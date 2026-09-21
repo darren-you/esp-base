@@ -1,0 +1,32 @@
+schema_version: 4
+name: esp_base
+workspace_area: tooling
+archetype: tooling_repo
+lifecycle: incubating
+owner: darren-you
+governance_tier: standard
+domains:
+  - embedded_firmware
+domain_roots:
+  embedded_firmware:
+    - firmware
+delivery_surfaces:
+  - embedded_firmware
+depends_on: []
+default_workflows:
+  - release_embedded_firmware
+doc_status:
+  architecture: present
+  api: missing
+  release: missing
+github:
+  repo: darren-you/esp_base
+  visibility: public
+  about: 基于 ESP-IDF 的 ESP 设备业务基座：身份、配置、Wi-Fi、OTA、官方 MQTT 与 FRP 集成
+  topics:
+    - darren-space
+    - tooling-repo
+    - embedded-firmware
+entrypoints:
+  - README.md
+  - AGENTS.md
