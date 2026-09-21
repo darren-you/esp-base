@@ -28,7 +28,7 @@ NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身�
 - [固件入口](firmware/README.md)
 - [设备协议](docs/design/device_protocol.md)
 - [来源记录](docs/design/source_provenance.md)
-- [嵌入式工程标准](https://github.com/darren-you/darren_space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)
+- [嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)
 
 ## 许可
 
