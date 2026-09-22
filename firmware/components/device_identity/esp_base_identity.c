@@ -37,7 +37,7 @@ static bool is_uuid_v4(const char *value)
            (value[19] == '8' || value[19] == '9' || value[19] == 'a' || value[19] == 'b');
 }
 
-static esp_err_t generate_uuid_v4(char *output, size_t output_size)
+esp_err_t esp_base_identity_generate_uuid(char *output, size_t output_size)
 {
     if (output == NULL || output_size < ESP_BASE_DEVICE_ID_LENGTH) {
         return ESP_ERR_INVALID_ARG;
@@ -78,7 +78,7 @@ static esp_err_t load_or_create_device_id(char *output, size_t output_size)
         return result;
     }
 
-    result = generate_uuid_v4(output, output_size);
+    result = esp_base_identity_generate_uuid(output, output_size);
     if (result == ESP_OK) {
         result = nvs_set_str(handle, DEVICE_ID_KEY, output);
     }

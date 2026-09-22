@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "esp_base_protocol.c" "command_guard.c"
+    SRCS "esp_base_protocol.c" "command_guard.c" "command_decoder.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_timer esp_system freertos
+    REQUIRES esp_timer esp_system freertos device_identity esp_driver_usb_serial_jtag remote_config wifi_runtime mbedtls
 )

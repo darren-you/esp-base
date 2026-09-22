@@ -39,7 +39,11 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_base_safety_start(&safety));
 
     esp_base_remote_config_t config = {0};
-    ESP_ERROR_CHECK(esp_base_remote_config_load(&config));
+    const esp_err_t config_status = esp_base_remote_config_load(&config);
+    if (config_status != ESP_OK) {
+        ESP_LOGE(TAG, "Configuration unavailable (%s); storage preserved, initialization stopped", esp_err_to_name(config_status));
+        return;
+    }
 
     esp_base_ota_t ota = {0};
     ESP_ERROR_CHECK(esp_base_ota_inspect(&ota));
@@ -57,7 +61,7 @@ void app_main(void)
              identity.flash_size_bytes,
              ota.running_partition,
              safety.reset_reason,
-             config.generation);
+             config.revision);
 
     /* Pending images are confirmed only after the P5 self-test/stability gate. */
 
@@ -66,11 +70,14 @@ void app_main(void)
         .firmware_version = app->version,
         .chip_model = identity.model,
         .flash_size_bytes = identity.flash_size_bytes,
-        .config_generation = config.generation,
+        .config = config,
         .reset_reason = safety.reset_reason,
-        .provisioned = false,
     };
-    ESP_ERROR_CHECK(esp_base_protocol_start(&protocol));
+    const esp_err_t protocol_status = esp_base_protocol_start(&protocol);
+    if (protocol_status != ESP_OK) {
+        ESP_LOGE(TAG, "Control unavailable (%s); initialization stopped", esp_err_to_name(protocol_status));
+        return;
+    }
 
     ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required");
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include "esp_err.h"
 
@@ -15,3 +16,6 @@ typedef struct {
 } esp_base_identity_t;
 
 esp_err_t esp_base_identity_read(esp_base_identity_t *identity);
+
+/* Fresh UUID without changing persistent identity. */
+esp_err_t esp_base_identity_generate_uuid(char *output, size_t output_size);
