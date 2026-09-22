@@ -12,8 +12,10 @@
 | firmware/apps/esp_base/main | 同路径 | 移除 GPL POC 装配和 NVS 自动全擦 |
 | firmware/partitions、sdkconfig.defaults | 同路径 | 保留 C3 4 MiB 与 A/B 分区 |
 
-未复制 `xfrpc`、`frpc_runtime`、POC connectivity、json shim、专用测试、旧 Git 历史、凭据、固件二进制与实板身份。SDK 来自 [Espressif ESP-IDF v6.1](https://github.com/espressif/esp-idf/tree/v6.1)，以官方许可作为构建依赖；不是本仓自研源码。官方 MQTT 与独立 FRP 尚未加入此迁移基线的构建。
+未复制 `xfrpc`、`frpc_runtime`、POC connectivity、json shim、专用测试、旧 Git 历史、凭据、固件二进制与实板身份。SDK 来自 [Espressif ESP-IDF v6.1](https://github.com/espressif/esp-idf/tree/v6.1)，以官方许可作为构建依赖；不是本仓自研源码。独立 FRP 尚未加入当前构建。
 
 JSON 解析通过 Component Manager 依赖 [espressif/cjson 1.7.19~2](https://components.espressif.com/components/espressif/cjson/versions/1.7.19~2/readme)，组件摘要与 IDF 版本固定在 firmware/dependencies.lock。来源为 Dave Gamble 与 cJSON contributors，MIT 许可保留在官方依赖中；没有复制为本仓自研源码。命令边界校验、行读取与裁决由本仓实现。
 
 Wi-Fi 生命周期、候选控制与配置 codec 为本仓新增实现，调用 ESP-IDF v6.1 的 esp_wifi、esp_netif、esp_event、NVS 和 PSA SHA-256；未复制旧 FRP 调试连接器或重写 SDK 驱动/密码原语。
+
+MQTT 使用官方 [espressif/mqtt 1.1.0](https://components.espressif.com/components/espressif/mqtt/versions/1.1.0/readme)，Component Manager 摘要为 `fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c`，记录在同一 dependencies.lock。上游为 Espressif ESP-MQTT、Apache-2.0；API/实现核对参考 commit `1a1e5788a5cf57a0f44a3c6c061407f6c9be1026`。官方源码仅存在于忽略的 managed_components，不复制为本仓协议实现；本仓新增 mqtt_runtime 的配置、事件交接与业务边界，并提供隔离测试应用。

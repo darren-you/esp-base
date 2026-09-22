@@ -18,7 +18,9 @@ int main(void)
 {
     ebase_mqtt_config_t c = config();
     assert(ebase_mqtt_config_valid(&c, false));
-    c.tls = false; c.ca_pem[0] = 0;
+    c.tls = false;
+    assert(!ebase_mqtt_config_valid(&c, true)); /* TCP 不接受遗留的 TLS CA 字段。 */
+    c.ca_pem[0] = 0;
     assert(!ebase_mqtt_config_valid(&c, false));
     assert(ebase_mqtt_config_valid(&c, true));
     const char *bad_hosts[] = {"", "mqtt://broker", "user@broker", "bad host", ".invalid", "a..b", "-a", "a-", "a."};

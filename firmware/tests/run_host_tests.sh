@@ -42,7 +42,7 @@ if [[ ! -f "$MQTT_DIR/include/mqtt_client.h" ]]; then
   exit 1
 fi
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -DCONFIG_MQTT_REPORT_DELETED_MESSAGES=1 -DCONFIG_EBASE_MQTT_PLAINTEXT_LAB=1 \
+  -DCONFIG_MQTT_REPORT_DELETED_MESSAGES=1 -DCONFIG_EBASE_MQTT_PLAINTEXT_LAB=1 -DCONFIG_MBEDTLS_HAVE_TIME_DATE=1 \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/mqtt_runtime/include" -I "$MQTT_DIR/include" \
   "$ROOT/components/mqtt_runtime/mqtt_contract.c" "$ROOT/components/mqtt_runtime/esp_base_mqtt.c" \
   "$ROOT/tests/mqtt_runtime_test.c" -o "$BUILD_DIR/mqtt_runtime_test"

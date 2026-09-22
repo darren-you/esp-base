@@ -36,6 +36,8 @@ bool esp_base_mqtt_poll(ebase_mqtt_runtime_t *runtime, ebase_mqtt_event_t *out);
 ebase_mqtt_state_t esp_base_mqtt_state(const ebase_mqtt_runtime_t *runtime);
 esp_err_t esp_base_mqtt_enqueue(ebase_mqtt_runtime_t *runtime, const char *topic,
                                 const void *payload, size_t length, uint8_t qos, bool retain, int *message_id);
+/* 动态新增只发送该 filter；重连提交全部期望订阅。提交失败停止会话，
+ * start 是显式恢复入口；API 成功不代表 SUBACK/UNSUBACK 已确认。 */
 esp_err_t esp_base_mqtt_subscribe(ebase_mqtt_runtime_t *runtime, const char *filter, uint8_t qos);
 esp_err_t esp_base_mqtt_unsubscribe(ebase_mqtt_runtime_t *runtime, const char *filter);
 /* 官方 outbox 的协议字节计数，不是完整 heap 占用或远端处理证明。 */

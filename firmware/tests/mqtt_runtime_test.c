@@ -46,6 +46,8 @@ static void *callback_arg;
 static bool callback_active, init_fail, live_client;
 static int register_error, start_error, stop_error, enqueue_result = 41, subscribe_result = 31, unsubscribe_result = 32;
 static unsigned stop_calls, subscriptions, enqueues;
+static int submitted_topic_count;
+static ebase_mqtt_subscription_t submitted_topics[8];
 static const char *sent_data;
 static int sent_length, sent_qos;
 esp_mqtt_client_handle_t esp_mqtt_client_init(const esp_mqtt_client_config_t *config)
@@ -77,6 +79,11 @@ esp_err_t esp_mqtt_client_destroy(esp_mqtt_client_handle_t client)
 int esp_mqtt_client_subscribe_multiple(esp_mqtt_client_handle_t client, const esp_mqtt_topic_t *topics, int count)
 {
     assert(client == &sdk && !callback_active && topics && count > 0 && count <= 8);
+    submitted_topic_count = count;
+    for (int i = 0; i < count; ++i) {
+        strcpy(submitted_topics[i].topic, topics[i].filter);
+        submitted_topics[i].qos = (uint8_t)topics[i].qos;
+    }
     ++subscriptions; return subscribe_result;
 }
 int esp_mqtt_client_unsubscribe(esp_mqtt_client_handle_t client, const char *topic)
@@ -135,6 +142,7 @@ int main(void)
     assert(configured.session.protocol_ver == MQTT_PROTOCOL_V_3_1_1 && !configured.session.disable_clean_session);
     assert(configured.broker.address.transport == MQTT_TRANSPORT_OVER_SSL && !configured.broker.verification.skip_cert_common_name_check);
     assert(configured.outbox.limit == 16384 && configured.session.keepalive == 30);
+    assert(configured.buffer.out_size >= 5 + 8 * (2 + 256 + 1));
     assert(configured.network.reconnect_timeout_ms && !configured.network.disable_auto_reconnect);
     assert(!strcmp(configured.credentials.client_id, c.client_id));
     c.ca_pem[0] = 'X'; c.password[0] = 'X';
@@ -170,6 +178,14 @@ int main(void)
     emit(MQTT_EVENT_PUBLISHED, (esp_mqtt_event_t){.msg_id = 41});
     assert(esp_base_mqtt_poll(r, &output) && output.kind == EBASE_MQTT_EVENT_PUBACK);
     assert(esp_base_mqtt_subscribe(r, "unit/extra", 0) == ESP_OK);
+    assert(submitted_topic_count == 1 && !strcmp(submitted_topics[0].topic, "unit/extra") && submitted_topics[0].qos == 0);
+    char grant_extra = 0;
+    emit(MQTT_EVENT_SUBSCRIBED, (esp_mqtt_event_t){.msg_id = 31, .data = &grant_extra, .data_len = 1});
+    assert(esp_base_mqtt_poll(r, &output) && output.kind == EBASE_MQTT_EVENT_READY);
+    /* 单项动态 SUBACK 与重新连接时的完整 SUBACK 是不同的证明。 */
+    emit(MQTT_EVENT_DISCONNECTED, (esp_mqtt_event_t){0}); assert(esp_base_mqtt_poll(r, &output));
+    emit(MQTT_EVENT_CONNECTED, (esp_mqtt_event_t){0}); assert(esp_base_mqtt_poll(r, &output));
+    assert(submitted_topic_count == 2 && !strcmp(submitted_topics[0].topic, "unit/in") && !strcmp(submitted_topics[1].topic, "unit/extra"));
     char grants[] = {1, 0};
     emit(MQTT_EVENT_SUBSCRIBED, (esp_mqtt_event_t){.msg_id = 31, .data = grants, .data_len = 2});
     assert(esp_base_mqtt_poll(r, &output) && output.kind == EBASE_MQTT_EVENT_READY);
@@ -179,6 +195,17 @@ int main(void)
     emit(MQTT_EVENT_DISCONNECTED, (esp_mqtt_event_t){0});
     assert(esp_base_mqtt_poll(r, &output) && esp_base_mqtt_state(r) == EBASE_MQTT_DISCONNECTED);
     unsigned before = subscriptions; connect_ready(r); assert(subscriptions == before + 1);
+    esp_mqtt_error_codes_t fault = {.error_type = MQTT_ERROR_TYPE_CONNECTION_REFUSED,
+        .connect_return_code = MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED};
+    emit(MQTT_EVENT_ERROR, (esp_mqtt_event_t){.error_handle = &fault});
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_AUTH);
+    assert(esp_base_mqtt_state(r) == EBASE_MQTT_FAILED && live_client);
+    emit(MQTT_EVENT_DISCONNECTED, (esp_mqtt_event_t){0}); assert(esp_base_mqtt_poll(r, &output)); connect_ready(r);
+    fault = (esp_mqtt_error_codes_t){.error_type = MQTT_ERROR_TYPE_TCP_TRANSPORT, .esp_tls_cert_verify_flags = 8};
+    emit(MQTT_EVENT_ERROR, (esp_mqtt_event_t){.error_handle = &fault});
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_TLS && output.tls_flags == 8);
+    assert(configured.broker.address.transport == MQTT_TRANSPORT_OVER_SSL && !configured.broker.verification.skip_cert_common_name_check);
+    emit(MQTT_EVENT_DISCONNECTED, (esp_mqtt_event_t){0}); assert(esp_base_mqtt_poll(r, &output)); connect_ready(r);
     assert(esp_base_mqtt_stop(r) == ESP_OK);
     assert(esp_base_mqtt_start(r, true, true) == ESP_OK);
     emit(MQTT_EVENT_CONNECTED, (esp_mqtt_event_t){0}); assert(esp_base_mqtt_poll(r, &output));
@@ -203,6 +230,43 @@ int main(void)
     assert(esp_base_mqtt_destroy(r) == ESP_FAIL && live_client && live_queues == 2);
     stop_error = 0; assert(esp_base_mqtt_destroy(r) == ESP_OK && !live_client && !live_queues);
     c = config();
+    assert(esp_base_mqtt_create(&c, &r) == ESP_OK);
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK);
+    subscribe_result = -2;
+    emit(MQTT_EVENT_CONNECTED, (esp_mqtt_event_t){0});
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_SUBSCRIPTION && !sdk.started);
+    subscribe_result = 31;
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK); connect_ready(r);
+    subscribe_result = -1;
+    assert(esp_base_mqtt_subscribe(r, "unit/failed", 1) == ESP_FAIL && !sdk.started);
+    subscribe_result = 31;
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK); connect_ready(r);
+    assert(submitted_topic_count == 1 && !strcmp(submitted_topics[0].topic, "unit/in"));
+    unsubscribe_result = -1;
+    assert(esp_base_mqtt_unsubscribe(r, "unit/in") == ESP_FAIL && !sdk.started);
+    unsubscribe_result = 32;
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK); connect_ready(r);
+    assert(submitted_topic_count == 1);
+    /* 动态单项请求不接受错误条数、未匹配 UNSUBACK 或无限等待。 */
+    assert(esp_base_mqtt_subscribe(r, "unit/extra", 0) == ESP_OK);
+    emit(MQTT_EVENT_SUBSCRIBED, (esp_mqtt_event_t){.msg_id = 31, .data = grants, .data_len = 2});
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_SUBSCRIPTION && !sdk.started);
+    assert(esp_base_mqtt_destroy(r) == ESP_OK);
+    assert(esp_base_mqtt_create(&c, &r) == ESP_OK);
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK); connect_ready(r);
+    emit(MQTT_EVENT_UNSUBSCRIBED, (esp_mqtt_event_t){.msg_id = -1});
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_SUBSCRIPTION && !sdk.started);
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK); connect_ready(r);
+    assert(esp_base_mqtt_unsubscribe(r, "unit/in") == ESP_OK);
+    now_us += 10000001;
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_SUBSCRIPTION && !sdk.started);
+    assert(esp_base_mqtt_start(r, true, true) == ESP_OK);
+    emit(MQTT_EVENT_CONNECTED, (esp_mqtt_event_t){0});
+    assert(esp_base_mqtt_poll(r, &output) && output.kind == EBASE_MQTT_EVENT_READY);
+    fault = (esp_mqtt_error_codes_t){.error_type = MQTT_ERROR_TYPE_SUBSCRIBE_FAILED};
+    emit(MQTT_EVENT_ERROR, (esp_mqtt_event_t){.error_handle = &fault});
+    assert(esp_base_mqtt_poll(r, &output) && output.error == EBASE_MQTT_ERROR_SUBSCRIPTION && !sdk.started);
+    assert(esp_base_mqtt_destroy(r) == ESP_OK);
     for (int i = 0; i < 100; ++i) {
         assert(esp_base_mqtt_create(&c, &r) == ESP_OK);
         assert(esp_base_mqtt_start(r, true, true) == ESP_OK); connect_ready(r);

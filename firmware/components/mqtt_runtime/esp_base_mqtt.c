@@ -12,6 +12,9 @@
 #if !CONFIG_MQTT_REPORT_DELETED_MESSAGES
 #error "MQTT outbox expiry must report deleted messages"
 #endif
+#if !CONFIG_MBEDTLS_HAVE_TIME_DATE
+#error "MQTT TLS requires certificate validity-period checks"
+#endif
 
 #define NOTICE_CAPACITY 16
 #define MESSAGE_SLOTS 3
@@ -36,6 +39,7 @@ struct ebase_mqtt_runtime {
     bool faulted;
     ebase_mqtt_state_t state;
     int pending_subscribe, pending_unsubscribe;
+    size_t pending_subscribe_start, pending_subscribe_count;
     int64_t subscription_deadline_us;
 };
 static ebase_mqtt_runtime_t *s_instance;
@@ -126,6 +130,7 @@ static void drain(ebase_mqtt_runtime_t *r)
     atomic_store(&r->overflow, false);
     ebase_mqtt_receive_reset(&r->receiver);
     r->pending_subscribe = r->pending_unsubscribe = -1;
+    r->pending_subscribe_start = r->pending_subscribe_count = 0;
     r->subscription_deadline_us = 0;
     r->faulted = false;
 }
@@ -168,7 +173,8 @@ esp_err_t esp_base_mqtt_create(const ebase_mqtt_config_t *config, ebase_mqtt_run
                 .msg_len = (int)config->will_length, .qos = config->will_qos, .retain = config->will_retain}},
         .network = {.reconnect_timeout_ms = 2000, .timeout_ms = 3000, .disable_auto_reconnect = false},
         .task = {.priority = 5, .stack_size = 6144},
-        .buffer = {.size = 1024, .out_size = 1024},
+        /* 八个最大长度 filter 的单次 SUBSCRIBE 需要超过 2 KiB。 */
+        .buffer = {.size = 1024, .out_size = 2304},
         .outbox.limit = EBASE_MQTT_OUTBOX_LIMIT
     };
     r->client = esp_mqtt_client_init(&official);
@@ -230,17 +236,19 @@ esp_err_t esp_base_mqtt_destroy(ebase_mqtt_runtime_t *r)
     return ESP_OK;
 }
 
-static esp_err_t subscribe_desired(ebase_mqtt_runtime_t *r)
+static esp_err_t subscribe_selected(ebase_mqtt_runtime_t *r, size_t start, size_t count)
 {
-    if (!r->config.subscription_count) { r->state = EBASE_MQTT_READY; return ESP_OK; }
+    if (!count) { r->state = EBASE_MQTT_READY; return ESP_OK; }
     esp_mqtt_topic_t topics[EBASE_MQTT_SUBSCRIPTIONS_MAX];
-    for (size_t i = 0; i < r->config.subscription_count; ++i) {
-        topics[i].filter = r->config.subscriptions[i].topic;
-        topics[i].qos = r->config.subscriptions[i].qos;
+    for (size_t i = 0; i < count; ++i) {
+        topics[i].filter = r->config.subscriptions[start + i].topic;
+        topics[i].qos = r->config.subscriptions[start + i].qos;
     }
-    const int id = esp_mqtt_client_subscribe_multiple(r->client, topics, (int)r->config.subscription_count);
+    const int id = esp_mqtt_client_subscribe_multiple(r->client, topics, (int)count);
     if (id <= 0) { r->state = EBASE_MQTT_FAILED; return id == 0 ? ESP_FAIL : api_result(id); }
     r->pending_subscribe = id;
+    r->pending_subscribe_start = start;
+    r->pending_subscribe_count = count;
     r->subscription_deadline_us = esp_timer_get_time() + 10000000;
     r->state = EBASE_MQTT_SUBSCRIBING;
     return ESP_OK;
@@ -262,45 +270,50 @@ bool esp_base_mqtt_poll(ebase_mqtt_runtime_t *r, ebase_mqtt_event_t *out)
         memset(out, 0, sizeof(*out)); out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_QUEUE;
         return true;
     }
-    notice_t n;
-    if (xQueueReceive(r->notices, &n, 0) != pdTRUE) {
-        if (r->state == EBASE_MQTT_SUBSCRIBING && esp_timer_get_time() >= r->subscription_deadline_us) {
-            fail_closed(r);
-            memset(out, 0, sizeof(*out)); out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_SUBSCRIPTION;
-            return true;
-        }
-        return false;
+    if (r->state == EBASE_MQTT_SUBSCRIBING && esp_timer_get_time() >= r->subscription_deadline_us) {
+        fail_closed(r);
+        memset(out, 0, sizeof(*out)); out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_SUBSCRIPTION;
+        return true;
     }
+    notice_t n;
+    if (xQueueReceive(r->notices, &n, 0) != pdTRUE) return false;
     memset(out, 0, sizeof(*out));
     out->kind = (ebase_mqtt_event_kind_t)n.kind;
     out->message_id = n.message_id; out->error = n.error; out->broker_code = n.broker_code; out->tls_flags = n.tls_flags;
     switch (n.kind) {
     case EBASE_MQTT_EVENT_CONNECTED:
         r->pending_subscribe = r->pending_unsubscribe = -1;
-        if (subscribe_desired(r) != ESP_OK) { out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_SUBSCRIPTION; }
+        if (subscribe_selected(r, 0, r->config.subscription_count) != ESP_OK) {
+            fail_closed(r); out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_SUBSCRIPTION;
+        }
         else if (!r->config.subscription_count) out->kind = EBASE_MQTT_EVENT_READY;
         break;
     case NOTICE_SUBACK:
-        if (n.message_id != r->pending_subscribe || r->state != EBASE_MQTT_SUBSCRIBING ||
+        if (r->pending_subscribe <= 0 || n.message_id != r->pending_subscribe || r->state != EBASE_MQTT_SUBSCRIBING ||
             n.error != EBASE_MQTT_ERROR_NONE ||
-            !ebase_mqtt_suback_valid(n.suback, n.suback_count, r->config.subscriptions, r->config.subscription_count)) {
+            !ebase_mqtt_suback_valid(n.suback, n.suback_count,
+                r->config.subscriptions + r->pending_subscribe_start, r->pending_subscribe_count)) {
             fail_closed(r); out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_SUBSCRIPTION;
         } else { r->state = EBASE_MQTT_READY; out->kind = EBASE_MQTT_EVENT_READY; }
         r->pending_subscribe = -1;
+        r->pending_subscribe_start = r->pending_subscribe_count = 0;
+        r->subscription_deadline_us = 0;
         break;
     case EBASE_MQTT_EVENT_UNSUBSCRIBED:
-        if (n.message_id != r->pending_unsubscribe) {
+        if (r->pending_unsubscribe <= 0 || n.message_id != r->pending_unsubscribe || r->state != EBASE_MQTT_SUBSCRIBING) {
             fail_closed(r); out->kind = EBASE_MQTT_EVENT_ERROR; out->error = EBASE_MQTT_ERROR_SUBSCRIPTION;
-        } else { r->pending_unsubscribe = -1; r->state = EBASE_MQTT_READY; }
+        } else { r->pending_unsubscribe = -1; r->subscription_deadline_us = 0; r->state = EBASE_MQTT_READY; }
         break;
     case EBASE_MQTT_EVENT_DISCONNECTED:
-        r->state = EBASE_MQTT_DISCONNECTED; r->pending_subscribe = r->pending_unsubscribe = -1; break;
+        r->state = EBASE_MQTT_DISCONNECTED; r->pending_subscribe = r->pending_unsubscribe = -1;
+        r->pending_subscribe_start = r->pending_subscribe_count = 0; r->subscription_deadline_us = 0; break;
     case EBASE_MQTT_EVENT_MESSAGE:
         out->message = r->messages[n.slot];
         (void)xQueueSend(r->free_slots, &n.slot, 0);
         break;
     case EBASE_MQTT_EVENT_ERROR:
-        if (n.error != EBASE_MQTT_ERROR_FRAGMENT) r->state = EBASE_MQTT_FAILED;
+        if (n.error == EBASE_MQTT_ERROR_SUBSCRIPTION) fail_closed(r);
+        else if (n.error != EBASE_MQTT_ERROR_FRAGMENT) r->state = EBASE_MQTT_FAILED;
         break;
     default: break;
     }
@@ -334,20 +347,21 @@ esp_err_t esp_base_mqtt_subscribe(ebase_mqtt_runtime_t *r, const char *filter, u
         if (!strcmp(filter, r->config.subscriptions[i].topic)) return ESP_ERR_INVALID_ARG;
     ebase_mqtt_subscription_t *sub = &r->config.subscriptions[r->config.subscription_count++];
     strcpy(sub->topic, filter); sub->qos = qos;
-    const esp_err_t error = subscribe_desired(r);
-    if (error != ESP_OK) --r->config.subscription_count;
+    /* 只订阅新增项，避免重新订阅旧项触发无关 retained 消息再次交付。 */
+    const esp_err_t error = subscribe_selected(r, r->config.subscription_count - 1, 1);
+    if (error != ESP_OK) { --r->config.subscription_count; fail_closed(r); }
     return error;
 }
 
 esp_err_t esp_base_mqtt_unsubscribe(ebase_mqtt_runtime_t *r, const char *filter)
 {
     if (!owned(r) || r->state != EBASE_MQTT_READY) return ESP_ERR_INVALID_STATE;
-    if (!filter) return ESP_ERR_INVALID_ARG;
+    if (!filter || !ebase_mqtt_topic_valid(filter, strnlen(filter, EBASE_MQTT_TOPIC_MAX + 1), true)) return ESP_ERR_INVALID_ARG;
     size_t index = 0;
     while (index < r->config.subscription_count && strcmp(filter, r->config.subscriptions[index].topic)) ++index;
     if (index == r->config.subscription_count) return ESP_ERR_INVALID_ARG;
     const int id = esp_mqtt_client_unsubscribe(r->client, filter);
-    if (id <= 0) return id == 0 ? ESP_FAIL : api_result(id);
+    if (id <= 0) { fail_closed(r); return id == 0 ? ESP_FAIL : api_result(id); }
     memmove(r->config.subscriptions + index, r->config.subscriptions + index + 1,
             (r->config.subscription_count - index - 1) * sizeof(r->config.subscriptions[0]));
     --r->config.subscription_count;
