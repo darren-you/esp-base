@@ -1,5 +1,11 @@
 # 开发检查点
 
+2026-09-24 Base 当前公开依赖组合复验：普通固件的唯一 Component Manager 声明及重新生成的 `firmware/dependencies.lock` 精确解析 `esp-mqtt@5bff093646d8db810d64c50c39edc004e78bf40c`、`esp-frp@3a40a2c06580232bbe23cb981eeb21c4d14d33c1`、`esp-ota@3c3f72b823ce856b02f838fef17db1368e6d5448`，锁文件 SHA-256 为 `c170788e295f52321a132e6f5b42fdea389c180a5643528a745e6aad22342fc8`。SDK 使用公开 `esp-idf@578cf89c343e388db43ba1f4ddcd602fedcb763c` 与 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`。以下较早条目保留各自执行时的依赖与镜像事实，不代表当前锁版本。
+
+- `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过。固定 SDK 的普通 ESP32-C3 构建通过，镜像 961056 字节、SHA-256 `4c23641cd7b16e95f3e055a4bfbb72585462ce7bc2a02354649a2e1d6175cc48`；仓外临时 RSA-3072 测试键的签名 ESP32-C3 构建通过，镜像 1118208 字节、SHA-256 `2e776f18d4e5c6d90e4aadb1d8f1232dd80c4895d860f3e1980855eea703789b`，`espsecure verify-signature --version 2 --keyfile` 通过。两镜像均小于 `0x1e0000` 应用槽，测试键未入库。
+- 可选 Container 编译在独立副本中启用 `ESP_BASE_CONTAINER_BINDING_PROBE=ON`，精确解析公开 `esp-container@ce3b658a05732fb9af2cbd48e6e3f3a650b84380` 与其 WAMR 依赖 `a34d721b630213f59fde0b40cebbb980903660e8`，C3 编译通过；probe 锁文件 SHA-256 为 `7cc9202b10b0cf7038064f4b704849d4bee6444b5ca63fc9def9eeaf65b174bd`。该 probe 只验证可选组件装配与编译，普通 Base 锁未加入 Container，也没有证明运行时启动、执行或资源预算。
+- 本轮没有刷板；真实 Broker、FRPS、HTTPS/Flash、双槽回滚、Container 包槽及五能力同板并行峰值仍需设备级验证。上述软件构建不计作对应阶段的实板验收。
+
 2026-09-24 FRP 活动流重启回归依赖更新：Base 的唯一 Component Manager 声明与生成锁精确解析公开 `esp-frp@f31a049fe473532d59e64adf940e56511ef53652`，组件 hash 为 `8a6788d41d7b2907213f96da53454f97aa8dec16648a6f79577879957326ace6`。该提交只补官方 FRPS 的真实活动双流中断/清理/同 worker 恢复测试与中文证据，库 `src/` 未变；上游 Mbed TLS 4.1.0、ASan/UBSan 与官方 FRP v0.71.0 主机 CTest 17/17，固定 SDK/lwIP 的 C3 空输入样例链接通过。
 
 - 本仓 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 与固定公开 SDK 的普通 ESP32-C3 构建通过；镜像仍为 960592 字节、SHA-256 `add1d0a44378e9d857fea4de690c28c01b491087ce97ca2ee0234972490900b8`，小于 `0x1e0000` 槽。本轮没有刷板或重跑 Base 签名镜像；真实设备双流重启、MQTT/OTA 同板并行和组合资源峰值仍未验，P4-04/P4-05 不能勾验收。

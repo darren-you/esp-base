@@ -22,13 +22,13 @@ flowchart LR
 
 ## SDK 源码准备
 
-本仓 `sdk-lock.json` 锁定公开 ESP-IDF fork 的 OTA 擦除失败修正和公开 esp-lwip 的零窗口修正。首次准备独立 SDK 时，将 `ESP_BASE_IDF` 指向仓外的新路径：
+本仓 `sdk-lock.json` 锁定公开 ESP-IDF fork 的 OTA 擦除失败和 HTTP 初始化低内存清理修正，以及公开 esp-lwip 的零窗口修正。首次准备独立 SDK 时，将 `ESP_BASE_IDF` 指向仓外的新路径：
 
 ```bash
 ESP_BASE_IDF=/private/path/esp-base-idf
-git clone --recurse-submodules --branch codex/fix-ota-begin-erase-failure \
+git clone --recurse-submodules --branch codex/fix-http-init-transport-oom \
   https://github.com/darren-you/esp-idf.git "$ESP_BASE_IDF"
-git -C "$ESP_BASE_IDF" checkout --detach 855937cf9dcee13ee9c423fb0319238cdc8d53fd
+git -C "$ESP_BASE_IDF" checkout --detach 578cf89c343e388db43ba1f4ddcd602fedcb763c
 git -C "$ESP_BASE_IDF" submodule update --init --recursive
 git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
   https://github.com/darren-you/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
@@ -38,7 +38,7 @@ source "$ESP_BASE_IDF/export.sh"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
 
-构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。Git remote 使用 HTTPS 或 SSH 不改变提交身份。普通构建与 MQTT 实验构建共用一份 `firmware/dependencies.lock`，其中 `mqtt` 精确来自公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
+构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。Git remote 使用 HTTPS 或 SSH 不改变提交身份。普通构建与 MQTT 实验构建共用一份 `firmware/dependencies.lock`，其中 `mqtt` 精确来自公开 `esp-mqtt@5bff093646d8db810d64c50c39edc004e78bf40c`。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
 
 先退出占用该端点的监控或烧录程序；工具仅使用 Python 3 标准库。从本轮系统枚举结果选择端点，不把历史端点当设备身份。
 
