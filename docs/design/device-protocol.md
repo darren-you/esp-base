@@ -46,6 +46,8 @@ TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelop
 
 `result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。同启动重复请求经共同 owner 的幂等裁决后回送原结果；异步 OTA 结果回送原请求通道。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入；已认证的远端 `config.set` 经身份、期限与去重裁决后返回 `failed/physical_usb_required`，不写入配置。普通固件的软件 owner 已接入客户端、订阅和结果通道；设备级 Broker ACL、Tool 的网络控制端与实板 v1/v2→v3 迁移尚未生效，此代码构建与 host 测试不构成网络端到端验收。
 
+QoS 1 outbox 报告消息过期时，设备立即撤销 MQTT `ready`、停止会话并在退避后重新取得 `command` SUBACK。该过期事件只证明传输回执丢失，不改写已执行命令的结果；同一 boot 的控制端可用相同 request_id 重投，写命令由原去重表回送已保存结果，只读命令重新查询设备事实。重启后仍须按新 boot 与持久事实裁决，不能把旧 request_id 当作跨启动的执行证明。
+
 ## 当前 USB 结果
 
 status 成功的 result 固定含 uptime_ms、revision、free_heap、min_free_heap、ota_received_bytes、ota_total_bytes 和 capabilities；capabilities 固定含 wifi、mqtt、frp、config、ota。未签名构建的 OTA 为 unsupported；签名构建在空闲时为 ready、下载时为 running。配置在存储或启动槽不确定时为 failed。restart 的 running 回执 result 为 null；设备执行重启后通过同 UUID 的新 boot_id 验证完成。

@@ -12,7 +12,7 @@ static const char request[] = "{\"protocol_version\":1,\"request_id\":\"11111111
 static const char hex_tag[] = "57d8e98b33e69b075cd138712813411c036f615a240e04a54e8c54f2fa3f38ca";
 static struct emqtt_runtime { int marker; } runtime;
 static emqtt_config_t captured;
-static emqtt_event_t events[16];
+static emqtt_event_t events[24];
 static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands;
 static emqtt_state_t state = EMQTT_STOPPED;
 static bool fail_stop, fail_publish;
@@ -57,6 +57,7 @@ esp_err_t emqtt_stop(emqtt_runtime_t *instance)
     ++stops;
     if (fail_stop) return ESP_FAIL;
     state = EMQTT_STOPPED;
+    event_head = event_tail; /* emqtt_stop drains queued SDK notices. */
     return ESP_OK;
 }
 esp_err_t emqtt_destroy(emqtt_runtime_t *instance)
@@ -228,14 +229,31 @@ int main(void)
     assert(starts == 5);
     push(EMQTT_EVENT_READY);
     esp_base_mqtt_owner_poll(10012, true, true, received, &runtime);
+    assert(esp_base_mqtt_owner_ready());
+    assert(esp_base_mqtt_owner_result("{\"state\":\"succeeded\"}", strlen("{\"state\":\"succeeded\"}")));
+    const int expired_result_id = (int)sends;
+    push(EMQTT_EVENT_DELETED);
+    events[event_tail - 1].message_id = expired_result_id;
+    push_command(captured.subscriptions[0].topic, false, false);
+    esp_base_mqtt_owner_poll(10013, true, true, received, &runtime);
+    assert(stops == 5 && commands == 1 && !esp_base_mqtt_owner_ready());
+    assert(!esp_base_mqtt_owner_result("{}", 2));
+    esp_base_mqtt_owner_poll(15012, true, true, received, &runtime);
+    assert(starts == 5);
+    esp_base_mqtt_owner_poll(15013, true, true, received, &runtime);
+    assert(starts == 6 && !esp_base_mqtt_owner_ready());
+    push(EMQTT_EVENT_READY);
+    esp_base_mqtt_owner_poll(15014, true, true, received, &runtime);
+    assert(esp_base_mqtt_owner_ready());
+
     fail_stop = true;
     ebase_mqtt_config_t changed = mqtt;
     changed.management_key[0] ^= 1;
     assert(esp_base_mqtt_owner_configure(&changed, device_id, boot_id) == ESP_FAIL);
     assert(destroy_attempts == 2 && destroys == 1 && creates == 2);
     push_command(captured.subscriptions[0].topic, false, false);
-    esp_base_mqtt_owner_poll(10013, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(15015, true, true, received, &runtime);
     assert(commands == 1 && !esp_base_mqtt_owner_result("{}", 2));
     assert(!strcmp(esp_base_mqtt_owner_state(), "failed") && !esp_base_mqtt_owner_ready());
-    puts("mqtt_owner passed (TLS/UUID, SUBACK gate, auth, retain, reconnect, fail closed)");
+    puts("mqtt_owner passed (TLS/UUID, SUBACK gate, auth, retain, reconnect, outbox expiry, fail closed)");
 }

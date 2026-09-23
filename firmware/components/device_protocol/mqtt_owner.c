@@ -125,6 +125,14 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
         case EMQTT_EVENT_DISCONNECTED:
             s_ready = false;
             break;
+        case EMQTT_EVENT_DELETED:
+            /* A QoS 1 outbox entry expired before broker acknowledgement.
+             * That publication cannot be reported as delivered. Close this session;
+             * the caller may resend the same request_id after a new SUBACK. */
+            s_ready = false;
+            if (emqtt_stop(s_runtime) != ESP_OK) s_failed = true;
+            else { s_started = false; s_retry_after_ms = now_ms + 5000; }
+            return;
         case EMQTT_EVENT_ERROR:
             if (emqtt_state(s_runtime) != EMQTT_READY) s_ready = false;
             if (emqtt_state(s_runtime) == EMQTT_FAILED) {
