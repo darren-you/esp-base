@@ -16,6 +16,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `ota_firmware_test` 编译真实固件集合观察逻辑，注入 SDK 与 `esp-ota` 槽/镜像结果，覆盖双 `VALID`、只有当前签名镜像、双槽同摘要、pending/boot 不一致、不可回滚、旧槽虽标无效但仍有可验签镜像、读态改变及资源失败。它不模拟真实 bootloader、Flash 并发或物理镜像读取；固定 SDK 普通与测试键签名构建只验证装配。
 
+`storage_owner_test` 验证跨任务 release、10 万次 BUSY 重试不消耗 token、下次成功只加 1、过期 token 拒绝和 `UINT_MAX` 耗尽后释放保留值。`protocol_ota_owner_test` 编译真实 `esp_base_protocol.c` 命令与异步完成分支，注入已解析请求、收据和 OTA worker 结果，验证 owner 忙时不登记收据、收据已知失败释放、收据不确定保留、worker 创建失败先记录再释放、下载失败完成后释放、选槽状态不明时保留，以及成功选槽到重启仍持有 owner；它不执行真实命令解析、NVS、Flash 或 FreeRTOS 并发。`container_binding_test` 以假 Container 类型与调用记录验证真实 Base 固件集合逐字段映射、同 owner 互斥、观察失败及前后镜像变化时拒绝启动。可选固定 SDK 探针再用公开 Container 真头文件和组件编译本适配，但并不调用包槽 provider 或证明实板写入串行。
+
 ## 架构拓扑
 
 ```mermaid
@@ -23,6 +25,12 @@ flowchart LR
     sources["components / apps"] --> idf["ESP-IDF build"]
     sources --> host["ASan/UBSan：guard + decoder + config store"]
     ota["ota_operation + app_main + control_state：产品收据 / 固件集合 / pending 自检"] --> host
+    owner["storage_owner：跨任务 claim / BUSY / 过期 token"] --> host
+    protocol["device_protocol：OTA 命令 / worker 完成的 owner 生命周期"] --> host
+    owner --> protocol
+    binding["container_binding：精确集合 / 不确定拒绝"] --> host
+    owner --> binding
+    ota --> binding
     library["esp-ota：通用 HTTPS / Flash / 槽测试"] --> host
     time["time_runtime：SNTP 事件 / 时间下界"] --> host
     wifi["wifi_runtime：初始化故障与资源释放"] --> host

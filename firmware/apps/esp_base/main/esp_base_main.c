@@ -14,12 +14,15 @@
 #include "eota.h"
 #include "esp_base_protocol.h"
 #include "esp_base_remote_config.h"
+#include "esp_base_storage_owner.h"
 #include "esp_base_safety.h"
 #include "esp_base_time.h"
 
 static const char *TAG = "esp_base";
 static esp_base_remote_config_t s_config;
 static esp_base_protocol_context_t s_protocol;
+static esp_base_storage_owner_t s_storage_owner;
+static esp_base_storage_claim_t s_boot_storage_claim;
 
 #define ESP_BASE_CONTROL_START_TIMEOUT_MS UINT64_C(5000)
 #define ESP_BASE_OTA_STABLE_WINDOW_MS UINT64_C(30000)
@@ -71,6 +74,14 @@ static esp_err_t wait_for_control_start(void)
 
 void app_main(void)
 {
+    /* Hold the same owner as OTA and the optional Container adapter until
+     * startup has either confirmed the pending slot or reached Base ready. */
+    esp_base_storage_owner_init(&s_storage_owner);
+    s_boot_storage_claim = (esp_base_storage_claim_t){0};
+    if (!esp_base_storage_claim(&s_storage_owner, &s_boot_storage_claim)) {
+        ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED storage owner unavailable");
+        return;
+    }
     eota_current_t ota = {0};
     const esp_err_t ota_status = eota_inspect(&ota);
     if (ota_status != ESP_OK) {
@@ -132,6 +143,7 @@ void app_main(void)
     s_protocol.flash_size_bytes = identity.flash_size_bytes;
     s_protocol.config = s_config;
     s_protocol.reset_reason = safety.reset_reason;
+    s_protocol.storage_owner = &s_storage_owner;
     const esp_err_t protocol_status = esp_base_protocol_start(&s_protocol);
     if (protocol_status != ESP_OK) {
         ESP_LOGE(TAG, "Control unavailable (%s); initialization stopped", esp_err_to_name(protocol_status));
@@ -201,7 +213,11 @@ void app_main(void)
             stop_after_local_failure(&ota, pending_boot, "confirm", confirm_status);
             return;
         }
-        esp_base_protocol_set_ota_verification_pending(false);
     }
+    if (!esp_base_storage_release(&s_boot_storage_claim)) {
+        ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED storage owner release failed");
+        return;
+    }
+    if (pending_boot) esp_base_protocol_set_ota_verification_pending(false);
     ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required");
 }

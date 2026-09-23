@@ -32,6 +32,7 @@ static ebase_request_guard_t s_guard;
 static ebase_line_reader_t s_reader;
 static bool s_started, s_config_uncertain, s_trial_active;
 static bool s_ota_active, s_ota_boot_uncertain;
+static esp_base_storage_claim_t s_ota_storage_claim;
 static size_t s_ota_slot;
 static esp_base_ota_request_t s_ota_request;
 static atomic_bool s_ota_done;
@@ -311,6 +312,15 @@ static void poll_ota(void)
             memset(&s_ota_request, 0, sizeof s_ota_request);
             return;
         }
+        if (!esp_base_storage_release(&s_ota_storage_claim)) {
+            s_ota_boot_uncertain = true;
+            esp_base_control_state_set_ota_download_active(&s_control_state, false);
+            s_ota_active = false;
+            atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
+            save_outcome(s_ota_slot, "unknown", "storage_uncertain", false);
+            memset(&s_ota_request, 0, sizeof s_ota_request);
+            return;
+        }
     }
     esp_base_control_state_set_ota_download_active(&s_control_state, false);
     s_ota_active = false;
@@ -399,6 +409,9 @@ static void handle_line(const char *line, size_t length, void *context)
         if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
         if (!esp_base_wifi_ready()) { save_outcome(slot, "failed", "network_unavailable", false); return; }
         if (!esp_base_time_ready()) { save_outcome(slot, "failed", "time_unavailable", false); return; }
+        if (!esp_base_storage_claim(s_context.storage_owner, &s_ota_storage_claim)) {
+            save_outcome(slot, "failed", "operation_busy", false); return;
+        }
         const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(s_context.device_id, &command.ota);
         if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
             const char *receipt_error = receipt == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
@@ -410,9 +423,11 @@ static void handle_line(const char *line, size_t length, void *context)
                 receipt == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE ? "ota_target_not_safe" :
                 receipt == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
                 receipt == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
-            if (receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN) s_config_uncertain = true;
-            save_outcome(slot, receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN ? "unknown" : "failed",
-                         receipt_error, false);
+            bool uncertain = receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+            if (!uncertain && !esp_base_storage_release(&s_ota_storage_claim)) uncertain = true;
+            if (uncertain) s_config_uncertain = true;
+            save_outcome(slot, uncertain ? "unknown" : "failed",
+                         uncertain ? "storage_uncertain" : receipt_error, false);
             return;
         }
         s_ota_request = command.ota;
@@ -426,7 +441,8 @@ static void handle_line(const char *line, size_t length, void *context)
             s_ota_active = false;
             memset(&s_ota_request, 0, sizeof s_ota_request);
             if (esp_base_ota_receipt_record_failure(s_context.device_id, command.ota.operation_id,
-                    EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK) {
+                    EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
+                esp_base_storage_release(&s_ota_storage_claim)) {
                 save_outcome(slot, "failed", "resource_failure", false);
             } else {
                 s_config_uncertain = true;
@@ -524,7 +540,9 @@ static void control_task(void *argument)
 
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
-    if (!context || !ebase_is_uuid(context->device_id)) return ESP_ERR_INVALID_ARG;
+    if (!context || !ebase_is_uuid(context->device_id) || context->storage_owner == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     if (s_started) return ESP_ERR_INVALID_STATE;
     esp_err_t error = esp_base_identity_generate_uuid(s_boot_id, sizeof s_boot_id);
     if (error != ESP_OK) return error;

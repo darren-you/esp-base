@@ -28,6 +28,7 @@ static unsigned nvs_calls, protocol_calls, mark_calls, rollback_calls, time_call
 static bool protocol_started, control_never_ready, control_stalls;
 static bool control_exits_late, control_pauses_cross_window;
 static bool ota_gate_pending;
+static esp_base_storage_owner_t *storage_owner;
 static unsigned ota_gate_clears;
 static jmp_buf reboot_target;
 
@@ -43,6 +44,7 @@ static void reset_case(void)
     protocol_started = control_never_ready = control_stalls = ota_gate_pending = false;
     control_exits_late = control_pauses_cross_window = false;
     ota_gate_clears = 0;
+    storage_owner = NULL;
 }
 
 void test_log(const char *format, ...)
@@ -102,6 +104,8 @@ esp_err_t eota_confirm_pending(eota_current_t *current)
     assert(current->state == EOTA_STATE_PENDING_VERIFY);
     ++mark_calls;
     assert(ota_gate_pending);
+    esp_base_storage_claim_t competing = {0};
+    assert(storage_owner != NULL && !esp_base_storage_claim(storage_owner, &competing));
     image_state = state_after_mark;
     current->state = image_state;
     return image_state == EOTA_STATE_VALID ? ESP_OK :
@@ -112,6 +116,10 @@ esp_err_t eota_reject_pending(eota_current_t *current)
     assert(current->state == EOTA_STATE_PENDING_VERIFY);
     ++rollback_calls;
     assert(ota_gate_pending);
+    if (storage_owner != NULL) {
+        esp_base_storage_claim_t competing = {0};
+        assert(!esp_base_storage_claim(storage_owner, &competing));
+    }
     if (rollback_result == ESP_OK) {
         image_state = EOTA_STATE_INVALID;
         longjmp(reboot_target, 1);
@@ -163,6 +171,10 @@ const char *esp_get_idf_version(void)
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     assert(context != NULL);
+    assert(context->storage_owner != NULL);
+    storage_owner = context->storage_owner;
+    esp_base_storage_claim_t competing = {0};
+    assert(!esp_base_storage_claim(storage_owner, &competing));
     assert(ota_gate_pending == (image_state == EOTA_STATE_PENDING_VERIFY));
     ++protocol_calls;
     protocol_started = protocol_result == ESP_OK;
@@ -238,6 +250,9 @@ int main(void)
     time_result = ESP_FAIL;
     assert(!rebooted() && mark_calls == 1 && rollback_calls == 0 && ready_logs == 1);
     assert(time_calls == 1 && !ota_gate_pending);
+    esp_base_storage_claim_t after_ready = {0};
+    assert(esp_base_storage_claim(storage_owner, &after_ready));
+    assert(esp_base_storage_release(&after_ready));
 
     reset_case();
     control_never_ready = true;

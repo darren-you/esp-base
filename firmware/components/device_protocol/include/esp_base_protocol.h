@@ -5,6 +5,7 @@
 
 #include "esp_err.h"
 #include "esp_base_config.h"
+#include "esp_base_storage_owner.h"
 
 typedef struct {
     const char *device_id;
@@ -13,6 +14,7 @@ typedef struct {
     uint32_t flash_size_bytes;
     esp_base_remote_config_t config;
     const char *reset_reason;
+    esp_base_storage_owner_t *storage_owner;
 } esp_base_protocol_context_t;
 
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context);

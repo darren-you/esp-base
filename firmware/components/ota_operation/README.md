@@ -13,6 +13,9 @@ flowchart LR
     app["esp_base_main：30 秒本地自检"] -->|"确认或拒绝 pending"| library
     firmware_set["esp_base_ota_observe_firmware_set：只读集合"] -->|"槽状态 / 验签摘要"| library
     firmware_set -->|"回滚资格"| idf
+    owner["esp_base_storage_owner：启动与 OTA 串行 claim"] --> operation
+    owner --> firmware_set
+    binding["可选 Container 适配"] -->|"claim + 集合映射"| firmware_set
 ```
 
 通用 HTTPS 下载、镜像头/完整摘要、SDK 验签、槽观察与确认/回滚均由锁定的 `esp-ota` 维护；本组件不保留这些实现或旧 `esp_base_ota_*` 转发入口。收据查询通过 `eota_observe_slots` 和 `eota_sha256_running` 读取当前事实：worker 活跃或新槽 pending 为 running，新槽 VALID 且完整 signed bin 摘要吻合才 succeeded，明确失败或回滚才 failed，其余 unknown。存储写入或读回不确定时拒绝启动升级。普通未签名构建不登记收据。
@@ -20,3 +23,5 @@ flowchart LR
 当前实板是未签名旧基座，签名首次迁移与真实 HTTPS、Flash、bootloader 回滚尚未验收；构建和 host 假件不代表实板结果。
 
 固件集合接口仅在签名构建、调用方串行化 app/otadata 写入、运行槽已确认 `VALID` 且等于下次启动槽时返回。另一槽 `VALID` 还须经 IDF `esp_ota_check_rollback_is_possible` 判定并通过 `eota_sha256_verified_image` 验签；另一槽为 `UNTRACKED`、`INVALID` 或 `ABORTED` 时，只有 SDK 明确拒绝其镜像才可返回单固件集合。其它状态、可被 bootloader 回退扫描加载但未确认的镜像、读态变化、签名或资源失败都拒绝且清空输出。相同 signed bin 摘要合并为同一固件身份。它不修改槽或发布业务包，也未对真实设备证明启动资格。
+
+`esp_base_storage_owner` 是本次 boot 内跨任务传递的唯一高层串行 claim：启动检查与 pending 确认、`ota.start` 的收据/下载/选择，以及可选 Container 适配共用它。claim 不替代 Container provider 自己保护包 NVS/Flash 回调的存储信号量；实际包调用方尚未装配，不能把当前 C3 镜像视为包写入已串行化。

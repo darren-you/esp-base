@@ -21,6 +21,11 @@ flowchart LR
     protocol -->|"签名构建 ota.start"| receipt
     ota --> https["ESP-IDF esp_http_client：HTTPS 下载"]
     receipt <-->|"登记与读回"| nvs["base_store NVS：base_ota/operation"]
+    owner["ota_operation：跨任务串行 owner"] --> receipt
+    owner --> rollback
+    binding["integrations/container_binding：可选固件集合适配"] -->|"仅探针，未装配主应用"| container["公开 esp-container：绑定对账 API"]
+    owner --> binding
+    receipt --> binding
     main --> safety["safety_runtime：复位事实 / WDT"]
     main --> protocol["device_protocol：串口心跳 / 有界命令 / 回执"]
     protocol --> mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
@@ -50,6 +55,8 @@ flowchart LR
 `ota.start` 在目标槽写入前将 operation ID、设备 ID、摘要、长度与源/目标槽作为单 blob 保存到 `base_store` 的 `base_ota/operation`，commit 和读回成功才启动 worker；同 ID 不再次下载。签名构建的只读 `ota.result` 查询最近一次收据，只有新槽本地确认 VALID 且完整运行镜像摘要匹配才成功；回滚到尚无查询代码的旧镜像不能由设备提供最终结果，工具必须记 unknown。身份 NVS 保持原位；配置仍用 `base_config/committed` 单键，v3-only 读写不兼容旧 v1/v2 记录。真实回滚和 NVS 掉电行为待实板验证。
 
 `ota_operation` 另提供只读固件集合观察：要求运行槽已确认 `VALID` 且为当前 boot selector，另一槽若 `VALID` 则还须通过 IDF 回滚可能性检查和完整 signed bin 验签；若另一槽未受管，只有镜像校验明确无效才输出单固件集合。任何其它状态或过程中变化都返回不确定且输出清零。调用方必须在观察及消费结果期间独占 app/otadata 写入；当前尚未接入 Container。
+
+本次 boot 的启动检查和 pending 确认持有 `ota_operation` 串行 owner；`ota.start` 在持久登记前取得 claim，跨控制任务与 worker 保持到下载、验签和选择完成。未知选择或存储结果保留 claim；可证明失败并记账后释放。可选 [Container 固件集合适配](integrations/container_binding/README.md)使用同一 owner 包围物理固件观察与 Container 操作，但当前不在主应用调用，不改现有分区或业务包状态。
 
 MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELETED_MESSAGES=y`。新 sdkconfig 从 defaults 得到这些值；已有 sdkconfig 若显式关闭，需在 menuconfig 启用，编译器会拒绝缺少日期验证或消息过期通知的配置。
 

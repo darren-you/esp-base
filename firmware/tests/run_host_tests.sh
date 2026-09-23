@@ -72,6 +72,37 @@ printf '  hardware       not used\n'
   "$ROOT/components/ota_operation/esp_base_ota_firmware.c" \
   "$ROOT/tests/ota_firmware_test.c" -o "$BUILD_DIR/ota_firmware_test"
 "$BUILD_DIR/ota_firmware_test"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
+  -I "$ROOT/components/ota_operation/include" \
+  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
+  "$ROOT/tests/storage_owner_test.c" -o "$BUILD_DIR/storage_owner_test"
+"$BUILD_DIR/storage_owner_test"
+if [[ "$(uname -s)" == Darwin ]]; then
+  PROTOCOL_LINK_GC=(-Wl,-dead_strip)
+else
+  PROTOCOL_LINK_GC=(-Wl,--gc-sections)
+fi
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror \
+  -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
+  -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/device_protocol" \
+  -I "$ROOT/components/device_identity/include" -I "$ROOT/components/remote_config/include" \
+  -I "$ROOT/components/wifi_runtime/include" -I "$ROOT/components/time_runtime/include" \
+  -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
+  "$ROOT/components/device_protocol/command_guard.c" \
+  "$ROOT/components/device_protocol/control_state.c" \
+  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
+  "$ROOT/tests/protocol_ota_owner_test.c" -o "$BUILD_DIR/protocol_ota_owner_test"
+"$BUILD_DIR/protocol_ota_owner_test"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/container_binding" \
+  -I "$ROOT/components/ota_operation/include" \
+  -I "$ROOT/integrations/container_binding/include" -I "$EOTA_DIR/include" \
+  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
+  "$ROOT/integrations/container_binding/esp_base_container_binding.c" \
+  "$ROOT/tests/container_binding_test.c" -o "$BUILD_DIR/container_binding_test"
+"$BUILD_DIR/container_binding_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol" \
   "$ROOT/components/device_protocol/control_state.c" "$ROOT/tests/control_state_test.c" \
@@ -82,6 +113,8 @@ printf '  hardware       not used\n'
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$EOTA_DIR/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/safety_runtime/include" -I "$ROOT/components/time_runtime/include" \
+  -I "$ROOT/components/ota_operation/include" \
+  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/apps/esp_base/main/esp_base_main.c" \
   "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_test"
 "$BUILD_DIR/ota_startup_test"
