@@ -24,4 +24,4 @@
 
 真实 UUID、USB 序列号、配置输入、完整 Flash、原始日志与执行脚本只保存在 ESP Tool 私有忽略目录：首次尝试为 `p2-candidate-power-20260922/`，有效尝试为 `p2-candidate-power-retry-20260922/`。目录权限 0700，文件 0600；公开记录不包含恢复字节或网络身份。
 
-已提交配置断电恢复另见[开发检查点](development_checkpoint.md)。本次只关闭 RAM 候选期间断电子项；Flash 实际写入中间态掉电、WPA3、外部 AP 中断、完整 USB 插拔矩阵和五能力长稳仍未完成，P2 整体保持实施中。
+已提交配置断电恢复另见[开发检查点](development-checkpoint.md)。本次只关闭 RAM 候选期间断电子项；Flash 实际写入中间态掉电、WPA3、外部 AP 中断、完整 USB 插拔矩阵和五能力长稳仍未完成，P2 整体保持实施中。

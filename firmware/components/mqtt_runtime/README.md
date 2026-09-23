@@ -27,4 +27,4 @@ flowchart LR
 
 TLS 配置只接受显式 CA、hostname 与端口，不暴露 skip verification、备用明文地址或 URI 覆盖。客户端 ID 必须来自持久 UUID；配置按值复制，CA 在 SDK 生命周期内始终有效。编译强制 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y`；start 还要求 owner 已取得可信时间。证书解析、链、日期、主机名/SNI 由官方 TLS 层验证，配置预检不把 PEM 标记存在当作证书有效。TCP 仅在 `CONFIG_EBASE_MQTT_PLAINTEXT_LAB=y` 的实验构建中开放，普通基座 CMake 拒绝该选项。
 
-ASan/UBSan host 测试使用已锁定的官方头文件注入 SDK 回调，验证本层参数装配、队列、错误映射与 100 次资源释放；fake 没有实现 Broker 或 MQTT 协议，不能证明真实网络互操作。实板入口见 [集成测试应用](../../apps/mqtt_integration/README.md)，结果见 [开发检查点](../../../docs/operations/development_checkpoint.md)。
+ASan/UBSan host 测试使用已锁定的官方头文件注入 SDK 回调，验证本层参数装配、队列、错误映射与 100 次资源释放；fake 没有实现 Broker 或 MQTT 协议，不能证明真实网络互操作。实板入口见 [集成测试应用](../../apps/mqtt_integration/README.md)，结果见 [开发检查点](../../../docs/operations/development-checkpoint.md)。
