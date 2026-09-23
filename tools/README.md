@@ -16,6 +16,8 @@ flowchart LR
     sdk_lock["../sdk-lock.json：IDF / lwIP 提交"] --> sdk_check["check_sdk.py：源码核对"]
     idf["独立 ESP-IDF checkout"] --> sdk_check
     sdk_check --> build["firmware：C3 默认 / 实验构建"]
+    backup["两份仓外完整 Flash 备份"] --> preflight["preflight_v2_migration.py：v1 离线只读预检 / v2 base_store 候选"]
+    idf --> preflight
 ```
 
 ## SDK 源码准备
@@ -56,6 +58,10 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 文件包含完整 `schema_version`、`wifi`、`mqtt`、`frp`、`business` 字段。当前 `schema_version` 为 2；`wifi` 为 `{ssid,password}` 或 null；`mqtt` 为 `{hostname,port,username,password,ca_pem,management_key_hex}` 或 null；`frp`、`business` 必须为 null。MQTT 主机为 1–253 字节 ASCII DNS 名，端口 1–65535；用户名最多 128 UTF-8 字节、密码最多 256 UTF-8 字节，均非空；CA PEM 最多 4096 ASCII 字节并含证书标记；独立管理密钥为非全零 64 个小写十六进制字符。工具不会生成凭据，整个配置仅经本轮独占 USB 端点发送，整行请求上限 8192 字节。工具读取新鲜 revision 后构造 CAS 请求，最多等待 30 秒；仅确认新 revision 后报告成功。文件不存在、权限不合格、重复字段或内容无效会拒绝，不回显配置。固件 MQTT 状态仍为 unsupported，直至正式客户端与 Broker ACL 接通。
 
 `python3 tools/test-device-control.py` 使用本机伪终端验证字节不变、禁用关闭挂断和写入背压期限；伪终端不证明物理 USB 复位行为，后者以同板重复打开后的 boot_id 与断电验收为准。
+
+## v1→v2 离线配置预检
+
+`preflight_v2_migration.py` 只读取两份仓外的完整 4 MiB Flash 备份和固定 SDK 源码；可选输出权限 0600 的 `base_store` v2 候选分区镜像。它不打开串口，也不刷写设备。仅当前 v1→v2 Wi-Fi 原值转换：revision 保持，MQTT absent，凭据不生成或注入。完整步骤、阻断条件和两槽首启边界见[离线迁移合同](../docs/operations/base-v2-offline-migration.md)。
 
 ## MQTT 实验检查
 
