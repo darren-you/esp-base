@@ -1,4 +1,4 @@
-# USB 主机调用示例
+# ESP Base 宿主工具
 
 此目录运行在 macOS/Linux 宿主；不属于 MCU 固件，也不依赖私有 ESP Tool。
 
@@ -13,7 +13,30 @@ flowchart LR
     checker <-->|"严格 TLS / 新消息往返"| broker["本机隔离 Broker"]
     broker <-->|"in / extra / out / status"| lab["MQTT 集成实验应用"]
     lab -->|"串口原始资源日志"| report["mqtt_resource_report.py：逐轮完整性、计数与栈"]
+    sdk_lock["../sdk-lock.json：IDF / lwIP 提交"] --> sdk_check["check_sdk.py：源码核对"]
+    idf["独立 ESP-IDF checkout"] --> sdk_check
+    sdk_check --> build["firmware：C3 默认 / 实验构建"]
 ```
+
+## SDK 源码准备
+
+本仓 `sdk-lock.json` 锁定公开 ESP-IDF fork 的 OTA 擦除失败修正和公开 esp-lwip 的零窗口修正。首次准备独立 SDK 时，将 `ESP_BASE_IDF` 指向仓外的新路径：
+
+```bash
+ESP_BASE_IDF=/private/path/esp-base-idf
+git clone --recurse-submodules --branch codex/fix-ota-begin-erase-failure \
+  https://github.com/darren-you/esp-idf.git "$ESP_BASE_IDF"
+git -C "$ESP_BASE_IDF" checkout --detach 855937cf9dcee13ee9c423fb0319238cdc8d53fd
+git -C "$ESP_BASE_IDF" submodule update --init --recursive
+git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
+  https://github.com/darren-you/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
+git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
+bash "$ESP_BASE_IDF/install.sh" esp32c3
+source "$ESP_BASE_IDF/export.sh"
+python3 tools/check_sdk.py --path "$IDF_PATH"
+```
+
+构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。Git remote 使用 HTTPS 或 SSH 不改变提交身份。普通构建与 MQTT 实验构建共用一份 `firmware/dependencies.lock`，其中 `mqtt` 精确来自公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
 
 先退出占用该端点的监控或烧录程序；工具仅使用 Python 3 标准库。从本轮系统枚举结果选择端点，不把历史端点当设备身份。
 

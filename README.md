@@ -6,7 +6,8 @@
 
 ```mermaid
 flowchart LR
-    sdk["ESP-IDF v6.1"] --> firmware["firmware：ESP32-C3 应用"]
+    sdk_lock["sdk-lock.json：IDF / lwIP 精确提交"] --> sdk["公开 ESP-IDF v6.1 fork"]
+    sdk --> firmware["firmware：ESP32-C3 应用"]
     identity["device_identity：NVS UUID"] --> firmware
     state["device_protocol / remote_config / wifi_runtime / safety_runtime"] --> firmware
     time["time_runtime：SNTP 同步证明"] --> firmware
@@ -33,7 +34,7 @@ source "$IDF_PATH/export.sh"
 idf.py -C firmware build
 ```
 
-`IDF_PATH` 指向独立安装的 ESP-IDF v6.1。依赖来自本仓、固定 SDK、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@36c23dcdc44dd0c3df863b2ae635f8bc929ed860`，不读取工作区相邻仓库。普通基座虽统一解析 MQTT 依赖，但尚未创建客户端或接入设备命令，仍报告 MQTT unsupported；隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)为准；编译不写设备。
+`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`，不读取工作区相邻仓库。普通基座虽统一解析 MQTT 依赖，但尚未创建客户端或接入设备命令，仍报告 MQTT unsupported；隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)与[SDK fork 复验](docs/operations/mqtt-hard-cut-candidate.md#sdk-fork-升级复验)为准；编译不写设备。
 
 NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身份沿用 `nvs/base_identity/device_uuid`；分区地址和大小保持迁移基线。首版目标仅为 ESP32-C3、4 MiB，无 GPIO 动作。
 

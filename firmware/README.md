@@ -24,14 +24,15 @@ flowchart LR
     main --> protocol["device_protocol：串口心跳 / 有界命令 / 回执"]
     host["公开 tools 或私有 Bridge"] <-->|"JSON Lines"| protocol
     partitions["partitions/partition_table.csv"] --> build["ESP-IDF build"]
+    lock["../sdk-lock.json：公开 IDF / lwIP"] --> build
     main --> build
     lab["apps/mqtt_integration/main：显式实验应用"] --> mqtt["公开 esp-mqtt：官方核心 / emqtt_ 运行接口"]
     lab --> build
 ```
 
-从仓库根执行 `idf.py -C firmware build`，官方工具链固定 ESP-IDF v6.1 / esp32c3。保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
+从仓库根执行 `idf.py -C firmware build`，工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@36c23dcdc44dd0c3df863b2ae635f8bc929ed860`。host tests 使用同一已解析 cJSON 源码，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。host tests 使用同一已解析 cJSON 源码，不读取相邻仓。
 
 默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。公开 MQTT 组件已进入共同锁文件，实验应用直接消费 `emqtt_`；普通基座尚无 MQTT 设备控制或命令 ACK 闭环。
 

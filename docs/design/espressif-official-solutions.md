@@ -1,6 +1,6 @@
 # 乐鑫官方仓库与 ESP Base 固件选型
 
-仓库清单核对日期：2026-09-22；实现状态核对日期：2026-09-23。本文针对当前 `esp-base` 的 ESP32-C3、4 MiB、ESP-IDF v6.1 基线；[逐仓清单](./espressif-repository-catalog.md)记录当日乐鑫 GitHub 组织的全部公开仓库。组织名下有源码、组件、例程、文档、工具链、硬件资料、上游 Fork 和归档项目。组织归属本身不代表某仓可作为本固件的生产依赖。
+仓库清单核对日期：2026-09-22；实现状态核对日期：2026-09-24。本文针对当前 `esp-base` 的 ESP32-C3、4 MiB、ESP-IDF v6.1 基线；[逐仓清单](./espressif-repository-catalog.md)记录当日乐鑫 GitHub 组织的全部公开仓库。组织名下有源码、组件、例程、文档、工具链、硬件资料、上游 Fork 和归档项目。组织归属本身不代表某仓可作为本固件的生产依赖。
 
 ## 结论
 
@@ -24,9 +24,9 @@ USB 命令已使用 UUID v4 `boot_id`、配置 `revision` 与有界请求裁决�
 
 | 能力与来源 | 对 ESP Base 的判断 | 接入边界和完成证据 |
 | --- | --- | --- |
-| [ESP-IDF v6.1](https://github.com/espressif/esp-idf/releases/tag/v6.1) | **已采用，继续作为唯一设备 SDK**。NVS、分区/OTA、事件循环、Wi-Fi、TLS、HTTP 和 WDT 可直接使用 IDF 组件。 | 保持 `esp32c3` 与分区表；构建、锁定依赖和实板测试必须基于同一 SDK 版本。不要另建 Arduino 或 MicroPython 运行面。 |
+| [ESP-IDF v6.1](https://github.com/espressif/esp-idf/releases/tag/v6.1) | **已采用，继续作为唯一设备 SDK**。当前源码固定公开 [OTA 修复 fork](https://github.com/darren-you/esp-idf/tree/codex/fix-ota-begin-erase-failure) `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 及 esp-lwip `2758df4cd3666b3b2a5b53830148379326425c0d`；NVS、分区/OTA、事件循环、Wi-Fi、TLS、HTTP 和 WDT 仍使用 IDF 组件。 | 保持 `esp32c3` 与分区表；仓根 `sdk-lock.json` 和构建守卫核对 SDK，实板测试须使用同一源码提交。不要另建 Arduino 或 MicroPython 运行面。 |
 | [ESP-IDF Wi-Fi](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/network/esp_wifi.html)、[esp_netif](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/network/esp_netif.html)、`esp_event` | **已在普通基座采用**，由 SDK 负责 STA 连接与 IP 事件；`remote_config` 裁决已提交/候选配置。 | 候选凭据使用 `WIFI_STORAGE_RAM`，避免 Wi-Fi 默认 Flash 持久化绕过配置事务；连接、取得 IP 与必要链路 proof 后才提交本仓配置。外部 AP/WPA3 等矩阵继续见开发检查点。 |
-| [ESP-MQTT 仓库](https://github.com/espressif/esp-mqtt) / [公开维护仓](https://github.com/darren-you/esp-mqtt) | **已在隔离测试应用采用公开组件**，固定 `esp-mqtt@36c23dcdc44dd0c3df863b2ae635f8bc929ed860`；普通基座仍报告 unsupported。 | 旧适配层曾验证隔离 TLS Broker；新提交已完成 C3 组合编译，真实 Broker/C3 结果尚未继承。普通基座的 MQTT 持久配置、命令入口和最终结果仍待接入；`device_id`、HMAC、`boot_id`、期限、队列和最终结果由[自有协议](./device-protocol.md)裁决。 |
+| [ESP-MQTT 仓库](https://github.com/espressif/esp-mqtt) / [公开维护仓](https://github.com/darren-you/esp-mqtt) | **已在隔离测试应用采用公开组件**，固定 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`；普通基座仍报告 unsupported。 | 旧适配层曾验证隔离 TLS Broker；新提交已完成 C3 组合编译，真实 Broker/C3 结果尚未继承。普通基座的 MQTT 持久配置、命令入口和最终结果仍待接入；`device_id`、HMAC、`boot_id`、期限、队列和最终结果由[自有协议](./device-protocol.md)裁决。 |
 | [ESP HTTP Client](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/protocols/esp_http_client.html) / [IDF OTA](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/system/ota.html) | **签名构建的软件链已接入**：USB 命令、HTTPS 下载、完整 signed bin 长度/摘要、SDK 验签/切槽、pending 本地确认；普通未签名构建拒绝 OTA。 | 临时测试键签名构建和 host 故障注入已过；首次签名基座迁移、旧 bootloader 能力、真实 TLS/坏签名/断流/回滚/断电仍需实板验收。单槽 1,966,080 字节上限含签名 padding 与签名扇区。 |
 | [IDF Component Manager](https://github.com/espressif/idf-component-manager) | **已采用**，不手工复制 MQTT 或 cJSON 源码。 | `idf_component.yml` 声明公开 MQTT Git 完整提交与 cJSON 版本，[`dependencies.lock`](../../firmware/dependencies.lock) 固定求解结果；在全新 checkout 上复现构建。 |
 | [NVS](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/storage/nvs_flash.html)、[Task WDT](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/system/wdts.html)、[Core Dump](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-guides/core_dump.html) | **沿用已启用的基础设施，按实际功能补全**。身份、配置、复位事实和 coredump 分区已有基线。 | 不自动擦 NVS；确认配置事务的提交与掉电恢复；诊断从真实故障读取。分区存在不等于 coredump 已完成采集链路。 |

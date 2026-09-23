@@ -3,4 +3,4 @@ dependencies:
     version: "==1.7.19~2"
   mqtt:
     git: "https://github.com/darren-you/esp-mqtt.git"
-    version: "36c23dcdc44dd0c3df863b2ae635f8bc929ed860"
+    version: "9cac455b0184420353ff0283df3f100abaac3e6b"
