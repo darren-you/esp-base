@@ -10,6 +10,8 @@ flowchart LR
     owner --> state["control_state：最近进展与轮次 / pending 写门"]
     state -->|"活性与确认后解除写门"| app
     usb["USB Serial/JTAG：官方无缓冲 VFS"] <-->|"FIFO 背压 / 有界读取"| owner
+    broker["设备级 Broker：TLS / 精确 ACL"] <-->|"command / result / reported / status"| mqtt["mqtt_owner：UUID / LWT / SUBACK 门"]
+    mqtt <-->|"HMAC 验证后派发 / 结果发布"| owner
     owner --> parser["command_decoder：严格 JSON / 分片 / 超限排空"]
     parser --> guard["command_guard：目标 / deadline / 去重"]
     guard --> action["状态读取 / restart / RAM 配置候选 / ota.start"]
@@ -22,7 +24,7 @@ flowchart LR
     action -->|"结果与新启动证据"| usb
 ```
 
-解析使用精确锁定的官方 `espressif/cjson`；解析前限制长度、UTF-8、NUL、整数、深度和成员数量，解析后拒绝重复/未知字段。物理 USB `config.set` 只接受 schema_version 2 完整 Wi-Fi/MQTT 配置，使用规范 v2 blob 的 SHA-256 做同启动幂等指纹；status 保持既有脱敏字段，MQTT 能力仍报告 `unsupported`。半帧超过 2 秒不完整时排空至下一换行。命令在同一任务即将执行时检查 boot 和 uptime 期限；restart 先回 running，最终结果由工具核对同设备的新 boot_id，不能将该回执当成功。
+解析使用精确锁定的官方 `espressif/cjson`；解析前限制长度、UTF-8、NUL、整数、深度和成员数量，解析后拒绝重复/未知字段。物理 USB `config.set` 只接受 schema_version 2 完整 Wi-Fi/MQTT 配置，使用规范 v2 blob 的 SHA-256 做同启动幂等指纹；status 保持既有脱敏字段，MQTT 能力按 owner 状态报告。半帧超过 2 秒不完整时排空至下一换行。命令在同一任务即将执行时检查 boot 和 uptime 期限；restart 先回 running，最终结果由工具核对同设备的新 boot_id，不能将该回执当成功。
 
 使用 ESP-IDF v6.1 官方无缓冲 VFS 直接消费硬件 FIFO，每轮最多读取 256 字节并让出任务调度。实板发现缓冲驱动的 RX ring 满时会丢弃接收字节，因此不安装该驱动；硬件 FIFO 提供 USB 背压。8193 字节非法帧、后续有效命令及半帧超时恢复均已在同一 C3 验证。
 
@@ -30,6 +32,6 @@ pending OTA 自检期间，`config.set` 在身份、期限和去重裁决后返�
 
 Wi-Fi 驱动初始化失败时记录 `ESP_BASE_WIFI_UNAVAILABLE`，运行状态为 `failed`；USB 控制任务继续启动，pending 槽仍按本地控制进展确认。网络故障不自动触发固件回滚，`config.set` 候选因 Wi-Fi 未就绪而失败并保留已提交配置。
 
-已加入产品侧 MQTT Topic 与带 HMAC 的载荷解析原语，入口只对精确设备 `command` Topic、QoS 1、非 retained 和原始请求字节的有效 tag 返回借用请求。该原语无网络副作用；普通固件仍没有客户端和网络命令派发，MQTT 状态继续为 `unsupported`。完整 wire 与跨 Tool/Broker 前置见[设备控制协议](../../../docs/design/device-protocol.md#mqtt-网络命令合同软件入口准备中)。
+普通固件在配置 v2 MQTT 凭据存在且 pending OTA 本地确认结束后创建严格 TLS 客户端；Wi-Fi IP 与本次启动可信时间齐备后才连接，订阅 `command` 的 SUBACK 批准后发布 retained `status=online` 并标记 `ready`。入口只对精确设备 Topic、QoS 1、非 retained 和原始请求字节的有效 HMAC tag 派发，复用同一 JSON decoder、身份/期限/幂等裁决；无认证输入不回显。MQTT `config.set` 只返回 `physical_usb_required`；结果与每 5 秒的脱敏 reported 以 QoS 1 非 retained 发布，异步 OTA 结果回到发起通道。失去 Wi-Fi 或可信时间会停止会话，重新连接必须重新取得 SUBACK；订阅故障有界重试。主动停止或重配之后旧 retained online 可能仍在 Broker，Tool/网关须用当前会话、新鲜非 retained reported 与 boot_id 判定在线。完整 wire 与跨 Tool/Broker 前置见[设备控制协议](../../../docs/design/device-protocol.md#mqtt-网络命令合同固件软件接线候选)。此路径尚无普通 Base 与设备级 Broker 的实板端到端验收。
 
 签名构建的只读 `ota.result` 按 operation ID 读取最近一次持久收据，返回目标 signed bin 摘要/长度和当前 running/succeeded/failed/unknown；旧启动的 `request_id` 不会重放写动作。活跃 worker 查询保持 running，目标槽 VALID 且整镜像摘要匹配后才 succeeded。NVS 登记必须先 commit+读回再创建 worker；失败收据持久化不确定时返回 unknown 并关闭本次启动配置写入。只有新旧两个镜像都含此查询命令时，回滚到旧槽才能由设备回报最终失败；较旧镜像缺少命令时工具报告 unknown。

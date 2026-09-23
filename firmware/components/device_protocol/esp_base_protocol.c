@@ -4,6 +4,7 @@
 #include "esp_base_command.h"
 #include "esp_base_identity.h"
 #include "esp_base_remote_config.h"
+#include "esp_base_mqtt_owner.h"
 #include "esp_base_wifi.h"
 #include "esp_base_time.h"
 #include "esp_base_ota_update.h"
@@ -42,14 +43,17 @@ static esp_base_remote_config_t s_candidate;
 static esp_base_remote_config_t s_committed;
 static ebase_command_t command;
 static uint8_t s_fingerprint_bytes[EBASE_CONFIG_MAX_BYTES];
+static bool s_reply_mqtt, s_mqtt_revision_set;
+static uint32_t s_mqtt_revision;
+static char s_mqtt_result_json[1024], s_mqtt_reported_json[512];
 typedef struct {
     uint64_t uptime;
     uint32_t revision, free_heap, minimum_free_heap, ota_received, ota_total;
-    const char *wifi, *config, *ota;
+    const char *wifi, *mqtt, *config, *ota;
 } status_snapshot_t;
 typedef struct {
     const char *state, *error;
-    bool has_status;
+    bool has_status, via_mqtt;
     status_snapshot_t status;
 } command_outcome_t;
 static command_outcome_t s_outcomes[EBASE_REQUEST_SLOTS];
@@ -58,19 +62,29 @@ static uint64_t uptime_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000)
 
 static void reported(void)
 {
+    const uint64_t now = uptime_ms();
+    const bool time_ready = esp_base_time_ready();
     ESP_LOGI("base_reported",
         "ESP_BASE_REPORTED schema=1 boot_id=%s uptime_ms=%" PRIu64
         " free_heap=%" PRIu32 " min_free_heap=%" PRIu32
         " device_id=%s firmware=%s chip=%s flash=%" PRIu32 " config_generation=%" PRIu32
-        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=unsupported frp_state=unsupported ota_received=%" PRIu32 " ota_total=%" PRIu32,
-        s_boot_id, uptime_ms(), esp_get_free_heap_size(),
+        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s frp_state=unsupported ota_received=%" PRIu32 " ota_total=%" PRIu32,
+        s_boot_id, now, esp_get_free_heap_size(),
         (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT), s_context.device_id,
         s_context.firmware_version, s_context.chip_model, s_context.flash_size_bytes,
         s_context.config.revision, s_context.reset_reason,
         s_context.config.wifi.configured ? "true" : "false", esp_base_wifi_state(),
-        esp_base_time_ready() ? "true" : "false",
+        time_ready ? "true" : "false", esp_base_mqtt_owner_state(),
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request.image_size_bytes : 0);
+    const int size = snprintf(s_mqtt_reported_json, sizeof s_mqtt_reported_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
+        "\"wifi_state\":\"%s\",\"time_ready\":%s}",
+        s_context.device_id, s_boot_id, now, s_context.config.revision,
+        esp_base_wifi_state(), time_ready ? "true" : "false");
+    if (size > 0 && (size_t)size < sizeof s_mqtt_reported_json)
+        (void)esp_base_mqtt_owner_reported(s_mqtt_reported_json, (size_t)size);
 }
 
 static status_snapshot_t snapshot(void)
@@ -80,7 +94,8 @@ static status_snapshot_t snapshot(void)
         .minimum_free_heap = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
         .ota_received = (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         .ota_total = s_ota_active ? s_ota_request.image_size_bytes : 0,
-        .wifi = esp_base_wifi_state(), .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
+        .wifi = esp_base_wifi_state(), .mqtt = esp_base_mqtt_owner_state(),
+        .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
         .ota = !esp_base_ota_update_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
 }
 
@@ -88,6 +103,33 @@ static void reply(const char *request_id, const char *state, const char *error, 
 {
     /* Strings are validated UUIDs or closed firmware constants. Never echo
      * request text or secrets. One FILE lock covers the complete JSON line. */
+    if (s_reply_mqtt) {
+        const int length = status ?
+            snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
+                "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+                "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,"
+                "\"result\":{\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32
+                ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
+                ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
+                ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
+                "\"frp\":\"unsupported\",\"config\":\"%s\",\"ota\":\"%s\"}}}",
+                s_context.device_id, s_boot_id, request_id && request_id[0] ? "\"" : "null",
+                request_id && request_id[0] ? request_id : "",
+                request_id && request_id[0] ? "\"" : "",
+                state, error ? "\"" : "null", error ? error : "", error ? "\"" : "",
+                status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
+                status->ota_received, status->ota_total, status->wifi, status->mqtt, status->config, status->ota) :
+            snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
+                "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+                "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,\"result\":null}",
+                s_context.device_id, s_boot_id, request_id && request_id[0] ? "\"" : "null",
+                request_id && request_id[0] ? request_id : "",
+                request_id && request_id[0] ? "\"" : "",
+                state, error ? "\"" : "null", error ? error : "", error ? "\"" : "");
+        if (length > 0 && (size_t)length < sizeof s_mqtt_result_json)
+            (void)esp_base_mqtt_owner_result(s_mqtt_result_json, (size_t)length);
+        return;
+    }
     flockfile(stdout);
     printf("\n{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\",\"request_id\":",
            s_context.device_id, s_boot_id);
@@ -99,10 +141,10 @@ static void reply(const char *request_id, const char *state, const char *error, 
         printf("{\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32
                ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
                ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
-               ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"unsupported\","
+               ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
                "\"frp\":\"unsupported\",\"config\":\"%s\",\"ota\":\"%s\"}}",
                status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
-               status->ota_received, status->ota_total, status->wifi, status->config, status->ota);
+               status->ota_received, status->ota_total, status->wifi, status->mqtt, status->config, status->ota);
     } else printf("null");
     printf("}\n");
     fflush(stdout);
@@ -121,6 +163,21 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
         digest[i * 2 + 1] = digits[view->sha256[i] & 15];
     }
     digest[64] = '\0';
+    if (s_reply_mqtt) {
+        const int length = snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
+            "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+            "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
+            "\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
+            "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\"}}",
+            s_context.device_id, s_boot_id, request_id, state,
+            view->error_code ? "\"" : "null", view->error_code ? view->error_code : "",
+            view->error_code ? "\"" : "", view->operation_id, digest, view->image_size_bytes,
+            ESP_BASE_OTA_TARGET,
+            view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1");
+        if (length > 0 && (size_t)length < sizeof s_mqtt_result_json)
+            (void)esp_base_mqtt_owner_result(s_mqtt_result_json, (size_t)length);
+        return;
+    }
     flockfile(stdout);
     printf("\n{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
            "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":",
@@ -134,17 +191,22 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
     funlockfile(stdout);
 }
 
-static void emit_outcome(size_t slot)
+static void emit_outcome(size_t slot, bool via_mqtt)
 {
     command_outcome_t *out = &s_outcomes[slot];
+    const bool previous_route = s_reply_mqtt;
+    s_reply_mqtt = via_mqtt;
     reply(s_guard.requests[slot].request_id, out->state, out->error, out->has_status ? &out->status : NULL);
+    s_reply_mqtt = previous_route;
 }
 
 static void save_outcome(size_t slot, const char *state, const char *error, bool status)
 {
-    s_outcomes[slot] = (command_outcome_t){.state = state, .error = error, .has_status = status};
+    const bool via_mqtt = s_outcomes[slot].via_mqtt;
+    s_outcomes[slot] = (command_outcome_t){.state = state, .error = error,
+                                          .has_status = status, .via_mqtt = via_mqtt};
     if (status) s_outcomes[slot].status = snapshot();
-    emit_outcome(slot);
+    emit_outcome(slot, via_mqtt);
 }
 
 static void restore_committed(uint64_t now)
@@ -296,11 +358,16 @@ static void handle_line(const char *line, size_t length, void *context)
     size_t slot = 0;
     const ebase_admission_t decision = ebase_admit(&s_guard, &command.request,
         s_context.device_id, s_boot_id, uptime_ms(), &slot);
-    if (decision == EBASE_REPLAY) { emit_outcome(slot); return; }
+    if (decision == EBASE_REPLAY) { emit_outcome(slot, s_reply_mqtt); return; }
     if (decision != EBASE_ACCEPT) {
         static const char *const errors[] = {NULL, NULL, "invalid_identity", "wrong_device",
             "wrong_boot", "expired", "invalid_deadline", "request_conflict", "capacity_exceeded"};
         reply(command.request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", errors[decision], NULL);
+        return;
+    }
+    s_outcomes[slot].via_mqtt = s_reply_mqtt;
+    if (s_reply_mqtt && command.kind == EBASE_CONFIG_SET) {
+        save_outcome(slot, "failed", "physical_usb_required", false);
         return;
     }
     if (command.kind == EBASE_CONFIG_SET) {
@@ -380,6 +447,14 @@ static void handle_line(const char *line, size_t length, void *context)
     esp_restart();
 }
 
+static void handle_mqtt_command(const uint8_t *json, size_t length, void *context)
+{
+    (void)context;
+    s_reply_mqtt = true;
+    handle_line((const char *)json, length, NULL);
+    s_reply_mqtt = false;
+}
+
 static void control_task(void *argument)
 {
     (void)argument;
@@ -393,6 +468,15 @@ static void control_task(void *argument)
         if (now >= next_time_poll) {
             esp_base_time_poll();
             next_time_poll = now + 1000;
+        }
+        if (!esp_base_control_state_ota_pending(&s_control_state)) {
+            if (!s_mqtt_revision_set || s_mqtt_revision != s_context.config.revision) {
+                (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id, s_boot_id);
+                s_mqtt_revision = s_context.config.revision;
+                s_mqtt_revision_set = true;
+            }
+            esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
+                                     handle_mqtt_command, NULL);
         }
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader.length && now - last_input >= 2000) {

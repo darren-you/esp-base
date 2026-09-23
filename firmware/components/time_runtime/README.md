@@ -13,4 +13,4 @@ flowchart LR
     time -->|"time_ready 状态"| owner
 ```
 
-服务器名称仅保存在构建配置中，不写 Wi-Fi NVS。组件持有服务器名称直到本次 boot 结束；SNTP 初始化失败后允许再次调用 start。该门只证明 SDK 收到 SNTP 同步事件与时间下界，不提供加密时间认证。当前普通基座尚未接入 MQTT/HTTPS OTA，实板 SNTP、Wi-Fi 重连与服务失败恢复尚未验收。
+服务器名称仅保存在构建配置中，不写 Wi-Fi NVS。组件持有服务器名称直到本次 boot 结束；SNTP 初始化失败后允许再次调用 start。该门只证明 SDK 收到 SNTP 同步事件与时间下界，不提供加密时间认证。普通基座的 MQTT 与签名构建的 HTTPS OTA 均读取此门；实板 SNTP、Wi-Fi 重连与服务失败恢复尚未验收。

@@ -16,6 +16,16 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   "$ROOT/tests/network_auth_test.c" \
   -o "$BUILD_DIR/network_auth_test"
 "$BUILD_DIR/network_auth_test"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
+  -I "$ROOT/components/remote_config/include" \
+  -I "$ROOT/managed_components/mqtt/runtime/include" \
+  "$ROOT/components/device_protocol/mqtt_owner.c" \
+  "$ROOT/components/device_protocol/mqtt_command.c" \
+  "$ROOT/components/device_protocol/command_guard.c" \
+  "$ROOT/managed_components/mqtt/runtime/emqtt_contract.c" \
+  "$ROOT/tests/mqtt_owner_test.c" -o "$BUILD_DIR/mqtt_owner_test"
+"$BUILD_DIR/mqtt_owner_test"
 CJSON_DIR="$ROOT/managed_components/espressif__cjson/cJSON"
 if [[ ! -f "$CJSON_DIR/cJSON.c" ]]; then
   printf 'esp-base host tests\n  error  Run idf.py -C firmware reconfigure to resolve the locked cJSON dependency.\n' >&2

@@ -22,11 +22,13 @@ flowchart LR
     ota <-->|"登记与读回"| receipt["base_store NVS：base_ota/operation"]
     main --> safety["safety_runtime：复位事实 / WDT"]
     main --> protocol["device_protocol：串口心跳 / 有界命令 / 回执"]
+    protocol --> mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
+    mqtt_owner --> mqtt["公开 esp-mqtt：官方核心 / emqtt_ 运行接口"]
     host["公开 tools 或私有 Bridge"] <-->|"JSON Lines"| protocol
     partitions["partitions/partition_table.csv"] --> build["ESP-IDF build"]
     lock["../sdk-lock.json：公开 IDF / lwIP"] --> build
     main --> build
-    lab["apps/mqtt_integration/main：显式实验应用"] --> mqtt["公开 esp-mqtt：官方核心 / emqtt_ 运行接口"]
+    lab["apps/mqtt_integration/main：显式实验应用"] --> mqtt
     lab --> build
 ```
 
@@ -34,7 +36,7 @@ flowchart LR
 
 [嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。host tests 使用同一已解析 cJSON 源码，不读取相邻仓。
 
-默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座，并只读装载 v2 持久配置，经物理 USB `config.set` 写入完整 Wi-Fi/MQTT 凭据；状态仍报告 MQTT unsupported。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。公开 MQTT 组件已进入共同锁文件，实验应用直接消费 `emqtt_`；普通基座尚无 MQTT 设备控制或命令 ACK 闭环。现有实板仍为 v1 存储，未完成双槽与 NVS 离线迁移前不得启动 v2-only 镜像。
+默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座，并只读装载 v2 持久配置，经物理 USB `config.set` 写入完整 Wi-Fi/MQTT 凭据；未配置时不创建 MQTT 客户端。已配置时只在 Wi-Fi IP 和本次启动可信时间齐备后启动严格 TLS，会在 command SUBACK 后报告 ready，并通过同一控制任务执行已认证命令、发布 QoS 1 结果和脱敏 reported；远端 config.set 被拒绝。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。现有实板仍为 v1 存储，未完成双槽与 NVS 离线迁移前不得启动 v2-only 镜像；正式 Broker/Tool 和实板网络 ACK 闭环尚待联调。
 
 普通应用仅在本地启动检查成功、控制循环已实际运行且持续 30 秒报告进展，并跨过窗口终点再完成一轮后确认 pending OTA 槽；构建要求 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`。pending 窗口内拒绝 `config.set`，确认后恢复。SDK 确认失败后读回持久槽状态，若已 VALID 则清门。无可回退镜像时当前执行虽保留，下次复位仍有失去可启动槽风险。控制循环进展的 5 秒阈值是策略值，复杂负载、真实新槽和回滚仍待实板验收。
 

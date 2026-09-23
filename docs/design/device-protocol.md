@@ -20,7 +20,7 @@ USB 为 UTF-8 JSON Lines；单帧最大 8192 字节（不含换行），拒绝 N
 - `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃或目标槽 pending 时为 `running`；目标槽运行且 VALID、完整镜像摘要匹配时为 `succeeded`；已持久记录的下载失败或目标槽 ABORTED/INVALID 且旧槽有效时为 `failed`；收据缺失/损坏、槽关系不明或仅见旧槽而无失败证据时为 `unknown`。普通未签名构建拒绝查询。
 - `business.*`：仅派发业务注册的命令与参数 schema，未知命令拒绝，不提供任意 shell、脚本或 Topic。
 
-配置 `schema_version` 固定 2，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 和 business 必须为 null。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT 仍为 unsupported。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。网络命令入口尚未接入。
+配置 `schema_version` 固定 2，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 和 business 必须为 null。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT 能力按实际 owner 状态报告。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。
 
 ## 结果与幂等
 
@@ -36,15 +36,15 @@ OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下�
 
 TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelope 的 timestamp 是 Unix 毫秒，两者不得混用。
 
-## MQTT 网络命令合同（软件入口准备中）
+## MQTT 网络命令合同（固件软件接线候选）
 
 正式设备的 ClientID 仍是持久 UUID。四个 Topic 精确为 `esp-base/<device_id>/command`、`result`、`reported`、`status`；静态段为小写 kebab-case，设备 UUID 原样填入。设备只读 `command`，只写其余三个 Topic；控制端只对已绑定设备写 `command`、读 `result`/`reported`/`status`。Broker 必须为每台设备分配独立 principal 和精确 ACL，不借用实验应用的 `esp-base-lab` Topic 或已有共享 principal。
 
-首版 MQTT 3.1.1 只走严格 TLS。设备取得 Wi-Fi IP 和本次启动可信时间后才启动客户端；只有本轮 `command` QoS 1 订阅的 SUBACK 已批准，才可报告 MQTT `ready`。`status` 的上线和 LWT 离线消息采用 QoS 1 retained，载荷分别为 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","state":"online"}` 和同结构的 `state:"offline"`；retained `online` 只是最近提示，Broker 重启后可能残留，Tool/网关必须由新鲜时间和当前会话判在线。`reported` 不包含连接密码、管理密钥等敏感配置。
+首版 MQTT 3.1.1 只走严格 TLS。设备取得 Wi-Fi IP 和本次启动可信时间后才启动客户端；只有本轮 `command` QoS 1 订阅的 SUBACK 已批准，才可报告 MQTT `ready`。`status` 的上线和 LWT 离线消息采用 QoS 1 retained，载荷分别为 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","state":"online"}` 和同结构的 `state:"offline"`；retained `online` 只是最近提示，Broker 重启或设备主动停止/重配会话后可能残留，Tool/网关不得由单条 retained 消息判在线。MQTT ready 时，`reported` 每 5 秒以 QoS 1 非 retained 发布 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","uptime_ms":<整数>,"revision":<整数>,"wifi_state":"<状态>","time_ready":<布尔>}`，不包含连接密码、管理密钥等敏感配置。Tool/网关按自身收到该次消息的时间、当前会话及 boot_id 判断新鲜度；设备 uptime 不是 Unix 时间，历史 reported 也不能单独证明当前在线。
 
 `command` 载荷是连续 `64` 个小写十六进制字符、一个 LF、原始 UTF-8 v1 JSON 请求字节，总长度最多 `4096` 字节。前缀解码为 32 字节 HMAC-SHA256 tag，使用独立的设备管理密钥，只覆盖 LF 后的原始请求字节；不重排 JSON、归一化空白或先解析再签名。仅精确 `command` Topic、QoS 1、非 retained、格式和 HMAC 均有效的消息进入既有 JSON decoder、boot/deadline、request_id/指纹裁决。无认证消息直接丢弃，不回显 request_id 或产生 ACK。已认证但语法错误的请求由设备协议结果裁决。DUP 重投不重复执行，复用本次 boot 的原结果；跨 boot 未决结果仍是 unknown，不能从 PUBACK 推断成功。
 
-`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入，不能通过 MQTT 自身远程修改。普通固件现可只读装载 v2 持久格式和经 USB 写入凭据，但尚未接通 MQTT 客户端、设备级 Broker ACL、Tool 注入与实板 v1→v2 迁移；新增 HMAC/Topic/载荷解析原语不等于网络命令已开放。
+`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。同启动重复请求经共同 owner 的幂等裁决后回送原结果；异步 OTA 结果回送原请求通道。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入；已认证的远端 `config.set` 经身份、期限与去重裁决后返回 `failed/physical_usb_required`，不写入配置。普通固件的软件 owner 已接入客户端、订阅和结果通道；设备级 Broker ACL、Tool 的网络控制端与实板 v1→v2 迁移尚未生效，此代码构建与 host 测试不构成网络端到端验收。
 
 ## 当前 USB 结果
 

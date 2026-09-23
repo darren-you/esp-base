@@ -10,6 +10,8 @@ OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长
 
 v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 字节显式拒绝且无写入，以及 NVS 查询长度、写前/写后、commit 与读回故障；公开 USB 工具另验证相同 schema 的非法字段和整帧上限。
 
+`mqtt_owner_test` 编译普通 Base 的真实 owner、Topic 与公开 emqtt 配置校验源码，注入客户端事件；覆盖无凭据不建客户端、UUID ClientID、严格 TLS、离线 LWT、SUBACK 前不受理命令、retained/错 Topic/HMAC 拒绝、结果和 reported 的 QoS/retain、断连重新订阅门、发布或订阅失败的停止重试，以及配置更换时 stop 失败不释放旧 handle、清除旧 key 且不再派发。Fake 不模拟实际 Broker、TLS 握手或设备任务调度。
+
 `ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、普通构建无 NVS 写入。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
 ## 架构拓扑
@@ -21,9 +23,10 @@ flowchart LR
     ota["ota_runtime + app_main + control_state：pending / HTTPS OTA 裁决 / 回滚"] --> host
     time["time_runtime：SNTP 事件 / 时间下界"] --> host
     wifi["wifi_runtime：初始化故障与资源释放"] --> host
+    mqtt["mqtt_owner：会话 / 认证 / 结果发布"] --> host
     idf --> image["esp_base.bin"]
 ```
 
 编译不证明设备运行与断电恢复；相关结果只在实际验收后登记。
 
-MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再编译第二份运行层或重复其 SDK fake。Base 的隔离应用使用固定公开提交做 C3 组合编译；设备命令与 ACK 的 Base 回归需在普通应用真正接入后补齐。实际板卡和 Broker 验收单独执行 [MQTT 集成应用](../apps/mqtt_integration/README.md)。
+MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再编译第二份运行层或重复其 SDK fake。普通 Base 的 owner 故障测试与 C3 编译只证明软件接线；设备命令与 ACK 的 Broker/实板端到端验收仍需单独执行。隔离应用使用固定公开提交做 C3 组合编译；实验实板记录见 [MQTT 集成应用](../apps/mqtt_integration/README.md)。
