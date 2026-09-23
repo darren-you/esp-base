@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-24 OTA TLS 会话票据期限修正依赖更新：Base 的唯一 Component Manager 声明与生成锁精确解析公开 `esp-ota@56944e160b1f7c919272d3a3d0c70b043e1a87d0`，组件 hash 为 `d4fa00ef861447571d4a4624075b61b92e7800021a355077c1f0cdb658d0d805`。上游在每次 TLS 读取前核对同一次读取的绝对期限，连续 TLS 1.3 会话票据不能跳过超时门；旧源码配新增回归确定性失败，修后上游主机 ASan/UBSan 与真实 HTTPS CTest 5/5、固定 SDK 普通及测试键签名 C3 构建和 RSA 验签通过。Base 的 OTA 调用合同未变。
+
+- 本仓 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过；固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 与 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 960592 字节、SHA-256 `add1d0a44378e9d857fea4de690c28c01b491087ce97ca2ee0234972490900b8`，仍在 `0x1e0000` 槽内。普通未签名 Base 不编入 OTA 下载路径；本轮未重跑 Base 签名镜像、未刷板。真实 TLS 1.3 连续票据、设备 HTTPS/Flash、bootloader/回滚与 P5-04 墙钟验收仍缺。
+
 2026-09-24 MQTT 重连修正与 OTA 产品归属的组合软件候选：Base 的唯一 Component Manager 清单和生成锁现分别精确消费公开 `esp-mqtt@113bdef20d862a1bf094fd3cdd833f641ab7aa64`、`esp-ota@feb6ef255d55d6e29d7904b87be92f571eb00317` 与既有 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`。MQTT 源仓已在真实 core/Linux 隔离 Broker 验证 clean session 断线不重放旧 SUB/UNSUB、保留 QoS1 PUBLISH 重传；Base 仍以本仓的 MQTT owner 在本次 SUBACK 后裁决 ready。OTA 库切槽前重新核对可信项目/芯片，Base 的运行/回退固件集合还逐槽核对分区几何和镜像头/app 描述；只读签名摘要不能单独作为产品授权。
 
 - `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过，包含 Base MQTT owner、OTA 固件集合及可选 Container 映射的现有假件矩阵。固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 与 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 960592 字节、SHA-256 `add1d0a44378e9d857fea4de690c28c01b491087ce97ca2ee0234972490900b8`，小于 `0x1e0000` 槽。本轮未重跑 Base 签名镜像，未刷板；真实 Broker/TLS、设备命令 ACK、双槽 bootloader/回滚、Container 包槽及完整并行峰值仍待验收。
