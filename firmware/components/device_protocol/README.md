@@ -30,4 +30,6 @@ pending OTA 自检期间，`config.set` 在身份、期限和去重裁决后返�
 
 Wi-Fi 驱动初始化失败时记录 `ESP_BASE_WIFI_UNAVAILABLE`，运行状态为 `failed`；USB 控制任务继续启动，pending 槽仍按本地控制进展确认。网络故障不自动触发固件回滚，`config.set` 候选因 Wi-Fi 未就绪而失败并保留已提交配置。
 
+已加入产品侧 MQTT Topic 与带 HMAC 的载荷解析原语，入口只对精确设备 `command` Topic、QoS 1、非 retained 和原始请求字节的有效 tag 返回借用请求。该原语无网络副作用；普通固件仍没有客户端和网络命令派发，MQTT 状态继续为 `unsupported`。完整 wire 与跨 Tool/Broker 前置见[设备控制协议](../../../docs/design/device-protocol.md#mqtt-网络命令合同软件入口准备中)。
+
 签名构建的只读 `ota.result` 按 operation ID 读取最近一次持久收据，返回目标 signed bin 摘要/长度和当前 running/succeeded/failed/unknown；旧启动的 `request_id` 不会重放写动作。活跃 worker 查询保持 running，目标槽 VALID 且整镜像摘要匹配后才 succeeded。NVS 登记必须先 commit+读回再创建 worker；失败收据持久化不确定时返回 unknown 并关闭本次启动配置写入。只有新旧两个镜像都含此查询命令时，回滚到旧槽才能由设备回报最终失败；较旧镜像缺少命令时工具报告 unknown。

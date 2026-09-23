@@ -37,3 +37,14 @@
 SDK 检查负例使用独立临时 worktree：修改非 lwIP 的 IDF `README.md`、修改 lwIP 已跟踪文件、暂存 IDF 文件、使 micro-ecc 子模块 HEAD 漂移以及让其他子模块未初始化，均被拒绝。负例未修改本仓锁、正式 SDK checkout 或真实设备。
 
 本轮仅本机源码与构建复验；测试签名密钥留在仓外临时目录，未连接 Broker/真实板卡，也未验证 SDK fork 在真实 Flash I/O 擦除错误下的行为。普通 Base 的 MQTT 客户端、设备命令与结果 ACK 仍未接入，P3-08 继续未验收。
+
+## 设备网络命令鉴权输入候选
+
+2026-09-24 在 `esp-base@f3c1e3d34a02d97a88494871f042a3398b2255bb` 上新增产品侧 Topic 和带 HMAC 的 MQTT 请求帧解析原语。它精确生成四个 `esp-base/<UUID>/...` Topic，只在本设备 `command` Topic、QoS 1、非 retained、总载荷不超过 4096 字节时解析 `64` 个小写 hex tag、LF 和原始 JSON 字节。调用 IDF PSA HMAC-SHA256 验证原始字节后才返回借用请求；PSA 失败、格式错误或未认证时不给请求 view。固定 SDK 的 PSA MAC 验证内部使用 `mbedtls_ct_memcmp`，本仓不实现密码原语。
+
+| 检查 | 结果 |
+| --- | --- |
+| Base host ASan/UBSan | `bash firmware/tests/run_host_tests.sh` 全部通过；新增固定 HMAC 向量输入、篡改、错误 Topic、QoS、retained、大小/格式、PSA 导入/验证/销毁失败回归 |
+| 固定 SDK C3 编译 | `esp-idf@855937cf9dcee13ee9c423fb0319238cdc8d53fd`、`esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`、`esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`；`mqtt_command.c` 与 `network_auth.c` 均完成 ESP32-C3 编译，默认 `esp_base.bin` 789232 字节，SHA-256 `470bbb4f21baef919c796878fcc6541f606437d0edf4e40939177dc439fd36ab` |
+
+默认应用尚未调用这些原语，因此最终镜像无 MQTT 客户端或网络命令入口，`mqtt=unsupported` 仍是运行事实。当前 v1 `base_config/committed` 只有 112 字节 Wi-Fi 配置；私有 Tool、Broker 独立 principal/ACL、v2 单 blob 迁移与旧槽回滚保护必须同一设备切换批次闭合。不能让只读 v2 的新固件在未转换的 v1 NVS 上运行，或让只读 v1 的旧槽在 v2 NVS 写入后成为自动回滚目标。本候选不更改 NVS 格式、普通配置命令或生产 MQTT 状态；未写设备。
