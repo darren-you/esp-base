@@ -1,17 +1,22 @@
 # device_protocol
 
-单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart 和 config.set；Wi-Fi 由单一控制任务调度，其他未接入能力报告 unsupported。
+单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart、config.set 与受控签名构建中的 ota.start/ota.result；Wi-Fi 由单一控制任务调度，SNTP 同步结果每秒非阻塞轮询。每轮完成后记录原子进展时刻和轮次，供 pending OTA 启动门核对；pending 和下载期间拒绝配置写入。
 
 ## 架构拓扑
 
 ```mermaid
 flowchart LR
     app["apps/esp_base：身份与只读状态"] --> owner["esp_base_protocol：单一控制任务"]
+    owner --> state["control_state：最近进展与轮次 / pending 写门"]
+    state -->|"活性与确认后解除写门"| app
     usb["USB Serial/JTAG：官方无缓冲 VFS"] <-->|"FIFO 背压 / 有界读取"| owner
     owner --> parser["command_decoder：严格 JSON / 分片 / 超限排空"]
     parser --> guard["command_guard：目标 / deadline / 去重"]
-    guard --> action["状态读取 / restart / RAM 配置候选"]
+    guard --> action["状态读取 / restart / RAM 配置候选 / ota.start"]
     action --> wifi["wifi_runtime：20 秒候选连接证明"]
+    owner --> time["time_runtime：SNTP 轮询 / time_ready 心跳"]
+    action -->|"签名构建 + Wi-Fi + 时间门 / 持久收据"| ota["ota_runtime：独立 HTTPS OTA worker / 结果查询"]
+    ota -->|"原子进度 / 最终结果"| owner
     wifi --> store["remote_config：单 blob 条件提交"]
     store -->|"提交结果与 revision"| action
     action -->|"结果与新启动证据"| usb
@@ -20,3 +25,9 @@ flowchart LR
 解析使用精确锁定的官方 `espressif/cjson`；解析前限制长度、UTF-8、NUL、整数、深度和成员数量，解析后拒绝重复/未知字段。半帧超过 2 秒不完整时排空至下一换行。命令在同一任务即将执行时检查 boot 和 uptime 期限；restart 先回 running，最终结果由工具核对同设备的新 boot_id，不能将该回执当成功。
 
 使用 ESP-IDF v6.1 官方无缓冲 VFS 直接消费硬件 FIFO，每轮最多读取 256 字节并让出任务调度。实板发现缓冲驱动的 RX ring 满时会丢弃接收字节，因此不安装该驱动；硬件 FIFO 提供 USB 背压。8193 字节非法帧、后续有效命令及半帧超时恢复均已在同一 C3 验证。
+
+pending OTA 自检期间，`config.set` 在身份、期限和去重裁决后返回 `failed/ota_verification_pending`，不进入候选 Wi-Fi 或 NVS 提交；下载期间返回 `ota_in_progress`。`ota.start` 与配置候选互斥，要求签名构建、Wi-Fi IP 与本次启动时间同步；独立 worker 不阻塞 USB 控制循环，`status` 提供 `ota_received_bytes`/`ota_total_bytes`。升级写入后先回 `running` 再重启，新 boot 的本地自检与 30 秒窗口才确认有效。原请求 ID 重放返回原结果；未签名构建明确返回 `ota_signing_unavailable`。外部串口 Flash 租约由工具侧持有，设备软件无法阻止外部刷写；真实并发与 USB 负载尚待实板验收。
+
+Wi-Fi 驱动初始化失败时记录 `ESP_BASE_WIFI_UNAVAILABLE`，运行状态为 `failed`；USB 控制任务继续启动，pending 槽仍按本地控制进展确认。网络故障不自动触发固件回滚，`config.set` 候选因 Wi-Fi 未就绪而失败并保留已提交配置。
+
+签名构建的只读 `ota.result` 按 operation ID 读取最近一次持久收据，返回目标 signed bin 摘要/长度和当前 running/succeeded/failed/unknown；旧启动的 `request_id` 不会重放写动作。活跃 worker 查询保持 running，目标槽 VALID 且整镜像摘要匹配后才 succeeded。NVS 登记必须先 commit+读回再创建 worker；失败收据持久化不确定时返回 unknown 并关闭本次启动配置写入。只有新旧两个镜像都含此查询命令时，回滚到旧槽才能由设备回报最终失败；较旧镜像缺少命令时工具报告 unknown。

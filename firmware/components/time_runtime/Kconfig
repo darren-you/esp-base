@@ -1,0 +1,10 @@
+menu "ESP Base time"
+
+    config ESP_BASE_TIME_SERVER
+        string "普通 Base 应用使用的 SNTP 服务器"
+        default "pool.ntp.org"
+        help
+            这是构建期服务器名称，不写入持久 Wi-Fi 配置。
+            TLS 消费者必须等待本次启动完成有效时间同步。
+
+endmenu

@@ -73,6 +73,13 @@ static bool copy_id(const cJSON *object, const char *key, char *out)
     return true;
 }
 
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
 const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out)
 {
     if (!out) return "invalid_request";
@@ -84,19 +91,62 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     while (end < json + length && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) ++end;
     const char *error = "invalid_request";
     const char *const status_keys[] = {"protocol_version", "request_id", "command"};
+    const char *const query_keys[] = {"protocol_version", "request_id", "command", "parameters"};
     const char *const write_keys[] = {"protocol_version", "request_id", "command", "device_id", "target_boot_id", "expires_at_uptime_ms", "parameters"};
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (end != json + length || !cJSON_IsObject(root) || !cJSON_IsNumber(version) || version->valuedouble != 1 || !cJSON_IsString(command)) goto done;
     bool status = !strcmp(command->valuestring, "status");
-    if (!exact_keys(root, status ? status_keys : write_keys, status ? 3 : 7)) goto done;
+    bool ota_result = !strcmp(command->valuestring, "ota.result");
+    if (!exact_keys(root, status ? status_keys : ota_result ? query_keys : write_keys,
+                    status ? 3 : ota_result ? 4 : 7)) goto done;
     if (!copy_id(root, "request_id", out->request.request_id)) goto done;
     if (status) { out->kind = EBASE_STATUS; error = NULL; goto done; }
+    if (ota_result) {
+        const char *const keys[] = {"operation_id"};
+        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
+        if (!exact_keys(parameters, keys, 1) || !copy_id(parameters, "operation_id", out->operation_id)) goto done;
+        out->kind = EBASE_OTA_RESULT;
+        error = NULL;
+        goto done;
+    }
     if (!copy_id(root, "device_id", out->request.device_id) || !copy_id(root, "target_boot_id", out->request.boot_id)) goto done;
     const cJSON *deadline = cJSON_GetObjectItemCaseSensitive(root, "expires_at_uptime_ms");
     if (!cJSON_IsNumber(deadline) || !isfinite(deadline->valuedouble) || deadline->valuedouble < 0 ||
         deadline->valuedouble > 9007199254740991.0 || floor(deadline->valuedouble) != deadline->valuedouble) goto done;
     out->request.expires_at_ms = (uint64_t)deadline->valuedouble;
+    if (!strcmp(command->valuestring, "ota.start")) {
+        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
+        const char *const keys[] = {"operation_id", "image_url", "sha256", "image_size_bytes", "target", "signature"};
+        if (!exact_keys(parameters, keys, 6) ||
+            !copy_id(parameters, "operation_id", out->ota.operation_id)) goto done;
+        const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "image_url");
+        const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "sha256");
+        const cJSON *size = cJSON_GetObjectItemCaseSensitive(parameters, "image_size_bytes");
+        const cJSON *target = cJSON_GetObjectItemCaseSensitive(parameters, "target");
+        const cJSON *signature = cJSON_GetObjectItemCaseSensitive(parameters, "signature");
+        const char *const signature_keys[] = {"scheme"};
+        const cJSON *scheme = cJSON_GetObjectItemCaseSensitive(signature, "scheme");
+        if (!cJSON_IsString(url) || strlen(url->valuestring) > ESP_BASE_OTA_URL_BYTES ||
+            strncmp(url->valuestring, "https://", 8) != 0 ||
+            !cJSON_IsString(digest) || strlen(digest->valuestring) != 64 ||
+            !cJSON_IsNumber(size) || !isfinite(size->valuedouble) || size->valuedouble < 1 ||
+            size->valuedouble > UINT32_MAX || floor(size->valuedouble) != size->valuedouble ||
+            !cJSON_IsString(target) || strcmp(target->valuestring, ESP_BASE_OTA_TARGET) ||
+            !exact_keys(signature, signature_keys, 1) || !cJSON_IsString(scheme) ||
+            strcmp(scheme->valuestring, ESP_BASE_OTA_SIGNATURE_SCHEME)) goto done;
+        for (size_t i = 0; i < sizeof out->ota.sha256; ++i) {
+            const int hi = hex_digit(digest->valuestring[2 * i]);
+            const int lo = hex_digit(digest->valuestring[2 * i + 1]);
+            if (hi < 0 || lo < 0) goto done;
+            out->ota.sha256[i] = (uint8_t)((hi << 4) | lo);
+        }
+        memcpy(out->ota.image_url, url->valuestring, strlen(url->valuestring) + 1);
+        out->ota.image_size_bytes = (uint32_t)size->valuedouble;
+        out->kind = EBASE_OTA_START;
+        error = NULL;
+        goto done;
+    }
     if (!strcmp(command->valuestring, "config.set")) {
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const parameter_keys[] = {"expected_revision", "config"};

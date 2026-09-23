@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_protocol.h"
+#include "control_state.h"
 #include "esp_base_command.h"
 #include "esp_base_identity.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_wifi.h"
+#include "esp_base_time.h"
+#include "esp_base_ota_update.h"
+#include "esp_base_ota_receipt.h"
+#include "esp_partition.h"
 #include "psa/crypto.h"
+#include <stdatomic.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,13 +29,20 @@ static char s_boot_id[EBASE_ID_BYTES];
 static ebase_request_guard_t s_guard;
 static ebase_line_reader_t s_reader;
 static bool s_started, s_config_uncertain, s_trial_active;
+static bool s_ota_active, s_ota_boot_uncertain;
+static size_t s_ota_slot;
+static esp_base_ota_update_request_t s_ota_request;
+static atomic_bool s_ota_done;
+static atomic_int s_ota_result;
+static atomic_uint_fast32_t s_ota_received;
+static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
 static uint64_t s_trial_deadline;
 static esp_base_remote_config_t s_candidate;
 typedef struct {
     uint64_t uptime;
-    uint32_t revision, free_heap, minimum_free_heap;
-    const char *wifi, *config;
+    uint32_t revision, free_heap, minimum_free_heap, ota_received, ota_total;
+    const char *wifi, *config, *ota;
 } status_snapshot_t;
 typedef struct {
     const char *state, *error;
@@ -46,12 +59,15 @@ static void reported(void)
         "ESP_BASE_REPORTED schema=1 boot_id=%s uptime_ms=%" PRIu64
         " free_heap=%" PRIu32 " min_free_heap=%" PRIu32
         " device_id=%s firmware=%s chip=%s flash=%" PRIu32 " config_generation=%" PRIu32
-        " reset=%s provisioned=%s wifi_state=%s mqtt_state=unsupported frp_state=unsupported",
+        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=unsupported frp_state=unsupported ota_received=%" PRIu32 " ota_total=%" PRIu32,
         s_boot_id, uptime_ms(), esp_get_free_heap_size(),
         (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT), s_context.device_id,
         s_context.firmware_version, s_context.chip_model, s_context.flash_size_bytes,
         s_context.config.revision, s_context.reset_reason,
-        s_context.config.wifi.configured ? "true" : "false", esp_base_wifi_state());
+        s_context.config.wifi.configured ? "true" : "false", esp_base_wifi_state(),
+        esp_base_time_ready() ? "true" : "false",
+        (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
+        s_ota_active ? s_ota_request.image_size_bytes : 0);
 }
 
 static status_snapshot_t snapshot(void)
@@ -59,7 +75,10 @@ static status_snapshot_t snapshot(void)
     return (status_snapshot_t){.uptime = uptime_ms(), .revision = s_context.config.revision,
         .free_heap = esp_get_free_heap_size(),
         .minimum_free_heap = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
-        .wifi = esp_base_wifi_state(), .config = s_config_uncertain ? "failed" : "ready"};
+        .ota_received = (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
+        .ota_total = s_ota_active ? s_ota_request.image_size_bytes : 0,
+        .wifi = esp_base_wifi_state(), .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
+        .ota = !esp_base_ota_update_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
 }
 
 static void reply(const char *request_id, const char *state, const char *error, const status_snapshot_t *status)
@@ -76,12 +95,38 @@ static void reply(const char *request_id, const char *state, const char *error, 
     if (status) {
         printf("{\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32
                ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
+               ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
                ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"unsupported\","
-               "\"frp\":\"unsupported\",\"config\":\"%s\",\"ota\":\"unsupported\"}}",
+               "\"frp\":\"unsupported\",\"config\":\"%s\",\"ota\":\"%s\"}}",
                status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
-               status->wifi, status->config);
+               status->ota_received, status->ota_total, status->wifi, status->config, status->ota);
     } else printf("null");
     printf("}\n");
+    fflush(stdout);
+    funlockfile(stdout);
+}
+
+static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_view_t *view)
+{
+    const char *state = view->state == ESP_BASE_OTA_OPERATION_RUNNING ? "running" :
+        view->state == ESP_BASE_OTA_OPERATION_SUCCEEDED ? "succeeded" :
+        view->state == ESP_BASE_OTA_OPERATION_FAILED ? "failed" : "unknown";
+    static const char digits[] = "0123456789abcdef";
+    char digest[65];
+    for (size_t i = 0; i < 32; ++i) {
+        digest[i * 2] = digits[view->sha256[i] >> 4];
+        digest[i * 2 + 1] = digits[view->sha256[i] & 15];
+    }
+    digest[64] = '\0';
+    flockfile(stdout);
+    printf("\n{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+           "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":",
+           s_context.device_id, s_boot_id, request_id, state);
+    if (view->error_code) printf("\"%s\"", view->error_code); else printf("null");
+    printf(",\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
+           "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\"}}\n",
+           view->operation_id, digest, view->image_size_bytes, ESP_BASE_OTA_TARGET,
+           view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1");
     fflush(stdout);
     funlockfile(stdout);
 }
@@ -141,6 +186,60 @@ static void poll_configuration(uint64_t now)
     }
 }
 
+static void ota_progress(uint32_t received, uint32_t total, void *context)
+{
+    (void)total;
+    (void)context;
+    atomic_store_explicit(&s_ota_received, received, memory_order_relaxed);
+}
+
+static void ota_task(void *argument)
+{
+    (void)argument;
+    const esp_base_ota_update_result_t result =
+        esp_base_ota_update_run(&s_ota_request, ota_progress, NULL);
+    atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);
+    atomic_store_explicit(&s_ota_done, true, memory_order_release);
+    vTaskDelete(NULL);
+}
+
+static void poll_ota(void)
+{
+    if (!s_ota_active || !atomic_load_explicit(&s_ota_done, memory_order_acquire)) return;
+    const esp_base_ota_update_result_t result =
+        (esp_base_ota_update_result_t)atomic_load_explicit(&s_ota_result, memory_order_relaxed);
+    if (result == ESP_BASE_OTA_UPDATE_OK) {
+        /* The slot is selected but not yet confirmed. A new boot must pass the
+         * local self-test and stability window before it becomes valid. */
+        save_outcome(s_ota_slot, "running", NULL, false);
+        (void)fsync(STDOUT_FILENO);
+        esp_restart();
+        return;
+    }
+    if (result == ESP_BASE_OTA_UPDATE_BOOT_STATE_UNKNOWN) {
+        s_ota_boot_uncertain = true;
+        ESP_LOGE("base_ota", "ESP_BASE_OTA_RECOVERY_REQUIRED selector readback unavailable; avoid resetting device");
+    } else {
+        const esp_base_ota_receipt_result_t saved = esp_base_ota_receipt_record_failure(
+            s_context.device_id, s_ota_request.operation_id, result);
+        if (saved != ESP_BASE_OTA_RECEIPT_OK) {
+            s_config_uncertain = true;
+            esp_base_control_state_set_ota_download_active(&s_control_state, false);
+            s_ota_active = false;
+            atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
+            save_outcome(s_ota_slot, "unknown", "storage_uncertain", false);
+            memset(&s_ota_request, 0, sizeof s_ota_request);
+            return;
+        }
+    }
+    esp_base_control_state_set_ota_download_active(&s_control_state, false);
+    s_ota_active = false;
+    atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
+    save_outcome(s_ota_slot, result == ESP_BASE_OTA_UPDATE_BOOT_STATE_UNKNOWN ? "unknown" : "failed",
+                 esp_base_ota_update_error(result), false);
+    memset(&s_ota_request, 0, sizeof s_ota_request);
+}
+
 static void handle_line(const char *line, size_t length, void *context)
 {
     (void)context;
@@ -152,12 +251,38 @@ static void handle_line(const char *line, size_t length, void *context)
         reply(command.request.request_id, "succeeded", NULL, &current);
         return;
     }
+    if (command.kind == EBASE_OTA_RESULT) {
+        esp_base_ota_receipt_view_t view;
+        const bool active = s_ota_active && !strcmp(s_ota_request.operation_id, command.operation_id);
+        const esp_base_ota_receipt_result_t result = esp_base_ota_receipt_query(
+            s_context.device_id, command.operation_id, active, &view);
+        if (result == ESP_BASE_OTA_RECEIPT_OK) reply_ota_result(command.request.request_id, &view);
+        else reply(command.request.request_id, result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "failed" : "unknown",
+                   result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "ota_signing_unavailable" :
+                   result == ESP_BASE_OTA_RECEIPT_NOT_FOUND ? "ota_operation_not_found" : "storage_uncertain", NULL);
+        return;
+    }
     if (command.kind == EBASE_CONFIG_SET) {
         uint8_t bytes[10 + EBASE_CONFIG_BYTES];
         memcpy(bytes, "config.set", 10);
         size_t size = 0;
         if (!ebase_config_encode(&command.config, bytes + 10) ||
             psa_hash_compute(PSA_ALG_SHA_256, bytes, sizeof bytes, command.request.fingerprint,
+                sizeof command.request.fingerprint, &size) != PSA_SUCCESS || size != 32) {
+            reply(command.request.request_id, "failed", "resource_failure", NULL); return;
+        }
+    }
+    if (command.kind == EBASE_OTA_START) {
+        uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + ESP_BASE_OTA_URL_BYTES + 1 + 32 + 4];
+        size_t offset = 0;
+        memcpy(bytes + offset, "ota.start", 9); offset += 9;
+        memcpy(bytes + offset, command.ota.operation_id, ESP_BASE_OTA_OPERATION_ID_BYTES); offset += ESP_BASE_OTA_OPERATION_ID_BYTES;
+        const size_t url_bytes = strlen(command.ota.image_url) + 1;
+        memcpy(bytes + offset, command.ota.image_url, url_bytes); offset += url_bytes;
+        memcpy(bytes + offset, command.ota.sha256, 32); offset += 32;
+        for (int i = 3; i >= 0; --i) bytes[offset++] = (uint8_t)(command.ota.image_size_bytes >> (8 * i));
+        size_t size = 0;
+        if (psa_hash_compute(PSA_ALG_SHA_256, bytes, offset, command.request.fingerprint,
                 sizeof command.request.fingerprint, &size) != PSA_SUCCESS || size != 32) {
             reply(command.request.request_id, "failed", "resource_failure", NULL); return;
         }
@@ -172,6 +297,59 @@ static void handle_line(const char *line, size_t length, void *context)
         reply(command.request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", errors[decision], NULL);
         return;
     }
+    if (command.kind == EBASE_CONFIG_SET) {
+        const char *ota_error = esp_base_control_state_config_write_error(&s_control_state);
+        if (ota_error != NULL) { save_outcome(slot, "failed", ota_error, false); return; }
+    }
+    if (command.kind == EBASE_OTA_START) {
+        if (!esp_base_ota_update_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
+        if (esp_base_control_state_ota_pending(&s_control_state)) { save_outcome(slot, "failed", "ota_verification_pending", false); return; }
+        if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
+        if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
+        if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
+        if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
+        if (!esp_base_wifi_ready()) { save_outcome(slot, "failed", "network_unavailable", false); return; }
+        if (!esp_base_time_ready()) { save_outcome(slot, "failed", "time_unavailable", false); return; }
+        const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(s_context.device_id, &command.ota);
+        if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
+            const char *receipt_error = receipt == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
+                receipt == ESP_BASE_OTA_RECEIPT_CONFLICT ? "ota_operation_conflict" :
+                receipt == ESP_BASE_OTA_RECEIPT_BUSY ? "ota_previous_unresolved" :
+                receipt == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE ? "ota_slot_unavailable" :
+                receipt == ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH ? "ota_selector_mismatch" :
+                receipt == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID ? "ota_source_not_valid" :
+                receipt == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE ? "ota_target_not_safe" :
+                receipt == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
+                receipt == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
+            if (receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN) s_config_uncertain = true;
+            save_outcome(slot, receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN ? "unknown" : "failed",
+                         receipt_error, false);
+            return;
+        }
+        s_ota_request = command.ota;
+        s_ota_slot = slot;
+        s_ota_active = true;
+        atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
+        esp_base_control_state_set_ota_download_active(&s_control_state, true);
+        if (xTaskCreate(ota_task, "base_ota", 12288, NULL, 4, NULL) != pdPASS) {
+            esp_base_control_state_set_ota_download_active(&s_control_state, false);
+            s_ota_active = false;
+            memset(&s_ota_request, 0, sizeof s_ota_request);
+            if (esp_base_ota_receipt_record_failure(s_context.device_id, command.ota.operation_id,
+                    ESP_BASE_OTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK) {
+                save_outcome(slot, "failed", "resource_failure", false);
+            } else {
+                s_config_uncertain = true;
+                save_outcome(slot, "unknown", "storage_uncertain", false);
+            }
+            return;
+        }
+        save_outcome(slot, "running", NULL, false);
+        return;
+    }
+    if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
+    if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
     if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
     if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
     if (command.kind == EBASE_CONFIG_SET) {
@@ -199,12 +377,17 @@ static void handle_line(const char *line, size_t length, void *context)
 static void control_task(void *argument)
 {
     (void)argument;
-    uint64_t next_report = 0, last_input = 0;
+    uint64_t next_report = 0, next_time_poll = 0, last_input = 0;
     unsigned char bytes[256];
     while (true) {
         const uint64_t now = uptime_ms();
         esp_base_wifi_poll(now);
         poll_configuration(now);
+        poll_ota();
+        if (now >= next_time_poll) {
+            esp_base_time_poll();
+            next_time_poll = now + 1000;
+        }
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader.length && now - last_input >= 2000) {
             s_reader.length = 0;
@@ -219,6 +402,7 @@ static void control_task(void *argument)
             last_input = uptime_ms();
             ebase_line_feed(&s_reader, bytes, count, handle_line, NULL);
         }
+        esp_base_control_state_note_progress(&s_control_state);
         vTaskDelay(1); /* Let idle/WDT and other capabilities run under sustained input. */
     }
 }
@@ -237,10 +421,27 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     s_context = *context;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     error = esp_base_wifi_start(&s_context.config.wifi);
-    if (error != ESP_OK) return error;
+    if (error != ESP_OK) {
+        ESP_LOGW("base_wifi", "ESP_BASE_WIFI_UNAVAILABLE error=%s", esp_err_to_name(error));
+    }
     if (xTaskCreate(control_task, "base_control", 6144, NULL, 5, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     s_started = true;
     return ESP_OK;
+}
+
+bool esp_base_protocol_control_healthy(void)
+{
+    return s_started && esp_base_control_state_is_recent(&s_control_state);
+}
+
+uint32_t esp_base_protocol_control_progress_count(void)
+{
+    return esp_base_control_state_progress_count(&s_control_state);
+}
+
+void esp_base_protocol_set_ota_verification_pending(bool pending)
+{
+    esp_base_control_state_set_ota_pending(&s_control_state, pending);
 }

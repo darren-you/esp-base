@@ -121,9 +121,15 @@ void esp_base_wifi_poll(uint64_t now)
             esp_netif_ip_info_t ip = {0};
             /* Recheck current driver/netif facts so an old queued IP event can
              * never commit credentials for a different association. */
-            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK &&
+            const bool ap_ready = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+            const size_t wanted_ssid_bytes = strlen(s_config.ssid);
+            const uint8_t *ssid_end = memchr(ap.ssid, 0, sizeof s_config.ssid - 1);
+            const size_t actual_ssid_bytes = ssid_end ? (size_t)(ssid_end - ap.ssid) : sizeof s_config.ssid - 1;
+            if (ap_ready &&
                 esp_netif_is_netif_up(s_netif) && esp_netif_get_ip_info(s_netif, &ip) == ESP_OK &&
-                ip.ip.addr != 0 && !memcmp(ap.ssid, s_config.ssid, 32) && (ap.authmode == WIFI_AUTH_WPA2_PSK || ap.authmode == WIFI_AUTH_WPA_WPA2_PSK ||
+                ip.ip.addr != 0 && actual_ssid_bytes == wanted_ssid_bytes &&
+                !memcmp(ap.ssid, s_config.ssid, wanted_ssid_bytes) &&
+                (ap.authmode == WIFI_AUTH_WPA2_PSK || ap.authmode == WIFI_AUTH_WPA_WPA2_PSK ||
                 ap.authmode == WIFI_AUTH_WPA3_PSK || ap.authmode == WIFI_AUTH_WPA2_WPA3_PSK)) {
                 s_ready = true; s_connecting = false; s_retry_at = 0; s_failures = 0;
                 s_state = "connected";
@@ -145,13 +151,13 @@ esp_err_t esp_base_wifi_start(const ebase_wifi_config_t *config)
 {
     if (s_initialized || !config) return ESP_ERR_INVALID_STATE;
     esp_err_t error = esp_netif_init();
-    if (error != ESP_OK) return error;
+    if (error != ESP_OK) { failed(); return error; }
     error = esp_event_loop_create_default();
-    if (error != ESP_OK) return error;
+    if (error != ESP_OK) { failed(); return error; }
     s_events = xQueueCreate(16, sizeof(unsigned));
-    if (!s_events) { esp_event_loop_delete_default(); return ESP_ERR_NO_MEM; }
+    if (!s_events) { esp_event_loop_delete_default(); failed(); return ESP_ERR_NO_MEM; }
     s_netif = esp_netif_create_default_wifi_sta();
-    if (!s_netif) { vQueueDelete(s_events); esp_event_loop_delete_default(); return ESP_ERR_NO_MEM; }
+    if (!s_netif) { vQueueDelete(s_events); esp_event_loop_delete_default(); failed(); return ESP_ERR_NO_MEM; }
     wifi_init_config_t initialization = WIFI_INIT_CONFIG_DEFAULT();
     initialization.nvs_enable = false;
     error = esp_wifi_init(&initialization);
@@ -171,5 +177,6 @@ release_netif:
     esp_netif_destroy_default_wifi(s_netif);
     vQueueDelete(s_events);
     esp_event_loop_delete_default();
+    failed();
     return error;
 }

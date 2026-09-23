@@ -1,18 +1,25 @@
 #include <inttypes.h>
+#include <stdbool.h>
 
+#include "sdkconfig.h"
 #include "esp_app_desc.h"
-#include "esp_check.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "esp_base_identity.h"
 #include "esp_base_ota.h"
 #include "esp_base_protocol.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_safety.h"
+#include "esp_base_time.h"
 
 static const char *TAG = "esp_base";
+
+#define ESP_BASE_CONTROL_START_TIMEOUT_MS UINT64_C(5000)
 
 static esp_err_t initialise_nvs(void)
 {
@@ -20,11 +27,62 @@ static esp_err_t initialise_nvs(void)
     return result;
 }
 
+static uint64_t uptime_ms(void)
+{
+    return (uint64_t)esp_timer_get_time() / 1000;
+}
+
+static void stop_after_local_failure(esp_base_ota_t *ota, bool pending_boot,
+                                     const char *check, esp_err_t failure)
+{
+    ESP_LOGE(TAG, "ESP_BASE_LOCAL_CHECK_FAILED check=%s error=%s", check, esp_err_to_name(failure));
+    if (!pending_boot) {
+        return;
+    }
+    if (ota->state != ESP_BASE_OTA_STATE_PENDING_VERIFY) {
+        ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback=not_safe",
+                 ota->running_partition ? ota->running_partition : "unknown", esp_base_ota_state_name(ota->state));
+        return;
+    }
+    ESP_LOGE(TAG, "Pending OTA slot %s failed %s; requesting IDF rollback", ota->running_partition, check);
+    const esp_err_t rollback_status = esp_base_ota_reject_pending(ota);
+    /* ESP_OK never returns from the IDF rollback API. If it does return,
+     * preserve this boot rather than force a reset without a viable slot. */
+    ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback_error=%s",
+             ota->running_partition ? ota->running_partition : "unknown",
+             esp_base_ota_state_name(ota->state), esp_err_to_name(rollback_status));
+}
+
+static esp_err_t wait_for_control_start(void)
+{
+    const uint64_t started_ms = uptime_ms();
+    while (!esp_base_protocol_control_healthy()) {
+        const uint64_t now_ms = uptime_ms();
+        if (now_ms < started_ms || now_ms - started_ms >= ESP_BASE_CONTROL_START_TIMEOUT_MS) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return ESP_OK;
+}
+
 void app_main(void)
 {
+    esp_base_ota_t ota = {0};
+    const esp_err_t ota_status = esp_base_ota_inspect(&ota);
+    if (ota_status != ESP_OK) {
+        ESP_LOGE(TAG, "OTA slot state unavailable (%s); initialization stopped", esp_err_to_name(ota_status));
+        ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback=not_safe",
+                 ota.running_partition ? ota.running_partition : "unknown", esp_base_ota_state_name(ota.state));
+        return;
+    }
+    const bool pending_boot = ota.state == ESP_BASE_OTA_STATE_PENDING_VERIFY;
+    esp_base_protocol_set_ota_verification_pending(pending_boot);
+
     const esp_err_t storage_status = initialise_nvs();
     if (storage_status != ESP_OK) {
         ESP_LOGE(TAG, "NVS unavailable (%s); storage preserved, initialization stopped", esp_err_to_name(storage_status));
+        stop_after_local_failure(&ota, pending_boot, "nvs", storage_status);
         return;
     }
 
@@ -32,21 +90,24 @@ void app_main(void)
     const esp_err_t identity_status = esp_base_identity_read(&identity);
     if (identity_status != ESP_OK) {
         ESP_LOGE(TAG, "Identity unavailable (%s); initialization stopped", esp_err_to_name(identity_status));
+        stop_after_local_failure(&ota, pending_boot, "identity", identity_status);
         return;
     }
 
     esp_base_safety_t safety = {0};
-    ESP_ERROR_CHECK(esp_base_safety_start(&safety));
+    const esp_err_t safety_status = esp_base_safety_start(&safety);
+    if (safety_status != ESP_OK) {
+        stop_after_local_failure(&ota, pending_boot, "safety", safety_status);
+        return;
+    }
 
     esp_base_remote_config_t config = {0};
     const esp_err_t config_status = esp_base_remote_config_load(&config);
     if (config_status != ESP_OK) {
         ESP_LOGE(TAG, "Configuration unavailable (%s); storage preserved, initialization stopped", esp_err_to_name(config_status));
+        stop_after_local_failure(&ota, pending_boot, "config", config_status);
         return;
     }
-
-    esp_base_ota_t ota = {0};
-    ESP_ERROR_CHECK(esp_base_ota_inspect(&ota));
 
     const esp_app_desc_t *app = esp_app_get_description();
     ESP_LOGI(TAG,
@@ -63,8 +124,6 @@ void app_main(void)
              safety.reset_reason,
              config.revision);
 
-    /* Pending images are confirmed only after the P5 self-test/stability gate. */
-
     const esp_base_protocol_context_t protocol = {
         .device_id = identity.device_id,
         .firmware_version = app->version,
@@ -76,8 +135,71 @@ void app_main(void)
     const esp_err_t protocol_status = esp_base_protocol_start(&protocol);
     if (protocol_status != ESP_OK) {
         ESP_LOGE(TAG, "Control unavailable (%s); initialization stopped", esp_err_to_name(protocol_status));
+        stop_after_local_failure(&ota, pending_boot, "control_start", protocol_status);
         return;
     }
 
+    /* Time is needed by future strict TLS consumers, but it is not part of
+     * the pending slot's local self-test and must not block USB control. */
+    const esp_err_t time_status = esp_base_time_start(CONFIG_ESP_BASE_TIME_SERVER);
+    if (time_status != ESP_OK) {
+        ESP_LOGW(TAG, "ESP_BASE_TIME_UNAVAILABLE error=%s", esp_err_to_name(time_status));
+    }
+
+    if (pending_boot) {
+        /* Startup checks above are local: no Broker, FRPS or Wi-Fi connection is
+         * required. The control task must also make progress throughout this boot. */
+        const esp_err_t control_status = wait_for_control_start();
+        if (control_status != ESP_OK) {
+            stop_after_local_failure(&ota, pending_boot, "control_ready", control_status);
+            return;
+        }
+        ESP_LOGI(TAG, "pending OTA slot %s: waiting %" PRIu64 " ms of local stability",
+                 ota.running_partition, ESP_BASE_OTA_STABLE_WINDOW_MS);
+        const uint64_t stable_started_ms = uptime_ms();
+        uint64_t now_ms;
+        for (;;) {
+            if (!esp_base_protocol_control_healthy()) {
+                stop_after_local_failure(&ota, pending_boot, "control_progress", ESP_ERR_TIMEOUT);
+                return;
+            }
+            now_ms = uptime_ms();
+            if (now_ms < stable_started_ms) {
+                stop_after_local_failure(&ota, pending_boot, "stable_clock", ESP_ERR_INVALID_STATE);
+                return;
+            }
+            if (now_ms - stable_started_ms >= ESP_BASE_OTA_STABLE_WINDOW_MS) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        /* A heartbeat from before the 30-second boundary is insufficient:
+         * require one complete control pass afterwards before confirming. */
+        const uint32_t boundary_progress = esp_base_protocol_control_progress_count();
+        const uint64_t boundary_ms = now_ms;
+        while (esp_base_protocol_control_progress_count() == boundary_progress) {
+            if (!esp_base_protocol_control_healthy()) {
+                stop_after_local_failure(&ota, pending_boot, "control_progress", ESP_ERR_TIMEOUT);
+                return;
+            }
+            now_ms = uptime_ms();
+            if (now_ms < boundary_ms || now_ms - boundary_ms >= ESP_BASE_CONTROL_START_TIMEOUT_MS) {
+                stop_after_local_failure(&ota, pending_boot, "control_boundary", ESP_ERR_TIMEOUT);
+                return;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        if (!esp_base_protocol_control_healthy()) {
+            stop_after_local_failure(&ota, pending_boot, "control_boundary", ESP_ERR_TIMEOUT);
+            return;
+        }
+        now_ms = uptime_ms();
+        const esp_err_t confirm_status = esp_base_ota_confirm_if_stable(&ota, stable_started_ms, now_ms);
+        if (confirm_status != ESP_OK) {
+            stop_after_local_failure(&ota, pending_boot, "confirm", confirm_status);
+            return;
+        }
+        esp_base_protocol_set_ota_verification_pending(false);
+    }
     ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required");
 }

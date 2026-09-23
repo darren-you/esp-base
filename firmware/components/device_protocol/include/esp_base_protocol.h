@@ -16,3 +16,8 @@ typedef struct {
 } esp_base_protocol_context_t;
 
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context);
+/* True only after the control loop has completed a pass recently. */
+bool esp_base_protocol_control_healthy(void);
+uint32_t esp_base_protocol_control_progress_count(void);
+/* A pending OTA self-test rejects config.set until the slot is confirmed. */
+void esp_base_protocol_set_ota_verification_pending(bool pending);

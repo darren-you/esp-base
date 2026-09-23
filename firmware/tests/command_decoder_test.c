@@ -51,9 +51,41 @@ static void config_tests(void)
         snprintf(json, sizeof json, "%s%s}", prefix, bad[i]); reject(json);
     }
 }
+static void ota_tests(void)
+{
+    char json[1400];
+    const char *prefix = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.start\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":";
+    const char *valid = "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/esp-base.bin\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"esp32c3/esp_base\",\"signature\":{\"scheme\":\"esp_secure_boot_v2_rsa3072\"}}";
+    ebase_command_t out;
+    snprintf(json, sizeof json, "%s%s}", prefix, valid);
+    assert(!ebase_parse_command(json, strlen(json), &out) && out.kind == EBASE_OTA_START);
+    assert(out.ota.image_size_bytes == 123456 && out.ota.sha256[0] == 0 && out.ota.sha256[31] == 31);
+    assert(!strcmp(out.ota.image_url, "https://example.test/esp-base.bin"));
+    const char *bad[] = {
+        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"http://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"esp32c3/esp_base\",\"signature\":{\"scheme\":\"esp_secure_boot_v2_rsa3072\"}}",
+        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"esp32s3/esp_base\",\"signature\":{\"scheme\":\"esp_secure_boot_v2_rsa3072\"}}",
+        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":0,\"target\":\"esp32c3/esp_base\",\"signature\":{\"scheme\":\"esp_secure_boot_v2_rsa3072\"}}",
+        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"esp32c3/esp_base\",\"signature\":{\"scheme\":\"none\"}}",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; ++i) {
+        snprintf(json, sizeof json, "%s%s}", prefix, bad[i]); reject(json);
+    }
+}
+static void ota_result_tests(void)
+{
+    const char *valid = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\"}}";
+    ebase_command_t out;
+    assert(!ebase_parse_command(valid, strlen(valid), &out) && out.kind == EBASE_OTA_RESULT);
+    assert(!strcmp(out.operation_id, "44444444-4444-4444-8444-444444444444"));
+    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{}}");
+    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"bad\"}}");
+    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"extra\":1}}");
+}
 int main(void)
 {
     config_tests();
+    ota_tests();
+    ota_result_tests();
     ebase_command_t out;
     assert(!ebase_parse_command(status, strlen(status), &out) && out.kind == EBASE_STATUS);
     assert(!ebase_parse_command(restart, strlen(restart), &out) && out.kind == EBASE_RESTART);

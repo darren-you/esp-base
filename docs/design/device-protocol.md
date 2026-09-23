@@ -1,6 +1,6 @@
 # 设备控制协议 v1
 
-本文件为设备协议事实源。当前实现 status、restart、config.set、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执；ota.start 和业务命令仍待实现，收到时返回 unsupported_command。实现与实板证据见开发检查点。
+本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执；业务命令仍待实现。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与实板证据见开发检查点。
 
 ## 帧与身份
 
@@ -8,22 +8,27 @@ USB 为 UTF-8 JSON Lines；单帧最大 8192 字节（不含换行），拒绝 N
 
 只读 `status` 请求包含 `protocol_version:1`、`request_id`、`command:"status"`。响应包含固件持久 `device_id`、随机启动 `boot_id`、`uptime_ms`、配置 `revision`、能力状态与资源事实，不返回秘密。固件初始化失败时不生成替代身份。
 
+只读 `ota.result` 请求精确包含 `protocol_version:1`、`request_id`、`command:"ota.result"`、`parameters:{"operation_id":"<UUID v4>"}`；它不携带写入期限或目标 boot，允许在新启动后按原 operation ID 读取结果。响应 `request_id` 对应本次查询，`result` 含 `operation_id`、完整 signed bin `sha256`、`image_size_bytes`、固定 `target` 和 `target_slot`。设备身份仍以响应的 `device_id` 由调用方核对。
+
 写命令必须且仅包含 `protocol_version`、`device_id`、`target_boot_id`、`request_id`、`command`、`expires_at_uptime_ms`、`parameters`。request_id 为规范 UUID v4；target_boot_id 必须精确等于当前启动值，受理期限为当前设备 uptime 后不超过 30000 ms；在出队执行前再次验证。过期拒绝，不跨启动重放。
 
 ## 命令与配置
 
 - `config.set`：parameters 为 `expected_revision` 和完整类型化 `config`；只从当前 revision 开始候选事务，校验失败不写入已提交配置。Wi-Fi 候选完成取得 IP 和必要链路 proof 后才提交；超时恢复已提交配置。
 - `restart`：parameters 为空对象；发送成功不表示重启成功，必须回读相同 device_id 的新 boot_id。
-- `ota.start`：parameters 包含 operation_id、镜像 URL、SHA-256、长度、target 与签名元数据。下载期间不重复执行同一操作；成功以新启动自检确认。
+- `ota.start`：parameters 精确包含 `operation_id`（UUID v4）、`image_url`（最多 512 字节 HTTPS URL）、`sha256`（完整 signed bin 的小写 64 字符十六进制）、`image_size_bytes`（完整镜像字节数）、`target`（固定 `esp32c3/esp_base`）、`signature`（精确对象 `{"scheme":"esp_secure_boot_v2_rsa3072"}`）。签名构建要求当前运行槽 VALID、boot 与 running 一致、另一 OTA 槽可写、Wi-Fi IP 和本次启动时间同步。目标 otadata 只允许历史 VALID/INVALID/ABORTED/UNDEFINED 或尚无记录；NEW/PENDING/读取异常拒绝写入。启动下载任务前先把设备 ID、operation ID、摘要、长度与旧/目标槽写入 `base_store/base_ota/operation` 并逐字节读回；写入不确定时拒绝下载。下载期间不重复执行同一操作；切槽后先报告 running 并重启，成功须待新槽本地自检完成、otadata 为 VALID 且运行镜像完整摘要匹配。
+- `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃或目标槽 pending 时为 `running`；目标槽运行且 VALID、完整镜像摘要匹配时为 `succeeded`；已持久记录的下载失败或目标槽 ABORTED/INVALID 且旧槽有效时为 `failed`；收据缺失/损坏、槽关系不明或仅见旧槽而无失败证据时为 `unknown`。普通未签名构建拒绝查询。
 - `business.*`：仅派发业务注册的命令与参数 schema，未知命令拒绝，不提供任意 shell、脚本或 Topic。
 
-配置 schema_version 固定 1，完整字段为 schema_version、wifi、mqtt、frp、business；P2 的后三项必须为 null，非 null 返回 unsupported_configuration。wifi 为 null 或包含 ssid/password 的精确对象，长度与字符规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态只返回脱敏字段。USB 与网络进入同一个有界控制队列，配置提交、OTA 和外部 flash 租约互斥。
+配置 schema_version 固定 1，完整字段为 schema_version、wifi、mqtt、frp、business；P2 的后三项必须为 null，非 null 返回 unsupported_configuration。wifi 为 null 或包含 ssid/password 的精确对象，长度与字符规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态只返回脱敏字段。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。网络命令入口尚未接入。
 
 ## 结果与幂等
 
 无法解析或没有合法唯一 request_id 的输入返回 failed/invalid_request，request_id 为 null，不能与任何已提交操作关联。有效请求的结果带 protocol_version、device_id、boot_id、request_id、state、error_code、result。state 只允许 accepted/running/succeeded/failed/expired/unknown；error_code 为稳定字符串或 null。所有 key 必须存在。状态以设备最终结果裁决，USB write、HTTP 202、PUBACK 都不是 succeeded。
 
 同 boot 下缓存有界 request_id 与规范内容 SHA-256；同 ID 不同内容返回 request_conflict。缓存满时拒绝新操作，不驱逐尚可被重复投递的有效条目后再次执行。重启后的未终态只能报告 unknown 或基于持久裁决对账，不宣称物理 exactly-once。
+
+OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下载：摘要/长度相同返回 `ota_operation_exists`，不同返回 `ota_operation_conflict`。前次结果未能裁决时，新 ID 返回 `ota_previous_unresolved`，不能覆盖唯一持久证据；可能需要外部恢复后才能继续 OTA。一个新操作仅在前次有成功或失败证据时覆盖收据。目标状态不安全、selector 不一致、当前槽非 VALID 或目标状态读回异常分别拒绝并返回 `ota_target_not_safe`、`ota_selector_mismatch`、`ota_source_not_valid` 或 `ota_target_state_unknown`。`ota.result` 不重放写动作；查询旧 ID 在收据被新操作替换后返回 `unknown/ota_operation_not_found`。回滚若进入尚未实现 `ota.result` 的旧镜像，该镜像无法读取新收据，工具必须报告 unknown，不能推断失败或成功。
 
 ## 网络授权与首配
 
@@ -33,7 +38,9 @@ TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelop
 
 ## 当前 USB 结果
 
-status 成功的 result 固定含 uptime_ms、revision、free_heap、min_free_heap 和 capabilities；capabilities 固定含 wifi、mqtt、frp、config、ota。尚未接入的能力为 unsupported，配置为 ready（存储结果不确定时为 failed），不能伪造已经内置的 unconfigured 状态。restart 的 running 回执 result 为 null；设备执行重启后通过同 UUID 的新 boot_id 验证完成。
+status 成功的 result 固定含 uptime_ms、revision、free_heap、min_free_heap、ota_received_bytes、ota_total_bytes 和 capabilities；capabilities 固定含 wifi、mqtt、frp、config、ota。未签名构建的 OTA 为 unsupported；签名构建在空闲时为 ready、下载时为 running。配置在存储或启动槽不确定时为 failed。restart 的 running 回执 result 为 null；设备执行重启后通过同 UUID 的新 boot_id 验证完成。
+
+`ota.result` 的 `state` 和 `error_code` 是查询时由持久收据与当前槽事实裁决的结果；一次 `ota.start` 的 running 回执以及 USB 写入成功均不是最终成功。NVS 登记写入或失败终态持久化不确定时返回 `unknown/storage_uncertain` 并关闭本次启动的配置写入，不能自动重试升级。目标槽摘要读取失败时返回 `unknown/ota_result_uncertain`。
 
 USB 缓冲最多 8192 字节，JSON 嵌套最多 8 层、成员分隔符最多 128 个。拒绝小数/指数数字、NUL（含 Unicode 转义）和重复 key。超限或半帧闲置 2 秒后排空至换行，再处理下一帧；错误输入不回显请求内容或凭据。
 
@@ -46,3 +53,5 @@ USB 使用官方无缓冲 VFS 和硬件 FIFO 背压，不使用可能在 RX ring
 USB 配置候选在 RAM 验证最多 20 秒，取得 IP 后核对当前关联；此阶段的必要链路证明是当前 USB 控制通道和候选 Wi-Fi 关联/IP，不宣称互联网、MQTT 或 FRP 已连通。清除 Wi-Fi 则先确认 station 已停止。通过后单 blob 提交 revision 与完整配置，并读回校验；succeeded 的 result 使用与 status 相同的脱敏字段，revision 必须是 expected_revision+1。
 
 候选失败返回 connection_proof_failed，重新选择已提交配置；离线环境不伪造已经恢复连接。候选执行期间其他写命令返回 configuration_busy，status 仍可用。NVS 写后状态不确定返回 unknown/storage_uncertain，不自动重放，不承诺旧配置已恢复；重新读取存储事实后保持写入关闭，重启重新核验。已提交配置的真实断电恢复已验收；候选及 Flash 提交中间态掉电仍待实测。
+
+OTA pending 新槽完成本地确认前，`config.set` 在身份、期限与去重裁决后返回 `failed/ota_verification_pending`，不执行候选连接或配置提交；下载期间返回 `ota_in_progress`。`status` 保持可读。确认成功后新 request_id 可执行配置写入，原 request_id 重放仍返回原失败结果。签名构建的 OTA 下载与配置候选互斥；外部 flash 租约仍须工具侧实现。
