@@ -1,6 +1,10 @@
 # 开发检查点
 
-2026-09-24 esp-ota 精确依赖更新：Base 的唯一 Component Manager 声明、锁文件和当前 README/来源记录已对齐公开 `esp-ota@bed5709fe517f62d60f2efad95491bc66756a42c`。重新解析的组件 hash 为 `e875a87ce6e01f81798dd82984226861409aacec30df8770973dc058eca0c9ef`；该上游提交收紧 HTTPS 传输单次调用及 OTA 写入/哈希阶段的期限检查，Base 的 `eota_` 调用合同不变。较早检查点的 `bae8d13` 只描述当时构建，不代表当前锁版本。
+2026-09-24 OTA 槽预检期限修正消费：Base 的唯一 Component Manager 声明和锁文件精确解析公开 `esp-ota@ffe6544401646f84a833998954e65f7250576c94`，组件 hash 为 `3eca6dbfe0e72efa2c2b6fbbc766a9d05c6b6ab6f315446b54b94c1a43c6ae8a`。上游现在从 `eota_prepare` 内槽预检前启动期限，慢预检返回后若已逾期，不再启动 HTTPS 或写 Flash；固定 ESP-IDF 的同步 Flash、TLS 和 socket 调用仍不能由库抢占，P5-04 未因此验收。Base 现有 `eota_` 调用合同未变。
+
+- `bash firmware/tests/run_host_tests.sh` 的 Base ASan/UBSan 全套通过；固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 与 esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 951680 字节、SHA-256 `1849e65e338a915c187f83361aa273ce725d0c9e6da88c9fb1e70fe97c689c74`。这是未签名且未刷板的软件构建；本轮未运行 Base 签名构建、设备 HTTPS/Flash 或回滚。
+
+2026-09-24 esp-ota 精确依赖更新：Base 当时的唯一 Component Manager 声明、锁文件和 README/来源记录对齐公开 `esp-ota@bed5709fe517f62d60f2efad95491bc66756a42c`。重新解析的组件 hash 为 `e875a87ce6e01f81798dd82984226861409aacec30df8770973dc058eca0c9ef`；该上游提交收紧 HTTPS 传输单次调用及 OTA 写入/哈希阶段的期限检查，Base 的 `eota_` 调用合同不变。较早检查点的 `bae8d13` 只描述当时构建，不代表当前锁版本。
 
 - `bash firmware/tests/run_host_tests.sh` 的 Base ASan/UBSan 全套通过。固定 ESP-IDF v6.1/ESP32-C3 普通构建通过，镜像 951632 字节、SHA-256 `18ae1f2450bad05d873cc90fa722a80640ed5cf3efd3a94a3afe77413e524224`；仓外临时 RSA-3072 测试键签名构建通过，镜像 1118208 字节、SHA-256 `540a8e111e1d18c8e84f67d61314ba57c77c866ce23af2649fce546cb99ae197`，`espsecure verify-signature --version 2 --keyfile` 通过。两者均未刷板；真实 HTTPS、Flash、回滚与资源峰值不因此计为完成。
 

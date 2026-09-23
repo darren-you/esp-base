@@ -2,3 +2,4 @@
 - 拒绝 SDK 源码与子模块漂移，并同步活动方案中的 MQTT 精确版本
 - 将 Base OTA 通用下载与槽机制硬切到精确公开 esp-ota，保留产品约束、持久收据和本地自检
 - 在 MQTT QoS 1 outbox 过期时撤销 Base ready 并重建会话，补宿主故障回归
+- 将 Base 的 esp-ota 精确依赖更新到槽预检期限修正版本
