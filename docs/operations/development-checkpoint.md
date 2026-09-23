@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-24 OTA 固件集合验证接口依赖更新：Base 的唯一 Component Manager 声明与锁文件精确解析公开 `esp-ota@3731db7da35a262ff06c67951cd0e359dd1711a7`，组件 hash 为 `42796415a593ffb3118dd99906e91eeb47a9f3d16615f9b5b92c7f225a5b3bf4`。上游增加 `eota_sha256_verified_image`：对指定 OTA 应用槽执行固定 SDK 镜像校验，再按 SDK 给出的完整镜像长度计算包含签名扇区的 SHA-256；此接口不把分区存在、otadata 状态或 boot selector 当作可启动证明。Base 目前仍使用原有 `eota_` 接口，本次只更新精确依赖与来源记录，未接入 Container 固件集合，也未改变设备运行行为。
+
+- `bash firmware/tests/run_host_tests.sh` 的 Base ASan/UBSan 全套通过；固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 与 esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 951712 字节、SHA-256 `16a87f8244c6caae242fb06cc28184c9291e19e2836fdbb9d299638678f9b15d`。仓外临时 RSA-3072 测试键的签名 C3 构建通过，镜像 1118208 字节、SHA-256 `178aae6bc035ce4784e7752d2d3d68f3e2030ab8f65224ec3ceec512bd6d7061`，`espsecure verify-signature --version 2 --keyfile` 验证成功。两者均未刷板；真实 bootloader 选择、HTTPS/Flash、固件集合可启动性和设备回滚仍需实板证据。
+
 2026-09-24 OTA 槽预检期限修正消费：Base 的唯一 Component Manager 声明和锁文件精确解析公开 `esp-ota@ffe6544401646f84a833998954e65f7250576c94`，组件 hash 为 `3eca6dbfe0e72efa2c2b6fbbc766a9d05c6b6ab6f315446b54b94c1a43c6ae8a`。上游现在从 `eota_prepare` 内槽预检前启动期限，慢预检返回后若已逾期，不再启动 HTTPS 或写 Flash；固定 ESP-IDF 的同步 Flash、TLS 和 socket 调用仍不能由库抢占，P5-04 未因此验收。Base 现有 `eota_` 调用合同未变。
 
 - `bash firmware/tests/run_host_tests.sh` 的 Base ASan/UBSan 全套通过；固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 与 esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 951680 字节、SHA-256 `1849e65e338a915c187f83361aa273ce725d0c9e6da88c9fb1e70fe97c689c74`。这是未签名且未刷板的软件构建；本轮未运行 Base 签名构建、设备 HTTPS/Flash 或回滚。
