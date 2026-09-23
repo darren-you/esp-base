@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-24 FRP 活动流重启回归依赖更新：Base 的唯一 Component Manager 声明与生成锁精确解析公开 `esp-frp@f31a049fe473532d59e64adf940e56511ef53652`，组件 hash 为 `8a6788d41d7b2907213f96da53454f97aa8dec16648a6f79577879957326ace6`。该提交只补官方 FRPS 的真实活动双流中断/清理/同 worker 恢复测试与中文证据，库 `src/` 未变；上游 Mbed TLS 4.1.0、ASan/UBSan 与官方 FRP v0.71.0 主机 CTest 17/17，固定 SDK/lwIP 的 C3 空输入样例链接通过。
+
+- 本仓 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 与固定公开 SDK 的普通 ESP32-C3 构建通过；镜像仍为 960592 字节、SHA-256 `add1d0a44378e9d857fea4de690c28c01b491087ce97ca2ee0234972490900b8`，小于 `0x1e0000` 槽。本轮没有刷板或重跑 Base 签名镜像；真实设备双流重启、MQTT/OTA 同板并行和组合资源峰值仍未验，P4-04/P4-05 不能勾验收。
+
 2026-09-24 OTA TLS 会话票据期限修正依赖更新：Base 的唯一 Component Manager 声明与生成锁精确解析公开 `esp-ota@56944e160b1f7c919272d3a3d0c70b043e1a87d0`，组件 hash 为 `d4fa00ef861447571d4a4624075b61b92e7800021a355077c1f0cdb658d0d805`。上游在每次 TLS 读取前核对同一次读取的绝对期限，连续 TLS 1.3 会话票据不能跳过超时门；旧源码配新增回归确定性失败，修后上游主机 ASan/UBSan 与真实 HTTPS CTest 5/5、固定 SDK 普通及测试键签名 C3 构建和 RSA 验签通过。Base 的 OTA 调用合同未变。
 
 - 本仓 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过；固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd` 与 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 960592 字节、SHA-256 `add1d0a44378e9d857fea4de690c28c01b491087ce97ca2ee0234972490900b8`，仍在 `0x1e0000` 槽内。普通未签名 Base 不编入 OTA 下载路径；本轮未重跑 Base 签名镜像、未刷板。真实 TLS 1.3 连续票据、设备 HTTPS/Flash、bootloader/回滚与 P5-04 墙钟验收仍缺。
