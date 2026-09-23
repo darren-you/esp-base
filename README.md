@@ -1,6 +1,6 @@
 # ESP Base
 
-基于官方 ESP-IDF v6.1 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议，以及 OTA pending 新槽本地确认。受控签名构建还具备 USB `ota.start` 下载和按 operation ID 查询 `ota.result` 持久收据的软件链；当前实板仍是未签名基座，五能力完整验收尚未完成。
+基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载和按 operation ID 查询 `ota.result` 持久收据的软件链；当前实板仍是未签名基座，五能力完整验收尚未完成。
 
 ## 架构拓扑
 
