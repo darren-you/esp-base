@@ -1,6 +1,6 @@
 # ESP Base
 
-基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载和按 operation ID 查询 `ota.result` 持久收据的软件链。FRP 已接入公开组件和单 owner，但受控本地管理端点尚未实现，端点门始终关闭，不能连接 FRPS；当前实板仍是未签名旧基座，五能力完整验收尚未完成。
+基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载和按 operation ID 查询 `ota.result` 持久收据的软件链，并提供只读、失败保守拒绝的双应用槽固件身份观察接口，供未来 Container 绑定。FRP 已接入公开组件和单 owner，但受控本地管理端点尚未实现，端点门始终关闭，不能连接 FRPS；当前实板仍是未签名旧基座，五能力完整验收尚未完成。
 
 ## 架构拓扑
 
@@ -19,6 +19,7 @@ flowchart LR
     time --> idf_time["ESP-IDF esp_netif_sntp"]
     ota["esp-ota：HTTPS / 镜像验签 / 槽机制"] --> firmware
     receipt["ota_operation：产品约束 / operation 收据"] --> firmware
+    receipt -->|"只读有效槽 / 完整签名镜像身份"| image_set["可启动固件集合：未来 Container 绑定输入"]
     firmware -->|"控制任务进展 + 30 秒本地窗口"| ota
     state -->|"受控签名构建的 ota.start"| receipt
     receipt -->|"预检 / 准备 / 选槽"| ota
@@ -49,6 +50,8 @@ pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制�
 普通应用使用编译期 `CONFIG_ESP_BASE_TIME_SERVER`（默认 `pool.ntp.org`）启动官方 SNTP。本次启动收到同步事件且时间合理后才报告 `time_ready=true`；初始化或同步失败时保持 false，USB 与 pending OTA 本地确认继续运行。签名构建的 HTTPS OTA 必须先有 Wi-Fi IP 和 `time_ready`。普通未签名构建拒绝 OTA；签名镜像的首次迁移、真实 TLS/回滚和 SNTP 网络行为仍待实板验收。
 
 签名构建的 `ota.start` 在下载前将最近一次 operation ID、设备 ID、完整镜像摘要/长度和双槽写入 `base_store/base_ota/operation` 并读回。只读 `ota.result` 可在新 boot 按原 operation ID 查询：worker 活跃和新槽 pending 为 running，新槽 VALID 且镜像摘要相同才 succeeded，有可核对失败证据才 failed，其余为 unknown。旧回滚镜像若不含此查询代码，工具仍须报告 unknown；本轮没有升级实板上的旧镜像。
+
+签名构建的 `esp_base_ota_observe_firmware_set` 在调用方串行化所有 app/otadata 写入时读取运行、下次启动及另一槽状态，再调用锁定 `esp-ota` 验签并计算完整 signed bin 摘要。只有当前槽为 `VALID` 且下次启动槽与之相同，另一槽为 `VALID` 并由 IDF 判定可回滚，或另一槽镜像确实无效时才返回确定集合；pending、状态变化及仍可能被 bootloader 回退扫描加载的歧义镜像全部拒绝。当前没有独立包分区或 Container 运行接线，接口的 host 假件与 C3 编译不证明实板启动/回滚。
 
 - [固件入口](firmware/README.md)
 - [设备协议](docs/design/device-protocol.md)

@@ -12,7 +12,7 @@ flowchart LR
     wifi -->|"连接证明"| protocol
     protocol -->|"验证后提交"| config
     main --> ota["esp-ota：槽状态 / pending 确认 / HTTPS 升级"]
-    receipt["ota_operation：产品约束 / operation 收据"] --> ota
+    receipt["ota_operation：产品约束 / operation 收据 / 固件身份"] --> ota
     main --> time["time_runtime：本次启动 SNTP 同步门"]
     protocol -->|"控制循环进展 / 配置写门"| main
     protocol -->|"非阻塞轮询 / 心跳状态"| time
@@ -48,6 +48,8 @@ flowchart LR
 签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、RSA-3072、证书包和构建签名密钥。当前未签名实板不能直接打开这些选项：IDF 在签名配置启动时需要运行镜像中的公钥。首次迁移必须保全原设备、核对旧 bootloader 的 rollback、建立已签名且 otadata 为 VALID 的基座与回退槽；本轮只使用仓外临时测试键编译，不写板卡或生成生产凭据。签名构建的软件路径检查完整 signed bin 长度、inactive 槽大小、project/芯片、SHA-256 与 IDF 签名结果，下载/配置提交互斥；外部串口 Flash 租约仍由工具侧控制。
 
 `ota.start` 在目标槽写入前将 operation ID、设备 ID、摘要、长度与源/目标槽作为单 blob 保存到 `base_store` 的 `base_ota/operation`，commit 和读回成功才启动 worker；同 ID 不再次下载。签名构建的只读 `ota.result` 查询最近一次收据，只有新槽本地确认 VALID 且完整运行镜像摘要匹配才成功；回滚到尚无查询代码的旧镜像不能由设备提供最终结果，工具必须记 unknown。身份 NVS 保持原位；配置仍用 `base_config/committed` 单键，v3-only 读写不兼容旧 v1/v2 记录。真实回滚和 NVS 掉电行为待实板验证。
+
+`ota_operation` 另提供只读固件集合观察：要求运行槽已确认 `VALID` 且为当前 boot selector，另一槽若 `VALID` 则还须通过 IDF 回滚可能性检查和完整 signed bin 验签；若另一槽未受管，只有镜像校验明确无效才输出单固件集合。任何其它状态或过程中变化都返回不确定且输出清零。调用方必须在观察及消费结果期间独占 app/otadata 写入；当前尚未接入 Container。
 
 MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELETED_MESSAGES=y`。新 sdkconfig 从 defaults 得到这些值；已有 sdkconfig 若显式关闭，需在 menuconfig 启用，编译器会拒绝缺少日期验证或消息过期通知的配置。
 

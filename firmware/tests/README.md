@@ -14,13 +14,15 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、普通构建无 NVS 写入。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
+`ota_firmware_test` 编译真实固件集合观察逻辑，注入 SDK 与 `esp-ota` 槽/镜像结果，覆盖双 `VALID`、只有当前签名镜像、双槽同摘要、pending/boot 不一致、不可回滚、旧槽虽标无效但仍有可验签镜像、读态改变及资源失败。它不模拟真实 bootloader、Flash 并发或物理镜像读取；固定 SDK 普通与测试键签名构建只验证装配。
+
 ## 架构拓扑
 
 ```mermaid
 flowchart LR
     sources["components / apps"] --> idf["ESP-IDF build"]
     sources --> host["ASan/UBSan：guard + decoder + config store"]
-    ota["ota_operation + app_main + control_state：产品收据 / pending 自检"] --> host
+    ota["ota_operation + app_main + control_state：产品收据 / 固件集合 / pending 自检"] --> host
     library["esp-ota：通用 HTTPS / Flash / 槽测试"] --> host
     time["time_runtime：SNTP 事件 / 时间下界"] --> host
     wifi["wifi_runtime：初始化故障与资源释放"] --> host
