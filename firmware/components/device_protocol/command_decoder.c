@@ -127,7 +127,7 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         const cJSON *signature = cJSON_GetObjectItemCaseSensitive(parameters, "signature");
         const char *const signature_keys[] = {"scheme"};
         const cJSON *scheme = cJSON_GetObjectItemCaseSensitive(signature, "scheme");
-        if (!cJSON_IsString(url) || strlen(url->valuestring) > ESP_BASE_OTA_URL_BYTES ||
+        if (!cJSON_IsString(url) || strlen(url->valuestring) > EOTA_URL_BYTES ||
             strncmp(url->valuestring, "https://", 8) != 0 ||
             !cJSON_IsString(digest) || strlen(digest->valuestring) != 64 ||
             !cJSON_IsNumber(size) || !isfinite(size->valuedouble) || size->valuedouble < 1 ||

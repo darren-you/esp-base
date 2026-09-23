@@ -11,7 +11,7 @@
 #include "freertos/task.h"
 
 #include "esp_base_identity.h"
-#include "esp_base_ota.h"
+#include "eota.h"
 #include "esp_base_protocol.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_safety.h"
@@ -22,6 +22,7 @@ static esp_base_remote_config_t s_config;
 static esp_base_protocol_context_t s_protocol;
 
 #define ESP_BASE_CONTROL_START_TIMEOUT_MS UINT64_C(5000)
+#define ESP_BASE_OTA_STABLE_WINDOW_MS UINT64_C(30000)
 
 static esp_err_t initialise_nvs(void)
 {
@@ -34,25 +35,25 @@ static uint64_t uptime_ms(void)
     return (uint64_t)esp_timer_get_time() / 1000;
 }
 
-static void stop_after_local_failure(esp_base_ota_t *ota, bool pending_boot,
+static void stop_after_local_failure(eota_current_t *ota, bool pending_boot,
                                      const char *check, esp_err_t failure)
 {
     ESP_LOGE(TAG, "ESP_BASE_LOCAL_CHECK_FAILED check=%s error=%s", check, esp_err_to_name(failure));
     if (!pending_boot) {
         return;
     }
-    if (ota->state != ESP_BASE_OTA_STATE_PENDING_VERIFY) {
+    if (ota->state != EOTA_STATE_PENDING_VERIFY) {
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback=not_safe",
-                 ota->running_partition ? ota->running_partition : "unknown", esp_base_ota_state_name(ota->state));
+                 ota->running_partition ? ota->running_partition : "unknown", eota_state_name(ota->state));
         return;
     }
     ESP_LOGE(TAG, "Pending OTA slot %s failed %s; requesting IDF rollback", ota->running_partition, check);
-    const esp_err_t rollback_status = esp_base_ota_reject_pending(ota);
+    const esp_err_t rollback_status = eota_reject_pending(ota);
     /* ESP_OK never returns from the IDF rollback API. If it does return,
      * preserve this boot rather than force a reset without a viable slot. */
     ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback_error=%s",
              ota->running_partition ? ota->running_partition : "unknown",
-             esp_base_ota_state_name(ota->state), esp_err_to_name(rollback_status));
+             eota_state_name(ota->state), esp_err_to_name(rollback_status));
 }
 
 static esp_err_t wait_for_control_start(void)
@@ -70,15 +71,15 @@ static esp_err_t wait_for_control_start(void)
 
 void app_main(void)
 {
-    esp_base_ota_t ota = {0};
-    const esp_err_t ota_status = esp_base_ota_inspect(&ota);
+    eota_current_t ota = {0};
+    const esp_err_t ota_status = eota_inspect(&ota);
     if (ota_status != ESP_OK) {
         ESP_LOGE(TAG, "OTA slot state unavailable (%s); initialization stopped", esp_err_to_name(ota_status));
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback=not_safe",
-                 ota.running_partition ? ota.running_partition : "unknown", esp_base_ota_state_name(ota.state));
+                 ota.running_partition ? ota.running_partition : "unknown", eota_state_name(ota.state));
         return;
     }
-    const bool pending_boot = ota.state == ESP_BASE_OTA_STATE_PENDING_VERIFY;
+    const bool pending_boot = ota.state == EOTA_STATE_PENDING_VERIFY;
     esp_base_protocol_set_ota_verification_pending(pending_boot);
 
     const esp_err_t storage_status = initialise_nvs();
@@ -193,7 +194,9 @@ void app_main(void)
             return;
         }
         now_ms = uptime_ms();
-        const esp_err_t confirm_status = esp_base_ota_confirm_if_stable(&ota, stable_started_ms, now_ms);
+        const esp_err_t confirm_status = now_ms >= stable_started_ms &&
+            now_ms - stable_started_ms >= ESP_BASE_OTA_STABLE_WINDOW_MS ?
+            eota_confirm_pending(&ota) : ESP_ERR_NOT_FINISHED;
         if (confirm_status != ESP_OK) {
             stop_after_local_failure(&ota, pending_boot, "confirm", confirm_status);
             return;

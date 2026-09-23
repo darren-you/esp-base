@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "esp_base_ota_update.h"
+#include "esp_base_ota_policy.h"
 
 typedef enum {
     ESP_BASE_OTA_RECEIPT_OK,
@@ -41,9 +41,9 @@ typedef struct {
  * operation may replace only a terminal result; the same ID never downloads
  * twice. Commit and exact readback precede the first target-slot write. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
-    const char *device_id, const esp_base_ota_update_request_t *request);
+    const char *device_id, const esp_base_ota_request_t *request);
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_failure(
-    const char *device_id, const char *operation_id, esp_base_ota_update_result_t error);
+    const char *device_id, const char *operation_id, eota_result_t error);
 esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
     esp_base_ota_receipt_view_t *view);

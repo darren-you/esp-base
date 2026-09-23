@@ -11,15 +11,16 @@ flowchart LR
     protocol --> wifi["wifi_runtime：候选连接 / 退避重连"]
     wifi -->|"连接证明"| protocol
     protocol -->|"验证后提交"| config
-    main --> ota["ota_runtime：槽状态 / pending 确认 / operation 收据"]
+    main --> ota["esp-ota：槽状态 / pending 确认 / HTTPS 升级"]
+    receipt["ota_operation：产品约束 / operation 收据"] --> ota
     main --> time["time_runtime：本次启动 SNTP 同步门"]
     protocol -->|"控制循环进展 / 配置写门"| main
     protocol -->|"非阻塞轮询 / 心跳状态"| time
     time --> sntp["ESP-IDF esp_netif_sntp"]
     ota -->|"inactive 槽写入 / 验签 / 回滚"| rollback["ESP-IDF app_update：A/B 槽与回滚状态"]
-    protocol -->|"签名构建 ota.start"| ota
+    protocol -->|"签名构建 ota.start"| receipt
     ota --> https["ESP-IDF esp_http_client：HTTPS 下载"]
-    ota <-->|"登记与读回"| receipt["base_store NVS：base_ota/operation"]
+    receipt <-->|"登记与读回"| nvs["base_store NVS：base_ota/operation"]
     main --> safety["safety_runtime：复位事实 / WDT"]
     main --> protocol["device_protocol：串口心跳 / 有界命令 / 回执"]
     protocol --> mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
@@ -34,7 +35,7 @@ flowchart LR
 
 从仓库根执行 `idf.py -C firmware build`，工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。host tests 使用同一已解析 cJSON 源码，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`，`esp_ota` 唯一来源是公开 `esp-ota@bae8d13ca5f99c730c667bc55d6ea6a0d883e608`。host tests 使用同一已解析 cJSON 与 `eota.h`，不读取相邻仓。
 
 默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座，并只读装载 v2 持久配置，经物理 USB `config.set` 写入完整 Wi-Fi/MQTT 凭据；未配置时不创建 MQTT 客户端。已配置时只在 Wi-Fi IP 和本次启动可信时间齐备后启动严格 TLS，会在 command SUBACK 后报告 ready，并通过同一控制任务执行已认证命令、发布 QoS 1 结果和脱敏 reported；远端 config.set 被拒绝。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。现有实板仍为 v1 存储，未完成双槽与 NVS 离线迁移前不得启动 v2-only 镜像；正式 Broker/Tool 和实板网络 ACK 闭环尚待联调。
 

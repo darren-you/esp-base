@@ -1,2 +1,3 @@
 - 将 ESP Base SDK 锁至公开 OTA 修复 fork，同步 MQTT 精确依赖并完成 C3 复验
 - 拒绝 SDK 源码与子模块漂移，并同步活动方案中的 MQTT 精确版本
+- 将 Base OTA 通用下载与槽机制硬切到精确公开 esp-ota，保留产品约束、持久收据和本地自检

@@ -6,7 +6,7 @@
 
 Wi-Fi 启动测试编译真实 `wifi_runtime`，逐项注入 netif、事件循环、队列、驱动、事件注册、配置和启动失败，验证明确 `failed` 状态及初始化中途资源释放；事件注入还验证不同 SSID 拒绝、同 SSID 但记录填充字节不同仍可取得关联/IP 证明。它不模拟真实 AP 关联、WPA3、DNS、无线恢复或 pending 槽的整机任务调度。
 
-OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度和 HTTPS URL。`ota_update_test` 直接编译受控签名分支的下载源码，注入 SDK 结果，覆盖运行槽非 VALID、超槽、错误 project/芯片、缺 Content-Length、响应头及首块 EAGAIN 到期限、body 断流、5 分钟总期限、不完整、摘要不符、分区读取失败、验签拒绝、切槽后回退检查与旧槽恢复失败。Fake 只模拟每次 SDK 返回后的裁决，不替代真实 TLS、SDK 单次调用中的慢速滴流、签名密码学、bootloader 或断电测试。pending 确认故障测试还验证 SDK 报错但持久槽已 VALID 时清除配置写门。
+OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度和 HTTPS URL。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽；`ota_receipt_test` 验证产品约束及持久收据。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
 
 v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 字节显式拒绝且无写入，以及 NVS 查询长度、写前/写后、commit 与读回故障；公开 USB 工具另验证相同 schema 的非法字段和整帧上限。
 
@@ -20,7 +20,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 flowchart LR
     sources["components / apps"] --> idf["ESP-IDF build"]
     sources --> host["ASan/UBSan：guard + decoder + config store"]
-    ota["ota_runtime + app_main + control_state：pending / HTTPS OTA 裁决 / 回滚"] --> host
+    ota["ota_operation + app_main + control_state：产品收据 / pending 自检"] --> host
+    library["esp-ota：通用 HTTPS / Flash / 槽测试"] --> host
     time["time_runtime：SNTP 事件 / 时间下界"] --> host
     wifi["wifi_runtime：初始化故障与资源释放"] --> host
     mqtt["mqtt_owner：会话 / 认证 / 结果发布"] --> host

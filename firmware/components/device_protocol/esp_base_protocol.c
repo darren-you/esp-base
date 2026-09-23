@@ -7,7 +7,7 @@
 #include "esp_base_mqtt_owner.h"
 #include "esp_base_wifi.h"
 #include "esp_base_time.h"
-#include "esp_base_ota_update.h"
+#include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
 #include "esp_partition.h"
 #include "psa/crypto.h"
@@ -32,7 +32,7 @@ static ebase_line_reader_t s_reader;
 static bool s_started, s_config_uncertain, s_trial_active;
 static bool s_ota_active, s_ota_boot_uncertain;
 static size_t s_ota_slot;
-static esp_base_ota_update_request_t s_ota_request;
+static esp_base_ota_request_t s_ota_request;
 static atomic_bool s_ota_done;
 static atomic_int s_ota_result;
 static atomic_uint_fast32_t s_ota_received;
@@ -96,7 +96,7 @@ static status_snapshot_t snapshot(void)
         .ota_total = s_ota_active ? s_ota_request.image_size_bytes : 0,
         .wifi = esp_base_wifi_state(), .mqtt = esp_base_mqtt_owner_state(),
         .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
-        .ota = !esp_base_ota_update_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
+        .ota = !eota_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
 }
 
 static void reply(const char *request_id, const char *state, const char *error, const status_snapshot_t *status)
@@ -260,8 +260,18 @@ static void ota_progress(uint32_t received, uint32_t total, void *context)
 static void ota_task(void *argument)
 {
     (void)argument;
-    const esp_base_ota_update_result_t result =
-        esp_base_ota_update_run(&s_ota_request, ota_progress, NULL);
+    const eota_policy_t policy = esp_base_ota_policy(true);
+    eota_image_t image = {
+        .image_url = s_ota_request.image_url,
+        .image_size_bytes = s_ota_request.image_size_bytes,
+    };
+    memcpy(image.sha256, s_ota_request.sha256, sizeof image.sha256);
+    eota_prepared_t prepared;
+    eota_result_t result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);
+    if (result == EOTA_UPDATE_OK) {
+        /* There is no product package binding in this Base-only image. */
+        result = eota_select(&policy, &prepared);
+    }
     atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);
     atomic_store_explicit(&s_ota_done, true, memory_order_release);
     vTaskDelete(NULL);
@@ -270,9 +280,9 @@ static void ota_task(void *argument)
 static void poll_ota(void)
 {
     if (!s_ota_active || !atomic_load_explicit(&s_ota_done, memory_order_acquire)) return;
-    const esp_base_ota_update_result_t result =
-        (esp_base_ota_update_result_t)atomic_load_explicit(&s_ota_result, memory_order_relaxed);
-    if (result == ESP_BASE_OTA_UPDATE_OK) {
+    const eota_result_t result =
+        (eota_result_t)atomic_load_explicit(&s_ota_result, memory_order_relaxed);
+    if (result == EOTA_UPDATE_OK) {
         /* The slot is selected but not yet confirmed. A new boot must pass the
          * local self-test and stability window before it becomes valid. */
         save_outcome(s_ota_slot, "running", NULL, false);
@@ -280,7 +290,7 @@ static void poll_ota(void)
         esp_restart();
         return;
     }
-    if (result == ESP_BASE_OTA_UPDATE_BOOT_STATE_UNKNOWN) {
+    if (result == EOTA_UPDATE_BOOT_STATE_UNKNOWN) {
         s_ota_boot_uncertain = true;
         ESP_LOGE("base_ota", "ESP_BASE_OTA_RECOVERY_REQUIRED selector readback unavailable; avoid resetting device");
     } else {
@@ -299,8 +309,8 @@ static void poll_ota(void)
     esp_base_control_state_set_ota_download_active(&s_control_state, false);
     s_ota_active = false;
     atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
-    save_outcome(s_ota_slot, result == ESP_BASE_OTA_UPDATE_BOOT_STATE_UNKNOWN ? "unknown" : "failed",
-                 esp_base_ota_update_error(result), false);
+    save_outcome(s_ota_slot, result == EOTA_UPDATE_BOOT_STATE_UNKNOWN ? "unknown" : "failed",
+                 eota_error(result), false);
     memset(&s_ota_request, 0, sizeof s_ota_request);
 }
 
@@ -341,7 +351,7 @@ static void handle_line(const char *line, size_t length, void *context)
         memset(s_fingerprint_bytes, 0, sizeof s_fingerprint_bytes);
     }
     if (command.kind == EBASE_OTA_START) {
-        uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + ESP_BASE_OTA_URL_BYTES + 1 + 32 + 4];
+        uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + EOTA_URL_BYTES + 1 + 32 + 4];
         size_t offset = 0;
         memcpy(bytes + offset, "ota.start", 9); offset += 9;
         memcpy(bytes + offset, command.ota.operation_id, ESP_BASE_OTA_OPERATION_ID_BYTES); offset += ESP_BASE_OTA_OPERATION_ID_BYTES;
@@ -375,7 +385,7 @@ static void handle_line(const char *line, size_t length, void *context)
         if (ota_error != NULL) { save_outcome(slot, "failed", ota_error, false); return; }
     }
     if (command.kind == EBASE_OTA_START) {
-        if (!esp_base_ota_update_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
+        if (!eota_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
         if (esp_base_control_state_ota_pending(&s_control_state)) { save_outcome(slot, "failed", "ota_verification_pending", false); return; }
         if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
         if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
@@ -410,7 +420,7 @@ static void handle_line(const char *line, size_t length, void *context)
             s_ota_active = false;
             memset(&s_ota_request, 0, sizeof s_ota_request);
             if (esp_base_ota_receipt_record_failure(s_context.device_id, command.ota.operation_id,
-                    ESP_BASE_OTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK) {
+                    EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK) {
                 save_outcome(slot, "failed", "resource_failure", false);
             } else {
                 s_config_uncertain = true;

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_app_desc.h"
 #include "esp_base_identity.h"
-#include "esp_base_ota.h"
+#include "eota.h"
+#include "esp_ota_ops.h"
 #include "esp_base_protocol.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_safety.h"
 #include "esp_base_time.h"
-#include "esp_ota_ops.h"
 #include "freertos/task.h"
 
 #include <assert.h>
@@ -17,9 +17,8 @@
 
 void app_main(void);
 
-static esp_partition_t running = {.label = "ota_1"};
-static esp_ota_img_states_t image_state;
-static esp_ota_img_states_t state_after_mark;
+static eota_state_t image_state;
+static eota_state_t state_after_mark;
 static esp_err_t inspect_result, nvs_result, identity_result, safety_result, config_result;
 static esp_err_t protocol_result, mark_result, rollback_result, time_result;
 static uint64_t now_ms;
@@ -34,8 +33,8 @@ static jmp_buf reboot_target;
 
 static void reset_case(void)
 {
-    image_state = ESP_OTA_IMG_PENDING_VERIFY;
-    state_after_mark = ESP_OTA_IMG_VALID;
+    image_state = EOTA_STATE_PENDING_VERIFY;
+    state_after_mark = EOTA_STATE_VALID;
     inspect_result = nvs_result = identity_result = safety_result = config_result = ESP_OK;
     protocol_result = mark_result = rollback_result = time_result = ESP_OK;
     now_ms = last_control_progress_ms = 0;
@@ -87,32 +86,34 @@ void vTaskDelay(TickType_t ticks)
     maybe_control_progress();
 }
 
-const esp_partition_t *esp_ota_get_running_partition(void)
+esp_err_t eota_inspect(eota_current_t *current)
 {
-    return &running;
-}
-
-esp_err_t esp_ota_get_state_partition(const esp_partition_t *partition, esp_ota_img_states_t *state)
-{
-    assert(partition == &running);
-    if (inspect_result == ESP_OK) *state = image_state;
+    current->running_partition = "ota_1";
+    current->state = inspect_result == ESP_OK ? image_state : EOTA_STATE_UNKNOWN;
     return inspect_result;
 }
-
-esp_err_t esp_ota_mark_app_valid_cancel_rollback(void)
+const char *eota_state_name(eota_state_t state)
 {
+    return state == EOTA_STATE_PENDING_VERIFY ? "pending_verify" :
+        state == EOTA_STATE_VALID ? "valid" : "unknown";
+}
+esp_err_t eota_confirm_pending(eota_current_t *current)
+{
+    assert(current->state == EOTA_STATE_PENDING_VERIFY);
     ++mark_calls;
     assert(ota_gate_pending);
     image_state = state_after_mark;
-    return mark_result;
+    current->state = image_state;
+    return image_state == EOTA_STATE_VALID ? ESP_OK :
+        mark_result == ESP_OK ? ESP_ERR_INVALID_STATE : mark_result;
 }
-
-esp_err_t esp_ota_mark_app_invalid_rollback_and_reboot(void)
+esp_err_t eota_reject_pending(eota_current_t *current)
 {
+    assert(current->state == EOTA_STATE_PENDING_VERIFY);
     ++rollback_calls;
     assert(ota_gate_pending);
     if (rollback_result == ESP_OK) {
-        image_state = ESP_OTA_IMG_INVALID;
+        image_state = EOTA_STATE_INVALID;
         longjmp(reboot_target, 1);
     }
     return rollback_result;
@@ -162,7 +163,7 @@ const char *esp_get_idf_version(void)
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     assert(context != NULL);
-    assert(ota_gate_pending == (image_state == ESP_OTA_IMG_PENDING_VERIFY));
+    assert(ota_gate_pending == (image_state == EOTA_STATE_PENDING_VERIFY));
     ++protocol_calls;
     protocol_started = protocol_result == ESP_OK;
     maybe_control_progress();
@@ -205,7 +206,7 @@ static bool rebooted(void)
 int main(void)
 {
     reset_case();
-    image_state = ESP_OTA_IMG_VALID;
+    image_state = EOTA_STATE_VALID;
     nvs_result = ESP_FAIL;
     assert(!rebooted() && rollback_calls == 0 && recovery_logs == 0);
 
@@ -258,25 +259,25 @@ int main(void)
     reset_case();
     assert(!rebooted() && mark_calls == 1 && rollback_calls == 0 && ready_logs == 1);
     assert(!ota_gate_pending && ota_gate_clears == 1);
-    assert(now_ms >= ESP_BASE_OTA_STABLE_WINDOW_MS && image_state == ESP_OTA_IMG_VALID);
+    assert(now_ms >= 30000 && image_state == EOTA_STATE_VALID);
 
     reset_case();
     mark_result = ESP_FAIL;
-    state_after_mark = ESP_OTA_IMG_PENDING_VERIFY;
+    state_after_mark = EOTA_STATE_PENDING_VERIFY;
     assert(rebooted() && mark_calls == 1 && rollback_calls == 1 && ready_logs == 0);
 
     reset_case();
     mark_result = ESP_FAIL;
-    state_after_mark = ESP_OTA_IMG_VALID;
+    state_after_mark = EOTA_STATE_VALID;
     assert(!rebooted() && mark_calls == 1 && rollback_calls == 0);
-    assert(ready_logs == 1 && recovery_logs == 0 && image_state == ESP_OTA_IMG_VALID);
+    assert(ready_logs == 1 && recovery_logs == 0 && image_state == EOTA_STATE_VALID);
     assert(!ota_gate_pending && ota_gate_clears == 1);
 
     reset_case();
     nvs_result = ESP_FAIL;
     rollback_result = ESP_ERR_OTA_ROLLBACK_FAILED;
     assert(!rebooted() && rollback_calls == 1 && recovery_logs == 1);
-    assert(image_state == ESP_OTA_IMG_PENDING_VERIFY && ota_gate_pending);
+    assert(image_state == EOTA_STATE_PENDING_VERIFY && ota_gate_pending);
 
     puts("  ota_startup passed (startup faults, control progress, rollback, readback)");
 }

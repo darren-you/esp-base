@@ -17,7 +17,8 @@ flowchart LR
     guard --> action["状态读取 / restart / RAM 配置候选 / ota.start"]
     action --> wifi["wifi_runtime：20 秒候选连接证明"]
     owner --> time["time_runtime：SNTP 轮询 / time_ready 心跳"]
-    action -->|"签名构建 + Wi-Fi + 时间门 / 持久收据"| ota["ota_runtime：独立 HTTPS OTA worker / 结果查询"]
+    action -->|"签名构建 + Wi-Fi + 时间门 / 持久收据"| receipt["ota_operation：产品约束 / 结果查询"]
+    receipt -->|"预检 / 准备 / 选槽"| ota["esp-ota：独立 HTTPS OTA 机制"]
     ota -->|"原子进度 / 最终结果"| owner
     wifi --> store["remote_config：单 blob 条件提交"]
     store -->|"提交结果与 revision"| action

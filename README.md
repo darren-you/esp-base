@@ -15,12 +15,14 @@ flowchart LR
     time["time_runtime：SNTP 同步证明"] --> firmware
     state -->|"控制任务轮询"| time
     time --> idf_time["ESP-IDF esp_netif_sntp"]
-    ota["ota_runtime：HTTPS 下载 / 摘要验签 / pending 确认 / operation 收据"] --> firmware
+    ota["esp-ota：HTTPS / 镜像验签 / 槽机制"] --> firmware
+    receipt["ota_operation：产品约束 / operation 收据"] --> firmware
     firmware -->|"控制任务进展 + 30 秒本地窗口"| ota
-    state -->|"受控签名构建的 ota.start"| ota
+    state -->|"受控签名构建的 ota.start"| receipt
+    receipt -->|"预检 / 准备 / 选槽"| ota
     ota -->|"TLS / 有界重试"| https["ESP-IDF esp_http_client：HTTPS"]
     ota -->|"固定槽写入 / 签名 / 选槽 / 回滚"| slot["ESP-IDF app_update：A/B 回滚状态"]
-    ota <-->|"operation ID / 摘要与槽事实"| receipt["base_store NVS：base_ota/operation"]
+    receipt <-->|"operation ID / 摘要与槽事实"| nvs["base_store NVS：base_ota/operation"]
     layout["partitions：4 MiB 与双应用槽"] --> firmware
     host["tools/device-control.py：公开 USB 示例"] <-->|"JSON 命令与设备结果"| state
     firmware --> image["build/esp_base.bin"]
@@ -36,7 +38,7 @@ source "$IDF_PATH/export.sh"
 idf.py -C firmware build
 ```
 
-`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`，不读取工作区相邻仓库。普通基座的软件候选已在配置 v2 凭据后接入严格 TLS MQTT 命令 owner；无凭据时不创建客户端。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)与[SDK fork 复验](docs/operations/mqtt-hard-cut-candidate.md#sdk-fork-升级复验)为准；编译不写设备。
+`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`、`esp-ota@bae8d13ca5f99c730c667bc55d6ea6a0d883e608`，不读取工作区相邻仓库。普通基座的软件候选已在配置 v2 凭据后接入严格 TLS MQTT 命令 owner；无凭据时不创建客户端。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)与[SDK fork 复验](docs/operations/mqtt-hard-cut-candidate.md#sdk-fork-升级复验)为准；编译不写设备。
 
 NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身份沿用 `nvs/base_identity/device_uuid`；分区地址和大小保持迁移基线。配置 `base_store/base_config/committed` 只接受 v2，旧 v1 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。首版目标仅为 ESP32-C3、4 MiB，无 GPIO 动作。
 

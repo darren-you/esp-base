@@ -5,6 +5,12 @@
 - `bash firmware/tests/run_host_tests.sh` 的 ASan/UBSan 全套通过，新增 owner 假运行层覆盖无凭据、TLS/UUID/LWT、SUBACK 门、已认证/retained/错 Topic 输入、结果/上报 retain 位、断连重订阅、订阅错误重试、配置更换时停止失败保留旧 handle 且清除旧管理 key。固定公开 SDK ESP32-C3 普通镜像 911792 字节、SHA-256 `eda17dd49dc07fb7a58430ecbf4858a2329123dd5fe50513d675e1d36a4551ff`；仓外临时 RSA-3072 测试键签名镜像 1052672 字节、SHA-256 `9811563a344c8c6bd787742fc42c46fb84caba71180ee8fe074974200cce4c3b`，`espsecure verify-signature --version 2` 通过。两者均在 `0x1e0000` 槽内，均未刷板。
 - 设备级 Broker 精确 ACL 与账户尚未部署，私有 Tool 的网络控制端尚未联调，现有实板 v1→v2 的两槽与 NVS 离线迁移尚未执行；本软件候选没有真实设备、Broker 或网络命令 ACK 的端到端证明。retained online 与 PUBACK 不能作操作终态。
 
+2026-09-24 P5-07 软件硬切候选：普通与受控签名 Base 均精确解析公开 `esp-ota@bae8d13ca5f99c730c667bc55d6ea6a0d883e608`；删除 Base 原 HTTPS 下载、镜像摘要、槽读写和确认/回滚实现及旧转发接口。`ota_operation` 只保留可信项目/芯片/分区/期限约束和 `base_store/base_ota/operation` 持久收据；设备协议仍拥有授权、Wi-Fi/时间前置、单 worker、配置互斥、同 ID 去重及重启调度；主程序仍拥有本地启动检查、30 秒窗口和跨窗口控制进展。成功查询通过 `eota_observe_slots` 和 `eota_sha256_running` 绑定真实新槽与完整 signed bin 摘要。
+
+- 主机 ASan/UBSan 全套通过。Base 的 `ota_receipt_test` 覆盖收据 commit/读回、同 ID 去重与未决拒绝、NVS 不确定及 pending/VALID/回滚裁决；`ota_startup_test` 与 `control_state_test` 覆盖产品自检、30 秒窗口、写门和失败回滚。迁出的通用 SDK/HTTP/槽故障矩阵由 `esp-ota` 自有 `ota_test`、`update_test`、`http_deadline_test`、`http_transport_test` 及真实 HTTPS 回环维护。
+- 固定公开 ESP-IDF fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd`、esp-lwip `2758df4cd3666b3b2a5b53830148379326425c0d` 的普通 ESP32-C3 构建通过，镜像 `0xc10d0` 字节；仓外临时 RSA-3072 测试键的签名 C3 构建通过，镜像 `0x101000` 字节，`espsecure verify-signature` 验签成功。两者均小于原双 `0x1e0000` 应用槽，不含生产密钥，也未刷板。
+- P5-06 独立实板 HTTPS/Flash/bootloader 故障矩阵尚未完成，本候选不能计作 P5-07 总验收。当前实板是未签名旧基座；v2 NVS 离线迁移、签名首次迁移、真实 Wi-Fi/时间、槽确认和回滚仍待按恢复基线执行。固定 SDK 单次 HTTP/TLS/Flash 调用不可抢占，30 秒无进展/5 分钟总期限不代表完整 prepare 的严格墙钟上界。
+
 2026-09-23 MQTT 公开组件硬切软件候选：移除 Base 原有通用运行层与重复 host 用例，实验应用直接消费公开 `esp-mqtt` 的固定 Git 提交。普通与实验应用的 C3 构建、Base host 回归及唯一组件/锁文件核对见[候选记录](mqtt-hard-cut-candidate.md)。原 2026-09-22 MQTT 实板证据只覆盖当时旧镜像；公开组件的独立实板矩阵及 Base 命令 ACK 闭环尚未完成，本候选未刷板。
 
 2026-09-23 保存前软件复核：当前工作树的 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过；固定 ESP-IDF `fff9895c82d744c7237be8847347bdd1b07c6643` 与 esp-lwip `2758df4cd3666b3b2a5b53830148379326425c0d` 在独立临时 build/sdkconfig 下完成 ESP32-C3 普通构建，镜像 786336 字节、SHA-256 `7f0e394d3795be16caddc51e4d49ebba3b47390012dff53ee79fad794bdfdb50`。同一 SDK 的受控签名构建镜像 1052672 字节、SHA-256 `cbccc852affc8d4b9025e7018df8f48c3c8f1f52d289a780ba57e1c31851de4c`；仓外临时 RSA-3072 测试键的签名经 `espsecure` 验证通过。上述两种镜像均未刷板，临时密钥不入仓，真实 HTTPS、签名槽切换与回滚仍待实板验收。

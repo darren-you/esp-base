@@ -9,14 +9,15 @@ flowchart LR
     main["main/esp_base_main.c：本地启动检查 / 30 秒窗口"] --> identity["device_identity / remote_config：身份与配置"]
     main --> protocol["device_protocol：控制任务与 Wi-Fi"]
     protocol -->|"首轮与最近进展"| main
-    main --> ota["ota_runtime：HTTPS 下载 / 摘要验签 / operation 收据"]
+    main --> ota["esp-ota：pending 确认 / HTTPS / 槽机制"]
+    receipt["ota_operation：产品约束 / operation 收据"] --> ota
     main --> time["time_runtime：SNTP 启动"]
     protocol -->|"轮询并报告 time_ready"| time
     usb["USB 工具"] <-->|"命令与回执"| protocol
     ota -->|"inactive 槽写入 / 验签 / 回滚"| sdk["ESP-IDF app_update：A/B 回滚状态"]
-    protocol -->|"签名构建 ota.start"| ota
+    protocol -->|"签名构建 ota.start"| receipt
     ota --> https["ESP-IDF esp_http_client：HTTPS 下载"]
-    ota <-->|"按 operation ID 登记与查询"| receipt["base_store NVS：base_ota/operation"]
+    receipt <-->|"按 operation ID 登记与查询"| nvs["base_store NVS：base_ota/operation"]
 ```
 
 在仓库根使用 `idf.py -C firmware build`。此 v2-only 应用只接受 `base_store/base_config/committed` 的 EBCF v2 blob；已有 v1 记录在启动读取阶段失败，不写 NVS、不确认 pending 槽。实板须先完成离线双槽与同键迁移；物理 USB `config.set` 可在 v2 首启后写入完整 MQTT TLS 凭据，但正式网络客户端尚未接线。

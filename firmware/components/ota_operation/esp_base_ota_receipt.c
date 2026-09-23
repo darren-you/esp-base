@@ -3,11 +3,9 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "psa/crypto.h"
 
 #define OTA_PARTITION "base_store"
 #define OTA_NAMESPACE "base_ota"
@@ -35,18 +33,6 @@ static bool valid_uuid(const char *value)
                      (value[i] >= 'a' && value[i] <= 'f'))) return false;
     }
     return true;
-}
-
-static bool valid_slot(const esp_partition_t *partition)
-{
-    if (partition == NULL || partition->type != ESP_PARTITION_TYPE_APP || partition->size != 0x1e0000) return false;
-    return (partition->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 && partition->address == 0x20000) ||
-           (partition->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1 && partition->address == 0x200000);
-}
-
-static bool same_slot(const esp_partition_t *partition, uint8_t subtype)
-{
-    return valid_slot(partition) && partition->subtype == subtype;
 }
 
 static void encode(const receipt_t *receipt, uint8_t bytes[OTA_BYTES])
@@ -79,9 +65,9 @@ static bool decode(const uint8_t bytes[OTA_BYTES], receipt_t *receipt)
     if (candidate.image_size_bytes == 0 || candidate.image_size_bytes > 0x1e0000 ||
         (candidate.status == OTA_STATUS_PREPARED && candidate.failure != 0) ||
         (candidate.status == OTA_STATUS_FAILED &&
-         (candidate.failure == ESP_BASE_OTA_UPDATE_OK ||
-          candidate.failure == ESP_BASE_OTA_UPDATE_BOOT_STATE_UNKNOWN ||
-          candidate.failure > ESP_BASE_OTA_UPDATE_RESOURCE_FAILURE))) return false;
+         (candidate.failure == EOTA_UPDATE_OK ||
+          candidate.failure == EOTA_UPDATE_BOOT_STATE_UNKNOWN ||
+          candidate.failure > EOTA_UPDATE_RESOURCE_FAILURE))) return false;
     memcpy(candidate.device_id, bytes + 14, 36);
     memcpy(candidate.operation_id, bytes + 50, 36);
     memcpy(candidate.sha256, bytes + 86, 32);
@@ -128,60 +114,38 @@ static esp_base_ota_receipt_result_t store(const receipt_t *receipt)
            ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
 }
 
-static bool running_digest_matches(const esp_partition_t *partition, const receipt_t *receipt)
-{
-    psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
-    if (psa_hash_setup(&hash, PSA_ALG_SHA_256) != PSA_SUCCESS) return false;
-    uint8_t buffer[1024], digest[32];
-    for (uint32_t offset = 0; offset < receipt->image_size_bytes;) {
-        const size_t count = receipt->image_size_bytes - offset < sizeof buffer ?
-            receipt->image_size_bytes - offset : sizeof buffer;
-        if (esp_partition_read(partition, offset, buffer, count) != ESP_OK ||
-            psa_hash_update(&hash, buffer, count) != PSA_SUCCESS) {
-            (void)psa_hash_abort(&hash);
-            return false;
-        }
-        offset += (uint32_t)count;
-    }
-    size_t size = 0;
-    if (psa_hash_finish(&hash, digest, sizeof digest, &size) != PSA_SUCCESS || size != sizeof digest) {
-        return false;
-    }
-    return memcmp(digest, receipt->sha256, sizeof digest) == 0;
-}
-
 static void evaluate(const receipt_t *receipt, bool worker_active, esp_base_ota_receipt_view_t *view)
 {
     view->state = ESP_BASE_OTA_OPERATION_UNKNOWN;
     view->error_code = "ota_result_uncertain";
     if (worker_active) { view->state = ESP_BASE_OTA_OPERATION_RUNNING; view->error_code = NULL; return; }
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    const esp_partition_t *boot = esp_ota_get_boot_partition();
-    if (same_slot(running, receipt->target_subtype) && same_slot(boot, receipt->target_subtype)) {
-        esp_ota_img_states_t state;
-        if (esp_ota_get_state_partition(running, &state) != ESP_OK) return;
-        if (state == ESP_OTA_IMG_PENDING_VERIFY) {
+    const eota_policy_t policy = esp_base_ota_policy(false);
+    eota_slots_t slots;
+    if (eota_observe_slots(&policy, &slots) != EOTA_UPDATE_OK) return;
+    if (slots.running_subtype == receipt->target_subtype &&
+        slots.boot_subtype == receipt->target_subtype) {
+        if (slots.running_state == EOTA_STATE_PENDING_VERIFY) {
             view->state = ESP_BASE_OTA_OPERATION_RUNNING;
             view->error_code = NULL;
-        } else if (state == ESP_OTA_IMG_VALID && running_digest_matches(running, receipt)) {
-            view->state = ESP_BASE_OTA_OPERATION_SUCCEEDED;
-            view->error_code = NULL;
+        } else if (slots.running_state == EOTA_STATE_VALID) {
+            uint8_t digest[EOTA_SHA256_BYTES];
+            if (eota_sha256_running(&policy, receipt->image_size_bytes, digest) == EOTA_UPDATE_OK &&
+                memcmp(digest, receipt->sha256, sizeof digest) == 0) {
+                view->state = ESP_BASE_OTA_OPERATION_SUCCEEDED;
+                view->error_code = NULL;
+            }
         }
         return;
     }
-    if (!same_slot(running, receipt->source_subtype) || !same_slot(boot, receipt->source_subtype)) return;
-    esp_ota_img_states_t source_state;
-    if (esp_ota_get_state_partition(running, &source_state) != ESP_OK || source_state != ESP_OTA_IMG_VALID) return;
+    if (slots.running_subtype != receipt->source_subtype ||
+        slots.boot_subtype != receipt->source_subtype || slots.running_state != EOTA_STATE_VALID) return;
     if (receipt->status == OTA_STATUS_FAILED) {
         view->state = ESP_BASE_OTA_OPERATION_FAILED;
-        view->error_code = esp_base_ota_update_error((esp_base_ota_update_result_t)receipt->failure);
+        view->error_code = eota_error((eota_result_t)receipt->failure);
         return;
     }
-    const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
-    esp_ota_img_states_t target_state;
-    if (same_slot(target, receipt->target_subtype) &&
-        esp_ota_get_state_partition(target, &target_state) == ESP_OK &&
-        (target_state == ESP_OTA_IMG_ABORTED || target_state == ESP_OTA_IMG_INVALID)) {
+    if (slots.target_subtype == receipt->target_subtype &&
+        (slots.target_state == EOTA_STATE_ABORTED || slots.target_state == EOTA_STATE_INVALID)) {
         view->state = ESP_BASE_OTA_OPERATION_FAILED;
         view->error_code = "ota_rolled_back";
     }
@@ -191,7 +155,7 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
     esp_base_ota_receipt_view_t *view)
 {
-    if (!esp_base_ota_update_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
+    if (!eota_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
     if (!view || !valid_uuid(device_id) || !valid_uuid(operation_id)) return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
     *view = (esp_base_ota_receipt_view_t){0};
     receipt_t receipt;
@@ -208,36 +172,31 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
 }
 
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
-    const char *device_id, const esp_base_ota_update_request_t *request)
+    const char *device_id, const esp_base_ota_request_t *request)
 {
-    if (!esp_base_ota_update_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
+    if (!eota_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
     if (!valid_uuid(device_id) || request == NULL || !valid_uuid(request->operation_id)) {
         return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
     }
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    const esp_partition_t *boot = esp_ota_get_boot_partition();
-    const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
-    if (!valid_slot(running) || !valid_slot(boot) || !valid_slot(target) ||
-        running->subtype == target->subtype ||
-        request->image_size_bytes == 0 || request->image_size_bytes > target->size) {
+    const eota_policy_t policy = esp_base_ota_policy(false);
+    eota_slots_t slots;
+    if (eota_observe_slots(&policy, &slots) != EOTA_UPDATE_OK) {
+        return ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN;
+    }
+    if (request->image_size_bytes == 0 || request->image_size_bytes > slots.target_size_bytes) {
         return ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE;
     }
-    if (running->subtype != boot->subtype) return ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH;
-    esp_ota_img_states_t state;
-    if (esp_ota_get_state_partition(running, &state) != ESP_OK || state != ESP_OTA_IMG_VALID) {
-        return ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID;
+    if (slots.running_subtype != slots.boot_subtype ||
+        slots.running_address_bytes != slots.boot_address_bytes) return ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH;
+    if (slots.running_state != EOTA_STATE_VALID) return ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID;
+    if (slots.target_state == EOTA_STATE_NEW || slots.target_state == EOTA_STATE_PENDING_VERIFY) {
+        return ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE;
     }
-    const esp_err_t target_error = esp_ota_get_state_partition(target, &state);
-    if (target_error == ESP_OK) {
-        if (state == ESP_OTA_IMG_NEW || state == ESP_OTA_IMG_PENDING_VERIFY) {
-            return ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE;
-        }
-        if (state != ESP_OTA_IMG_UNDEFINED && state != ESP_OTA_IMG_VALID &&
-            state != ESP_OTA_IMG_INVALID && state != ESP_OTA_IMG_ABORTED) {
-            return ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN;
-        }
-    } else if (target_error != ESP_ERR_NOT_FOUND) {
-        return ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN;
+    if (slots.target_state != EOTA_STATE_UNTRACKED && slots.target_state != EOTA_STATE_UNDEFINED &&
+        slots.target_state != EOTA_STATE_VALID && slots.target_state != EOTA_STATE_INVALID &&
+        slots.target_state != EOTA_STATE_ABORTED) return ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN;
+    if (eota_preflight(&policy, request->image_size_bytes, &slots) != EOTA_UPDATE_OK) {
+        return ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE;
     }
     receipt_t previous;
     esp_base_ota_receipt_result_t existing = load(&previous);
@@ -255,8 +214,8 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
             return ESP_BASE_OTA_RECEIPT_BUSY;
         }
     }
-    receipt_t next = {.status = OTA_STATUS_PREPARED, .source_subtype = running->subtype,
-        .target_subtype = target->subtype, .image_size_bytes = request->image_size_bytes};
+    receipt_t next = {.status = OTA_STATUS_PREPARED, .source_subtype = slots.running_subtype,
+        .target_subtype = slots.target_subtype, .image_size_bytes = request->image_size_bytes};
     memcpy(next.device_id, device_id, sizeof next.device_id);
     memcpy(next.operation_id, request->operation_id, sizeof next.operation_id);
     memcpy(next.sha256, request->sha256, sizeof next.sha256);
@@ -264,12 +223,12 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
 }
 
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_failure(
-    const char *device_id, const char *operation_id, esp_base_ota_update_result_t error)
+    const char *device_id, const char *operation_id, eota_result_t error)
 {
-    if (!esp_base_ota_update_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
-    if (!valid_uuid(device_id) || !valid_uuid(operation_id) || error == ESP_BASE_OTA_UPDATE_OK ||
-        error == ESP_BASE_OTA_UPDATE_BOOT_STATE_UNKNOWN ||
-        error > ESP_BASE_OTA_UPDATE_RESOURCE_FAILURE) return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
+    if (!eota_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
+    if (!valid_uuid(device_id) || !valid_uuid(operation_id) || error == EOTA_UPDATE_OK ||
+        error == EOTA_UPDATE_BOOT_STATE_UNKNOWN ||
+        error > EOTA_UPDATE_RESOURCE_FAILURE) return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
     receipt_t receipt;
     esp_base_ota_receipt_result_t result = load(&receipt);
     if (result != ESP_BASE_OTA_RECEIPT_OK) return result;

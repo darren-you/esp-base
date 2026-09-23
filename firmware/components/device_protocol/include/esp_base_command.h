@@ -2,7 +2,7 @@
 #pragma once
 #include "esp_base_command_guard.h"
 #include "esp_base_config.h"
-#include "esp_base_ota_update.h"
+#include "esp_base_ota_policy.h"
 
 #define EBASE_LINE_LIMIT 8192
 typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT } ebase_command_kind_t;
@@ -10,7 +10,7 @@ typedef struct {
     ebase_command_kind_t kind;
     ebase_request_t request;
     esp_base_remote_config_t config;
-    esp_base_ota_update_request_t ota;
+    esp_base_ota_request_t ota;
     char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
 } ebase_command_t;
 
