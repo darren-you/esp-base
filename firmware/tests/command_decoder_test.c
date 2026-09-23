@@ -92,11 +92,35 @@ static void ota_result_tests(void)
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"bad\"}}");
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"extra\":1}}");
 }
+static void frp_status_tests(void)
+{
+    static const char valid[] =
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\","
+        "\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\","
+        "\"command\":\"status\",\"expires_at_uptime_ms\":31000}";
+    ebase_request_t request;
+    assert(!ebase_parse_frp_status(valid, sizeof valid - 1, &request));
+    assert(!strcmp(request.device_id, DEVICE) && !strcmp(request.boot_id, BOOT) &&
+           !strcmp(request.request_id, REQUEST) && request.expires_at_ms == 31000);
+    assert(ebase_parse_frp_status(status, sizeof status - 1, &request));
+    assert(request.request_id[0] == 0);
+    static const char *invalid[] = {
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"restart\",\"expires_at_uptime_ms\":31000}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000,\"parameters\":{}}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000,\"request_id\":\"" REQUEST "\"}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":3.1}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000}tail"
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; ++i)
+        assert(ebase_parse_frp_status(invalid[i], strlen(invalid[i]), &request));
+    assert(ebase_parse_frp_status(valid, 513, &request));
+}
 int main(void)
 {
     config_tests();
     ota_tests();
     ota_result_tests();
+    frp_status_tests();
     ebase_command_t out;
     assert(!ebase_parse_command(status, strlen(status), &out) && out.kind == EBASE_STATUS);
     assert(!ebase_parse_command(restart, strlen(restart), &out) && out.kind == EBASE_RESTART);

@@ -25,8 +25,8 @@ typedef struct {
 esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
                                        const char *device_id);
 /* The endpoint gate is true only after the separate, authenticated loopback
- * management listener is bound to config.local_port. Base currently passes
- * false: no FRPS session can expose an unauthenticated local target. */
+ * management listener is bound to config.local_port. A failed bind keeps
+ * FRPS disconnected rather than exposing an unauthenticated local target. */
 void esp_base_frp_owner_poll(uint64_t now_ms, bool network_ready,
                              bool trusted_time_ready, bool endpoint_ready);
 esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void);

@@ -12,6 +12,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `mqtt_owner_test` 编译普通 Base 的真实 owner、Topic 与公开 emqtt 配置校验源码，注入客户端事件；覆盖无凭据不建客户端、UUID ClientID、严格 TLS、离线 LWT、SUBACK 前不受理命令、retained/错 Topic/HMAC 拒绝、结果和 reported 的 QoS/retain、断连重新订阅门、QoS 1 outbox 过期后的停止与重新取得 SUBACK、发布或订阅失败的停止重试，以及配置更换时 stop 失败不释放旧 handle、清除旧 key 且不再派发。Fake 不模拟实际 Broker、TLS 握手或设备任务调度。
 
+`frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
+
 `ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、普通构建无 NVS 写入。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
 `ota_firmware_test` 编译真实固件集合观察逻辑，注入 SDK 与 `esp-ota` 槽/镜像结果，覆盖双 `VALID`、只有当前签名镜像、双槽同摘要、pending/boot 不一致、不可回滚、旧槽虽标无效但仍有可验签镜像、读态改变及资源失败。它不模拟真实 bootloader、Flash 并发或物理镜像读取；固定 SDK 普通与测试键签名构建只验证装配。

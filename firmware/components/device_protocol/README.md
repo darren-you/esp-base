@@ -13,6 +13,8 @@ flowchart LR
     broker["设备级 Broker：TLS / 精确 ACL"] <-->|"command / result / reported / status"| mqtt["mqtt_owner：UUID / LWT / SUBACK 门"]
     mqtt <-->|"HMAC 验证后派发 / 结果发布"| owner
     owner --> frp_owner["frp_owner：公开 esp-frp 单实例 / 端点门 / 状态"]
+    owner --> frp_listener["frp_status_listener：loopback / FRP 独立 HMAC / 只读 status"]
+    frp_listener -->|"绑定门"| frp_owner
     frp_owner --> frp["公开 esp-frp：严格 TLS / Yamux / Token"]
     owner --> parser["command_decoder：严格 JSON / 分片 / 超限排空"]
     parser --> guard["command_guard：目标 / deadline / 去重"]
@@ -41,4 +43,4 @@ QoS 1 outbox 消息过期时，owner 撤销 `ready`、停止当前会话并在�
 
 签名构建的只读 `ota.result` 按 operation ID 读取最近一次持久收据，返回目标 signed bin 摘要/长度和当前 running/succeeded/failed/unknown；旧启动的 `request_id` 不会重放写动作。活跃 worker 查询保持 running，目标槽 VALID 且整镜像摘要匹配后才 succeeded。NVS 登记必须先 commit+读回再创建 worker；失败收据持久化不确定时返回 unknown 并关闭本次启动配置写入。只有新旧两个镜像都含此查询命令时，回滚到旧槽才能由设备回报最终失败；较旧镜像缺少命令时工具报告 unknown。
 
-FRP owner 消费公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`，先要求独立 Token/CA、Wi-Fi IP、本次启动可信时间，并以受控 loopback 管理 listener 已绑定为启动门。当前尚未冻结并实现该 listener 的业务请求鉴权与线格式，控制任务恒传 `endpoint_ready=false`；FRP 状态为 `endpoint_unavailable`，不向 FRPS 建连。host 测试覆盖端点门、状态快照和异步停止/重配保留句柄；C3 编译不代表远端业务可用。
+FRP owner 消费公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`，先要求独立 Token/CA、Wi-Fi IP、本次启动可信时间，并以受控 loopback 管理 listener 已绑定为启动门。listener 与 FRP owner 同属唯一控制任务，只在 `127.0.0.1:local_port` 绑定，只接受独立 FRP key 的 HMAC 后解析只读 `status`；重配先撤销旧 listener，再等旧 FRP worker 销毁才装配新 key。HTTP 请求和结果字段见[设备协议](../../../docs/design/device-protocol.md#frp-base-软件接线边界)。host 测试覆盖半包、超限、重复长度头、错 tag、重配撤销旧 key、2 秒总时限、boot/期限和同 ID 结果缓存/冲突；固定 SDK C3 编译不代表真实 FRPS、MQTT/OTA 并行或内存门槛通过。

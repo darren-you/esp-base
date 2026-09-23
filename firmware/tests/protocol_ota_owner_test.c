@@ -13,6 +13,7 @@ static eota_result_t prepare_result, select_result;
 static bool worker_created;
 static unsigned register_calls, failure_record_calls, task_calls, prepare_calls, select_calls, restart_calls;
 static char latest_reply[1200];
+static uint32_t fake_free_heap = 1000;
 
 static void reset_case(void)
 {
@@ -23,6 +24,7 @@ static void reset_case(void)
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
     memset(s_outcomes, 0, sizeof s_outcomes);
+    memset(s_frp_status_seen, 0, sizeof s_frp_status_seen);
     memset(&s_ota_storage_claim, 0, sizeof s_ota_storage_claim);
     memset(&s_ota_request, 0, sizeof s_ota_request);
     s_config_uncertain = s_ota_boot_uncertain = s_ota_active = s_trial_active = false;
@@ -35,6 +37,7 @@ static void reset_case(void)
     worker_created = true;
     register_calls = failure_record_calls = task_calls = prepare_calls = select_calls = restart_calls = 0;
     latest_reply[0] = '\0';
+    fake_free_heap = 1000;
 }
 
 static void start(unsigned request_number)
@@ -58,8 +61,37 @@ static void expect_reply(const char *state, const char *error)
     }
 }
 
+static void check_frp_status(const char *request, int expected_http,
+                             const char *expected_error)
+{
+    char response[1024] = {0};
+    size_t length = 0;
+    const int http = handle_frp_status((const uint8_t *)request, strlen(request),
+                                       response, sizeof response, &length, NULL);
+    assert(http == expected_http && length > 0 && length < sizeof response);
+    if (expected_error) assert(strstr(response, expected_error));
+    else {
+        char heap_field[48];
+        snprintf(heap_field, sizeof heap_field, "\"free_heap\":%u", !strcmp(request, "status-1") ? 1000u : fake_free_heap);
+        assert(strstr(response, "\"state\":\"succeeded\"") &&
+               strstr(response, "\"frp\":\"stopped\"") && strstr(response, heap_field));
+    }
+}
+
 int main(void)
 {
+    reset_case();
+    check_frp_status("status-1", 200, NULL);
+    fake_free_heap = 500;
+    check_frp_status("status-1", 200, NULL);
+    check_frp_status("changed-deadline", 409, "request_conflict");
+    check_frp_status("changed-boot", 409, "request_conflict");
+    check_frp_status("status-2", 200, NULL);
+    check_frp_status("wrong-boot", 409, "wrong_boot");
+    check_frp_status("wrong-device", 409, "wrong_device");
+    check_frp_status("expired", 409, "expired");
+    check_frp_status("far", 400, "invalid_deadline");
+    check_frp_status("invalid", 400, "invalid_request");
     reset_case();
     esp_base_storage_claim_t other = {0};
     assert(esp_base_storage_claim(&owner, &other));
@@ -146,6 +178,27 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     return NULL;
 }
 
+const char *ebase_parse_frp_status(const char *json, size_t length, ebase_request_t *out)
+{
+    (void)length;
+    memset(out, 0, sizeof *out);
+    if (!strcmp(json, "invalid")) return "invalid_request";
+    strcpy(out->request_id, "11111111-1111-4111-8111-111111111111");
+    out->request_id[35] = !strcmp(json, "status-2") ? '2' :
+        !strcmp(json, "wrong-boot") ? '3' :
+        !strcmp(json, "wrong-device") ? '4' :
+        !strcmp(json, "expired") ? '5' :
+        !strcmp(json, "far") ? '6' : '1';
+    strcpy(out->device_id, !strcmp(json, "wrong-device") ?
+        "99999999-9999-4999-8999-999999999999" : "22222222-2222-4222-8222-222222222222");
+    strcpy(out->boot_id, (!strcmp(json, "wrong-boot") || !strcmp(json, "changed-boot")) ?
+        "88888888-8888-4888-8888-888888888888" : "33333333-3333-4333-8333-333333333333");
+    out->expires_at_ms = !strcmp(json, "expired") ? 1000 :
+        !strcmp(json, "far") ? 32000 :
+        !strcmp(json, "changed-deadline") ? 10001 : 10000;
+    return NULL;
+}
+
 psa_status_t psa_hash_compute(int algorithm, const uint8_t *bytes, size_t length,
                               uint8_t *out, size_t out_size, size_t *actual)
 {
@@ -161,7 +214,7 @@ bool esp_base_time_ready(void) { return true; }
 const char *esp_base_wifi_state(void) { return "ready"; }
 const char *esp_base_mqtt_owner_state(void) { return "ready"; }
 esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = "stopped"}; }
-uint32_t esp_get_free_heap_size(void) { return 1000; }
+uint32_t esp_get_free_heap_size(void) { return fake_free_heap; }
 size_t heap_caps_get_minimum_free_size(unsigned caps) { (void)caps; return 1000; }
 int64_t esp_timer_get_time(void) { return 1000000; }
 bool esp_base_mqtt_owner_result(const char *json, size_t length)

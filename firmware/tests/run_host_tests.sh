@@ -16,6 +16,11 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   "$ROOT/tests/network_auth_test.c" \
   -o "$BUILD_DIR/network_auth_test"
 "$BUILD_DIR/network_auth_test"
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
+  "$ROOT/components/device_protocol/frp_status_listener.c" \
+  "$ROOT/tests/frp_status_listener_test.c" -o "$BUILD_DIR/frp_status_listener_test"
+"$BUILD_DIR/frp_status_listener_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
   -I "$ROOT/components/remote_config/include" \

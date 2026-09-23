@@ -6,6 +6,7 @@
 #include "esp_base_remote_config.h"
 #include "esp_base_mqtt_owner.h"
 #include "esp_base_frp_owner.h"
+#include "esp_base_frp_status_listener.h"
 #include "esp_base_wifi.h"
 #include "esp_base_time.h"
 #include "esp_base_ota_policy.h"
@@ -50,11 +51,19 @@ static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
 static uint32_t s_frp_revision;
 static char s_mqtt_result_json[1024], s_mqtt_reported_json[512];
+#define FRP_STATUS_REPLAY_SLOTS 8u
 typedef struct {
     uint64_t uptime;
     uint32_t revision, free_heap, minimum_free_heap, ota_received, ota_total;
     const char *wifi, *mqtt, *frp, *config, *ota;
 } status_snapshot_t;
+static struct {
+    char request_id[EBASE_ID_BYTES];
+    uint64_t expires_at_ms;
+    /* Capability names come from static owner state strings, not transient
+     * network buffers; retain the first read-only result for same-ID retry. */
+    status_snapshot_t status;
+} s_frp_status_seen[FRP_STATUS_REPLAY_SLOTS];
 typedef struct {
     const char *state, *error;
     bool has_status, via_mqtt;
@@ -106,54 +115,103 @@ static status_snapshot_t snapshot(void)
         .ota = !eota_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
 }
 
+static int format_result_json(char *response, size_t capacity,
+                              const char *request_id, const char *state,
+                              const char *error, const status_snapshot_t *status)
+{
+    const int written = status ? snprintf(response, capacity,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,"
+        "\"result\":{\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32
+        ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
+        ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
+        ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
+        "\"frp\":\"%s\",\"config\":\"%s\",\"ota\":\"%s\"}}}",
+        s_context.device_id, s_boot_id,
+        request_id ? "\"" : "null", request_id ? request_id : "", request_id ? "\"" : "",
+        state, error ? "\"" : "null", error ? error : "", error ? "\"" : "",
+        status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
+        status->ota_received, status->ota_total, status->wifi, status->mqtt,
+        status->frp, status->config, status->ota) : snprintf(response, capacity,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,\"result\":null}",
+        s_context.device_id, s_boot_id,
+        request_id ? "\"" : "null", request_id ? request_id : "", request_id ? "\"" : "",
+        state, error ? "\"" : "null", error ? error : "", error ? "\"" : "");
+    return written >= 0 && (size_t)written < capacity ? written : -1;
+}
+
+static int handle_frp_status(const uint8_t *json, size_t json_length,
+                             char *response, size_t capacity,
+                             size_t *response_length, void *context)
+{
+    (void)context;
+    ebase_request_t request;
+    const char *parse_error = ebase_parse_frp_status((const char *)json, json_length, &request);
+    const uint64_t now = uptime_ms();
+    const char *error = parse_error;
+    const char *state = "failed";
+    int http_status = 400;
+    size_t empty = FRP_STATUS_REPLAY_SLOTS;
+    const status_snapshot_t *cached = NULL;
+    if (!error) {
+        for (size_t i = 0; i < FRP_STATUS_REPLAY_SLOTS; ++i) {
+            if (s_frp_status_seen[i].expires_at_ms <= now) {
+                if (empty == FRP_STATUS_REPLAY_SLOTS) empty = i;
+            } else if (!strcmp(s_frp_status_seen[i].request_id, request.request_id)) {
+                if (strcmp(request.device_id, s_context.device_id) ||
+                    strcmp(request.boot_id, s_boot_id) ||
+                    request.expires_at_ms != s_frp_status_seen[i].expires_at_ms) {
+                    error = "request_conflict";
+                    http_status = 409;
+                } else cached = &s_frp_status_seen[i].status;
+                break;
+            }
+        }
+    }
+    if (!error && strcmp(request.device_id, s_context.device_id)) {
+        error = "wrong_device";
+        http_status = 409;
+    } else if (!error && strcmp(request.boot_id, s_boot_id)) {
+        error = "wrong_boot";
+        http_status = 409;
+    } else if (!error && request.expires_at_ms <= now) {
+        error = "expired";
+        state = "expired";
+        http_status = 409;
+    } else if (!error && request.expires_at_ms - now > EBASE_REQUEST_WINDOW_MS) {
+        error = "invalid_deadline";
+    }
+    if (!error && !cached && empty == FRP_STATUS_REPLAY_SLOTS) error = "capacity_exceeded";
+    if (!error && !cached) {
+        memcpy(s_frp_status_seen[empty].request_id, request.request_id, EBASE_ID_BYTES);
+        s_frp_status_seen[empty].expires_at_ms = request.expires_at_ms;
+        s_frp_status_seen[empty].status = snapshot();
+        cached = &s_frp_status_seen[empty].status;
+    }
+    const int formatted = format_result_json(response, capacity,
+        parse_error ? NULL : request.request_id,
+        error ? state : "succeeded", error, cached && !error ? cached : NULL);
+    if (formatted < 0) return 500;
+    *response_length = (size_t)formatted;
+    return error ? http_status : 200;
+}
+
 static void reply(const char *request_id, const char *state, const char *error, const status_snapshot_t *status)
 {
-    /* Strings are validated UUIDs or closed firmware constants. Never echo
-     * request text or secrets. One FILE lock covers the complete JSON line. */
+    /* USB, MQTT and FRP share one result serializer. Strings are validated
+     * UUIDs or closed firmware constants; raw request bytes are never echoed. */
+    const int length = format_result_json(s_mqtt_result_json, sizeof s_mqtt_result_json,
+        request_id && request_id[0] ? request_id : NULL, state, error, status);
+    if (length < 0) return;
     if (s_reply_mqtt) {
-        const int length = status ?
-            snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
-                "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
-                "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,"
-                "\"result\":{\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32
-                ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
-                ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
-                ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
-                "\"frp\":\"%s\",\"config\":\"%s\",\"ota\":\"%s\"}}}",
-                s_context.device_id, s_boot_id, request_id && request_id[0] ? "\"" : "null",
-                request_id && request_id[0] ? request_id : "",
-                request_id && request_id[0] ? "\"" : "",
-                state, error ? "\"" : "null", error ? error : "", error ? "\"" : "",
-                status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
-                status->ota_received, status->ota_total, status->wifi, status->mqtt, status->frp, status->config, status->ota) :
-            snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
-                "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
-                "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,\"result\":null}",
-                s_context.device_id, s_boot_id, request_id && request_id[0] ? "\"" : "null",
-                request_id && request_id[0] ? request_id : "",
-                request_id && request_id[0] ? "\"" : "",
-                state, error ? "\"" : "null", error ? error : "", error ? "\"" : "");
-        if (length > 0 && (size_t)length < sizeof s_mqtt_result_json)
-            (void)esp_base_mqtt_owner_result(s_mqtt_result_json, (size_t)length);
+        (void)esp_base_mqtt_owner_result(s_mqtt_result_json, (size_t)length);
         return;
     }
     flockfile(stdout);
-    printf("\n{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\",\"request_id\":",
-           s_context.device_id, s_boot_id);
-    if (request_id && request_id[0]) printf("\"%s\"", request_id); else printf("null");
-    printf(",\"state\":\"%s\",\"error_code\":", state);
-    if (error) printf("\"%s\"", error); else printf("null");
-    printf(",\"result\":");
-    if (status) {
-        printf("{\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32
-               ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
-               ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
-               ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
-               "\"frp\":\"%s\",\"config\":\"%s\",\"ota\":\"%s\"}}",
-               status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
-               status->ota_received, status->ota_total, status->wifi, status->mqtt, status->frp, status->config, status->ota);
-    } else printf("null");
-    printf("}\n");
+    fputc('\n', stdout);
+    (void)fwrite(s_mqtt_result_json, 1, (size_t)length, stdout);
+    fputc('\n', stdout);
     fflush(stdout);
     funlockfile(stdout);
 }
@@ -510,14 +568,18 @@ static void control_task(void *argument)
             esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
                                      handle_mqtt_command, NULL);
             if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
+                /* Revoke the old endpoint before waiting for the old FRP worker
+                 * to finish; no stale management key remains reachable. */
+                esp_base_frp_status_listener_configure(NULL);
                 if (esp_base_frp_owner_configure(&s_context.config.frp, s_context.device_id) == ESP_OK) {
+                    esp_base_frp_status_listener_configure(&s_context.config.frp);
                     s_frp_revision = s_context.config.revision;
                     s_frp_revision_set = true;
                 }
             }
-            /* No authenticated loopback listener exists yet. Keep the FRP
-             * client stopped even when the configured network is healthy. */
-            esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(), false);
+            esp_base_frp_status_listener_poll(now, handle_frp_status, NULL);
+            esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
+                                    esp_base_frp_status_listener_ready());
         }
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader.length && now - last_input >= 2000) {

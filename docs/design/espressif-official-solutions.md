@@ -14,11 +14,11 @@
 | --- | --- | --- |
 | 构建目标 | ESP-IDF v6.1、ESP32-C3、4 MiB、USB Serial/JTAG；开启 OTA rollback 与 Task WDT | [仓库 README](../../README.md)、[sdkconfig.defaults](../../firmware/sdkconfig.defaults) |
 | Flash | `ota_0`、`ota_1` 各 `0x1e0000`，另有 NVS、otadata、coredump、`base_store`；单槽上限 1,966,080 字节 | [分区表](../../firmware/partitions/partition_table.csv) |
-| 已装配的入口 | NVS 持久身份、复位事实、已提交配置读取/条件提交、Wi-Fi station、USB status/restart/config.set、5 秒心跳；签名构建还装配 ota.start/HTTPS OTA，pending 新槽有本地确认与失败回滚接线 | [主程序](../../firmware/apps/esp_base/main/esp_base_main.c)、[控制任务](../../firmware/components/device_protocol/esp_base_protocol.c)、[OTA 产品约束与收据](../../firmware/components/ota_operation/README.md) |
-| 尚未实现 | 普通基座的 MQTT/FRP 控制、签名基座的首次实板迁移与 OTA 实板验收、网络命令入口；MQTT 仅在隔离测试应用装配 | [开发检查点](../operations/development-checkpoint.md)、[协议设计](./device-protocol.md) |
+| 已装配的入口 | NVS 持久身份、复位事实、已提交配置读取/条件提交、Wi-Fi station、USB status/restart/config.set、5 秒心跳；普通基座 MQTT 网络命令和 FRP loopback 只读 status 均有软件接线；签名构建还装配 ota.start/HTTPS OTA，pending 新槽有本地确认与失败回滚接线 | [主程序](../../firmware/apps/esp_base/main/esp_base_main.c)、[控制任务](../../firmware/components/device_protocol/esp_base_protocol.c)、[OTA 产品约束与收据](../../firmware/components/ota_operation/README.md) |
+| 尚未验收 | 签名基座的首次实板迁移与 OTA 实板验收、普通基座 MQTT/FRP 真实远端请求到板及同板资源并行；FRP 当前仅接受只读 status | [开发检查点](../operations/development-checkpoint.md)、[协议设计](./device-protocol.md) |
 | 设备验收 | 本轮 OTA 仅有 host 故障注入、普通与隔离签名 C3 编译，没有 HTTPS 下载、新槽及回滚实板验收；既有 Wi-Fi/配置/MQTT 实板记录另见检查点 | [开发检查点](../operations/development-checkpoint.md)、[测试说明](../../firmware/tests/README.md) |
 
-USB 命令已使用 UUID v4 `boot_id`、配置 `revision` 与有界请求裁决；网络命令入口仍未接入。OTA pending 自检和签名下载期间配置写入与 OTA 互斥，控制循环 5 秒活性阈值和真实回滚仍需实板负载证明。证据见[控制任务](../../firmware/components/device_protocol/esp_base_protocol.c)、[配置存储](../../firmware/components/remote_config/esp_base_remote_config.c)及[协议设计](./device-protocol.md)。
+USB 命令已使用 UUID v4 `boot_id`、配置 `revision` 与有界请求裁决；MQTT 与 FRP 只读 status 网络入口的软件接线仍需真实设备闭环。OTA pending 自检和签名下载期间配置写入与 OTA 互斥，控制循环 5 秒活性阈值和真实回滚仍需实板负载证明。证据见[控制任务](../../firmware/components/device_protocol/esp_base_protocol.c)、[配置存储](../../firmware/components/remote_config/esp_base_remote_config.c)及[协议设计](./device-protocol.md)。
 
 ## 官方方案映射
 

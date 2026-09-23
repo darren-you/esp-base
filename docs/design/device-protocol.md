@@ -70,4 +70,10 @@ OTA pending 新槽完成本地确认前，`config.set` 在身份、期限与去�
 
 ## FRP Base 软件接线边界
 
-普通 Base 精确锁定公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`。FRP owner 在单一 USB 控制任务中持有一个客户端句柄；配置变更、网络或时间门失效时用非阻塞 destroy 持续收敛，未完成时保留句柄。`ready` 只来自库完成代理注册与首轮认证 Pong 的状态快照，status 与 reported 不含 Token、CA、管理 key。当前受控 loopback 管理 listener 的请求鉴权和线格式尚未实施，`endpoint_ready` 恒为 false，配置存在时状态明确为 `endpoint_unavailable`，绝不连接 FRPS。FRP Token、TLS 和 UUID 不能代替管理端点授权。真实 FRPS、MQTT/OTA 并行及资源验收仍待完成。
+普通 Base 精确锁定公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`。FRP owner 在单一 USB 控制任务中持有一个客户端句柄；配置变更、网络或时间门失效时用非阻塞 destroy 持续收敛，未完成时保留句柄。`ready` 只来自库完成代理注册与首轮认证 Pong 的状态快照，status 与 reported 不含 Token、CA、管理 key。受控 listener 与 owner 共用该控制任务，只在配置的 `127.0.0.1:local_port` 绑定；绑定失败保持 `endpoint_unavailable`，不会向 FRPS 建连。配置 revision 变化时先关闭旧 listener 与半帧，旧 FRP worker 销毁后才装配新独立 key。FRP Token、TLS 和 UUID 不能代替管理端点授权。
+
+当前设备端点仅有只读软件候选：HTTP/1.1 `POST /api/v1/commands/status`，请求必须含一个非空 `Host`、精确 `Content-Type: application/json`、十进制 `Content-Length` 和 `X-ESP-Management-Tag`。Tag 为 `frp.management_key` 对**原始 JSON body 字节**计算的 HMAC-SHA256，以 64 个小写十六进制字符发送；先完整读取并验证 HMAC，之后才解析或回显 request ID。header 最多 512 字节，body 为 1–384 字节，不接受重复安全/长度头、`Transfer-Encoding`、`Expect`、HTTP 管线化或无效帧；单连接从 accept 起的读取与写回总期限为 2 秒，随后关闭。未认证请求返回空 body 的 HTTP 401，错误 HTTP 帧返回空 body 的 400；两者均不泄露设备状态。listener 同时只处理一个连接。
+
+body 精确包含 `protocol_version:1`、`device_id`、`target_boot_id`、`request_id`、`command:"status"`、`expires_at_uptime_ms` 六项；三个 ID 都是规范 UUIDv4。设备在同一控制任务核对持久设备 ID、当前 boot ID 与单调 uptime，期限必须晚于本轮 uptime 且不超过 30 秒；8 槽有界表保存未过期 request ID、期限与首次脱敏快照。同 ID 同一规范请求在期限内返回首次结果，同 ID 不同目标/期限返回 `request_conflict`，过期请求按 `expired` 拒绝后释放槽位；表满时拒绝新请求。已认证但非法的请求返回现有结果 envelope、HTTP 400；错设备/错 boot/过期/冲突返回相同 envelope、HTTP 409；成功返回 HTTP 200、`succeeded` 与 USB/MQTT 共用序列化的脱敏 status `result`。该端点不接受 restart、OTA、配置写入或任意命令；HTTP 状态码与 body 的 `state` 分别表示本次请求的传输/业务裁决。
+
+FRP status 要求调用方先从**本轮** USB 或 MQTT 新鲜状态取得 boot ID 与 uptime，不能从 FRP 单一路径首次自举；这是当前受限切片的明确边界。设备本地 loopback 为明文 HTTP，外侧调用方仍须经受控 HTTPS 入口和 FRPS 的严格 TLS/路由授权验证；该软件编译没有验证外侧路径、真实 FRPS、同板 MQTT/OTA 并行、资源门槛或硬件运行，因此 P4-05 尚未验收。

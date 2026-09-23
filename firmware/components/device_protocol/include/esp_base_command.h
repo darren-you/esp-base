@@ -19,6 +19,12 @@ typedef struct {
  * owner must hash canonical values before admission. The caller owns storage. */
 const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out);
 
+/* Authenticated FRP status uses the write-command identity and uptime window
+ * even though it cannot mutate device state. The listener authenticates the
+ * exact bytes before calling this parser. */
+const char *ebase_parse_frp_status(const char *json, size_t length,
+                                  ebase_request_t *out);
+
 typedef struct {
     char data[EBASE_LINE_LIMIT + 1];
     size_t length;

@@ -18,7 +18,7 @@
 
 2026-09-24 P4 Base FRP 软件候选：固定公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`，普通控制任务独占 FRP 客户端生命周期。持久配置硬切为 EBCF v3：FRP 服务器域名/端口、独立 Token、显式 CA、proxy 名称、远端端口、本地端口和独立管理密钥必须完整提供；空 FRP 配置不创建客户端。owner 在 Wi-Fi IP、可信时间与已认证 loopback 管理端点均就绪后才可启动，停止与换配置必须等旧 worker 销毁完成；状态和计数可通过 USB status、周期日志及 MQTT reported 只读观察。
 
-- 本候选**尚无 loopback 管理监听器及其认证 wire 合同**，控制任务固定传入 `endpoint_ready=false`。即使 FRP 配置非空也只能报告 `endpoint_unavailable`，不会连接 FRPS 或暴露本地业务端口。P4-05 及 FRPS/设备端到端验收均未完成；不得把本地构建当作 FRP 可用证据。
+- 新增受限 loopback 只读 `status` 软件切片：同一控制任务先在 `127.0.0.1:local_port` 绑定，再允许 FRP owner 启动；HTTP body 的独立 HMAC、boot/单调期限、8 槽同 ID 首次快照缓存与冲突拒绝、统一脱敏结果已通过主机 ASan/UBSan，固定 SDK C3 普通构建通过。首次 FRP-only 请求仍需从本轮 USB/MQTT 获取 boot/uptime，外侧 HTTPS/FRPS 路由、同板 MQTT/OTA 并行、堆峰值和真实设备管理请求均未验。P4-05 及 FRPS/设备端到端验收保持未完成；不得把本地构建当作 FRP 可用证据。
 - 离线迁移预检从两份一致的完整 Flash 备份只读提取 v1/v2 配置，生成 v3 候选且不写设备：v2 Wi-Fi/MQTT 原字段、管理密钥与 revision 逐字节保留，FRP 留空待独立正式供给。新版固件只解码 v3，不自动迁移或清 NVS。现有 v1/v2 设备未完成离线迁移、私有 Tool Bridge `config.set` 的 v3 合同未同步前，不能启动或发布此候选到设备。
 - `bash firmware/tests/run_host_tests.sh` 的 ASan/UBSan 全套通过；`IDF_PATH=<固定SDK路径> python3 tools/test_preflight_v3_migration.py` 9 项、`python3 -m unittest tools/test-device-control.py -q` 5 项通过。ESP32-C3 普通镜像 951632 字节、SHA-256 `7871386c042c16dca212cdefbc3ef57b64c3559e1839d3ddc53a84f8e78b8624`；仓外临时 RSA-3072 测试键签名镜像 1118208 字节、SHA-256 `6c5bb4783f93ee07bb1fabdf723f5cfb5c7252d41c2546213f007133568a249b`，`espsecure verify-signature --version 2 --keyfile` 验签通过。两者均在原 `0x1e0000` 应用槽内；实板 Flash、FRPS 真实证书/凭据、loopback 监听与认证、Tool Bridge、签名启动和资源峰值仍待闭合。
 
