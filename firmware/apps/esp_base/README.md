@@ -19,7 +19,7 @@ flowchart LR
     ota <-->|"按 operation ID 登记与查询"| receipt["base_store NVS：base_ota/operation"]
 ```
 
-在仓库根使用 `idf.py -C firmware build`。
+在仓库根使用 `idf.py -C firmware build`。此 v2-only 应用只接受 `base_store/base_config/committed` 的 EBCF v2 blob；已有 v1 记录在启动读取阶段失败，不写 NVS、不确认 pending 槽。实板须先完成离线双槽与同键迁移；物理 USB `config.set` 可在 v2 首启后写入完整 MQTT TLS 凭据，但正式网络客户端尚未接线。
 
 先读取运行槽状态，再进行 NVS、身份、配置与控制任务初始化。Wi-Fi 驱动初始化失败只将网络状态标为 `failed`，不阻止 USB 控制任务启动。pending 槽需在 5 秒内看到控制循环首轮完成，在之后的 30 秒内每秒核对最近进展不超过 5 秒，窗口结束后还要等待控制循环完成新一轮，最多再等 5 秒；此期间 `status` 可读、`config.set` 返回 `ota_verification_pending`，确认成功后恢复配置写入。确认 API 失败后若持久状态已为 VALID，仍清门；其它不确定状态输出 `ESP_BASE_OTA_RECOVERY_REQUIRED`。检查失败调用 IDF 标记无效并重启回滚；无可回退镜像时不强制重启，但后续复位不能保证可启动。网络在线不是本地确认条件。5 秒是当前活性策略值，真实 OTA/回滚仍需实板验证。
 

@@ -161,7 +161,10 @@ def wait_ready(port):
 
 
 def send(port, request):
-    payload = b"\n" + json.dumps(request, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
+    line = json.dumps(request, separators=(",", ":"), ensure_ascii=True).encode()
+    if len(line) > 8192:
+        raise ValueError("USB 请求超过 8192 字节，未发送")
+    payload = b"\n" + line + b"\n"
     if port.write(payload) != len(payload):
         raise OSError("串口写入不完整；状态为 unknown")
 
@@ -178,21 +181,69 @@ def status(port):
         return value
 
 
-def apply_configuration(port, current, config):
+def validate_configuration(config):
     if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "frp", "business"}:
         raise ValueError("配置字段不完整")
-    if type(config["schema_version"]) is not int or config["schema_version"] != 1 or any(config[k] is not None for k in ["mqtt", "frp", "business"]):
+    if type(config["schema_version"]) is not int or config["schema_version"] != 2 or any(config[k] is not None for k in ["frp", "business"]):
         raise ValueError("配置版本或能力尚未支持")
     network = config["wifi"]
     if network is not None:
         if not isinstance(network, dict) or set(network) != {"ssid", "password"}:
             raise ValueError("Wi-Fi 配置字段无效")
         ssid, password = network["ssid"], network["password"]
-        if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32 or any(ord(c) < 32 or ord(c) == 127 for c in ssid):
+        if not isinstance(ssid, str):
+            raise ValueError("SSID 长度或字符无效")
+        try:
+            ssid_bytes = ssid.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("SSID 长度或字符无效") from exc
+        if not 1 <= len(ssid_bytes) <= 32 or any(ord(c) < 32 or ord(c) == 127 for c in ssid):
             raise ValueError("SSID 长度或字符无效")
         if not isinstance(password, str) or not ((8 <= len(password) <= 63 and all(32 <= ord(c) <= 126 for c in password)) or
                 (len(password) == 64 and all(c in "0123456789abcdefABCDEF" for c in password))):
             raise ValueError("Wi-Fi 密码格式无效")
+    mqtt = config["mqtt"]
+    if mqtt is not None:
+        required = {"hostname", "port", "username", "password", "ca_pem", "management_key_hex"}
+        if not isinstance(mqtt, dict) or set(mqtt) != required:
+            raise ValueError("MQTT 配置字段无效")
+        host = mqtt["hostname"]
+        if not isinstance(host, str) or not 1 <= len(host) <= 253 or not host.isascii():
+            raise ValueError("MQTT 主机无效")
+        for label in host.split("."):
+            if not 1 <= len(label) <= 63 or not label[0].isalnum() or not label[-1].isalnum() or not all(
+                    ("a" <= char <= "z") or ("A" <= char <= "Z") or ("0" <= char <= "9") or char == "-"
+                    for char in label):
+                raise ValueError("MQTT 主机无效")
+        port = mqtt["port"]
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError("MQTT 端口无效")
+        for name, limit in (("username", 128), ("password", 256)):
+            value = mqtt[name]
+            if not isinstance(value, str):
+                raise ValueError("MQTT 设备凭据无效")
+            try:
+                encoded = value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("MQTT 设备凭据无效") from exc
+            if not 1 <= len(encoded) <= limit or any(
+                    ord(char) < 32 or 127 <= ord(char) <= 159 or
+                    0xFDD0 <= ord(char) <= 0xFDEF or ord(char) & 0xFFFF >= 0xFFFE
+                    for char in value):
+                raise ValueError("MQTT 设备凭据无效")
+        ca = mqtt["ca_pem"]
+        if (not isinstance(ca, str) or not 1 <= len(ca) <= 4096 or not all(
+                char in "\t\r\n" or 32 <= ord(char) <= 126 for char in ca) or
+                "-----BEGIN CERTIFICATE-----" not in ca or "-----END CERTIFICATE-----" not in ca):
+            raise ValueError("MQTT CA PEM 无效")
+        key = mqtt["management_key_hex"]
+        if (not isinstance(key, str) or len(key) != 64 or any(char not in "0123456789abcdef" for char in key) or
+                not any(char != "0" for char in key)):
+            raise ValueError("MQTT 管理密钥无效")
+
+
+def apply_configuration(port, current, config):
+    validate_configuration(config)
     revision = current["result"]["revision"]
     if type(revision) is not int or not 0 <= revision < 4294967295:
         raise ValueError("配置 revision 无效或已耗尽")
@@ -220,8 +271,8 @@ def load_private_config(path):
         facts = os.fstat(source.fileno())
         if not stat.S_ISREG(facts.st_mode) or facts.st_uid != os.getuid() or facts.st_mode & 0o077 or facts.st_nlink != 1:
             raise ValueError("配置文件必须由当前用户独占，权限 0600，且不是链接")
-        raw = source.read(2049)
-    if len(raw) > 2048:
+        raw = source.read(8193)
+    if len(raw) > 8192:
         raise ValueError("配置文件超限")
     return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
 

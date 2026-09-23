@@ -26,26 +26,32 @@ static void receive(const char *line, size_t length, void *context)
 }
 static void config_tests(void)
 {
-    char json[1024];
+    char json[2048];
     const char *prefix = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"config.set\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":";
     const char *valid[] = {
-        "{\"expected_revision\":0,\"config\":{\"schema_version\":1,\"wifi\":{\"ssid\":\"test\",\"password\":\"test-password\"},\"mqtt\":null,\"frp\":null,\"business\":null}}",
-        "{\"expected_revision\":4294967295,\"config\":{\"schema_version\":1,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}"
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":2,\"wifi\":{\"ssid\":\"test\",\"password\":\"test-password\"},\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":4294967295,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":7,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":{\"hostname\":\"broker.example.test\",\"port\":8883,\"username\":\"device\",\"password\":\"secret\",\"ca_pem\":\"-----BEGIN CERTIFICATE-----\\nQQ==\\n-----END CERTIFICATE-----\",\"management_key_hex\":\"0100000000000000000000000000000000000000000000000000000000000000\"},\"frp\":null,\"business\":null}}"
     };
     ebase_command_t out;
-    for (size_t i = 0; i < 2; ++i) {
+    for (size_t i = 0; i < 3; ++i) {
         snprintf(json, sizeof json, "%s%s}", prefix, valid[i]);
         assert(!ebase_parse_command(json, strlen(json), &out) && out.kind == EBASE_CONFIG_SET);
-        assert(out.config.revision == (i ? UINT32_MAX : 0));
+        assert(out.config.revision == (i == 0 ? 0 : i == 1 ? UINT32_MAX : 7));
         assert(out.config.wifi.configured == (i == 0));
+        assert(out.config.mqtt.configured == (i == 2));
+        if (i == 2) assert(out.config.mqtt.port == 8883 && out.config.mqtt.management_key[0] == 1);
     }
     const char *bad[] = {
         "{}",
-        "{\"expected_revision\":4294967296,\"config\":{\"schema_version\":1,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}",
-        "{\"expected_revision\":true,\"config\":{\"schema_version\":1,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}",
-        "{\"expected_revision\":0,\"config\":{\"schema_version\":1,\"wifi\":{\"ssid\":\"test\",\"password\":\"short\"},\"mqtt\":null,\"frp\":null,\"business\":null}}",
-        "{\"expected_revision\":0,\"config\":{\"schema_version\":1,\"wifi\":{\"ssid\":\"test\",\"ssid\":\"other\",\"password\":\"test-password\"},\"mqtt\":null,\"frp\":null,\"business\":null}}",
-        "{\"expected_revision\":0,\"config\":{\"schema_version\":1,\"wifi\":null,\"mqtt\":{},\"frp\":null,\"business\":null}}"
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":1,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":4294967296,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":true,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":2,\"wifi\":{\"ssid\":\"test\",\"password\":\"short\"},\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":2,\"wifi\":{\"ssid\":\"test\",\"ssid\":\"other\",\"password\":\"test-password\"},\"mqtt\":null,\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":{},\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":{\"hostname\":\"broker.example.test\",\"port\":8883,\"username\":\"device\",\"password\":\"secret\",\"ca_pem\":\"-----BEGIN CERTIFICATE-----\\nQQ==\\n-----END CERTIFICATE-----\",\"management_key_hex\":\"0000000000000000000000000000000000000000000000000000000000000000\"},\"frp\":null,\"business\":null}}",
+        "{\"expected_revision\":0,\"config\":{\"schema_version\":2,\"wifi\":null,\"mqtt\":{\"hostname\":\"broker.example.test\",\"port\":8883,\"username\":\"device\",\"password\":\"secret\",\"ca_pem\":\"-----BEGIN CERTIFICATE-----\\nQQ==\\n-----END CERTIFICATE-----\",\"management_key_hex\":\"A100000000000000000000000000000000000000000000000000000000000000\"},\"frp\":null,\"business\":null}}"
     };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; ++i) {
         snprintf(json, sizeof json, "%s%s}", prefix, bad[i]); reject(json);

@@ -18,6 +18,8 @@
 #include "esp_base_time.h"
 
 static const char *TAG = "esp_base";
+static esp_base_remote_config_t s_config;
+static esp_base_protocol_context_t s_protocol;
 
 #define ESP_BASE_CONTROL_START_TIMEOUT_MS UINT64_C(5000)
 
@@ -101,8 +103,7 @@ void app_main(void)
         return;
     }
 
-    esp_base_remote_config_t config = {0};
-    const esp_err_t config_status = esp_base_remote_config_load(&config);
+    const esp_err_t config_status = esp_base_remote_config_load(&s_config);
     if (config_status != ESP_OK) {
         ESP_LOGE(TAG, "Configuration unavailable (%s); storage preserved, initialization stopped", esp_err_to_name(config_status));
         stop_after_local_failure(&ota, pending_boot, "config", config_status);
@@ -122,17 +123,15 @@ void app_main(void)
              identity.flash_size_bytes,
              ota.running_partition,
              safety.reset_reason,
-             config.revision);
+             s_config.revision);
 
-    const esp_base_protocol_context_t protocol = {
-        .device_id = identity.device_id,
-        .firmware_version = app->version,
-        .chip_model = identity.model,
-        .flash_size_bytes = identity.flash_size_bytes,
-        .config = config,
-        .reset_reason = safety.reset_reason,
-    };
-    const esp_err_t protocol_status = esp_base_protocol_start(&protocol);
+    s_protocol.device_id = identity.device_id;
+    s_protocol.firmware_version = app->version;
+    s_protocol.chip_model = identity.model;
+    s_protocol.flash_size_bytes = identity.flash_size_bytes;
+    s_protocol.config = s_config;
+    s_protocol.reset_reason = safety.reset_reason;
+    const esp_err_t protocol_status = esp_base_protocol_start(&s_protocol);
     if (protocol_status != ESP_OK) {
         ESP_LOGE(TAG, "Control unavailable (%s); initialization stopped", esp_err_to_name(protocol_status));
         stop_after_local_failure(&ota, pending_boot, "control_start", protocol_status);

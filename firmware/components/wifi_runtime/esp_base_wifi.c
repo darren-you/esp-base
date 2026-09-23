@@ -68,8 +68,7 @@ static esp_err_t start_selected(void)
 esp_err_t esp_base_wifi_apply(const ebase_wifi_config_t *config, uint64_t now)
 {
     if (!s_initialized || !config) return ESP_ERR_INVALID_STATE;
-    esp_base_remote_config_t checked = {.wifi = *config};
-    if (!ebase_config_valid(&checked)) return ESP_ERR_INVALID_ARG;
+    if (!ebase_wifi_config_valid(config)) return ESP_ERR_INVALID_ARG;
     s_config = *config;
     s_ready = s_associated = s_connecting = false;
     s_retry_at = 0; s_failures = 0;

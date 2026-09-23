@@ -158,9 +158,8 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         const char *const config_keys[] = {"schema_version", "wifi", "mqtt", "frp", "business"};
         if (!exact_keys(config, config_keys, 5)) goto done;
         const cJSON *schema = cJSON_GetObjectItemCaseSensitive(config, "schema_version");
-        if (!cJSON_IsNumber(schema) || schema->valuedouble != 1) goto done;
-        if (!cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(config, "mqtt")) ||
-            !cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(config, "frp")) ||
+        if (!cJSON_IsNumber(schema) || schema->valuedouble != 2) goto done;
+        if (!cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(config, "frp")) ||
             !cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(config, "business"))) {
             error = "unsupported_configuration"; goto done;
         }
@@ -176,6 +175,38 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             out->config.wifi.configured = true;
             memcpy(out->config.wifi.ssid, ssid->valuestring, strlen(ssid->valuestring));
             memcpy(out->config.wifi.password, password->valuestring, strlen(password->valuestring));
+        }
+        const cJSON *mqtt = cJSON_GetObjectItemCaseSensitive(config, "mqtt");
+        if (!cJSON_IsNull(mqtt)) {
+            const char *const mqtt_keys[] = {
+                "hostname", "port", "username", "password", "ca_pem", "management_key_hex"
+            };
+            if (!exact_keys(mqtt, mqtt_keys, 6)) goto done;
+            const cJSON *hostname = cJSON_GetObjectItemCaseSensitive(mqtt, "hostname");
+            const cJSON *port = cJSON_GetObjectItemCaseSensitive(mqtt, "port");
+            const cJSON *username = cJSON_GetObjectItemCaseSensitive(mqtt, "username");
+            const cJSON *password = cJSON_GetObjectItemCaseSensitive(mqtt, "password");
+            const cJSON *ca = cJSON_GetObjectItemCaseSensitive(mqtt, "ca_pem");
+            const cJSON *key = cJSON_GetObjectItemCaseSensitive(mqtt, "management_key_hex");
+            if (!cJSON_IsString(hostname) || strlen(hostname->valuestring) > 253 ||
+                !cJSON_IsNumber(port) || !isfinite(port->valuedouble) || port->valuedouble < 1 ||
+                port->valuedouble > UINT16_MAX || floor(port->valuedouble) != port->valuedouble ||
+                !cJSON_IsString(username) || strlen(username->valuestring) > 128 ||
+                !cJSON_IsString(password) || strlen(password->valuestring) > 256 ||
+                !cJSON_IsString(ca) || strlen(ca->valuestring) > 4096 ||
+                !cJSON_IsString(key) || strlen(key->valuestring) != 64) goto done;
+            out->config.mqtt.configured = true;
+            out->config.mqtt.port = (uint16_t)port->valuedouble;
+            memcpy(out->config.mqtt.hostname, hostname->valuestring, strlen(hostname->valuestring));
+            memcpy(out->config.mqtt.username, username->valuestring, strlen(username->valuestring));
+            memcpy(out->config.mqtt.password, password->valuestring, strlen(password->valuestring));
+            memcpy(out->config.mqtt.ca_pem, ca->valuestring, strlen(ca->valuestring));
+            for (size_t i = 0; i < EBASE_MQTT_KEY_BYTES; ++i) {
+                const int hi = hex_digit(key->valuestring[2 * i]);
+                const int lo = hex_digit(key->valuestring[2 * i + 1]);
+                if (hi < 0 || lo < 0) goto done;
+                out->config.mqtt.management_key[i] = (uint8_t)((hi << 4) | lo);
+            }
         }
         if (!ebase_config_valid(&out->config)) goto done;
         out->kind = EBASE_CONFIG_SET;
@@ -193,6 +224,7 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     memcpy(out->request.fingerprint, fingerprint, sizeof fingerprint);
     error = NULL;
 done:
+    if (error) memset(&out->config, 0, sizeof out->config);
     cJSON_Delete(root);
     return error;
 }

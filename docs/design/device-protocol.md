@@ -20,7 +20,7 @@ USB 为 UTF-8 JSON Lines；单帧最大 8192 字节（不含换行），拒绝 N
 - `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃或目标槽 pending 时为 `running`；目标槽运行且 VALID、完整镜像摘要匹配时为 `succeeded`；已持久记录的下载失败或目标槽 ABORTED/INVALID 且旧槽有效时为 `failed`；收据缺失/损坏、槽关系不明或仅见旧槽而无失败证据时为 `unknown`。普通未签名构建拒绝查询。
 - `business.*`：仅派发业务注册的命令与参数 schema，未知命令拒绝，不提供任意 shell、脚本或 Topic。
 
-配置 schema_version 固定 1，完整字段为 schema_version、wifi、mqtt、frp、business；P2 的后三项必须为 null，非 null 返回 unsupported_configuration。wifi 为 null 或包含 ssid/password 的精确对象，长度与字符规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态只返回脱敏字段。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。网络命令入口尚未接入。
+配置 `schema_version` 固定 2，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 和 business 必须为 null。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT 仍为 unsupported。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。网络命令入口尚未接入。
 
 ## 结果与幂等
 
@@ -44,7 +44,7 @@ TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelop
 
 `command` 载荷是连续 `64` 个小写十六进制字符、一个 LF、原始 UTF-8 v1 JSON 请求字节，总长度最多 `4096` 字节。前缀解码为 32 字节 HMAC-SHA256 tag，使用独立的设备管理密钥，只覆盖 LF 后的原始请求字节；不重排 JSON、归一化空白或先解析再签名。仅精确 `command` Topic、QoS 1、非 retained、格式和 HMAC 均有效的消息进入既有 JSON decoder、boot/deadline、request_id/指纹裁决。无认证消息直接丢弃，不回显 request_id 或产生 ACK。已认证但语法错误的请求由设备协议结果裁决。DUP 重投不重复执行，复用本次 boot 的原结果；跨 boot 未决结果仍是 unknown，不能从 PUBACK 推断成功。
 
-`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入，不能通过 MQTT 自身远程修改。当前普通固件仍只装载 Wi-Fi 配置，尚未接通 MQTT 客户端、设备级 Broker ACL、Tool 注入与 v2 配置迁移；新增 HMAC/Topic/载荷解析原语不等于网络命令已开放。
+`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入，不能通过 MQTT 自身远程修改。普通固件现可只读装载 v2 持久格式和经 USB 写入凭据，但尚未接通 MQTT 客户端、设备级 Broker ACL、Tool 注入与实板 v1→v2 迁移；新增 HMAC/Topic/载荷解析原语不等于网络命令已开放。
 
 ## 当前 USB 结果
 

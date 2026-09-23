@@ -8,6 +8,8 @@ Wi-Fi 启动测试编译真实 `wifi_runtime`，逐项注入 netif、事件循�
 
 OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度和 HTTPS URL。`ota_update_test` 直接编译受控签名分支的下载源码，注入 SDK 结果，覆盖运行槽非 VALID、超槽、错误 project/芯片、缺 Content-Length、响应头及首块 EAGAIN 到期限、body 断流、5 分钟总期限、不完整、摘要不符、分区读取失败、验签拒绝、切槽后回退检查与旧槽恢复失败。Fake 只模拟每次 SDK 返回后的裁决，不替代真实 TLS、SDK 单次调用中的慢速滴流、签名密码学、bootloader 或断电测试。pending 确认故障测试还验证 SDK 报错但持久槽已 VALID 时清除配置写门。
 
+v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 字节显式拒绝且无写入，以及 NVS 查询长度、写前/写后、commit 与读回故障；公开 USB 工具另验证相同 schema 的非法字段和整帧上限。
+
 `ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、普通构建无 NVS 写入。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
 ## 架构拓扑

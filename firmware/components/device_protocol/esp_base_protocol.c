@@ -39,6 +39,9 @@ static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
 static uint64_t s_trial_deadline;
 static esp_base_remote_config_t s_candidate;
+static esp_base_remote_config_t s_committed;
+static ebase_command_t command;
+static uint8_t s_fingerprint_bytes[EBASE_CONFIG_MAX_BYTES];
 typedef struct {
     uint64_t uptime;
     uint32_t revision, free_heap, minimum_free_heap, ota_received, ota_total;
@@ -155,19 +158,18 @@ static void poll_configuration(uint64_t now)
     const bool ready = s_candidate.wifi.configured ? esp_base_wifi_ready() :
         !strcmp(esp_base_wifi_state(), "unconfigured");
     if (ready && now < s_trial_deadline) {
-        esp_base_remote_config_t committed;
-        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision, &committed);
+        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision, &s_committed);
         s_trial_active = false;
         memset(&s_candidate, 0, sizeof s_candidate);
         if (error == ESP_OK) {
-            s_context.config = committed;
+            s_context.config = s_committed;
             save_outcome(s_trial_slot, "succeeded", NULL, true);
         } else if (error == ESP_BASE_CONFIG_UNCERTAIN) {
             s_config_uncertain = true;
             /* A write error may follow a durable commit. Reload before selecting
              * connectivity, never claim the old configuration was restored. */
-            if (esp_base_remote_config_load(&committed) == ESP_OK) {
-                s_context.config = committed;
+            if (esp_base_remote_config_load(&s_committed) == ESP_OK) {
+                s_context.config = s_committed;
                 restore_committed(now);
             } else {
                 ebase_wifi_config_t disabled = {0};
@@ -243,7 +245,6 @@ static void poll_ota(void)
 static void handle_line(const char *line, size_t length, void *context)
 {
     (void)context;
-    ebase_command_t command;
     const char *error = ebase_parse_command(line, length, &command);
     if (error) { reply(command.request.request_id, "failed", error, NULL); return; }
     if (command.kind == EBASE_STATUS) {
@@ -263,14 +264,19 @@ static void handle_line(const char *line, size_t length, void *context)
         return;
     }
     if (command.kind == EBASE_CONFIG_SET) {
-        uint8_t bytes[10 + EBASE_CONFIG_BYTES];
-        memcpy(bytes, "config.set", 10);
-        size_t size = 0;
-        if (!ebase_config_encode(&command.config, bytes + 10) ||
-            psa_hash_compute(PSA_ALG_SHA_256, bytes, sizeof bytes, command.request.fingerprint,
-                sizeof command.request.fingerprint, &size) != PSA_SUCCESS || size != 32) {
+        size_t bytes_size = 0, hash_size = 0;
+        psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
+        if (!ebase_config_encode(&command.config, s_fingerprint_bytes, &bytes_size) ||
+            psa_hash_setup(&hash, PSA_ALG_SHA_256) != PSA_SUCCESS ||
+            psa_hash_update(&hash, (const uint8_t *)"config.set", 10) != PSA_SUCCESS ||
+            psa_hash_update(&hash, s_fingerprint_bytes, bytes_size) != PSA_SUCCESS ||
+            psa_hash_finish(&hash, command.request.fingerprint,
+                            sizeof command.request.fingerprint, &hash_size) != PSA_SUCCESS || hash_size != 32) {
+            (void)psa_hash_abort(&hash);
+            memset(s_fingerprint_bytes, 0, sizeof s_fingerprint_bytes);
             reply(command.request.request_id, "failed", "resource_failure", NULL); return;
         }
+        memset(s_fingerprint_bytes, 0, sizeof s_fingerprint_bytes);
     }
     if (command.kind == EBASE_OTA_START) {
         uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + ESP_BASE_OTA_URL_BYTES + 1 + 32 + 4];
