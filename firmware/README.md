@@ -25,16 +25,15 @@ flowchart LR
     host["公开 tools 或私有 Bridge"] <-->|"JSON Lines"| protocol
     partitions["partitions/partition_table.csv"] --> build["ESP-IDF build"]
     main --> build
-    lab["apps/mqtt_integration/main：显式实验应用"] --> mqtt["mqtt_runtime：配置 / 事件 / 订阅证明"]
-    mqtt --> official["官方 espressif/mqtt 1.1.0"]
+    lab["apps/mqtt_integration/main：显式实验应用"] --> mqtt["公开 esp-mqtt：官方核心 / emqtt_ 运行接口"]
     lab --> build
 ```
 
 从仓库根执行 `idf.py -C firmware build`，官方工具链固定 ESP-IDF v6.1 / esp32c3。保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；host tests 使用同一已解析 cJSON 源码，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@36c23dcdc44dd0c3df863b2ae635f8bc929ed860`。host tests 使用同一已解析 cJSON 源码，不读取相邻仓。
 
-默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。官方 MQTT 已进入锁文件和测试应用，不代表普通基座已具备 MQTT 设备控制。
+默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。公开 MQTT 组件已进入共同锁文件，实验应用直接消费 `emqtt_`；普通基座尚无 MQTT 设备控制或命令 ACK 闭环。
 
 普通应用仅在本地启动检查成功、控制循环已实际运行且持续 30 秒报告进展，并跨过窗口终点再完成一轮后确认 pending OTA 槽；构建要求 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`。pending 窗口内拒绝 `config.set`，确认后恢复。SDK 确认失败后读回持久槽状态，若已 VALID 则清门。无可回退镜像时当前执行虽保留，下次复位仍有失去可启动槽风险。控制循环进展的 5 秒阈值是策略值，复杂负载、真实新槽和回滚仍待实板验收。
 

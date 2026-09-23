@@ -4,7 +4,7 @@
 
 ## 结论
 
-当前已采用 ESP-IDF 基础能力、`esp_wifi` / `esp_netif` / `esp_event`、官方 `espressif/mqtt` 隔离测试组件及 OTA `app_update` 的 pending 本地确认。受控签名构建的软件 OTA 下载采用官方 `esp_http_client` HTTPS 与 `app_update`；组件依赖由 IDF Component Manager 精确声明并提交锁文件。`esp-matter`、`esp-rainmaker`、`esp-bsp` 和整套无线配网目前没有已确认的需求或板型依据，不能因为它们也是官方仓库就纳入基座。FRP 不是乐鑫官方协议组件，仍按本仓既有公开 `esp-frp` 边界单独验证。
+当前已采用 ESP-IDF 基础能力、`esp_wifi` / `esp_netif` / `esp_event`、公开 `esp-mqtt` 内的官方 ESP-MQTT 核心及 OTA `app_update` 的 pending 本地确认。受控签名构建的软件 OTA 下载采用官方 `esp_http_client` HTTPS 与 `app_update`；组件依赖由 IDF Component Manager 精确声明并提交锁文件。`esp-matter`、`esp-rainmaker`、`esp-bsp` 和整套无线配网目前没有已确认的需求或板型依据，不能因为它们也是官方仓库就纳入基座。FRP 不是乐鑫官方协议组件，仍按本仓既有公开 `esp-frp` 边界单独验证。
 
 这是一份**选型与实施顺序**；软件编译通过不表示签名 OTA 已通过实板验收。
 
@@ -26,9 +26,9 @@ USB 命令已使用 UUID v4 `boot_id`、配置 `revision` 与有界请求裁决�
 | --- | --- | --- |
 | [ESP-IDF v6.1](https://github.com/espressif/esp-idf/releases/tag/v6.1) | **已采用，继续作为唯一设备 SDK**。NVS、分区/OTA、事件循环、Wi-Fi、TLS、HTTP 和 WDT 可直接使用 IDF 组件。 | 保持 `esp32c3` 与分区表；构建、锁定依赖和实板测试必须基于同一 SDK 版本。不要另建 Arduino 或 MicroPython 运行面。 |
 | [ESP-IDF Wi-Fi](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/network/esp_wifi.html)、[esp_netif](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/network/esp_netif.html)、`esp_event` | **已在普通基座采用**，由 SDK 负责 STA 连接与 IP 事件；`remote_config` 裁决已提交/候选配置。 | 候选凭据使用 `WIFI_STORAGE_RAM`，避免 Wi-Fi 默认 Flash 持久化绕过配置事务；连接、取得 IP 与必要链路 proof 后才提交本仓配置。外部 AP/WPA3 等矩阵继续见开发检查点。 |
-| [ESP-MQTT 仓库](https://github.com/espressif/esp-mqtt) / [组件 `espressif/mqtt`](https://components.espressif.com/components/espressif/mqtt) | **已在隔离测试应用采用**，锁定 `espressif/mqtt 1.1.0`；普通基座仍报告 unsupported。 | 已验证隔离 TLS Broker 与故障注入；普通基座的持久配置、命令入口和最终结果仍待接入。MQTT 只提供传输，`device_id`、HMAC、`boot_id`、期限、队列和最终结果仍由[自有协议](./device-protocol.md)裁决。 |
+| [ESP-MQTT 仓库](https://github.com/espressif/esp-mqtt) / [公开维护仓](https://github.com/darren-you/esp-mqtt) | **已在隔离测试应用采用公开组件**，固定 `esp-mqtt@36c23dcdc44dd0c3df863b2ae635f8bc929ed860`；普通基座仍报告 unsupported。 | 旧适配层曾验证隔离 TLS Broker；新提交已完成 C3 组合编译，真实 Broker/C3 结果尚未继承。普通基座的 MQTT 持久配置、命令入口和最终结果仍待接入；`device_id`、HMAC、`boot_id`、期限、队列和最终结果由[自有协议](./device-protocol.md)裁决。 |
 | [ESP HTTP Client](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/protocols/esp_http_client.html) / [IDF OTA](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/system/ota.html) | **签名构建的软件链已接入**：USB 命令、HTTPS 下载、完整 signed bin 长度/摘要、SDK 验签/切槽、pending 本地确认；普通未签名构建拒绝 OTA。 | 临时测试键签名构建和 host 故障注入已过；首次签名基座迁移、旧 bootloader 能力、真实 TLS/坏签名/断流/回滚/断电仍需实板验收。单槽 1,966,080 字节上限含签名 padding 与签名扇区。 |
-| [IDF Component Manager](https://github.com/espressif/idf-component-manager) | **已采用**，不手工复制 MQTT 或 cJSON 源码。 | `idf_component.yml` 声明精确依赖，[`dependencies.lock`](../../firmware/dependencies.lock) 固定求解结果；在全新 checkout 上复现构建。 |
+| [IDF Component Manager](https://github.com/espressif/idf-component-manager) | **已采用**，不手工复制 MQTT 或 cJSON 源码。 | `idf_component.yml` 声明公开 MQTT Git 完整提交与 cJSON 版本，[`dependencies.lock`](../../firmware/dependencies.lock) 固定求解结果；在全新 checkout 上复现构建。 |
 | [NVS](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/storage/nvs_flash.html)、[Task WDT](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/system/wdts.html)、[Core Dump](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-guides/core_dump.html) | **沿用已启用的基础设施，按实际功能补全**。身份、配置、复位事实和 coredump 分区已有基线。 | 不自动擦 NVS；确认配置事务的提交与掉电恢复；诊断从真实故障读取。分区存在不等于 coredump 已完成采集链路。 |
 | [pytest-embedded](https://github.com/espressif/pytest-embedded)、[esptool](https://github.com/espressif/esptool) | **在实板验收阶段使用**官方测试与设备识别/烧录工具；当前 host 测试继续保留。 | 测试脚本每次确认真实芯片、分区和两份完整 Flash 恢复基线；构建、host 测试与 target 测试分别报告。刷写必须另获当前设备与恢复基线授权。 |
 
@@ -50,7 +50,7 @@ USB 命令已使用 UUID v4 `boot_id`、配置 `revision` 与有界请求裁决�
 
 1. 先收敛 `boot_id`、`revision`、USB/网络命令的字段和错误语义，接通现有 guard 与执行/结果队列；用协议测试证明重复投递、过期、重启和目标绑定。
 2. 用 IDF Wi-Fi/网络事件实现 RAM 候选连接与配置事务；实板验证候选失败和掉电后保留旧配置。
-3. 用精确锁定的 `espressif/mqtt` 实现 TLS 网络命令通路；在 Broker 中断与重连时验证最终结果不会被 PUBACK 冒充。
+3. 用精确锁定的公开 `esp-mqtt` 实现 TLS 网络命令通路；在 Broker 中断与重连时验证最终结果不会被 PUBACK 冒充。
 4. 用 `esp_http_client`、`app_update` 和 bootloader rollback 完成 OTA；在 ESP32-C3 双槽上量测镜像大小、运行堆、下载峰值、断电恢复与新启动自检。只有实板通过才更新 README 的已支持状态。
 5. FRP 继续按本仓公开 `esp-frp` 来源、许可和资源边界独立评估；它不属于乐鑫 342 仓所提供的官方替代方案。
 

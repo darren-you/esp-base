@@ -72,19 +72,3 @@ printf '  hardware       not used\n'
   "$ROOT/tests/wifi_startup_test.c" -o "$BUILD_DIR/wifi_startup_test"
 for stage in {0..11}; do "$BUILD_DIR/wifi_startup_test" "$stage"; done
 printf '  wifi_startup passed (SDK init faults preserve failed state and release resources)\n'
-"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/components/mqtt_runtime/include" \
-  "$ROOT/components/mqtt_runtime/mqtt_contract.c" "$ROOT/tests/mqtt_contract_test.c" \
-  -o "$BUILD_DIR/mqtt_contract_test"
-"$BUILD_DIR/mqtt_contract_test"
-MQTT_DIR="$ROOT/managed_components/espressif__mqtt"
-if [[ ! -f "$MQTT_DIR/include/mqtt_client.h" ]]; then
-  printf '  error  Run idf.py -C firmware reconfigure to resolve the locked MQTT dependency.\n' >&2
-  exit 1
-fi
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -DCONFIG_MQTT_REPORT_DELETED_MESSAGES=1 -DCONFIG_EBASE_MQTT_PLAINTEXT_LAB=1 -DCONFIG_MBEDTLS_HAVE_TIME_DATE=1 \
-  -I "$ROOT/tests/fakes" -I "$ROOT/components/mqtt_runtime/include" -I "$MQTT_DIR/include" \
-  "$ROOT/components/mqtt_runtime/mqtt_contract.c" "$ROOT/components/mqtt_runtime/esp_base_mqtt.c" \
-  "$ROOT/tests/mqtt_runtime_test.c" -o "$BUILD_DIR/mqtt_runtime_test"
-"$BUILD_DIR/mqtt_runtime_test"

@@ -18,4 +18,4 @@ JSON 解析通过 Component Manager 依赖 [espressif/cjson 1.7.19~2](https://co
 
 Wi-Fi 生命周期、候选控制与配置 codec 为本仓新增实现，调用 ESP-IDF v6.1 的 esp_wifi、esp_netif、esp_event、NVS 和 PSA SHA-256；未复制旧 FRP 调试连接器或重写 SDK 驱动/密码原语。
 
-MQTT 使用官方 [espressif/mqtt 1.1.0](https://components.espressif.com/components/espressif/mqtt/versions/1.1.0/readme)，Component Manager 摘要为 `fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c`，记录在同一 dependencies.lock。上游为 Espressif ESP-MQTT、Apache-2.0；API/实现核对参考 commit `1a1e5788a5cf57a0f44a3c6c061407f6c9be1026`。官方源码仅存在于忽略的 managed_components，不复制为本仓协议实现；本仓新增 mqtt_runtime 的配置、事件交接与业务边界，并提供隔离测试应用。
+MQTT 从公开 [darren-you/esp-mqtt](https://github.com/darren-you/esp-mqtt) 的完整提交 `36c23dcdc44dd0c3df863b2ae635f8bc929ed860` 获取，组件名仍为 `mqtt`，在 `firmware/dependencies.lock` 中固定。该仓以官方 [ESP-MQTT v1.1.0](https://github.com/espressif/esp-mqtt/tree/1a1e5788a5cf57a0f44a3c6c061407f6c9be1026) 为基线并保留 Apache-2.0 许可，通用 `emqtt_` 运行层归该仓；Base 只保留持久 UUID、实验 Topic/LWT 与后续设备命令归属。Base 不再持有 `mqtt_runtime` 或官方 Registry 的第二份 MQTT 依赖。

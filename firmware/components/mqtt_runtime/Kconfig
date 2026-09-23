@@ -1,7 +1,0 @@
-menu "ESP Base MQTT integration"
-    config EBASE_MQTT_PLAINTEXT_LAB
-        bool "Allow plaintext MQTT for isolated integration tests"
-        default n
-        help
-            This marks a lab build. Production artifacts must reject this option.
-endmenu

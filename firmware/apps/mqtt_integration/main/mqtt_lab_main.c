@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "esp_base_mqtt.h"
+#include "emqtt.h"
 #include "esp_base_identity.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_wifi.h"
@@ -17,12 +17,12 @@
 #include "mqtt_lab_inputs.h"
 #include "mqtt_lab_resources.h"
 
-static ebase_mqtt_runtime_t *mqtt;
-static ebase_mqtt_event_t event;
+static emqtt_runtime_t *mqtt;
+static emqtt_event_t event;
 static esp_base_remote_config_t committed;
-static char output_topic[EBASE_MQTT_TOPIC_MAX + 1];
-static char input_topic[EBASE_MQTT_TOPIC_MAX + 1];
-static char extra_topic[EBASE_MQTT_TOPIC_MAX + 1];
+static char output_topic[EMQTT_TOPIC_MAX + 1];
+static char input_topic[EMQTT_TOPIC_MAX + 1];
+static char extra_topic[EMQTT_TOPIC_MAX + 1];
 static bool clock_ready;
 static unsigned cycles;
 static int64_t wifi_restore_at;
@@ -31,16 +31,16 @@ static void report(void)
 {
     printf("EBASE_MQTT_LAB state=%d cycle=%u heap=%" PRIu32 " min_heap=%" PRIu32
            " largest=%u tasks=%u owner_stack=%u outbox=%d wifi=%s\n",
-           mqtt ? (int)esp_base_mqtt_state(mqtt) : -1, cycles, esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
+           mqtt ? (int)emqtt_state(mqtt) : -1, cycles, esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)uxTaskGetNumberOfTasks(),
-           (unsigned)uxTaskGetStackHighWaterMark(NULL), esp_base_mqtt_outbox_size(mqtt), esp_base_wifi_state());
+           (unsigned)uxTaskGetStackHighWaterMark(NULL), emqtt_outbox_size(mqtt), esp_base_wifi_state());
     fflush(stdout);
 }
 
 static bool start_client(void)
 {
-    esp_err_t error = esp_base_mqtt_create(&lab_mqtt_config, &mqtt);
-    if (error == ESP_OK) error = esp_base_mqtt_start(mqtt, esp_base_wifi_ready(), clock_ready);
+    esp_err_t error = emqtt_create(&lab_mqtt_config, &mqtt);
+    if (error == ESP_OK) error = emqtt_start(mqtt, esp_base_wifi_ready(), clock_ready);
     printf("EBASE_MQTT_LAB start_error=%d\n", error);
     return error == ESP_OK;
 }
@@ -61,7 +61,7 @@ static void receive(void)
     }
     if (is_command(":cycle")) {
         /* 实验镜像控制字：等待 SDK 收敛后完整释放、重新建立实例。 */
-        esp_err_t error = esp_base_mqtt_destroy(mqtt);
+        esp_err_t error = emqtt_destroy(mqtt);
         if (error == ESP_OK) {
             mqtt = NULL; ++cycles;
             vTaskDelay(pdMS_TO_TICKS(100)); /* 让 Idle 完成已退出任务的释放。 */
@@ -70,13 +70,13 @@ static void receive(void)
         }
         printf("EBASE_MQTT_LAB cycle_error=%d\n", error);
     } else if (is_command(":restart")) {
-        esp_err_t error = esp_base_mqtt_stop(mqtt);
-        if (error == ESP_OK) error = esp_base_mqtt_start(mqtt, esp_base_wifi_ready(), clock_ready);
+        esp_err_t error = emqtt_stop(mqtt);
+        if (error == ESP_OK) error = emqtt_start(mqtt, esp_base_wifi_ready(), clock_ready);
         printf("EBASE_MQTT_LAB restart_error=%d\n", error);
     } else if (is_command(":subscribe")) {
-        printf("EBASE_MQTT_LAB subscribe_error=%d\n", esp_base_mqtt_subscribe(mqtt, extra_topic, 1));
+        printf("EBASE_MQTT_LAB subscribe_error=%d\n", emqtt_subscribe(mqtt, extra_topic, 1));
     } else if (is_command(":unsubscribe")) {
-        printf("EBASE_MQTT_LAB unsubscribe_error=%d\n", esp_base_mqtt_unsubscribe(mqtt, extra_topic));
+        printf("EBASE_MQTT_LAB unsubscribe_error=%d\n", emqtt_unsubscribe(mqtt, extra_topic));
     } else if (is_command(":wifi-cycle")) {
         /* 只中断本板 station；不是外部 AP 断电，不写持久配置。 */
         const ebase_wifi_config_t disabled = {0};
@@ -89,7 +89,7 @@ static void receive(void)
         ebase_mqtt_lab_report_resources("requested", cycles);
     } else {
         int id = -1;
-        const esp_err_t error = esp_base_mqtt_enqueue(mqtt, output_topic, event.message.payload,
+        const esp_err_t error = emqtt_enqueue(mqtt, output_topic, event.message.payload,
             event.message.length, event.message.qos, event.message.retain, &id);
         printf("EBASE_MQTT_LAB echo_length=%u qos=%u duplicate=%u retain=%u enqueue_error=%d message_id=%d\n",
                (unsigned)event.message.length, (unsigned)event.message.qos, (unsigned)event.message.duplicate,
@@ -144,15 +144,15 @@ void app_main(void)
             ebase_mqtt_lab_report_resources("before_create", cycles);
             (void)start_client();
         }
-        while (mqtt && esp_base_mqtt_poll(mqtt, &event)) {
+        while (mqtt && emqtt_poll(mqtt, &event)) {
             printf("EBASE_MQTT_LAB event=%d error=%d message_id=%d broker_code=%d tls_flags=%d\n",
                    (int)event.kind, (int)event.error, event.message_id, event.broker_code, event.tls_flags);
-            if (event.kind == EBASE_MQTT_EVENT_READY || event.kind == EBASE_MQTT_EVENT_UNSUBSCRIBED) {
+            if (event.kind == EMQTT_EVENT_READY || event.kind == EMQTT_EVENT_UNSUBSCRIBED) {
                 int id = -1;
-                error = esp_base_mqtt_enqueue(mqtt, lab_mqtt_config.will_topic, "online", 6, 1, true, &id);
+                error = emqtt_enqueue(mqtt, lab_mqtt_config.will_topic, "online", 6, 1, true, &id);
                 printf("EBASE_MQTT_LAB online_enqueue_error=%d message_id=%d\n", error, id);
             }
-            if (event.kind == EBASE_MQTT_EVENT_MESSAGE) receive();
+            if (event.kind == EMQTT_EVENT_MESSAGE) receive();
         }
         if (now >= next_report) { report(); next_report = now + 5000000; }
         vTaskDelay(pdMS_TO_TICKS(10));

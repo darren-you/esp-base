@@ -1,6 +1,6 @@
 # 官方 MQTT 集成测试应用
 
-此应用消费本仓 MQTT 适配层与锁定的官方 `espressif/mqtt == 1.1.0`，运行在同一 ESP32-C3 / 4 MiB 分区布局。它是带 `ESP_BASE_LAB_ONLY MQTT_INTEGRATION` 标记的实验固件，已通过部分实板矩阵，不能作为产品或 OTA 发布。
+此应用直接消费公开 `esp-mqtt@36c23dcdc44dd0c3df863b2ae635f8bc929ed860` 的 `emqtt_` 接口，运行在同一 ESP32-C3 / 4 MiB 分区布局。它是带 `ESP_BASE_LAB_ONLY MQTT_INTEGRATION` 标记的实验固件；旧 Base 适配层的部分实板结果不自动继承到本候选，不能作为产品或 OTA 发布。
 
 ## 架构拓扑
 
@@ -9,9 +9,8 @@ flowchart LR
     input["仓外私有 header：隔离 Broker / CA / NTP"] --> app["main/mqtt_lab_main.c"]
     store["已提交 NVS 身份与 Wi-Fi"] --> app
     app --> wifi["wifi_runtime / 官方 SNTP"]
-    app --> runtime["mqtt_runtime：事件重组 / 有界队列"]
-    runtime --> sdk["官方 ESP-MQTT 1.1.0"]
-    sdk <-->|"TCP 或严格 TLS / MQTT 3.1.1"| broker["本机隔离 Broker"]
+    app --> runtime["公开 esp-mqtt：emqtt_ / 官方核心"]
+    runtime <-->|"TCP 或严格 TLS / MQTT 3.1.1"| broker["本机隔离 Broker"]
     test["本机 MQTT 测试客户端"] <-->|"in / out / status"| broker
     app --> resources["mqtt_lab_resources：任务栈 / socket / esp_timer"]
     resources --> usb["USB：有界资源事实，不输出消息内容或凭据"]
@@ -20,7 +19,7 @@ flowchart LR
 
 先用普通基座配置 Wi-Fi 并保存同板恢复基线；本应用只读取已提交配置，不提交新的 Wi-Fi 配置、不自动擦 NVS、不驱动 GPIO。身份沿用当前 UUID；已有身份不存在时，身份组件仍按正常初始化合同建立身份，因此刷写前必须核对本轮基线。
 
-将仓库 `tools/mqtt-lab-inputs.example.h` 复制到仓外权限 0700 的目录，文件设 0600，填写本轮隔离 Broker、用户名密码、CA 和 NTP。TLS 必须先收到 SNTP 同步，使用 CA 与主机名验证；认证或证书失败不切换明文。默认构建不允许 TCP；只有明文实验可在独立 sdkconfig 中显式设置 `CONFIG_EBASE_MQTT_PLAINTEXT_LAB=y`，并将私有输入设为 `.tls=false`、`.ca_pem=""`；TCP 与非空 CA 的矛盾配置会被拒绝。
+将仓库 `tools/mqtt-lab-inputs.example.h` 复制到仓外权限 0700 的目录，文件设 0600，填写本轮隔离 Broker、用户名密码、CA 和 NTP。TLS 必须先收到 SNTP 同步，使用 CA 与主机名验证；认证或证书失败不切换明文。默认构建不允许 TCP；只有明文实验可在独立 sdkconfig 中显式设置 `CONFIG_EMQTT_PLAINTEXT_LAB=y`，并将私有输入设为 `.tls=false`、`.ca_pem=""`；TCP 与非空 CA 的矛盾配置会被拒绝。
 
 从仓库根构建，两个应用使用不同 build 与 sdkconfig，避免缓存混用：
 
@@ -48,4 +47,4 @@ idf.py -C firmware -B /private/path/mqtt-build \
 
 100 次资源测试应逐次等待新 READY、验证新消息并采集销毁后及在线数据，不能连续发送 100 条后把丢失当成功。公开检查器的 `--resource-samples --subscriptions --wifi-cycles 3` 可覆盖相应网络操作；串口与 Broker 的实际事件仍须共同核对。
 
-已完成的同板 TLS、QoS/载荷、100 次重建与故障子项见 [实板验收记录](../../../docs/operations/mqtt-hardware-acceptance.md)。动态订阅/退订、显式 TCP 与逐轮任务/socket/esp_timer 观测已补齐；完整验收仍需真实 AP 中断恢复及后续组合资源验证。编译和 SDK 事件注入不代替这些结论。烧录只能按本轮设备、分区、OTA 选择与完整备份核对后的应用槽进行。
+旧 Base 适配层已完成的同板 TLS、QoS/载荷、100 次重建与故障子项见 [实板验收记录](../../../docs/operations/mqtt-hardware-acceptance.md)，仅证明旧镜像。本候选的动态订阅/退订、显式 TCP 与逐轮任务/socket/esp_timer 观测入口保留；公开 `esp-mqtt` 的真实 Broker/C3、完整 AP 中断和组合资源矩阵仍待重做。编译和 SDK 事件注入不代替这些结论。烧录只能按本轮设备、分区、OTA 选择与完整备份核对后的应用槽进行。

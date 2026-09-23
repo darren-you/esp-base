@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-23 MQTT 公开组件硬切软件候选：移除 Base 原有通用运行层与重复 host 用例，实验应用直接消费公开 `esp-mqtt` 的固定 Git 提交。普通与实验应用的 C3 构建、Base host 回归及唯一组件/锁文件核对见[候选记录](mqtt-hard-cut-candidate.md)。原 2026-09-22 MQTT 实板证据只覆盖当时旧镜像；公开组件的独立实板矩阵及 Base 命令 ACK 闭环尚未完成，本候选未刷板。
+
 2026-09-23 保存前软件复核：当前工作树的 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过；固定 ESP-IDF `fff9895c82d744c7237be8847347bdd1b07c6643` 与 esp-lwip `2758df4cd3666b3b2a5b53830148379326425c0d` 在独立临时 build/sdkconfig 下完成 ESP32-C3 普通构建，镜像 786336 字节、SHA-256 `7f0e394d3795be16caddc51e4d49ebba3b47390012dff53ee79fad794bdfdb50`。同一 SDK 的受控签名构建镜像 1052672 字节、SHA-256 `cbccc852affc8d4b9025e7018df8f48c3c8f1f52d289a780ba57e1c31851de4c`；仓外临时 RSA-3072 测试键的签名经 `espsecure` 验证通过。上述两种镜像均未刷板，临时密钥不入仓，真实 HTTPS、签名槽切换与回滚仍待实板验收。
 
 2026-09-23 P2/P5 网络故障与本地确认软件修正：普通 Base 在 Wi-Fi 驱动初始化失败时保留 USB 控制任务，报告 Wi-Fi `failed`，使 pending 槽仍可按身份、配置和控制进展完成本地确认。配置候选不能凭失败网络提交；网络失败不会单独触发固件回滚。关联/IP 证明改为按实际 SSID 长度比较，忽略驱动 AP 记录中终止符后的填充字节。

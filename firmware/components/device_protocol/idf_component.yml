@@ -1,3 +1,6 @@
 dependencies:
   espressif/cjson:
     version: "==1.7.19~2"
+  mqtt:
+    git: "https://github.com/darren-you/esp-mqtt.git"
+    version: "36c23dcdc44dd0c3df863b2ae635f8bc929ed860"
