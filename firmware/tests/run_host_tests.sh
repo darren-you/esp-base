@@ -71,7 +71,7 @@ printf '  hardware       not used\n'
   -o "$BUILD_DIR/ota_receipt_test"
 "$BUILD_DIR/ota_receipt_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/ota_firmware" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" \
   "$ROOT/components/ota_operation/esp_base_ota_firmware.c" \

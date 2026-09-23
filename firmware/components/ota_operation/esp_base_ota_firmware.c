@@ -5,7 +5,9 @@
 #include <string.h>
 
 #include "esp_base_ota_policy.h"
+#include "esp_app_format.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
 
 static bool same_slots(const eota_slots_t *first, const eota_slots_t *second)
 {
@@ -27,6 +29,30 @@ static bool zero_digest(const uint8_t digest[EOTA_SHA256_BYTES])
     uint8_t any = 0;
     for (size_t i = 0; i < EOTA_SHA256_BYTES; ++i) any |= digest[i];
     return any == 0;
+}
+
+/* The OTA library deliberately reports signed image identity without product
+ * authorization. A rollback image offered to Container must also be a Base
+ * image for this chip, or a valid signature from another product could enter
+ * the bootable firmware set. The caller holds the app/otadata write owner. */
+static bool matching_base_image(const eota_policy_t *policy, uint8_t subtype,
+                                uint32_t address, uint32_t size)
+{
+    const esp_partition_t *partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, subtype, NULL);
+    if (!partition || partition->type != ESP_PARTITION_TYPE_APP ||
+        partition->subtype != subtype || partition->address != address ||
+        partition->size != size) return false;
+
+    esp_image_header_t header = {0};
+    esp_app_desc_t description = {0};
+    return esp_partition_read(partition, 0, &header, sizeof header) == ESP_OK &&
+           header.magic == ESP_IMAGE_HEADER_MAGIC &&
+           header.chip_id == policy->chip_id &&
+           esp_ota_get_partition_description(partition, &description) == ESP_OK &&
+           description.magic_word == ESP_APP_DESC_MAGIC_WORD &&
+           strncmp(description.project_name, policy->project_name,
+                   sizeof description.project_name) == 0;
 }
 
 esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
@@ -60,14 +86,20 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
     uint8_t running_sha256[EOTA_SHA256_BYTES], target_sha256[EOTA_SHA256_BYTES];
     if (eota_sha256_verified_image(&policy, before.running_subtype, &running_size,
                                    running_sha256) != EOTA_UPDATE_OK ||
-        running_size == 0 || zero_digest(running_sha256)) {
+        running_size == 0 || zero_digest(running_sha256) ||
+        !matching_base_image(&policy, before.running_subtype,
+                             before.running_address_bytes, before.running_size_bytes)) {
         return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
     }
     const eota_result_t target_result = eota_sha256_verified_image(
         &policy, before.target_subtype, &target_size, target_sha256);
     if (has_rollback) {
         if (target_result != EOTA_UPDATE_OK || target_size == 0 ||
-            zero_digest(target_sha256)) return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
+            zero_digest(target_sha256) ||
+            !matching_base_image(&policy, before.target_subtype,
+                                 before.target_address_bytes, before.target_size_bytes)) {
+            return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
+        }
     } else if (target_result != EOTA_UPDATE_IMAGE_INVALID) {
         return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
     }

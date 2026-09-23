@@ -20,8 +20,8 @@ typedef enum {
     ESP_BASE_OTA_FIRMWARE_UNCERTAIN,
 } esp_base_ota_firmware_result_t;
 
-/* Observe the complete set of independently bootable signed app identities in
- * the fixed two-slot Base layout. A pending/new running image, an ambiguous
+/* Observe the complete set of independently bootable signed Base images for
+ * this chip in the fixed two-slot layout. A pending/new running image, an ambiguous
  * inactive image, or any inconsistent SDK observation yields no set. The
  * caller must serialize all app Flash and otadata writers through the entire
  * call and while using the result; this function neither takes a product lock

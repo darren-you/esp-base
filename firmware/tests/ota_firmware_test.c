@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_app_format.h"
 #include "esp_partition.h"
 
 static bool signed_enabled, rollback_possible, change_during_hash;
@@ -12,6 +13,12 @@ static unsigned observe_calls, verify_calls, rollback_calls;
 static uint8_t running_subtype, boot_subtype, image_seed[2];
 static eota_state_t running_state, target_state;
 static eota_result_t image_result[2];
+static esp_partition_t partitions[2];
+static uint16_t image_chip_id[2];
+static uint8_t image_magic[2];
+static uint32_t description_magic[2];
+static char image_project[2][32];
+static bool read_failure[2], description_failure[2];
 
 static void reset(void)
 {
@@ -23,6 +30,51 @@ static void reset(void)
     image_seed[0] = 0xa0;
     image_seed[1] = 0xb0;
     image_result[0] = image_result[1] = EOTA_UPDATE_OK;
+    partitions[0] = (esp_partition_t){.type = ESP_PARTITION_TYPE_APP,
+        .subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0, .address = 0x20000, .size = 0x1e0000};
+    partitions[1] = (esp_partition_t){.type = ESP_PARTITION_TYPE_APP,
+        .subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1, .address = 0x200000, .size = 0x1e0000};
+    for (size_t i = 0; i < 2; ++i) {
+        image_chip_id[i] = 0x0005;
+        image_magic[i] = ESP_IMAGE_HEADER_MAGIC;
+        description_magic[i] = ESP_APP_DESC_MAGIC_WORD;
+        strcpy(image_project[i], "esp_base");
+        read_failure[i] = description_failure[i] = false;
+    }
+}
+
+const esp_partition_t *esp_partition_find_first(uint8_t type, uint8_t subtype,
+                                                 const char *label)
+{
+    assert(type == ESP_PARTITION_TYPE_APP && label == NULL);
+    if (subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) return &partitions[0];
+    if (subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) return &partitions[1];
+    return NULL;
+}
+
+esp_err_t esp_partition_read(const esp_partition_t *partition, size_t offset,
+                             void *destination, size_t size)
+{
+    assert(partition == &partitions[0] || partition == &partitions[1]);
+    assert(offset == 0 && size == sizeof(esp_image_header_t));
+    const size_t index = (size_t)(partition - partitions);
+    if (read_failure[index]) return ESP_FAIL;
+    *(esp_image_header_t *)destination = (esp_image_header_t){
+        .magic = image_magic[index], .chip_id = image_chip_id[index]};
+    return ESP_OK;
+}
+
+esp_err_t esp_ota_get_partition_description(const esp_partition_t *partition,
+                                             esp_app_desc_t *description)
+{
+    assert(partition == &partitions[0] || partition == &partitions[1]);
+    const size_t index = (size_t)(partition - partitions);
+    if (description_failure[index]) return ESP_FAIL;
+    memset(description, 0, sizeof *description);
+    description->magic_word = description_magic[index];
+    memcpy(description->project_name, image_project[index],
+           sizeof description->project_name);
+    return ESP_OK;
 }
 
 bool eota_available(void) { return signed_enabled; }
@@ -123,6 +175,15 @@ int main(void)
     reset(); rollback_possible = false; expect_uncertain();
     reset(); image_result[0] = EOTA_UPDATE_IMAGE_INVALID; expect_uncertain();
     reset(); image_result[1] = EOTA_UPDATE_IMAGE_INVALID; expect_uncertain();
+    reset(); image_chip_id[0] = 0x0009; expect_uncertain();
+    reset(); image_chip_id[1] = 0x0009; expect_uncertain();
+    reset(); strcpy(image_project[0], "other_product"); expect_uncertain();
+    reset(); strcpy(image_project[1], "other_product"); expect_uncertain();
+    reset(); image_magic[0] = 0; expect_uncertain();
+    reset(); description_magic[1] = 0; expect_uncertain();
+    reset(); read_failure[0] = true; expect_uncertain();
+    reset(); description_failure[1] = true; expect_uncertain();
+    reset(); partitions[1].address += 0x1000; expect_uncertain();
     reset(); target_state = EOTA_STATE_INVALID; expect_uncertain();
     reset(); target_state = EOTA_STATE_ABORTED; expect_uncertain();
     reset(); target_state = EOTA_STATE_UNTRACKED; expect_uncertain();
