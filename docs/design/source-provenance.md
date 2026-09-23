@@ -20,4 +20,4 @@ Wi-Fi 生命周期、候选控制与配置 codec 为本仓新增实现，调用 
 
 MQTT 从公开 [darren-you/esp-mqtt](https://github.com/darren-you/esp-mqtt) 的完整提交 `9cac455b0184420353ff0283df3f100abaac3e6b` 获取，组件名仍为 `mqtt`，在 `firmware/dependencies.lock` 中固定。该仓以官方 [ESP-MQTT v1.1.0](https://github.com/espressif/esp-mqtt/tree/1a1e5788a5cf57a0f44a3c6c061407f6c9be1026) 为基线并保留 Apache-2.0 许可，通用 `emqtt_` 运行层归该仓；Base 只保留持久 UUID、实验 Topic/LWT 与后续设备命令归属。Base 不再持有 `mqtt_runtime` 或官方 Registry 的第二份 MQTT 依赖。
 
-OTA 通用机制由公开 [darren-you/esp-ota](https://github.com/darren-you/esp-ota) 完整提交 `bae8d13ca5f99c730c667bc55d6ea6a0d883e608` 提供，Component Manager 在 `firmware/dependencies.lock` 中锁定其 `components/esp_ota`。该仓[来源记录](https://github.com/darren-you/esp-ota/blob/master/docs/design/source-provenance.md)绑定迁自 Base 的精确源码与许可；Base 仅维护产品约束、operation 收据、自检及调度。
+OTA 通用机制由公开 [darren-you/esp-ota](https://github.com/darren-you/esp-ota) 完整提交 `bed5709fe517f62d60f2efad95491bc66756a42c` 提供，Component Manager 在 `firmware/dependencies.lock` 中锁定其 `components/esp_ota`。该仓[来源记录](https://github.com/darren-you/esp-ota/blob/master/docs/design/source-provenance.md)绑定迁自 Base 的精确源码与许可；Base 仅维护产品约束、operation 收据、自检及调度。

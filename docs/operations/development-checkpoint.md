@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-24 esp-ota 精确依赖更新：Base 的唯一 Component Manager 声明、锁文件和当前 README/来源记录已对齐公开 `esp-ota@bed5709fe517f62d60f2efad95491bc66756a42c`。重新解析的组件 hash 为 `e875a87ce6e01f81798dd82984226861409aacec30df8770973dc058eca0c9ef`；该上游提交收紧 HTTPS 传输单次调用及 OTA 写入/哈希阶段的期限检查，Base 的 `eota_` 调用合同不变。较早检查点的 `bae8d13` 只描述当时构建，不代表当前锁版本。
+
+- `bash firmware/tests/run_host_tests.sh` 的 Base ASan/UBSan 全套通过。固定 ESP-IDF v6.1/ESP32-C3 普通构建通过，镜像 951632 字节、SHA-256 `18ae1f2450bad05d873cc90fa722a80640ed5cf3efd3a94a3afe77413e524224`；仓外临时 RSA-3072 测试键签名构建通过，镜像 1118208 字节、SHA-256 `540a8e111e1d18c8e84f67d61314ba57c77c866ce23af2649fce546cb99ae197`，`espsecure verify-signature --version 2 --keyfile` 通过。两者均未刷板；真实 HTTPS、Flash、回滚与资源峰值不因此计为完成。
+
 2026-09-24 P4 Base FRP 软件候选：固定公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`，普通控制任务独占 FRP 客户端生命周期。持久配置硬切为 EBCF v3：FRP 服务器域名/端口、独立 Token、显式 CA、proxy 名称、远端端口、本地端口和独立管理密钥必须完整提供；空 FRP 配置不创建客户端。owner 在 Wi-Fi IP、可信时间与已认证 loopback 管理端点均就绪后才可启动，停止与换配置必须等旧 worker 销毁完成；状态和计数可通过 USB status、周期日志及 MQTT reported 只读观察。
 
 - 本候选**尚无 loopback 管理监听器及其认证 wire 合同**，控制任务固定传入 `endpoint_ready=false`。即使 FRP 配置非空也只能报告 `endpoint_unavailable`，不会连接 FRPS 或暴露本地业务端口。P4-05 及 FRPS/设备端到端验收均未完成；不得把本地构建当作 FRP 可用证据。
