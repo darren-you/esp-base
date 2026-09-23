@@ -4,7 +4,7 @@
 
 ## 帧与身份
 
-USB 为 UTF-8 JSON Lines；单帧最大 8192 字节（不含换行），拒绝 NUL、重复 key、未知字段、非法 UTF-8、非对象与非整数数值。只解析带协议字段的行，日志不是 ACK。网络端复用同一请求与结果对象。
+USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 NUL、重复 key、未知字段、非法 UTF-8、非对象与非整数数值。只解析带协议字段的行，日志不是 ACK。网络端复用同一请求与结果对象。
 
 只读 `status` 请求包含 `protocol_version:1`、`request_id`、`command:"status"`。响应包含固件持久 `device_id`、随机启动 `boot_id`、`uptime_ms`、配置 `revision`、能力状态与资源事实，不返回秘密。固件初始化失败时不生成替代身份。
 
@@ -20,7 +20,7 @@ USB 为 UTF-8 JSON Lines；单帧最大 8192 字节（不含换行），拒绝 N
 - `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃或目标槽 pending 时为 `running`；目标槽运行且 VALID、完整镜像摘要匹配时为 `succeeded`；已持久记录的下载失败或目标槽 ABORTED/INVALID 且旧槽有效时为 `failed`；收据缺失/损坏、槽关系不明或仅见旧槽而无失败证据时为 `unknown`。普通未签名构建拒绝查询。
 - `business.*`：仅派发业务注册的命令与参数 schema，未知命令拒绝，不提供任意 shell、脚本或 Topic。
 
-配置 `schema_version` 固定 2，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 和 business 必须为 null。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT 能力按实际 owner 状态报告。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。
+配置 `schema_version` 固定 3，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 为 null 或精确 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}`；business 必须为 null。FRP Token 为 1–256 字节非空可打印 ASCII，CA PEM 最多 2048 字节，proxy_name 为 1–128 字节受限 ASCII，三个端口均为 1–65535；本地目标固定为 `127.0.0.1`，独立管理 key 与 MQTT key 不互用。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT/FRP 能力按实际 owner 状态报告。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。
 
 ## 结果与幂等
 
@@ -40,11 +40,11 @@ TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelop
 
 正式设备的 ClientID 仍是持久 UUID。四个 Topic 精确为 `esp-base/<device_id>/command`、`result`、`reported`、`status`；静态段为小写 kebab-case，设备 UUID 原样填入。设备只读 `command`，只写其余三个 Topic；控制端只对已绑定设备写 `command`、读 `result`/`reported`/`status`。Broker 必须为每台设备分配独立 principal 和精确 ACL，不借用实验应用的 `esp-base-lab` Topic 或已有共享 principal。
 
-首版 MQTT 3.1.1 只走严格 TLS。设备取得 Wi-Fi IP 和本次启动可信时间后才启动客户端；只有本轮 `command` QoS 1 订阅的 SUBACK 已批准，才可报告 MQTT `ready`。`status` 的上线和 LWT 离线消息采用 QoS 1 retained，载荷分别为 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","state":"online"}` 和同结构的 `state:"offline"`；retained `online` 只是最近提示，Broker 重启或设备主动停止/重配会话后可能残留，Tool/网关不得由单条 retained 消息判在线。MQTT ready 时，`reported` 每 5 秒以 QoS 1 非 retained 发布 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","uptime_ms":<整数>,"revision":<整数>,"wifi_state":"<状态>","time_ready":<布尔>}`，不包含连接密码、管理密钥等敏感配置。Tool/网关按自身收到该次消息的时间、当前会话及 boot_id 判断新鲜度；设备 uptime 不是 Unix 时间，历史 reported 也不能单独证明当前在线。
+首版 MQTT 3.1.1 只走严格 TLS。设备取得 Wi-Fi IP 和本次启动可信时间后才启动客户端；只有本轮 `command` QoS 1 订阅的 SUBACK 已批准，才可报告 MQTT `ready`。`status` 的上线和 LWT 离线消息采用 QoS 1 retained，载荷分别为 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","state":"online"}` 和同结构的 `state:"offline"`；retained `online` 只是最近提示，Broker 重启或设备主动停止/重配会话后可能残留，Tool/网关不得由单条 retained 消息判在线。MQTT ready 时，`reported` 每 5 秒以 QoS 1 非 retained 发布 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","uptime_ms":<整数>,"revision":<整数>,"wifi_state":"<状态>","time_ready":<布尔>,"frp_state":"<状态>"}`，不包含连接密码、管理密钥等敏感配置。Tool/网关按自身收到该次消息的时间、当前会话及 boot_id 判断新鲜度；设备 uptime 不是 Unix 时间，历史 reported 也不能单独证明当前在线。
 
 `command` 载荷是连续 `64` 个小写十六进制字符、一个 LF、原始 UTF-8 v1 JSON 请求字节，总长度最多 `4096` 字节。前缀解码为 32 字节 HMAC-SHA256 tag，使用独立的设备管理密钥，只覆盖 LF 后的原始请求字节；不重排 JSON、归一化空白或先解析再签名。仅精确 `command` Topic、QoS 1、非 retained、格式和 HMAC 均有效的消息进入既有 JSON decoder、boot/deadline、request_id/指纹裁决。无认证消息直接丢弃，不回显 request_id 或产生 ACK。已认证但语法错误的请求由设备协议结果裁决。DUP 重投不重复执行，复用本次 boot 的原结果；跨 boot 未决结果仍是 unknown，不能从 PUBACK 推断成功。
 
-`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。同启动重复请求经共同 owner 的幂等裁决后回送原结果；异步 OTA 结果回送原请求通道。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入；已认证的远端 `config.set` 经身份、期限与去重裁决后返回 `failed/physical_usb_required`，不写入配置。普通固件的软件 owner 已接入客户端、订阅和结果通道；设备级 Broker ACL、Tool 的网络控制端与实板 v1→v2 迁移尚未生效，此代码构建与 host 测试不构成网络端到端验收。
+`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。同启动重复请求经共同 owner 的幂等裁决后回送原结果；异步 OTA 结果回送原请求通道。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入；已认证的远端 `config.set` 经身份、期限与去重裁决后返回 `failed/physical_usb_required`，不写入配置。普通固件的软件 owner 已接入客户端、订阅和结果通道；设备级 Broker ACL、Tool 的网络控制端与实板 v1/v2→v3 迁移尚未生效，此代码构建与 host 测试不构成网络端到端验收。
 
 ## 当前 USB 结果
 
@@ -52,7 +52,7 @@ status 成功的 result 固定含 uptime_ms、revision、free_heap、min_free_he
 
 `ota.result` 的 `state` 和 `error_code` 是查询时由持久收据与当前槽事实裁决的结果；一次 `ota.start` 的 running 回执以及 USB 写入成功均不是最终成功。NVS 登记写入或失败终态持久化不确定时返回 `unknown/storage_uncertain` 并关闭本次启动的配置写入，不能自动重试升级。目标槽摘要读取失败时返回 `unknown/ota_result_uncertain`。
 
-USB 缓冲最多 8192 字节，JSON 嵌套最多 8 层、成员分隔符最多 128 个。拒绝小数/指数数字、NUL（含 Unicode 转义）和重复 key。超限或半帧闲置 2 秒后排空至换行，再处理下一帧；错误输入不回显请求内容或凭据。
+USB 缓冲最多 9216 字节，JSON 嵌套最多 8 层、成员分隔符最多 128 个。拒绝小数/指数数字、NUL（含 Unicode 转义）和重复 key。超限或半帧闲置 2 秒后排空至换行，再处理下一帧；错误输入不回显请求内容或凭据。
 
 USB 使用官方无缓冲 VFS 和硬件 FIFO 背压，不使用可能在 RX ring 满时丢字节的中断缓冲驱动。主机每次请求前后各发送一个换行，前导换行只用于结束先前未完成的帧；不得把写入完成当成设备受理。
 
@@ -65,3 +65,7 @@ USB 配置候选在 RAM 验证最多 20 秒，取得 IP 后核对当前关联；
 候选失败返回 connection_proof_failed，重新选择已提交配置；离线环境不伪造已经恢复连接。候选执行期间其他写命令返回 configuration_busy，status 仍可用。NVS 写后状态不确定返回 unknown/storage_uncertain，不自动重放，不承诺旧配置已恢复；重新读取存储事实后保持写入关闭，重启重新核验。已提交配置的真实断电恢复已验收；候选及 Flash 提交中间态掉电仍待实测。
 
 OTA pending 新槽完成本地确认前，`config.set` 在身份、期限与去重裁决后返回 `failed/ota_verification_pending`，不执行候选连接或配置提交；下载期间返回 `ota_in_progress`。`status` 保持可读。确认成功后新 request_id 可执行配置写入，原 request_id 重放仍返回原失败结果。签名构建的 OTA 下载与配置候选互斥；外部 flash 租约仍须工具侧实现。
+
+## FRP Base 软件接线边界
+
+普通 Base 精确锁定公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`。FRP owner 在单一 USB 控制任务中持有一个客户端句柄；配置变更、网络或时间门失效时用非阻塞 destroy 持续收敛，未完成时保留句柄。`ready` 只来自库完成代理注册与首轮认证 Pong 的状态快照，status 与 reported 不含 Token、CA、管理 key。当前受控 loopback 管理 listener 的请求鉴权和线格式尚未实施，`endpoint_ready` 恒为 false，配置存在时状态明确为 `endpoint_unavailable`，绝不连接 FRPS。FRP Token、TLS 和 UUID 不能代替管理端点授权。真实 FRPS、MQTT/OTA 并行及资源验收仍待完成。

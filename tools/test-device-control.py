@@ -48,10 +48,10 @@ class SerialTransportTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2.5)
 
 
-class ConfigurationV2Tests(unittest.TestCase):
+class ConfigurationV3Tests(unittest.TestCase):
     def setUp(self):
         self.config = {
-            "schema_version": 2,
+            "schema_version": 3,
             "wifi": {"ssid": "test-network", "password": "test-password"},
             "mqtt": {
                 "hostname": "broker.example.test", "port": 8883,
@@ -62,16 +62,33 @@ class ConfigurationV2Tests(unittest.TestCase):
             "frp": None, "business": None,
         }
 
-    def testCompleteV2AndNullCapabilities(self):
+    def testCompleteV3AndNullCapabilities(self):
         control.validate_configuration(self.config)
         candidate = copy.deepcopy(self.config)
         candidate["wifi"] = None
         candidate["mqtt"] = None
         control.validate_configuration(candidate)
+        candidate["frp"] = {
+            "server_hostname": "frp.example.test", "server_port": 7000,
+            "token": "test-frp-token",
+            "ca_pem": "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n",
+            "proxy_name": "base-device", "remote_port": 10200, "local_port": 8123,
+            "management_key_hex": "02" + "00" * 31,
+        }
+        control.validate_configuration(candidate)
+        for field, value in (("server_hostname", "-frp.example.test"), ("server_port", 0),
+                             ("token", "bad token"), ("ca_pem", "missing CA"),
+                             ("proxy_name", "bad/name"), ("remote_port", True),
+                             ("local_port", 0), ("management_key_hex", "00" * 32)):
+            rejected = copy.deepcopy(candidate)
+            rejected["frp"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                control.validate_configuration(rejected)
 
     def testV1AndMalformedFieldsAreRejected(self):
         variants = [
             ("schema_version", 1),
+            ("schema_version", 2),
             ("schema_version", True),
             ("frp", {}),
             ("mqtt.hostname", "-broker.example.test"),
@@ -114,8 +131,8 @@ class ConfigurationV2Tests(unittest.TestCase):
         class NeverWrite:
             def write(self, payload):
                 raise AssertionError("oversized USB frame was sent")
-        with self.assertRaisesRegex(ValueError, "8192"):
-            control.send(NeverWrite(), {"config": "A" * 8192})
+        with self.assertRaisesRegex(ValueError, "9216"):
+            control.send(NeverWrite(), {"config": "A" * 9216})
 
 
 if __name__ == "__main__":

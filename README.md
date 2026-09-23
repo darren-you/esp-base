@@ -1,6 +1,6 @@
 # ESP Base
 
-基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载和按 operation ID 查询 `ota.result` 持久收据的软件链；当前实板仍是未签名基座，五能力完整验收尚未完成。
+基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载和按 operation ID 查询 `ota.result` 持久收据的软件链。FRP 已接入公开组件和单 owner，但受控本地管理端点尚未实现，端点门始终关闭，不能连接 FRPS；当前实板仍是未签名旧基座，五能力完整验收尚未完成。
 
 ## 架构拓扑
 
@@ -10,8 +10,10 @@ flowchart LR
     sdk --> firmware["firmware：ESP32-C3 应用"]
     identity["device_identity：NVS UUID"] --> firmware
     state["device_protocol / remote_config / wifi_runtime / safety_runtime"] --> firmware
-    state -->|"v2 凭据 / 控制任务"| mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
+    state -->|"v3 凭据 / 控制任务"| mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
     mqtt_owner --> mqtt
+    state -->|"v3 FRP 配置 / 端点门"| frp_owner["frp_owner：单实例 / 状态 / 停止收敛"]
+    frp_owner -->|"端点就绪后才允许 start"| frp["公开 esp-frp：严格 TLS / Yamux / Token"]
     time["time_runtime：SNTP 同步证明"] --> firmware
     state -->|"控制任务轮询"| time
     time --> idf_time["ESP-IDF esp_netif_sntp"]
@@ -38,9 +40,9 @@ source "$IDF_PATH/export.sh"
 idf.py -C firmware build
 ```
 
-`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`、`esp-ota@bae8d13ca5f99c730c667bc55d6ea6a0d883e608`，不读取工作区相邻仓库。普通基座的软件候选已在配置 v2 凭据后接入严格 TLS MQTT 命令 owner；无凭据时不创建客户端。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)与[SDK fork 复验](docs/operations/mqtt-hard-cut-candidate.md#sdk-fork-升级复验)为准；编译不写设备。
+`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `855937cf9dcee13ee9c423fb0319238cdc8d53fd`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`、`esp-ota@bae8d13ca5f99c730c667bc55d6ea6a0d883e608`、`esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`，不读取工作区相邻仓库。普通基座的软件候选使用 v3 配置；MQTT 的 HMAC、Topic 和 ClientID 合同未变，无凭据时不创建客户端。FRP 有独立 Token、CA、代理名和管理 key，但端点未就绪时不创建连接。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)为准；编译不写设备。
 
-NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身份沿用 `nvs/base_identity/device_uuid`；分区地址和大小保持迁移基线。配置 `base_store/base_config/committed` 只接受 v2，旧 v1 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。首版目标仅为 ESP32-C3、4 MiB，无 GPIO 动作。
+NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身份沿用 `nvs/base_identity/device_uuid`；分区地址和大小保持迁移基线。配置 `base_store/base_config/committed` 只接受 v3，旧 v1/v2 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。只读预检和候选见[离线迁移](docs/operations/base-v3-offline-migration.md)。首版目标仅为 ESP32-C3、4 MiB，无 GPIO 动作。
 
 pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制循环实际开始、在本地 30 秒窗口内持续报告进展，且跨过窗口终点再完成一轮后确认。Wi-Fi 初始化失败时状态为 `failed`，USB 控制仍启动，不因此回滚；窗口内 `config.set` 返回 `ota_verification_pending`，确认成功后恢复；不等待 Wi-Fi、Broker 或 FRPS 在线。确认 SDK 报错但 otadata 已为 VALID 时按持久状态清门。启动或活性检查失败时由 IDF 尝试回滚；无可回退镜像时当前执行暂留，但下次复位不保证可启动，需人工恢复。
 
@@ -55,6 +57,7 @@ pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制�
 - [官方 MQTT 集成测试应用](firmware/apps/mqtt_integration/README.md)
 - [MQTT 实板验收记录](docs/operations/mqtt-hardware-acceptance.md)
 - [MQTT 公开组件硬切软件候选](docs/operations/mqtt-hard-cut-candidate.md)
+- [FRP 平台接线软件候选](docs/operations/development-checkpoint.md#frp-平台接线软件候选)
 - [乐鑫官方仓库全景与 ESP Base 选型](docs/design/espressif-official-solutions.md)
 - [乐鑫 342 个公开仓库逐项清单](docs/design/espressif-repository-catalog.md)
 - [来源记录](docs/design/source-provenance.md)

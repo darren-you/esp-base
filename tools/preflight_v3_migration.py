@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读核对 ESP Base v1 的双份完整 Flash 备份。"""
+"""只读核对 ESP Base v1/v2 的双份完整 Flash 备份并生成 v3 候选。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import base64
 import contextlib
 import csv
 import hashlib
-from importlib import metadata
+from importlib import metadata, util
 import os
 from pathlib import Path
 import re
@@ -274,6 +274,60 @@ def validate_v1_config(blob: bytes) -> int:
     return int.from_bytes(blob[8:12], "little")
 
 
+def validate_v2_config(blob: bytes) -> int:
+    require(24 <= len(blob) <= 4885 and blob[:5] == b"EBCF\x02",
+            "base_config/committed 不是规范 EBCF v2 blob")
+    flags, ssid_len, wifi_password_len = blob[5:8]
+    host_len, user_len = blob[12:14]
+    mqtt_password_len = int.from_bytes(blob[14:16], "little")
+    ca_len = int.from_bytes(blob[16:18], "little")
+    port = int.from_bytes(blob[18:20], "little")
+    require(flags <= 3 and ssid_len <= 32 and wifi_password_len <= 64 and
+            host_len <= 253 and user_len <= 128 and mqtt_password_len <= 256 and
+            ca_len <= 4096 and blob[20:24] == bytes(4) and
+            len(blob) == 24 + ssid_len + wifi_password_len + host_len + user_len +
+            mqtt_password_len + ca_len + (32 if flags & 2 else 0),
+            "EBCF v2 字段长度、标记或保留字节无效")
+    at = 24
+    def take(length: int) -> bytes:
+        nonlocal at
+        value = blob[at:at + length]
+        at += length
+        return value
+    ssid = take(ssid_len)
+    wifi_password = take(wifi_password_len)
+    host = take(host_len)
+    user = take(user_len)
+    mqtt_password = take(mqtt_password_len)
+    ca = take(ca_len)
+    key = take(32) if flags & 2 else bytes(32)
+    require(at == len(blob), "EBCF v2 长度不完整")
+    try:
+        config = {
+            "schema_version": 3,
+            "wifi": {"ssid": ssid.decode("utf-8"), "password": wifi_password.decode("ascii")}
+                    if flags & 1 else None,
+            "mqtt": {"hostname": host.decode("ascii"), "port": port,
+                     "username": user.decode("utf-8"), "password": mqtt_password.decode("utf-8"),
+                     "ca_pem": ca.decode("ascii"), "management_key_hex": key.hex()}
+                    if flags & 2 else None,
+            "frp": None, "business": None,
+        }
+        if not flags & 1:
+            require(not ssid_len and not wifi_password_len, "EBCF v2 未配置 Wi-Fi 却含数据")
+        if not flags & 2:
+            require(not (host_len or user_len or mqtt_password_len or ca_len or port),
+                    "EBCF v2 未配置 MQTT 却含数据")
+        spec = util.spec_from_file_location("esp_base_device_control", ROOT / "tools/device-control.py")
+        require(spec is not None and spec.loader is not None, "设备配置校验器不可用")
+        module = util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.validate_configuration(config)
+    except (UnicodeError, ValueError) as exc:
+        raise PreflightError("EBCF v2 配置值无效") from exc
+    return int.from_bytes(blob[8:12], "little")
+
+
 def validate_ota_receipt(blob: bytes, device_id: str) -> str:
     require(len(blob) == 118 and blob[:5] == b"EOTA\x01" and blob[9] == 0,
             "base_ota/operation 不是规范 EOTA v1 118B blob")
@@ -311,13 +365,13 @@ def audit_otadata_and_slots(flash: bytes) -> list[str]:
                 f"otadata 副本 {index} 的序列、状态或 CRC 无效")
         entries.append((sequence, state))
     require(all(item is None or item[1] not in {0, 1} for item in entries),
-            "otadata 含 NEW/PENDING_VERIFY 未决槽；阻断 v2 维护准备")
+            "otadata 含 NEW/PENDING_VERIFY 未决槽；阻断 v3 维护准备")
     selectable = [(index, item[0], item[1]) for index, item in enumerate(entries)
                   if item is not None and item[1] not in {3, 4}]
     require(selectable, "otadata 没有可选择的应用槽")
     selected_index, selected_sequence, selected_state = max(selectable, key=lambda item: (item[1], -item[0]))
     selected_slot = (selected_sequence - 1) % 2
-    require(selected_state == 2, "当前 otadata 选择器不是 VALID；阻断 v2 维护准备")
+    require(selected_state == 2, "当前 otadata 选择器不是 VALID；阻断 v3 维护准备")
     lines = []
     for slot, offset in enumerate(APP_OFFSETS):
         image = flash[offset:offset + APP_SIZE]
@@ -354,10 +408,14 @@ def audit(flash: bytes, components: Path, device_id: str) -> tuple[list[str], di
     if ("base_config", "committed") in store:
         kind, blob = store[("base_config", "committed")]
         require(kind == "blob", "base_config/committed 不是 blob")
-        revision = validate_v1_config(blob)
-        lines.append(f"base_store/base_config/committed: EBCF v1, 112B, revision={revision}")
+        if len(blob) >= 5 and blob[4] == 1:
+            revision = validate_v1_config(blob)
+            lines.append(f"base_store/base_config/committed: EBCF v1, 112B, revision={revision}")
+        else:
+            revision = validate_v2_config(blob)
+            lines.append(f"base_store/base_config/committed: EBCF v2, {len(blob)}B, revision={revision}")
     else:
-        lines.append("base_store/base_config/committed: 缺失，v1 固件读取为默认空配置")
+        lines.append("base_store/base_config/committed: 缺失，旧固件读取为默认空配置")
     if ("base_ota", "operation") in store:
         kind, blob = store[("base_ota", "operation")]
         require(kind == "blob", "base_ota/operation 不是 blob")
@@ -370,13 +428,21 @@ def audit(flash: bytes, components: Path, device_id: str) -> tuple[list[str], di
 
 def convert_v1_wifi_only(blob: bytes) -> bytes:
     validate_v1_config(blob)
-    header = bytearray(24)
+    header = bytearray(40)
     header[:4] = b"EBCF"
-    header[4] = 2
-    header[5] = blob[5]  # 仅 Wi-Fi bit；MQTT 保持 absent
+    header[4] = 3
+    header[5] = blob[5]  # 仅 Wi-Fi bit；MQTT/FRP 保持 absent
     header[6:8] = blob[6:8]
     header[8:12] = blob[8:12]  # 纯格式转换：revision 原样保留
     return bytes(header) + blob[16:16 + blob[6]] + blob[48:48 + blob[7]]
+
+
+def convert_v2_preserving_mqtt(blob: bytes) -> bytes:
+    validate_v2_config(blob)
+    header = bytearray(40)
+    header[:20] = blob[:20]
+    header[4] = 3
+    return bytes(header) + blob[24:]
 
 
 def write_candidate(output: Path, store: dict[tuple[str, str], tuple[str, bytes]], components: Path) -> str:
@@ -392,9 +458,13 @@ def write_candidate(output: Path, store: dict[tuple[str, str], tuple[str, bytes]
     require(installed == NVS_GENERATOR_VERSION,
             "官方 NVS generator 版本与本次已核对版本不一致")
     old = store.get(("base_config", "committed"))
-    new_config = convert_v1_wifi_only(old[1]) if old else convert_v1_wifi_only(b"EBCF\x01" + bytes(107))
+    if old:
+        new_config = (convert_v1_wifi_only(old[1]) if old[1][4] == 1 else
+                      convert_v2_preserving_mqtt(old[1]))
+    else:
+        new_config = convert_v1_wifi_only(b"EBCF\x01" + bytes(107))
     receipt = store.get(("base_ota", "operation"))
-    with tempfile.TemporaryDirectory(prefix="esp-base-v2-store-") as temp:
+    with tempfile.TemporaryDirectory(prefix="esp-base-v3-store-") as temp:
         work = Path(temp)
         source = work / "records.csv"
         generated = work / "base-store.bin"
@@ -421,7 +491,7 @@ def write_candidate(output: Path, store: dict[tuple[str, str], tuple[str, bytes]
     if receipt:
         expected[("base_ota", "operation")] = receipt
     require(reread == expected, "候选镜像逐键解析读回与迁移输入不一致")
-    descriptor, temporary = tempfile.mkstemp(prefix=".esp-base-v2-", dir=output.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix=".esp-base-v3-", dir=output.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(candidate)
@@ -442,7 +512,7 @@ def main() -> int:
     parser.add_argument("--idf-path", required=True, type=Path, help="sdk-lock.json 固定的 ESP-IDF checkout")
     parser.add_argument("--device-id", required=True, help="本轮已独立核对的设备 UUID v4")
     parser.add_argument("--output-base-store", type=Path,
-                        help="可选：在仓外创建经逐键读回验证的 v2 base_store 分区候选；不写设备")
+                        help="可选：在仓外创建经逐键读回验证的 v3 base_store 分区候选；不写设备")
     args = parser.parse_args()
     try:
         require(valid_uuid_text(args.device_id), "device-id 必须为小写 UUID v4")
@@ -451,18 +521,18 @@ def main() -> int:
         records, store = audit(flash, components, args.device_id)
         candidate_sha = write_candidate(args.output_base_store, store, components) if args.output_base_store else None
     except (OSError, PreflightError) as exc:
-        print(f"ESP Base v1→v2 只读预检：阻断；{exc}", file=sys.stderr)
+        print(f"ESP Base v1/v2→v3 只读预检：阻断；{exc}", file=sys.stderr)
         return 1
     except Exception:
-        print("ESP Base v1→v2 只读预检：阻断；固定 SDK 解析失败", file=sys.stderr)
+        print("ESP Base v1/v2→v3 只读预检：阻断；固定 SDK 解析失败", file=sys.stderr)
         return 1
-    print("ESP Base v1→v2 只读预检：通过")
+    print("ESP Base v1/v2→v3 只读预检：通过")
     print(f"完整 Flash：两份独立备份逐字节一致；4 MiB；SHA-256 {hashlib.sha256(flash).hexdigest()}")
     print("分区表：与仓库固定布局逐字节一致")
     for record in records:
         print(f"{'Flash' if record.startswith(('ota_', 'otadata:')) else 'NVS'}：{record}")
     if candidate_sha:
-        print(f"v2 base_store 候选：0x20000 字节、0600、逐键读回相等；SHA-256 {candidate_sha}")
+        print(f"v3 base_store 候选：0x20000 字节、0600、逐键读回相等；SHA-256 {candidate_sha}")
     print("只读预检不批准写入；镜像头和选择器解析不能证明镜像可启动。")
     return 0
 

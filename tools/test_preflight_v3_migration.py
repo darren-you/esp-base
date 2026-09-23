@@ -15,7 +15,7 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PREFLIGHT = ROOT / "tools/preflight_v2_migration.py"
+PREFLIGHT = ROOT / "tools/preflight_v3_migration.py"
 DEVICE_ID = "00000000-0000-4000-8000-000000000001"
 
 
@@ -25,7 +25,7 @@ class PreflightTests(unittest.TestCase):
         cls.idf = Path(os.environ["IDF_PATH"])
         cls.generator = cls.idf / "components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
         cls.partitions = cls.idf / "components/partition_table/gen_esp32part.py"
-        cls.temp = tempfile.TemporaryDirectory(prefix="esp-base-v2-preflight-test-")
+        cls.temp = tempfile.TemporaryDirectory(prefix="esp-base-v3-preflight-test-")
         cls.work = Path(cls.temp.name)
         cls.config = bytearray(112)
         cls.config[:5] = b"EBCF\x01"
@@ -116,10 +116,37 @@ class PreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("CRC", result.stderr)
 
-    def test_v2_blob_is_not_misread_as_v1(self) -> None:
+    def test_malformed_v2_blob_is_rejected(self) -> None:
         result = self.run_preflight(self.full_flash(store=self.store(version=2)))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("不是规范 EBCF v1", result.stderr)
+        self.assertIn("EBCF v2", result.stderr)
+
+    def test_v2_candidate_preserves_mqtt_and_revision(self) -> None:
+        ca = b"-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n"
+        host, user, password = b"broker.example.test", b"device", b"secret"
+        header = bytearray(24)
+        header[:8] = b"EBCF\x02\x03\x08\x08"
+        header[8:12] = (77).to_bytes(4, "little")
+        header[12] = len(host)
+        header[13] = len(user)
+        header[14:16] = len(password).to_bytes(2, "little")
+        header[16:18] = len(ca).to_bytes(2, "little")
+        header[18:20] = (8883).to_bytes(2, "little")
+        original = (bytes(header) + b"testwifipassword" + host + user + password + ca +
+                    bytes((1,)) + bytes(31))
+        output = self.work / "v2-candidate.bin"
+        result = self.run_preflight(self.full_flash(store=self.store(version=2, config=original)), candidate=output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("EBCF v2", result.stdout)
+        parser = self.idf / "components/nvs_flash/nvs_partition_tool/nvs_tool.py"
+        inspect = subprocess.run([sys.executable, str(parser), "-f", "json", "-d", "minimal", str(output)],
+                                 text=True, capture_output=True, check=True)
+        records = {(record["namespace"], record["key"]): base64.b64decode(record["data"])
+                   for record in json.loads(inspect.stdout)}
+        expected = bytearray(40)
+        expected[:20] = header[:20]
+        expected[4] = 3
+        self.assertEqual(records[("base_config", "committed")], bytes(expected) + original[24:])
 
     def test_pending_otadata_blocks(self) -> None:
         flash = self.full_flash()
@@ -152,9 +179,9 @@ class PreflightTests(unittest.TestCase):
                                  text=True, capture_output=True, check=True)
         records = {(record["namespace"], record["key"]): base64.b64decode(record["data"])
                    for record in json.loads(inspect.stdout)}
-        expected_v2 = (b"EBCF\x02\x01\x08\x08" + (42).to_bytes(4, "little") + bytes(12) +
+        expected_v3 = (b"EBCF\x03\x01\x08\x08" + (42).to_bytes(4, "little") + bytes(28) +
                        b"testwifipassword")
-        self.assertEqual(records[("base_config", "committed")], expected_v2)
+        self.assertEqual(records[("base_config", "committed")], expected_v3)
         self.assertEqual(records[("base_ota", "operation")], receipt)
 
     def test_candidate_never_overwrites(self) -> None:

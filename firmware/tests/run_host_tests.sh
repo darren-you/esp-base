@@ -28,10 +28,18 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
 "$BUILD_DIR/mqtt_owner_test"
 CJSON_DIR="$ROOT/managed_components/espressif__cjson/cJSON"
 EOTA_DIR="$ROOT/managed_components/esp_ota"
-if [[ ! -f "$CJSON_DIR/cJSON.c" || ! -f "$EOTA_DIR/include/eota.h" ]]; then
+EFRP_DIR="$ROOT/managed_components/esp_frp"
+if [[ ! -f "$CJSON_DIR/cJSON.c" || ! -f "$EOTA_DIR/include/eota.h" || ! -f "$EFRP_DIR/include/esp_frp.h" ]]; then
   printf 'esp-base host tests\n  error  Run idf.py -C firmware reconfigure to resolve the locked cJSON and esp-ota dependencies.\n' >&2
   exit 1
 fi
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
+  -I "$ROOT/components/remote_config/include" -I "$ROOT/components/time_runtime/include" \
+  -I "$EFRP_DIR/include" \
+  "$ROOT/components/device_protocol/frp_owner.c" "$ROOT/tests/frp_owner_test.c" \
+  -o "$BUILD_DIR/frp_owner_test"
+"$BUILD_DIR/frp_owner_test"
 # Keep strict diagnostics on our sources; the locked third-party cJSON uses
 # sprintf internally, which the macOS SDK marks deprecated.
 "${CC:-cc}" -std=c11 -fsanitize=address,undefined -Wno-deprecated-declarations \

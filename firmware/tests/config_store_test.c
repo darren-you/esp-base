@@ -70,6 +70,18 @@ static void add_mqtt(esp_base_remote_config_t *c)
     strcpy(c->mqtt.ca_pem, "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n");
     c->mqtt.management_key[0] = 0x01;
 }
+static void add_frp(esp_base_remote_config_t *c)
+{
+    c->frp.configured = true;
+    strcpy(c->frp.server_hostname, "frp.example.test");
+    c->frp.server_port = 7000;
+    strcpy(c->frp.token, "test-frp-token");
+    strcpy(c->frp.ca_pem, "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n");
+    strcpy(c->frp.proxy_name, "base-device");
+    c->frp.remote_port = 10200;
+    c->frp.local_port = 8123;
+    c->frp.management_key[0] = 0x02;
+}
 static void save(const esp_base_remote_config_t *config)
 {
     assert(ebase_config_encode(config, stored, &stored_size));
@@ -83,11 +95,11 @@ static void codec_tests(void)
     size_t size = 0;
     assert(ebase_config_encode(&c, bytes, &size));
     assert(size == EBASE_CONFIG_HEADER_BYTES + strlen(c.wifi.ssid) + strlen(c.wifi.password));
-    assert(bytes[4] == 2 && bytes[8] == 0x78 && bytes[9] == 0x56 && bytes[10] == 0x34 && bytes[11] == 0x12);
+    assert(bytes[4] == 3 && bytes[8] == 0x78 && bytes[9] == 0x56 && bytes[10] == 0x34 && bytes[11] == 0x12);
     assert(ebase_config_decode(bytes, size, &read));
     assert(read.revision == c.revision && !strcmp(read.wifi.ssid, c.wifi.ssid) && !read.mqtt.configured);
     for (size_t n = 0; n < size; ++n) assert(!ebase_config_decode(bytes, n, &read));
-    const unsigned invalid_offsets[] = {0, 4, 5, 6, 7, 12, 13, 14, 16, 18, 20};
+    const unsigned invalid_offsets[] = {0, 4, 5, 6, 7, 12, 13, 14, 16, 18, 20, 21, 22, 24, 26, 28, 30, 32};
     for (size_t i = 0; i < sizeof invalid_offsets / sizeof *invalid_offsets; ++i) {
         memcpy(changed, bytes, size); changed[invalid_offsets[i]] = 0xff;
         assert(!ebase_config_decode(changed, size, &read));
@@ -116,7 +128,7 @@ static void codec_tests(void)
            !memcmp(read.mqtt.management_key, c.mqtt.management_key, EBASE_MQTT_KEY_BYTES));
     memcpy(changed, bytes, size); memset(changed + size - EBASE_MQTT_KEY_BYTES, 0, EBASE_MQTT_KEY_BYTES);
     assert(!ebase_config_decode(changed, size, &read) && read.revision == 7);
-    memcpy(changed, bytes, size); changed[21] = 1;
+    memcpy(changed, bytes, size); changed[32] = 1;
     assert(!ebase_config_decode(changed, size, &read));
     c.mqtt.management_key[0] = 0; assert(!ebase_config_valid(&c));
     add_mqtt(&c); c.mqtt.hostname[0] = '-'; assert(!ebase_config_valid(&c));
@@ -125,7 +137,26 @@ static void codec_tests(void)
     add_mqtt(&c); c.mqtt.ca_pem[0] = 0; assert(!ebase_config_valid(&c));
     add_mqtt(&c); c.mqtt.configured = false; assert(!ebase_config_valid(&c));
 
+    c = configured(9); add_frp(&c);
+    assert(ebase_config_valid(&c));
+    assert(ebase_config_encode(&c, bytes, &size) && bytes[5] == 5);
+    assert(ebase_config_decode(bytes, size, &read));
+    assert(read.frp.configured && read.frp.server_port == 7000 &&
+           read.frp.remote_port == 10200 && read.frp.local_port == 8123 &&
+           !strcmp(read.frp.proxy_name, c.frp.proxy_name) &&
+           !memcmp(read.frp.management_key, c.frp.management_key, EBASE_FRP_KEY_BYTES));
+    memcpy(changed, bytes, size); memset(changed + size - EBASE_FRP_KEY_BYTES, 0, EBASE_FRP_KEY_BYTES);
+    assert(!ebase_config_decode(changed, size, &read) && read.revision == 9);
+    c.frp.management_key[0] = 0; assert(!ebase_config_valid(&c));
+    add_frp(&c); c.frp.server_hostname[0] = '-'; assert(!ebase_config_valid(&c));
+    add_frp(&c); c.frp.local_port = 0; assert(!ebase_config_valid(&c));
+    add_frp(&c); c.frp.proxy_name[0] = '/'; assert(!ebase_config_valid(&c));
+    add_frp(&c); c.frp.token[0] = ' '; assert(!ebase_config_valid(&c));
+    add_frp(&c); c.frp.ca_pem[0] = 0; assert(!ebase_config_valid(&c));
+    add_frp(&c); c.frp.configured = false; assert(!ebase_config_valid(&c));
+
     c = configured(8); add_mqtt(&c);
+    add_frp(&c);
     for (unsigned i = 0; i < 253; ++i) c.mqtt.hostname[i] = i == 63 || i == 127 || i == 191 ? '.' : 'a';
     c.mqtt.hostname[253] = 0;
     memset(c.mqtt.username, 'u', 128); c.mqtt.username[128] = 0;
@@ -136,6 +167,14 @@ static void codec_tests(void)
     c.mqtt.ca_pem[4096] = 0;
     memset(c.wifi.ssid, 's', 32); c.wifi.ssid[32] = 0;
     memset(c.wifi.password, 'a', 64); c.wifi.password[64] = 0;
+    for (unsigned i = 0; i < 253; ++i) c.frp.server_hostname[i] = i == 63 || i == 127 || i == 191 ? '.' : 'a';
+    c.frp.server_hostname[253] = 0;
+    memset(c.frp.token, 't', EBASE_FRP_TOKEN_MAX_BYTES); c.frp.token[EBASE_FRP_TOKEN_MAX_BYTES] = 0;
+    memset(c.frp.ca_pem, 'A', EBASE_FRP_CA_MAX_BYTES);
+    memcpy(c.frp.ca_pem, "-----BEGIN CERTIFICATE-----", 27);
+    memcpy(c.frp.ca_pem + EBASE_FRP_CA_MAX_BYTES - 25, "-----END CERTIFICATE-----", 25);
+    c.frp.ca_pem[EBASE_FRP_CA_MAX_BYTES] = 0;
+    memset(c.frp.proxy_name, 'p', 128); c.frp.proxy_name[128] = 0;
     assert(ebase_config_valid(&c));
     assert(ebase_config_encode(&c, bytes, &size) && size == EBASE_CONFIG_MAX_BYTES);
     assert(ebase_config_decode(bytes, size, &read) && ebase_config_valid(&read));
@@ -166,7 +205,7 @@ int main(void)
     candidate = configured(UINT32_MAX); save(&candidate);
     unsigned before = writes;
     assert(esp_base_remote_config_commit_verified(&candidate, UINT32_MAX, &current) == ESP_BASE_CONFIG_EXHAUSTED && writes == before);
-    stored[4] = 1;
+    stored[4] = 2;
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE && current.revision == 99);
     assert(esp_base_remote_config_commit_verified(&candidate, UINT32_MAX, &current) == ESP_ERR_INVALID_STATE && writes == before);
     memset(stored, 0, 112); memcpy(stored, "EBCF", 4); stored[4] = 1; stored_size = 112;
@@ -176,5 +215,5 @@ int main(void)
     stored_size = EBASE_CONFIG_MAX_BYTES + 1; /* Oversized key rejected before reading or writing. */
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE);
     assert(writes == before && handles == 0);
-    puts("  config_store     passed (v2-only; fault injection, not a power-cut test)");
+    puts("  config_store     passed (v3-only; fault injection, not a power-cut test)");
 }

@@ -5,6 +5,7 @@
 #include "esp_base_identity.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_mqtt_owner.h"
+#include "esp_base_frp_owner.h"
 #include "esp_base_wifi.h"
 #include "esp_base_time.h"
 #include "esp_base_ota_policy.h"
@@ -45,11 +46,13 @@ static ebase_command_t command;
 static uint8_t s_fingerprint_bytes[EBASE_CONFIG_MAX_BYTES];
 static bool s_reply_mqtt, s_mqtt_revision_set;
 static uint32_t s_mqtt_revision;
+static bool s_frp_revision_set;
+static uint32_t s_frp_revision;
 static char s_mqtt_result_json[1024], s_mqtt_reported_json[512];
 typedef struct {
     uint64_t uptime;
     uint32_t revision, free_heap, minimum_free_heap, ota_received, ota_total;
-    const char *wifi, *mqtt, *config, *ota;
+    const char *wifi, *mqtt, *frp, *config, *ota;
 } status_snapshot_t;
 typedef struct {
     const char *state, *error;
@@ -64,25 +67,27 @@ static void reported(void)
 {
     const uint64_t now = uptime_ms();
     const bool time_ready = esp_base_time_ready();
+    const esp_base_frp_snapshot_t frp = esp_base_frp_owner_snapshot();
     ESP_LOGI("base_reported",
         "ESP_BASE_REPORTED schema=1 boot_id=%s uptime_ms=%" PRIu64
         " free_heap=%" PRIu32 " min_free_heap=%" PRIu32
         " device_id=%s firmware=%s chip=%s flash=%" PRIu32 " config_generation=%" PRIu32
-        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s frp_state=unsupported ota_received=%" PRIu32 " ota_total=%" PRIu32,
+        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s frp_state=%s frp_attempts=%" PRIu64 " frp_sessions=%" PRIu64 " frp_pongs=%" PRIu64 " frp_active=%" PRIu32 " frp_error=%" PRId32 " ota_received=%" PRIu32 " ota_total=%" PRIu32,
         s_boot_id, now, esp_get_free_heap_size(),
         (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT), s_context.device_id,
         s_context.firmware_version, s_context.chip_model, s_context.flash_size_bytes,
         s_context.config.revision, s_context.reset_reason,
         s_context.config.wifi.configured ? "true" : "false", esp_base_wifi_state(),
-        time_ready ? "true" : "false", esp_base_mqtt_owner_state(),
+        time_ready ? "true" : "false", esp_base_mqtt_owner_state(), frp.state,
+        frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request.image_size_bytes : 0);
     const int size = snprintf(s_mqtt_reported_json, sizeof s_mqtt_reported_json,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
-        "\"wifi_state\":\"%s\",\"time_ready\":%s}",
+        "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\"}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
-        esp_base_wifi_state(), time_ready ? "true" : "false");
+        esp_base_wifi_state(), time_ready ? "true" : "false", frp.state);
     if (size > 0 && (size_t)size < sizeof s_mqtt_reported_json)
         (void)esp_base_mqtt_owner_reported(s_mqtt_reported_json, (size_t)size);
 }
@@ -95,6 +100,7 @@ static status_snapshot_t snapshot(void)
         .ota_received = (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         .ota_total = s_ota_active ? s_ota_request.image_size_bytes : 0,
         .wifi = esp_base_wifi_state(), .mqtt = esp_base_mqtt_owner_state(),
+        .frp = esp_base_frp_owner_snapshot().state,
         .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
         .ota = !eota_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
 }
@@ -112,13 +118,13 @@ static void reply(const char *request_id, const char *state, const char *error, 
                 ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
                 ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
                 ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
-                "\"frp\":\"unsupported\",\"config\":\"%s\",\"ota\":\"%s\"}}}",
+                "\"frp\":\"%s\",\"config\":\"%s\",\"ota\":\"%s\"}}}",
                 s_context.device_id, s_boot_id, request_id && request_id[0] ? "\"" : "null",
                 request_id && request_id[0] ? request_id : "",
                 request_id && request_id[0] ? "\"" : "",
                 state, error ? "\"" : "null", error ? error : "", error ? "\"" : "",
                 status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
-                status->ota_received, status->ota_total, status->wifi, status->mqtt, status->config, status->ota) :
+                status->ota_received, status->ota_total, status->wifi, status->mqtt, status->frp, status->config, status->ota) :
             snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
                 "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
                 "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,\"result\":null}",
@@ -142,9 +148,9 @@ static void reply(const char *request_id, const char *state, const char *error, 
                ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
                ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
                ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
-               "\"frp\":\"unsupported\",\"config\":\"%s\",\"ota\":\"%s\"}}",
+               "\"frp\":\"%s\",\"config\":\"%s\",\"ota\":\"%s\"}}",
                status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
-               status->ota_received, status->ota_total, status->wifi, status->mqtt, status->config, status->ota);
+               status->ota_received, status->ota_total, status->wifi, status->mqtt, status->frp, status->config, status->ota);
     } else printf("null");
     printf("}\n");
     fflush(stdout);
@@ -487,6 +493,15 @@ static void control_task(void *argument)
             }
             esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
                                      handle_mqtt_command, NULL);
+            if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
+                if (esp_base_frp_owner_configure(&s_context.config.frp, s_context.device_id) == ESP_OK) {
+                    s_frp_revision = s_context.config.revision;
+                    s_frp_revision_set = true;
+                }
+            }
+            /* No authenticated loopback listener exists yet. Keep the FRP
+             * client stopped even when the configured network is healthy. */
+            esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(), false);
         }
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader.length && now - last_input >= 2000) {

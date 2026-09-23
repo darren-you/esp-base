@@ -36,3 +36,7 @@ endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND (CONFIG_EMQTT_PLAINTEXT_LAB OR ESP_BASE_MQTT_LAB_INPUTS))
     message(FATAL_ERROR "Normal ESP Base build rejects MQTT lab inputs and plaintext test mode")
 endif()
+if(ESP_BASE_APP STREQUAL "esp_base" AND (NOT CONFIG_MBEDTLS_MD5_C OR NOT CONFIG_LWIP_SO_LINGER OR
+    NOT CONFIG_MBEDTLS_HAVE_TIME_DATE OR CONFIG_LWIP_MAX_SOCKETS LESS 12))
+    message(FATAL_ERROR "ESP Base FRP requires MD5 token auth, SO_LINGER, trusted TLS time and 12 sockets")
+endif()

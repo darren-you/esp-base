@@ -17,7 +17,7 @@ flowchart LR
     app --> usb
 ```
 
-先用普通基座配置 Wi-Fi 并保存同板恢复基线；本应用与普通基座共用 v2-only `remote_config` 读取器，旧 v1 NVS 设备必须先完成受控迁移，不能从实验入口绕过。本应用只读取已提交配置，不提交新的 Wi-Fi 配置、不自动擦 NVS、不驱动 GPIO。身份沿用当前 UUID；已有身份不存在时，身份组件仍按正常初始化合同建立身份，因此刷写前必须核对本轮基线。
+先用普通基座配置 Wi-Fi 并保存同板恢复基线；本应用与普通基座共用 v3-only `remote_config` 读取器，旧 v1/v2 NVS 设备必须先完成受控迁移，不能从实验入口绕过。本应用只读取已提交配置，不提交新的 Wi-Fi 配置、不自动擦 NVS、不驱动 GPIO。身份沿用当前 UUID；已有身份不存在时，身份组件仍按正常初始化合同建立身份，因此刷写前必须核对本轮基线。
 
 将仓库 `tools/mqtt-lab-inputs.example.h` 复制到仓外权限 0700 的目录，文件设 0600，填写本轮隔离 Broker、用户名密码、CA 和 NTP。TLS 必须先收到 SNTP 同步，使用 CA 与主机名验证；认证或证书失败不切换明文。默认构建不允许 TCP；只有明文实验可在独立 sdkconfig 中显式设置 `CONFIG_EMQTT_PLAINTEXT_LAB=y`，并将私有输入设为 `.tls=false`、`.ca_pem=""`；TCP 与非空 CA 的矛盾配置会被拒绝。
 

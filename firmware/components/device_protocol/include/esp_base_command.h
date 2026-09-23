@@ -4,7 +4,7 @@
 #include "esp_base_config.h"
 #include "esp_base_ota_policy.h"
 
-#define EBASE_LINE_LIMIT 8192
+#define EBASE_LINE_LIMIT 9216
 typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT } ebase_command_kind_t;
 typedef struct {
     ebase_command_kind_t kind;
