@@ -27,11 +27,20 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static esp_base_protocol_context_t s_context;
+typedef struct {
+    const char *device_id;
+    const char *firmware_version;
+    const char *chip_model;
+    uint32_t flash_size_bytes;
+    esp_base_remote_config_t config;
+    const char *reset_reason;
+    esp_base_storage_owner_t *storage_owner;
+} protocol_state_t;
+static protocol_state_t s_context;
 static char s_boot_id[EBASE_ID_BYTES];
 static ebase_request_guard_t s_guard;
 static ebase_line_reader_t s_reader;
-static bool s_started, s_config_uncertain, s_trial_active;
+static bool s_started, s_config_loaded, s_config_uncertain, s_trial_active;
 static bool s_ota_active, s_ota_boot_uncertain;
 static esp_base_storage_claim_t s_ota_storage_claim;
 static size_t s_ota_slot;
@@ -599,12 +608,24 @@ static void control_task(void *argument)
     }
 }
 
+esp_err_t esp_base_protocol_load_config(uint32_t *revision)
+{
+    if (!revision) return ESP_ERR_INVALID_ARG;
+    if (s_started) return ESP_ERR_INVALID_STATE;
+    s_config_loaded = false;
+    const esp_err_t error = esp_base_remote_config_load(&s_context.config);
+    if (error != ESP_OK) return error;
+    *revision = s_context.config.revision;
+    s_config_loaded = true;
+    return ESP_OK;
+}
+
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     if (!context || !ebase_is_uuid(context->device_id) || context->storage_owner == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_started) return ESP_ERR_INVALID_STATE;
+    if (s_started || !s_config_loaded) return ESP_ERR_INVALID_STATE;
     esp_err_t error = esp_base_identity_generate_uuid(s_boot_id, sizeof s_boot_id);
     if (error != ESP_OK) return error;
     usb_serial_jtag_vfs_use_nonblocking();
@@ -612,7 +633,12 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     // flag must remain clear so IDF 6.1 prefetches from hardware (there is no ring).
     int flags = fcntl(STDIN_FILENO, F_GETFL);
     if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK) < 0) return ESP_FAIL;
-    s_context = *context;
+    s_context.device_id = context->device_id;
+    s_context.firmware_version = context->firmware_version;
+    s_context.chip_model = context->chip_model;
+    s_context.flash_size_bytes = context->flash_size_bytes;
+    s_context.reset_reason = context->reset_reason;
+    s_context.storage_owner = context->storage_owner;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     error = esp_base_wifi_start(&s_context.config.wifi);
     if (error != ESP_OK) {
