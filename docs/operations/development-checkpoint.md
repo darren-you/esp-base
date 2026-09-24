@@ -1,5 +1,10 @@
 # 开发检查点
 
+2026-09-24 `codex/c3-low-memory` 第二轮 Base 常驻 DRAM 复用：配置指纹规范编码在唯一控制任务中同步借用 NVS `s_load_bytes`；NVS 条件提交借用已结束解析的 `command.config` 作为工作值，返回前擦除。提交与读回两个独立编码缓冲及逐字节比较保持不变，20 秒候选配置、9,216 字节 USB 行、7,618 字节配置 blob 和 32 个去重槽容量也不变。相同七依赖精确锁 `f05c54cb7a1e15361b8a87b1e135ccc01ab3744490c3520de3ba583f05c582e2` 的签名五组件链接图中，`.dram0.bss` 从 `0x1a158` 降至 `0x165d8`，`_heap_start` 前移 **15,232 字节**至 `0x3fca9d60`，相对原始 Base 累计释放 **50,080 字节**初始堆空间。
+
+- Base ASan／UBSan 全套通过，最大配置规范编码、NVS 写前／写后／commit／读回故障和工作区完整擦除均有主机断言；固定 SDK 普通 C3 构建通过，镜像 **961,568 字节**、SHA-256 `5dff4ee274ac12afa1bd1a4fbc3a3056a9f16ad0faa4ce8fccf7ba3da555027f`。仓外临时测试键签名五组件镜像 `0x121000` 字节、SHA-256 `72ca1c080823b67531207abd1a7ce19e5628e53edb99bed6a7186491440ce813`，RSA 签名验证通过。QEMU 在 Base READY 时 free／最大连续块为 **152,124／114,688 字节**；64 KiB guest 存活且完成事件时为 **61,736／40,960 字节**，两轮生命周期完成后恢复。详细生命周期、链接图和日志摘要见 [C3 小内存 Base 复测](c3-low-memory-base-probe.md)。
+- 该切片没有真实 Wi-Fi、TLS、Broker、FRPS 或 OTA 下载；guest 存活时最大连续块仍不足 FRP 单次 65,552 字节 AEAD 申请。签名探针带 QEMU 专用 ADC2 空实现，不可刷实板；48 KiB free 水位通过仅指无联网仿真切片，五能力并发和 4 MiB 包槽几何仍未通过。
+
 2026-09-24 `codex/c3-low-memory` 分支的精确依赖组合：普通 Base 的唯一 Component Manager 清单和全新解析的 `firmware/dependencies.lock` 锁定公开 `esp-mqtt@ccf81df2215cfddd87aff97afdd2e7f17e50fbaa`、`esp-frp@c56a0f32d96c75fd28e2c04146383348d8ce2829`、`esp-ota@3c3f72b823ce856b02f838fef17db1368e6d5448`，锁文件 SHA-256 为 `5825e30f7209c6fa6ddf2956e8d1706e3a081f9434af6bd392ea0d61184d61b5`。可选 Container 适配的清单锁定 `esp-container@60b65d21e4c1bf4935e791214eb5ff7174563242`，其 WAMR 仍为 `a34d721b630213f59fde0b40cebbb980903660e8`；独立探针重新解析后的七依赖锁 SHA-256 为 `f05c54cb7a1e15361b8a87b1e135ccc01ab3744490c3520de3ba583f05c582e2`，不会替换普通 Base 的五依赖锁。IDF/lwIP 固定提交未变。旧生成锁在清单变动后只更新了 manifest hash 而保留旧 Git 提交，因此本次把旧锁与 `managed_components` 移出隔离 checkout，再由清单全新解析，并逐项回读提交。
 
 - `bash firmware/tests/run_host_tests.sh` 的 Base ASan/UBSan 全套通过；固定 SDK 的普通 C3 镜像为 961,408 字节、SHA-256 `242b47ac329e0ca94d35bbc96a8fb06a8a89ab06be0b1b8e81a2a1f580952007`。独立启用 `ESP_BASE_CONTAINER_BINDING_PROBE=ON`、叠加公开 Container C3 sdkconfig defaults 的组件编译通过，镜像为 961,392 字节、SHA-256 `5cb7912dddf9d7fcb03f3852c91ba3f62107f9d89f82dd35df9cdf84eedbbd89`。两者仍使用现有双 `0x1e0000` 应用槽且未刷板。

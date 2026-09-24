@@ -7,6 +7,7 @@
 
 /* Faults exercise our storage caller, not NVS power-loss behavior. */
 static uint8_t stored[EBASE_CONFIG_MAX_BYTES];
+static esp_base_remote_config_t work;
 static size_t stored_size;
 static unsigned writes, commits, handles;
 static int fault;
@@ -86,6 +87,27 @@ static void save(const esp_base_remote_config_t *config)
 {
     assert(ebase_config_encode(config, stored, &stored_size));
     after_write = false;
+}
+
+typedef struct {
+    const uint8_t *expected;
+    size_t size;
+    unsigned calls;
+    bool accept;
+} bytes_check_t;
+
+static bool check_canonical_bytes(const uint8_t *bytes, size_t length, void *context)
+{
+    bytes_check_t *check = context;
+    ++check->calls;
+    assert(length == check->size && !memcmp(bytes, check->expected, length));
+    return check->accept;
+}
+
+static void assert_work_wiped(void)
+{
+    const uint8_t *bytes = (const uint8_t *)&work;
+    for (size_t i = 0; i < sizeof work; ++i) assert(bytes[i] == 0);
 }
 
 static void codec_tests(void)
@@ -178,6 +200,17 @@ static void codec_tests(void)
     assert(ebase_config_valid(&c));
     assert(ebase_config_encode(&c, bytes, &size) && size == EBASE_CONFIG_MAX_BYTES);
     assert(ebase_config_decode(bytes, size, &read) && ebase_config_valid(&read));
+    bytes_check_t check = {.expected = bytes, .size = size, .accept = true};
+    assert(esp_base_remote_config_with_canonical_bytes(&c, check_canonical_bytes, &check));
+    assert(check.calls == 1);
+    check.accept = false;
+    assert(!esp_base_remote_config_with_canonical_bytes(&c, check_canonical_bytes, &check));
+    assert(check.calls == 2);
+    assert(!esp_base_remote_config_with_canonical_bytes(&c, NULL, &check));
+    assert(!esp_base_remote_config_with_canonical_bytes(NULL, check_canonical_bytes, &check));
+    c.wifi.password[0] = 0;
+    assert(!esp_base_remote_config_with_canonical_bytes(&c, check_canonical_bytes, &check));
+    assert(check.calls == 2);
 }
 
 int main(void)
@@ -185,33 +218,35 @@ int main(void)
     codec_tests();
     esp_base_remote_config_t current = configured(42), candidate = configured(0);
     assert(esp_base_remote_config_load(&current) == ESP_OK && current.revision == 0 && !current.wifi.configured);
-    assert(esp_base_remote_config_commit_verified(&candidate, 0, &current) == ESP_OK);
+    assert(esp_base_remote_config_commit_verified(&candidate, 0, &current, &work) == ESP_OK);
     assert(current.revision == 1 && current.wifi.configured && writes == 1 && commits == 1);
-    assert(esp_base_remote_config_commit_verified(&candidate, 0, &current) == ESP_BASE_CONFIG_CONFLICT && writes == 1);
+    assert_work_wiped();
+    assert(esp_base_remote_config_commit_verified(&candidate, 0, &current, &work) == ESP_BASE_CONFIG_CONFLICT && writes == 1);
     assert(esp_base_remote_config_load(&current) == ESP_OK && current.revision == 1);
     for (fault = INIT_ERROR; fault <= READBACK_MISMATCH; ++fault) {
         esp_base_remote_config_t baseline = configured(1);
         save(&baseline);
         candidate = configured(1); current = configured(99);
         unsigned before = writes;
-        esp_err_t result = esp_base_remote_config_commit_verified(&candidate, 1, &current);
+        esp_err_t result = esp_base_remote_config_commit_verified(&candidate, 1, &current, &work);
         if (fault <= OPEN_ERROR) { assert(result == ESP_FAIL && writes == before); }
         else { assert(result == ESP_BASE_CONFIG_UNCERTAIN && writes == before + 1); }
         assert(current.revision == 99 && handles == 0);
+        assert_work_wiped();
         if (fault == WRITE_ERROR_BEFORE) assert(stored[8] == 1);
         if (fault >= WRITE_ERROR_AFTER) assert(stored[8] == 2);
     }
     fault = 0; after_write = false;
     candidate = configured(UINT32_MAX); save(&candidate);
     unsigned before = writes;
-    assert(esp_base_remote_config_commit_verified(&candidate, UINT32_MAX, &current) == ESP_BASE_CONFIG_EXHAUSTED && writes == before);
+    assert(esp_base_remote_config_commit_verified(&candidate, UINT32_MAX, &current, &work) == ESP_BASE_CONFIG_EXHAUSTED && writes == before);
     stored[4] = 2;
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE && current.revision == 99);
-    assert(esp_base_remote_config_commit_verified(&candidate, UINT32_MAX, &current) == ESP_ERR_INVALID_STATE && writes == before);
+    assert(esp_base_remote_config_commit_verified(&candidate, UINT32_MAX, &current, &work) == ESP_ERR_INVALID_STATE && writes == before);
     memset(stored, 0, 112); memcpy(stored, "EBCF", 4); stored[4] = 1; stored_size = 112;
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE && current.revision == 99);
     candidate = configured(0);
-    assert(esp_base_remote_config_commit_verified(&candidate, 0, &current) == ESP_ERR_INVALID_STATE && writes == before);
+    assert(esp_base_remote_config_commit_verified(&candidate, 0, &current, &work) == ESP_ERR_INVALID_STATE && writes == before);
     stored_size = EBASE_CONFIG_MAX_BYTES + 1; /* Oversized key rejected before reading or writing. */
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE);
     assert(writes == before && handles == 0);

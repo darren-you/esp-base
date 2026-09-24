@@ -53,7 +53,6 @@ static size_t s_trial_slot;
 static uint64_t s_trial_deadline;
 static esp_base_remote_config_t s_candidate;
 static ebase_command_t command;
-static uint8_t s_fingerprint_bytes[EBASE_CONFIG_MAX_BYTES];
 static bool s_reply_mqtt, s_mqtt_revision_set;
 static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
@@ -78,6 +77,21 @@ typedef struct {
     status_snapshot_t status;
 } command_outcome_t;
 static command_outcome_t s_outcomes[EBASE_REQUEST_SLOTS];
+
+static bool fingerprint_config_bytes(const uint8_t *bytes, size_t length, void *context)
+{
+    uint8_t *fingerprint = context;
+    size_t hash_size = 0;
+    psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
+    if (psa_hash_setup(&hash, PSA_ALG_SHA_256) != PSA_SUCCESS ||
+        psa_hash_update(&hash, (const uint8_t *)"config.set", 10) != PSA_SUCCESS ||
+        psa_hash_update(&hash, bytes, length) != PSA_SUCCESS ||
+        psa_hash_finish(&hash, fingerprint, 32, &hash_size) != PSA_SUCCESS || hash_size != 32) {
+        (void)psa_hash_abort(&hash);
+        return false;
+    }
+    return true;
+}
 
 static uint64_t uptime_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
 
@@ -295,7 +309,8 @@ static void poll_configuration(uint64_t now)
     if (ready && now < s_trial_deadline) {
         /* The control task is the sole reader/writer of s_context.config after
          * startup. Network owners copy their config before starting workers. */
-        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision, &s_context.config);
+        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision,
+                                                                  &s_context.config, &command.config);
         s_trial_active = false;
         memset(&s_candidate, 0, sizeof s_candidate);
         if (error == ESP_OK) {
@@ -418,19 +433,10 @@ static void handle_line(const char *line, size_t length, void *context)
         return;
     }
     if (command.kind == EBASE_CONFIG_SET) {
-        size_t bytes_size = 0, hash_size = 0;
-        psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
-        if (!ebase_config_encode(&command.config, s_fingerprint_bytes, &bytes_size) ||
-            psa_hash_setup(&hash, PSA_ALG_SHA_256) != PSA_SUCCESS ||
-            psa_hash_update(&hash, (const uint8_t *)"config.set", 10) != PSA_SUCCESS ||
-            psa_hash_update(&hash, s_fingerprint_bytes, bytes_size) != PSA_SUCCESS ||
-            psa_hash_finish(&hash, command.request.fingerprint,
-                            sizeof command.request.fingerprint, &hash_size) != PSA_SUCCESS || hash_size != 32) {
-            (void)psa_hash_abort(&hash);
-            memset(s_fingerprint_bytes, 0, sizeof s_fingerprint_bytes);
+        if (!esp_base_remote_config_with_canonical_bytes(&command.config,
+                fingerprint_config_bytes, command.request.fingerprint)) {
             reply(command.request.request_id, "failed", "resource_failure", NULL); return;
         }
-        memset(s_fingerprint_bytes, 0, sizeof s_fingerprint_bytes);
     }
     if (command.kind == EBASE_OTA_START) {
         uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + EOTA_URL_BYTES + 1 + 32 + 4];
