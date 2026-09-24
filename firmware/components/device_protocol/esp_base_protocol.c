@@ -43,7 +43,6 @@ static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
 static uint64_t s_trial_deadline;
 static esp_base_remote_config_t s_candidate;
-static esp_base_remote_config_t s_committed;
 static ebase_command_t command;
 static uint8_t s_fingerprint_bytes[EBASE_CONFIG_MAX_BYTES];
 static bool s_reply_mqtt, s_mqtt_revision_set;
@@ -285,18 +284,18 @@ static void poll_configuration(uint64_t now)
     const bool ready = s_candidate.wifi.configured ? esp_base_wifi_ready() :
         !strcmp(esp_base_wifi_state(), "unconfigured");
     if (ready && now < s_trial_deadline) {
-        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision, &s_committed);
+        /* The control task is the sole reader/writer of s_context.config after
+         * startup. Network owners copy their config before starting workers. */
+        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision, &s_context.config);
         s_trial_active = false;
         memset(&s_candidate, 0, sizeof s_candidate);
         if (error == ESP_OK) {
-            s_context.config = s_committed;
             save_outcome(s_trial_slot, "succeeded", NULL, true);
         } else if (error == ESP_BASE_CONFIG_UNCERTAIN) {
             s_config_uncertain = true;
             /* A write error may follow a durable commit. Reload before selecting
              * connectivity, never claim the old configuration was restored. */
-            if (esp_base_remote_config_load(&s_committed) == ESP_OK) {
-                s_context.config = s_committed;
+            if (esp_base_remote_config_load(&s_context.config) == ESP_OK) {
                 restore_committed(now);
             } else {
                 ebase_wifi_config_t disabled = {0};

@@ -154,6 +154,7 @@ esp_err_t esp_base_safety_start(esp_base_safety_t *safety)
 esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
 {
     *config = (esp_base_remote_config_t){0};
+    if (config_result == ESP_OK) config->revision = 7;
     return config_result;
 }
 
@@ -172,6 +173,7 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     assert(context != NULL);
     assert(context->storage_owner != NULL);
+    assert(context->config.revision == 7);
     storage_owner = context->storage_owner;
     esp_base_storage_claim_t competing = {0};
     assert(!esp_base_storage_claim(storage_owner, &competing));

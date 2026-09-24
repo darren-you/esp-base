@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-24 `codex/c3-low-memory` 分支只优化 Base 配置缓冲的长期占用；同一五组件 QEMU 切片的 map、READY 与 64 KiB guest 前后数值见 [C3 小内存 Base 复测](c3-low-memory-base-probe.md)。该切片仍未证明 FRP、MQTT、OTA、Container 在真实 C3 上并发或通过内存水位。
+
 2026-09-24 Base 当前公开依赖组合复验：普通固件的唯一 Component Manager 声明及重新生成的 `firmware/dependencies.lock` 精确解析 `esp-mqtt@5bff093646d8db810d64c50c39edc004e78bf40c`、`esp-frp@3a40a2c06580232bbe23cb981eeb21c4d14d33c1`、`esp-ota@3c3f72b823ce856b02f838fef17db1368e6d5448`，锁文件 SHA-256 为 `c170788e295f52321a132e6f5b42fdea389c180a5643528a745e6aad22342fc8`。SDK 使用公开 `esp-idf@578cf89c343e388db43ba1f4ddcd602fedcb763c` 与 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`。以下较早条目保留各自执行时的依赖与镜像事实，不代表当前锁版本。
 
 - `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 通过。固定 SDK 的普通 ESP32-C3 构建通过，镜像 961056 字节、SHA-256 `4c23641cd7b16e95f3e055a4bfbb72585462ce7bc2a02354649a2e1d6175cc48`；仓外临时 RSA-3072 测试键的签名 ESP32-C3 构建通过，镜像 1118208 字节、SHA-256 `2e776f18d4e5c6d90e4aadb1d8f1232dd80c4895d860f3e1980855eea703789b`，`espsecure verify-signature --version 2 --keyfile` 通过。两镜像均小于 `0x1e0000` 应用槽，测试键未入库。

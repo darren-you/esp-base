@@ -19,7 +19,6 @@
 #include "esp_base_time.h"
 
 static const char *TAG = "esp_base";
-static esp_base_remote_config_t s_config;
 static esp_base_protocol_context_t s_protocol;
 static esp_base_storage_owner_t s_storage_owner;
 static esp_base_storage_claim_t s_boot_storage_claim;
@@ -115,7 +114,7 @@ void app_main(void)
         return;
     }
 
-    const esp_err_t config_status = esp_base_remote_config_load(&s_config);
+    const esp_err_t config_status = esp_base_remote_config_load(&s_protocol.config);
     if (config_status != ESP_OK) {
         ESP_LOGE(TAG, "Configuration unavailable (%s); storage preserved, initialization stopped", esp_err_to_name(config_status));
         stop_after_local_failure(&ota, pending_boot, "config", config_status);
@@ -135,13 +134,12 @@ void app_main(void)
              identity.flash_size_bytes,
              ota.running_partition,
              safety.reset_reason,
-             s_config.revision);
+             s_protocol.config.revision);
 
     s_protocol.device_id = identity.device_id;
     s_protocol.firmware_version = app->version;
     s_protocol.chip_model = identity.model;
     s_protocol.flash_size_bytes = identity.flash_size_bytes;
-    s_protocol.config = s_config;
     s_protocol.reset_reason = safety.reset_reason;
     s_protocol.storage_owner = &s_storage_owner;
     const esp_err_t protocol_status = esp_base_protocol_start(&s_protocol);

@@ -10,9 +10,11 @@
 
 /* The config can approach 5 KiB. These buffers are owned by the startup and
  * subsequently single USB control task; never place them on its 6 KiB stack. */
+/* Loading and commit verification run under the same Base control owner.
+ * A commit reuses the load buffer only after its readback load has returned
+ * and wiped it; the encoded candidate stays in the separate commit buffer. */
 static uint8_t s_load_bytes[EBASE_CONFIG_MAX_BYTES];
 static uint8_t s_commit_bytes[EBASE_CONFIG_MAX_BYTES];
-static uint8_t s_readback_bytes[EBASE_CONFIG_MAX_BYTES];
 static esp_base_remote_config_t s_work;
 
 static void wipe(void *memory, size_t length)
@@ -74,14 +76,14 @@ esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t 
     nvs_close(handle);
     if (result != ESP_OK) { result = ESP_BASE_CONFIG_UNCERTAIN; goto done; }
     if (esp_base_remote_config_load(&s_work) != ESP_OK ||
-        !ebase_config_encode(&s_work, s_readback_bytes, &readback_size) ||
-        bytes_size != readback_size || memcmp(s_commit_bytes, s_readback_bytes, bytes_size)) {
+        !ebase_config_encode(&s_work, s_load_bytes, &readback_size) ||
+        bytes_size != readback_size || memcmp(s_commit_bytes, s_load_bytes, bytes_size)) {
         result = ESP_BASE_CONFIG_UNCERTAIN; goto done;
     }
     *committed = s_work;
 done:
     wipe(&s_work, sizeof s_work);
     wipe(s_commit_bytes, sizeof s_commit_bytes);
-    wipe(s_readback_bytes, sizeof s_readback_bytes);
+    wipe(s_load_bytes, sizeof s_load_bytes);
     return result;
 }
