@@ -284,6 +284,14 @@ bool ebase_config_encode(const esp_base_remote_config_t *config,
     assert(false && "config.set is outside this test");
     return false;
 }
+bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t *config,
+                                                 esp_base_config_bytes_consumer_t consume,
+                                                 void *context)
+{
+    (void)config; (void)consume; (void)context;
+    assert(false && "config.set is outside this test");
+    return false;
+}
 esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
     esp_base_ota_receipt_view_t *view)
