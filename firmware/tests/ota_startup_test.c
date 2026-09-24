@@ -24,7 +24,7 @@ static esp_err_t protocol_result, mark_result, rollback_result, time_result;
 static uint64_t now_ms;
 static uint64_t last_control_progress_ms;
 static uint32_t control_progress_count;
-static unsigned nvs_calls, protocol_calls, mark_calls, rollback_calls, time_calls, ready_logs, recovery_logs;
+static unsigned nvs_calls, config_load_calls, protocol_calls, mark_calls, rollback_calls, time_calls, ready_logs, recovery_logs;
 static bool protocol_started, control_never_ready, control_stalls;
 static bool control_exits_late, control_pauses_cross_window;
 static bool ota_gate_pending;
@@ -40,7 +40,7 @@ static void reset_case(void)
     protocol_result = mark_result = rollback_result = time_result = ESP_OK;
     now_ms = last_control_progress_ms = 0;
     control_progress_count = 0;
-    nvs_calls = protocol_calls = mark_calls = rollback_calls = time_calls = ready_logs = recovery_logs = 0;
+    nvs_calls = config_load_calls = protocol_calls = mark_calls = rollback_calls = time_calls = ready_logs = recovery_logs = 0;
     protocol_started = control_never_ready = control_stalls = ota_gate_pending = false;
     control_exits_late = control_pauses_cross_window = false;
     ota_gate_clears = 0;
@@ -158,6 +158,15 @@ esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
     return config_result;
 }
 
+esp_err_t esp_base_protocol_load_config(uint32_t *revision)
+{
+    ++config_load_calls;
+    esp_base_remote_config_t config;
+    const esp_err_t result = esp_base_remote_config_load(&config);
+    if (result == ESP_OK) *revision = config.revision;
+    return result;
+}
+
 const esp_app_desc_t *esp_app_get_description(void)
 {
     static const esp_app_desc_t app = {.version = "test"};
@@ -173,7 +182,7 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     assert(context != NULL);
     assert(context->storage_owner != NULL);
-    assert(context->config.revision == 7);
+    assert(config_load_calls == 1 && config_result == ESP_OK);
     storage_owner = context->storage_owner;
     esp_base_storage_claim_t competing = {0};
     assert(!esp_base_storage_claim(storage_owner, &competing));
@@ -242,7 +251,7 @@ int main(void)
 
     reset_case();
     config_result = ESP_FAIL;
-    assert(rebooted() && rollback_calls == 1 && protocol_calls == 0);
+    assert(rebooted() && rollback_calls == 1 && config_load_calls == 1 && protocol_calls == 0);
 
     reset_case();
     protocol_result = ESP_FAIL;

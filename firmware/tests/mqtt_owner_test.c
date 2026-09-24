@@ -214,9 +214,15 @@ int main(void)
     esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
     assert(esp_base_mqtt_owner_ready());
 
+    /* A complete MESSAGE is consumed before the next configure phase reuses
+     * the same static scratch storage for the copied client config. */
+    push_command(captured.subscriptions[0].topic, false, false);
+    esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
+    assert(commands == 2);
     assert(esp_base_mqtt_owner_configure(&absent, device_id, boot_id) == ESP_OK);
     assert(destroys == 1 && !esp_base_mqtt_owner_ready() && !strcmp(esp_base_mqtt_owner_state(), "unconfigured"));
     assert(esp_base_mqtt_owner_configure(&mqtt, device_id, boot_id) == ESP_OK);
+    assert(!strcmp(captured.ca_pem, mqtt.ca_pem));
     esp_base_mqtt_owner_poll(5010, true, true, received, &runtime);
     fail_publish = true;
     push(EMQTT_EVENT_READY);
@@ -236,7 +242,7 @@ int main(void)
     events[event_tail - 1].message_id = expired_result_id;
     push_command(captured.subscriptions[0].topic, false, false);
     esp_base_mqtt_owner_poll(10013, true, true, received, &runtime);
-    assert(stops == 5 && commands == 1 && !esp_base_mqtt_owner_ready());
+    assert(stops == 5 && commands == 2 && !esp_base_mqtt_owner_ready());
     assert(!esp_base_mqtt_owner_result("{}", 2));
     esp_base_mqtt_owner_poll(15012, true, true, received, &runtime);
     assert(starts == 5);
@@ -253,7 +259,7 @@ int main(void)
     assert(destroy_attempts == 2 && destroys == 1 && creates == 2);
     push_command(captured.subscriptions[0].topic, false, false);
     esp_base_mqtt_owner_poll(15015, true, true, received, &runtime);
-    assert(commands == 1 && !esp_base_mqtt_owner_result("{}", 2));
+    assert(commands == 2 && !esp_base_mqtt_owner_result("{}", 2));
     assert(!strcmp(esp_base_mqtt_owner_state(), "failed") && !esp_base_mqtt_owner_ready());
     puts("mqtt_owner passed (TLS/UUID, SUBACK gate, auth, retain, reconnect, outbox expiry, fail closed)");
 }

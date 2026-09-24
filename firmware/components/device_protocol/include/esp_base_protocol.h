@@ -12,11 +12,12 @@ typedef struct {
     const char *firmware_version;
     const char *chip_model;
     uint32_t flash_size_bytes;
-    esp_base_remote_config_t config;
     const char *reset_reason;
     esp_base_storage_owner_t *storage_owner;
 } esp_base_protocol_context_t;
 
+/* Load directly into the protocol's long-lived config before the control task starts. */
+esp_err_t esp_base_protocol_load_config(uint32_t *revision);
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context);
 /* True only after the control loop has completed a pass recently. */
 bool esp_base_protocol_control_healthy(void);

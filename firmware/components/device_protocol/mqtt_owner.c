@@ -6,8 +6,12 @@
 #include <string.h>
 
 static emqtt_runtime_t *s_runtime;
-static emqtt_event_t s_event;
-static emqtt_config_t s_emqtt_config;
+/* The single control-task owner finishes configure before polling events.
+ * emqtt_create copies the config; neither phase retains this scratch buffer. */
+static union {
+    emqtt_event_t event;
+    emqtt_config_t config;
+} s_work;
 static char s_topics[4][EBASE_MQTT_TOPIC_BYTES];
 static char s_device_id[37];
 static char s_online[192];
@@ -39,7 +43,7 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     }
     s_started = s_failed = s_configured = false;
     s_retry_after_ms = 0;
-    wipe(&s_emqtt_config, sizeof s_emqtt_config);
+    wipe(&s_work.config, sizeof s_work.config);
     wipe(s_management_key, sizeof s_management_key);
     memset(s_device_id, 0, sizeof s_device_id);
     if (!config->configured) return ESP_OK;
@@ -48,37 +52,37 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
             s_failed = true; return ESP_ERR_INVALID_ARG;
         }
     }
-    const int offline_size = snprintf((char *)s_emqtt_config.will_payload,
-        sizeof s_emqtt_config.will_payload,
+    const int offline_size = snprintf((char *)s_work.config.will_payload,
+        sizeof s_work.config.will_payload,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\",\"state\":\"offline\"}",
         device_id, boot_id);
     const int online_size = snprintf(s_online, sizeof s_online,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\",\"state\":\"online\"}",
         device_id, boot_id);
-    if (offline_size <= 0 || (size_t)offline_size >= sizeof s_emqtt_config.will_payload ||
+    if (offline_size <= 0 || (size_t)offline_size >= sizeof s_work.config.will_payload ||
         online_size <= 0 || (size_t)online_size >= sizeof s_online) {
         s_failed = true; return ESP_ERR_INVALID_ARG;
     }
-    memcpy(s_emqtt_config.hostname, config->hostname, sizeof config->hostname);
-    s_emqtt_config.port = config->port;
-    s_emqtt_config.tls = true;
-    memcpy(s_emqtt_config.client_id, device_id, strlen(device_id) + 1);
-    memcpy(s_emqtt_config.username, config->username, sizeof config->username);
-    memcpy(s_emqtt_config.password, config->password, sizeof config->password);
-    memcpy(s_emqtt_config.ca_pem, config->ca_pem, sizeof config->ca_pem);
-    memcpy(s_emqtt_config.will_topic, s_topics[EBASE_MQTT_STATUS],
+    memcpy(s_work.config.hostname, config->hostname, sizeof config->hostname);
+    s_work.config.port = config->port;
+    s_work.config.tls = true;
+    memcpy(s_work.config.client_id, device_id, strlen(device_id) + 1);
+    memcpy(s_work.config.username, config->username, sizeof config->username);
+    memcpy(s_work.config.password, config->password, sizeof config->password);
+    memcpy(s_work.config.ca_pem, config->ca_pem, sizeof config->ca_pem);
+    memcpy(s_work.config.will_topic, s_topics[EBASE_MQTT_STATUS],
            strlen(s_topics[EBASE_MQTT_STATUS]) + 1);
-    s_emqtt_config.will_length = (size_t)offline_size;
-    s_emqtt_config.will_qos = 1;
-    s_emqtt_config.will_retain = true;
-    s_emqtt_config.subscription_count = 1;
-    memcpy(s_emqtt_config.subscriptions[0].topic, s_topics[EBASE_MQTT_COMMAND],
+    s_work.config.will_length = (size_t)offline_size;
+    s_work.config.will_qos = 1;
+    s_work.config.will_retain = true;
+    s_work.config.subscription_count = 1;
+    memcpy(s_work.config.subscriptions[0].topic, s_topics[EBASE_MQTT_COMMAND],
            strlen(s_topics[EBASE_MQTT_COMMAND]) + 1);
-    s_emqtt_config.subscriptions[0].qos = 1;
+    s_work.config.subscriptions[0].qos = 1;
     memcpy(s_management_key, config->management_key, sizeof s_management_key);
     memcpy(s_device_id, device_id, strlen(device_id) + 1);
-    const esp_err_t result = emqtt_create(&s_emqtt_config, &s_runtime);
-    wipe(&s_emqtt_config, sizeof s_emqtt_config);
+    const esp_err_t result = emqtt_create(&s_work.config, &s_runtime);
+    wipe(&s_work.config, sizeof s_work.config);
     if (result != ESP_OK) {
         wipe(s_management_key, sizeof s_management_key);
         s_failed = true;
@@ -109,8 +113,8 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
         }
         s_started = true;
     }
-    for (unsigned i = 0; i < 8 && emqtt_poll(s_runtime, &s_event); ++i) {
-        switch (s_event.kind) {
+    for (unsigned i = 0; i < 8 && emqtt_poll(s_runtime, &s_work.event); ++i) {
+        switch (s_work.event.kind) {
         case EMQTT_EVENT_READY: {
             int message_id = -1;
             const esp_err_t sent = emqtt_enqueue(s_runtime, s_topics[EBASE_MQTT_STATUS],
@@ -144,8 +148,8 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             if (s_ready && handler) {
                 ebase_mqtt_request_view_t verified;
                 if (ebase_mqtt_verified_request(s_management_key, s_device_id,
-                        s_event.message.topic, s_event.message.qos, s_event.message.retain,
-                        s_event.message.payload, s_event.message.length, &verified))
+                        s_work.event.message.topic, s_work.event.message.qos, s_work.event.message.retain,
+                        s_work.event.message.payload, s_work.event.message.length, &verified))
                     handler(verified.request, verified.request_length, context);
             }
             break;
