@@ -1,6 +1,6 @@
 # ESP32-C3 小内存 Base 常驻 DRAM 复测
 
-本记录对应独立 `codex/c3-low-memory` 分支，以 `esp-base@31f5ebcc0bbc756fe5e78cb7c53f9042832ce286` 为起点。固定 SDK 为公开 `esp-idf@578cf89c343e388db43ba1f4ddcd602fedcb763c` 和 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`。本次收敛 Base 配置及 MQTT owner 的静态缓冲，不修改配置 schema、NVS 事务、分区、TLS、FRP、MQTT 或 OTA 协议，也不刷写设备。
+本记录对应独立 `codex/c3-low-memory` 分支的 Base 静态内存改动，以 `esp-base@31f5ebcc0bbc756fe5e78cb7c53f9042832ce286` 为起点。固定 SDK 为公开 `esp-idf@578cf89c343e388db43ba1f4ddcd602fedcb763c` 和 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`。本次收敛 Base 配置及 MQTT owner 的静态缓冲，不修改配置 schema、NVS 事务、分区、TLS、FRP、MQTT 或 OTA 协议，也不刷写设备。下表先保留**升级 MQTT、FRP 和可选 Container 精确锁之前**的快照；文末记录新锁的签名 QEMU 复测，两轮均不含真实联网会话。
 
 ## 消除的长期占用
 
@@ -57,3 +57,11 @@ FRP 在 `c5fbe40` 的 32 位对象账本给出会话、Yamux、AEAD、client、w
 - `bash firmware/tests/run_host_tests.sh` 的 ASan／UBSan 全套通过；其中 `config_store` 覆盖条件提交与不确定写入，`ota_startup` 覆盖配置加载失败后的 pending OTA 回滚行为，`mqtt_owner` 覆盖完整 MESSAGE 消费后立即重配置、配置副本与 stop 失败保守拒绝。
 - 固定 SDK 的普通 ESP32-C3 构建通过，镜像 `0xeaa40` 字节、SHA-256 `2d3b182d84b65c2c24e6b864fed478619e07833a7c4fa42fecbe9af1d47d53f2`；仓外复制的测试键签名五组件 QEMU 镜像 `0x121000` 字节、SHA-256 `d3495ddde08fa4395e90b30045369699d159588692f56d9fdaf75e7e8c7341b7`，启动、Base READY 和两次 64 KiB guest 生命周期通过。QEMU 是无真实射频、Broker、FRPS 或 HTTPS 的容量切片。
 - 此分支不改变 4 MiB 分区；两应用槽与业务包槽的正式几何、真实网络峰值、FRP 与 Container 互斥调度、MQTT／OTA 同板运行和实板回滚仍待完整裁决与验证。`_heap_start` 和 QEMU 数值不能替代设备验收。
+
+## 新版精确锁的签名 QEMU 复测
+
+从本分支源码另建仓外探针，只在其副本添加静态链接引用、64 KiB guest 生命周期和 QEMU 不支持的 ADC2 校准空实现。全新解析的七依赖锁 SHA-256 为 `f05c54cb7a1e15361b8a87b1e135ccc01ab3744490c3520de3ba583f05c582e2`：MQTT `ccf81df2215cfddd87aff97afdd2e7f17e50fbaa`、FRP `c56a0f32d96c75fd28e2c04146383348d8ce2829`、OTA `3c3f72b823ce856b02f838fef17db1368e6d5448`、Container `60b65d21e4c1bf4935e791214eb5ff7174563242`，WAMR `a34d721b630213f59fde0b40cebbb980903660e8`，以及既定 cJSON/IDF。`esp_base.map` 确认 `efrp_tls_step`、`esp_mqtt_client_start`、`eota_preflight`、`econtainer_runtime_open`、`wasm_interp_call_wasm` 均进入镜像。
+
+固定 SDK 构建的测试键签名镜像为 **`0x121000` 字节**，SHA-256 `26b153a46d484ba5a0d3683aabdfd7a8b56a5fb35c1255c8f369726846b6c295`；`espsecure verify-signature --version 2 --keyfile` 核对第 0 个 RSA 签名块。`idf.py qemu --qemu-extra-args=-no-reboot` 从合并的 4 MiB 仿真 Flash 启动；日志 SHA-256 为 `4a0752fc7c28cd2c83f87c56c3877c50b98223e8cbf80bd2e67bc60cc82b5373`，观察 28 秒后由宿主终止仿真。两次 guest 都输出 `open=0 init=0 event=0 stop=0 guest=3`，第二次在 `ESP_BASE_READY` 后运行。新锁观测的 Base READY free／最大连续块为 **136,892／114,688 字节**，guest 存活并完成事件时为 **46,504／34,816 字节**，关闭并回收线程后恢复为 **136,892／114,688 字节**，与上表旧锁静态路径数值相同。
+
+MQTT C3 改动只在创建会话后缩小运行实例，QEMU 无凭据、无 Broker 连接，故不会出现其 4,360 字节常态节省；三槽满时还有第四条在途的额外申请。FRP、MQTT、OTA 在探针中只强制链接，没有建立会话或下载。guest 存活的最大连续块 **34,816 字节**仍不足以申请 FRP 单次 **65,552 字节** AEAD 接收区；而 QEMU 没有真实射频、TLS 或 Flash 包槽负载。这份复测确认新锁可签名链接并在仿真中执行单页 guest，不能证明五能力并发或实板容量；ADC2 空实现使该镜像绝不可用于物理板。

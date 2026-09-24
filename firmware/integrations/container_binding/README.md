@@ -19,4 +19,4 @@ Container 回调已开始却返回 `UNCERTAIN`，或回调前后固件集合不�
 
 Base 在启动检查直到 pending 确认/失败期间持有 owner。`ota.start` 在登记收据前取得 claim，跨控制任务与下载 worker 保持到准备及选择目标槽结束；成功选择后持有到设备重启，明确失败且收据已确认记录后才释放，不明结果保留 claim 阻止后续操作。可选适配使用同一 owner，但当前应用没有产品调用方，Container 的包记录/Flash 写入尚未通过此入口装配；跨仓联合 OTA、实板回滚与包恢复仍未验收。
 
-Host `bash firmware/tests/run_host_tests.sh` 使用假 Container 类型和结果测试映射、busy、歧义及前后快照变化。固定 SDK 的可选 C3 组件编译需从隔离 checkout 执行，在常规 Base defaults 后附加 `esp-container/examples/c3-runtime/sdkconfig.defaults`，并传 `-DESP_BASE_CONTAINER_BINDING_PROBE=ON`。这个开关只加入组件以检查精确公开 `esp-container@00c788e05d63df5279c3ca0383a778513b973601` 与 WAMR 的编译；主应用仍不引用包 API。Component Manager 为该探针改写的 `firmware/dependencies.lock` 是隔离构建产物，常规 Base 锁文件保留原四项依赖。构建不写设备，也不证明包分区、RAM 峰值或运行闭环。
+Host `bash firmware/tests/run_host_tests.sh` 使用假 Container 类型和结果测试映射、busy、歧义及前后快照变化。固定 SDK 的可选 C3 组件编译需从隔离 checkout 执行，在常规 Base defaults 后附加 `esp-container/examples/c3-runtime/sdkconfig.defaults`，并传 `-DESP_BASE_CONTAINER_BINDING_PROBE=ON`。这个开关只加入组件以检查精确公开 `esp-container@60b65d21e4c1bf4935e791214eb5ff7174563242` 与 WAMR 的编译；主应用仍不引用包 API。Component Manager 为该探针改写的 `firmware/dependencies.lock` 是隔离构建产物，常规 Base 锁文件保留原四项直接依赖。构建不写设备，也不证明包分区、RAM 峰值或运行闭环。

@@ -1,6 +1,6 @@
 dependencies:
   esp_frp:
-    component_hash: 857f31c5f545680cf5ecab5674a173d7567d0832fd3dd1ac33a15e0e60d067fb
+    component_hash: a38919102650c995f1e07a8535204e26e23ec7c2cbebed9b9b843d66f1736c9a
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -10,7 +10,7 @@ dependencies:
       git: https://github.com/darren-you/esp-frp.git
       path: .
       type: git
-    version: 3a40a2c06580232bbe23cb981eeb21c4d14d33c1
+    version: c56a0f32d96c75fd28e2c04146383348d8ce2829
   esp_ota:
     component_hash: 1d98f08eeb6d3d47a3af126ac7f1e5024d1db6afbd56b2d3eb6662787fd3d6be
     dependencies:
@@ -36,7 +36,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: 0b447d99bd2544e07deff7bfbf5d31b819e8033034840a7f4e7382dd468ac034
+    component_hash: 1ed67c3f6acdd54b2cece62e9bbf79503b7243a4e8f69d34cb865a29a0045d3b
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -44,12 +44,12 @@ dependencies:
       git: https://github.com/darren-you/esp-mqtt.git
       path: .
       type: git
-    version: 5bff093646d8db810d64c50c39edc004e78bf40c
+    version: ccf81df2215cfddd87aff97afdd2e7f17e50fbaa
 direct_dependencies:
 - esp_frp
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: 4ef1a18be5821ed07fc450543ef87f887e32d5e7721893ba10545acaecaffdf6
+manifest_hash: d60e2258dd939ae201bc4c15db2f74a10e9c2ff07338f609a9776d78f0fe6c96
 target: esp32c3
 version: 3.0.0
