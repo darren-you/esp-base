@@ -23,7 +23,7 @@
 
 ## SDK fork 升级复验
 
-同日从公开 `esp-base@a0eabdfdafab97a68c6dcbfb63e305801023922b` 的独立 clone 将构建源锁到公开 `darren-you/esp-idf@855937cf9dcee13ee9c423fb0319238cdc8d53fd`、`esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`，MQTT 精确依赖升级到 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。旧 `dependencies.lock` 仍指向 `36c23dcdc44dd0c3df863b2ae635f8bc929ed860` 时，Component Manager 会保留旧源码，且其 SDK 守卫正确拒绝新 IDF；重新从 manifest 解析后得到本次提交的单一锁文件。
+同日从公开 `esp-base@a0eabdfdafab97a68c6dcbfb63e305801023922b` 的独立 clone 将构建源锁到公开 `esp-space/esp-idf@855937cf9dcee13ee9c423fb0319238cdc8d53fd`、`esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`，MQTT 精确依赖升级到 `esp-mqtt@9cac455b0184420353ff0283df3f100abaac3e6b`。旧 `dependencies.lock` 仍指向 `36c23dcdc44dd0c3df863b2ae635f8bc929ed860` 时，Component Manager 会保留旧源码，且其 SDK 守卫正确拒绝新 IDF；重新从 manifest 解析后得到本次提交的单一锁文件。
 
 | 本机检查 | 结果 |
 | --- | --- |

@@ -27,11 +27,11 @@ flowchart LR
 ```bash
 ESP_BASE_IDF=/private/path/esp-base-idf
 git clone --recurse-submodules --branch codex/fix-http-init-transport-oom \
-  https://github.com/darren-you/esp-idf.git "$ESP_BASE_IDF"
+  https://github.com/esp-space/esp-idf.git "$ESP_BASE_IDF"
 git -C "$ESP_BASE_IDF" checkout --detach 578cf89c343e388db43ba1f4ddcd602fedcb763c
 git -C "$ESP_BASE_IDF" submodule update --init --recursive
 git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
-  https://github.com/darren-you/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
+  https://github.com/esp-space/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
 git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
 bash "$ESP_BASE_IDF/install.sh" esp32c3
 source "$ESP_BASE_IDF/export.sh"

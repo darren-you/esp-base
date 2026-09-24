@@ -7,7 +7,7 @@ dependencies:
     - name: espressif/cjson
       version: ==1.7.19~2
     source:
-      git: https://github.com/darren-you/esp-frp.git
+      git: https://github.com/esp-space/esp-frp.git
       path: .
       type: git
     version: 3a40a2c06580232bbe23cb981eeb21c4d14d33c1
@@ -17,7 +17,7 @@ dependencies:
     - name: idf
       version: ==6.1.0
     source:
-      git: https://github.com/darren-you/esp-ota.git
+      git: https://github.com/esp-space/esp-ota.git
       path: components/esp_ota
       type: git
     version: 3c3f72b823ce856b02f838fef17db1368e6d5448
@@ -41,7 +41,7 @@ dependencies:
     - name: idf
       version: ==6.1.0
     source:
-      git: https://github.com/darren-you/esp-mqtt.git
+      git: https://github.com/esp-space/esp-mqtt.git
       path: .
       type: git
     version: 5bff093646d8db810d64c50c39edc004e78bf40c
