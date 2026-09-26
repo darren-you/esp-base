@@ -43,7 +43,7 @@ flowchart LR
     lab --> build
 ```
 
-从仓库根执行 `idf.py -C firmware build`，默认工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。`sdkconfig.defaults` 只包含共同选项，C3 的原生 USB 与现行分区表在 `sdkconfig.defaults.esp32c3`，ESP32 的 UART0 入口在 `sdkconfig.defaults.esp32`。现行 C3 保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。`-DIDF_TARGET=esp32` 目前明确拒绝构建：新分区表、OTA policy 与签名启动链尚未确定，现存 ESP-AT 分区及 C3 分区均不能作为目标。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
+从仓库根执行 `idf.py -C firmware build`，默认工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。`sdkconfig.defaults` 只包含共同选项，C3 的原生 USB、现行分区表、纯 STA 与 TLS 客户端配置在 `sdkconfig.defaults.esp32c3`；FRP status 是本机明文 HTTP，不需要 TLS server。ESP32 的 UART0 入口在 `sdkconfig.defaults.esp32`。现行 C3 保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。`-DIDF_TARGET=esp32` 目前明确拒绝构建：新分区表、OTA policy 与签名启动链尚未确定，现存 ESP-AT 分区及 C3 分区均不能作为目标。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
 
 [嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@9d6d95e779f4f5ff387a6d9b54015bf4e43565f2`，`esp_ota` 唯一来源是公开 `esp-ota@5da4a0dfbbe97723286e1a9b050e7029cff6e718`，`esp_frp` 唯一来源是公开 `esp-frp@533e29467b24d01157ff3b5229e62c93d101be61`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
