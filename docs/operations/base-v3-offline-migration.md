@@ -2,7 +2,7 @@
 
 ## 当前事实
 
-现有实板仍运行 v1 配置，`base_store/base_config/committed` 为可选的 112 字节 `EBCF` v1 blob；v2 只在此前软件候选中实现，并未完成实板部署。普通新固件只读 `EBCF` v3，遇到 v1 或 v2 会停止启动并保留 NVS，不会自动转换、擦除或生成凭据。分区仍为 4 MiB：默认 `nvs` 位于 `0x9000/0x6000`，`otadata` 位于 `0xf000/0x2000`，`ota_0`、`ota_1` 分别位于 `0x20000/0x1e0000`、`0x200000/0x1e0000`，`base_store` 位于 `0x3e0000/0x20000`。
+P1-04 保存的 C3 实板基线仍运行 v1 配置，已观测 revision 5；`base_store/base_config/committed` 为可选的 112 字节 `EBCF` v1 blob。v2 只在此前软件候选中实现，并未完成实板部署。普通新固件只读 `EBCF` v3，遇到 v1 或 v2 会停止启动并保留 NVS，不会自动转换、擦除或生成凭据。分区仍为 4 MiB：默认 `nvs` 位于 `0x9000/0x6000`，`otadata` 位于 `0xf000/0x2000`，`ota_0`、`ota_1` 分别位于 `0x20000/0x1e0000`、`0x200000/0x1e0000`，`base_store` 位于 `0x3e0000/0x20000`。P1-04 是已保存的基线，未来物理写入前仍须重新确认同一设备的实时身份和状态。
 
 v3 候选只改同一个 `base_config/committed` 键，保留 revision 与原字段：v1 输入转为 40 字节 header 加原 Wi-Fi 字节，MQTT/FRP 未配置；v2 输入在严格校验后保留原 Wi-Fi、MQTT 凭据和管理 HMAC key 字节，FRP 未配置。可选 `base_ota/operation` 收据保持原 blob。候选不生成或更换任何 Token、key、密码、证书，也不替换默认 `nvs/base_identity/device_uuid`。
 
@@ -20,7 +20,7 @@ python3 tools/preflight_v3_migration.py \
 
 可加 `--output-base-store <仓外未存在的目标文件>`，生成权限 0600 的独立 `0x20000` 字节 v3 候选分区镜像。脚本使用固定 SDK 官方 NVS generator 生成候选，再以官方 NVS parser 逐键读回，验证精确键集、类型与字节；输出完整 Flash 和候选 SHA-256，不输出身份值、Wi-Fi、MQTT 凭据或 OTA 收据内容。脚本不打开串口，不执行 Flash/NVS 写入。
 
-预检先逐字节比较两份 Flash，核对本仓固定分区表、otadata 选择器和双槽头/全槽摘要；NVS 仅允许默认身份、同键配置与可选 OTA 收据。非规范 v1/v2、未知/重复键、NVS CRC 错误、加密 NVS、身份不符、未决或非 VALID 选槽均阻断。镜像头与全槽摘要仍不证明固件可启动或签名有效。候选使用官方生成器新建 NVS 分区，会改变页历史与空闲布局；证明范围是白名单内活动记录及目标配置值，不是其他 Flash 字节无差异。
+预检先逐字节比较两份 Flash，核对本仓固定分区表、otadata 选择器和双槽头/全槽摘要；`base_store` 仅允许同键配置与可选 OTA 收据。默认 `nvs` 允许身份，以及实板已见的 SDK `nvs.net80211/ap.sndchan`、`phy/cal_mac`、`phy/cal_data`、`phy/cal_version` 和无活动键的 `misc` namespace；各记录须满足精确类型，PHY 三项须同时存在，候选不会重建或改写默认 `nvs`。非规范 v1/v2、未知/重复键、无效 NVS 页/CRC、加密 NVS、身份不符、未决或非 VALID 选槽均阻断。镜像头与全槽摘要仍不证明固件可启动或签名有效。候选使用官方生成器新建 NVS 分区，会改变页历史与空闲布局；证明范围是白名单内活动记录及目标配置值，不是其他 Flash 字节无差异。
 
 测试入口：
 
@@ -28,8 +28,22 @@ python3 tools/preflight_v3_migration.py \
 IDF_PATH=<固定SDK路径> python3 tools/test_preflight_v3_migration.py
 ```
 
+## C3 现物只读结果与阻断
+
+2026-09-26 以 P1-04 两份私有 4 MiB 完整 Flash 恢复件和独立保存的 status 身份，在固定 SDK 上运行现行预检。双份逐字节比较、固定分区表和 otadata 检查已通过；默认 `nvs` 身份与记录的 status 匹配，SDK 记录按上述白名单校验。`base_store` 第 0 个 4 KiB 页可被官方 NVS parser 验为 Active、条目/CRC 有效；只在**内存中**以空白页代替其后各页进行独立诊断时，能解出唯一 `base_config/committed` 的 EBCF v1、112 字节、revision 5，未见 `base_ota/operation`。这不是完整分区通过。
+
+真实 `base_store` 后续 31 个 4 KiB 页均被官方解析器判为无效页，无全 `0xff` 或全 `0x00` 页；32 页摘要各不相同，后续四页与同一完整 Flash 的 `ota_1` 内两处 4 KiB 页分别完全相同。第 0 页的 126 个条目中有 95 个 Empty、8 个 Erased、3 个 Written，说明可以设计原位单键转换探针，但不能预先断言提交不会触发页擦除。摘要重合只支持存在重复字节的判断，不能确认全部无效页的来源或授权丢弃。完整分区预检明确返回“`base_store` 含无法安全审计的 NVS 页状态”，**未生成 v3 候选**。`tools/test_preflight_v3_migration.py` 的官方生成器假件 12/12 通过只证明脚本的已覆盖分支，不替代此真实阻断；本页不公开私有 Flash 摘要、UUID 或配置值。
+
+旧 v1 源码在 `c3d22c5` 对 `base_store@0x3e0000/0x20000` 只使用官方 `nvs_flash_init_partition` 和 `base_config/committed` blob 的 `nvs_get_blob`/`nvs_set_blob`，没有自有 journal 或原始块格式。固定 SDK 的 `nvs_page.cpp`、`nvs_pagemanager.cpp` 会把无有效序号的异常页放入可用页列表，已有 Active 页仍可供读取；使用这类页时才可能擦除它们。这解释了现物仍能从第 0 页读出 revision 5 的可能路径，但不证明全部异常字节可删除，也不证明旧实板二进制与当前 SDK 内部路径完全一致。
+
+下一步必须裁决这些异常页的保存边界：若要求逐字节保留，应先做一次性同键 NVS API 原位转换探针，证明新 v3 blob 能在第 0 页内提交、读回且其余页未被擦写，并完成双槽签名固件与失败恢复；若决定用离线生成的完整 `base_store` 候选替换分区，需先独立查明 31 页的来源并明确允许失去这些字节。当前没有满足任一路径的证据或物理写入条件，预检保持阻断。
+
 ## 首次启动与一次性写入边界
 
 本仓只交付离线只读预检和候选字节证明，不提供设备写入或选槽命令。首次 v3-only 启动前，必须保全两份可恢复的完整 Flash 基线、确认身份与真实 otadata，先使两个可能启动的应用槽都具备读取 v3 的能力，完成同键配置转换和精确读回，再确认启动槽及可回退槽安全。不能让 v1/v2-only 镜像成为 v3 NVS 的自动回滚目标。
+
+对当前 C3，最小离线执行顺序是：先在仓外用 P1-04 双份原始 Flash 和独立记录的设备身份运行上节只读预检，生成并逐键读回私有 `base_store` 候选；再准备与当前 C3 分区精确一致、能解码 v3 的**两个**应用槽镜像和匹配的签名启动链，逐镜像核对芯片、项目、签名方案、大小及实际签名。只有这些离线产物与完整 Flash 恢复件均可读回，才进入同板独占的物理维护窗口：重读设备事实、做新的双份完整 Flash 基线、按已审核的完整写入方案安装两个新应用及 v3 `base_store`，保留默认 `nvs/base_identity/device_uuid`，明确设置并读回安全启动槽与回退槽。首次启动后由真实 status 核对同一 UUID、revision 5、Wi-Fi 配置与启动槽；再按 Bridge v3 的物理 `config.set` 输入需要新增的 MQTT/FRP 凭据，并以设备提交回执核对新 revision。v1 只有 Wi-Fi，离线转换不会凭空产生 MQTT/FRP 材料。
+
+当前**可执行且已实现的只有离线预检/候选生成**。P5-05 签名运行基线、两槽 v3 镜像、一次性受控写入/选槽程序、写后完整 Flash 与身份/配置读回，以及 Tool Bridge 对目标串口的枚举仍缺；不能把上面的顺序当作今天可直接执行的刷写命令。`esp32` 旧 ESP-AT 分区与本 C3 过程无关。首次启动失败或写后事实不确定时，停止再次写入与自动重试，保全失败现场，然后按 P1-04 的同板完整 Flash 恢复件恢复并逐字节读回，重启核对原 UUID、revision 5、Wi-Fi 与 Bridge 状态；整个窗口不得改变 eFuse 或用清空 NVS 冒充迁移/恢复。实际恢复仍须在获得设备授权和明确独占窗口后单独验收。
 
 若采用一次性维护镜像原位写入，维护镜像需先安全启动并确认 VALID，再使用固定 SDK NVS API 枚举白名单记录、验证原 v1/v2 blob、生成 v3 同键值、`nvs_set_blob`/`nvs_commit` 并重新打开逐字节读回。开始写入后的异常都视为状态未知，只读取真实持久状态，不自动重试、擦除分区或复位。还须读回默认身份与 OTA 收据，核对未授权修改的其他分区。该维护实现和真实双槽迁移仍未完成；没有精确设备授权与恢复基线时，不得执行物理写入。
