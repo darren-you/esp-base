@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     sdk_lock["sdk-lock.json：IDF / lwIP 精确提交"] --> sdk["公开 ESP-IDF v6.1 fork"]
-    sdk --> firmware["firmware：ESP32-C3 应用"]
+    sdk --> firmware["firmware：C3 现行应用 / ESP32 UART 前置"]
     identity["device_identity：NVS UUID"] --> firmware
     state["device_protocol / remote_config / wifi_runtime / safety_runtime"] --> firmware
     state -->|"v3 凭据 / 控制任务"| mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
@@ -34,7 +34,7 @@ flowchart LR
     owner --> binding
     image_set --> binding
     layout["partitions：4 MiB 与双应用槽"] --> firmware
-    host["tools/device-control.py：公开 USB 示例"] <-->|"JSON 命令与设备结果"| state
+    host["tools/device-control.py：公开串口示例"] <-->|"JSON 命令与设备结果"| state
     firmware --> image["build/esp_base.bin"]
     lab["apps/mqtt_integration：隔离测试应用"] --> mqtt["公开 esp-mqtt：官方核心 + emqtt_ 运行接口"]
     mqtt <-->|"MQTT / 严格 TLS"| broker["Broker：实验已验收 / 设备级待联调"]
@@ -48,9 +48,11 @@ source "$IDF_PATH/export.sh"
 idf.py -C firmware build
 ```
 
+2026-09-26 固定 SDK 对当前工作树的普通 C3 构建通过，最新镜像 957712 字节、SHA-256 `42f3c7a3f28f9a28874505f6148c472c9765926f4618e9498630454a8c3ac485`，生成配置和分区仍为原 C3 基线；Base host ASan/UBSan 全套、离线预检假件 12/12、串口伪终端 5/5 通过。P1-04 C3 私有双份 Flash 的**真实**只读预检因 `base_store` 后 31 页不是有效 NVS 页而阻断，没有生成 v3 候选。ESP32 仓外副本以临时 ECDSA P-256 测试键构建的签名 Base 为 `0xffff4` 字节，离线验签有效；其探针三包槽各仅 `0x60000`，小于现有 532480 字节签名包，不能作为目标布局。产品仓 `esp32` 构建仍在布局/OTA/签名链守卫处退出，没有可刷写的 ESP32 Base 制品。详细输入与范围见[开发检查点](docs/operations/development-checkpoint.md)；P2-08/P6-03 仍在进行中。
+
 `IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `578cf89c343e388db43ba1f4ddcd602fedcb763c`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@5bff093646d8db810d64c50c39edc004e78bf40c`、`esp-ota@3c3f72b823ce856b02f838fef17db1368e6d5448`、`esp-frp@3a40a2c06580232bbe23cb981eeb21c4d14d33c1`，不读取工作区相邻仓库。普通基座的软件候选使用 v3 配置；MQTT 的 HMAC、Topic 和 ClientID 合同未变，无凭据时不创建客户端。FRP 有独立 Token、CA、代理名和管理 key，loopback `status` listener 未绑定时不创建连接；完整请求合同见[设备协议](docs/design/device-protocol.md#frp-base-软件接线边界)。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)为准；编译不写设备。
 
-NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身份沿用 `nvs/base_identity/device_uuid`；分区地址和大小保持迁移基线。配置 `base_store/base_config/committed` 只接受 v3，旧 v1/v2 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。只读预检和候选见[离线迁移](docs/operations/base-v3-offline-migration.md)。首版目标仅为 ESP32-C3、4 MiB，无 GPIO 动作。
+NVS 初始化失败时保留原分区并停止初始化，不自动擦除。身份沿用 `nvs/base_identity/device_uuid`；分区地址和大小保持迁移基线。配置 `base_store/base_config/committed` 只接受 v3，旧 v1/v2 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。只读预检和候选见[离线迁移](docs/operations/base-v3-offline-migration.md)。当前可构建镜像只对应 ESP32-C3、4 MiB，无 GPIO 动作。ESP32-D0WD-V3 已有 UART0 控制入口与芯片事实适配前置，但自己的新分区布局、OTA 产品约束和签名启动链尚未冻结；`esp32` 构建会明确失败，不能把旧 ESP-AT 或 C3 分区刷到这块板。
 
 pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制循环实际开始、在本地 30 秒窗口内持续报告进展，且跨过窗口终点再完成一轮后确认。Wi-Fi 初始化失败时状态为 `failed`，USB 控制仍启动，不因此回滚；窗口内 `config.set` 返回 `ota_verification_pending`，确认成功后恢复；不等待 Wi-Fi、Broker 或 FRPS 在线。确认 SDK 报错但 otadata 已为 VALID 时按持久状态清门。启动或活性检查失败时由 IDF 尝试回滚；无可回退镜像时当前执行暂留，但下次复位不保证可启动，需人工恢复。
 
@@ -64,7 +66,7 @@ pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制�
 
 - [固件入口](firmware/README.md)
 - [设备协议](docs/design/device-protocol.md)
-- [公开 USB 主机示例](tools/README.md)
+- [公开串口主机示例](tools/README.md)
 - [配置候选断电验收](docs/operations/config-power-loss-acceptance.md)
 - [官方 MQTT 集成测试应用](firmware/apps/mqtt_integration/README.md)
 - [MQTT 实板验收记录](docs/operations/mqtt-hardware-acceptance.md)

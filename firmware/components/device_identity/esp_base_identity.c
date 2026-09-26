@@ -92,6 +92,8 @@ static esp_err_t load_or_create_device_id(char *output, size_t output_size)
 static const char *chip_model_name(esp_chip_model_t model)
 {
     switch (model) {
+    case CHIP_ESP32:
+        return "ESP32";
     case CHIP_ESP32C3:
         return "ESP32-C3";
     default:
