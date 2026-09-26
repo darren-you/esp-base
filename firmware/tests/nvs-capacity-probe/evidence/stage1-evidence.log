@@ -1,0 +1,10 @@
+PROBE_INIT=0 stage=1
+PROBE_LOAD=0 revision=0
+PROBE_STEP=1 config_sha256=17604cd5769a47d72c8a61dad6daac7dbb7821e8f12a42b27a13f0dbbcc96a8f ota=ok container=ok
+PROBE_STATS=1 used=262 free=746 available=620 total=1008 namespaces=3
+PROBE_STEP=2 config_sha256=3c9e26a584bac5debc01b0f12553301ca66ba21f5af8adec144ebaa8d9f7258f ota=ok container=ok
+PROBE_STATS=2 used=262 free=746 available=620 total=1008 namespaces=3
+PROBE_STEP=3 config_sha256=7afbcf90eda5381793b5f4f43a1998ae73f8410fe23d4b6acf9e49cc0d501983 ota=ok container=ok
+PROBE_STATS=3 used=263 free=745 available=619 total=1008 namespaces=3
+PROBE_STALE_CAS=29697 expected=29697
+PROBE_DONE=stage1

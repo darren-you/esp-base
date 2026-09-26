@@ -46,6 +46,8 @@ IDF_PATH=<固定SDK路径> python3 tools/test_preflight_v3_migration.py
 
 固定 SDK 官方 NVS parser 只在**隔离第 0 页并在内存中用空白页替换尾部**时，确认转换前后都仅有一个活动 `base_config/committed`，v3 blob 与独立 `convert_v1_wifi_only` 逐字节相等，revision 原样保留。这只验证第 0 页记录。对原始或模拟提交后的**完整 `base_store` 字节**，官方 parser 的完整分区审计仍因后 31 页无效而拒绝；正式预检对原始完整 Flash 继续阻断，没有生成完整分区 v3 候选。QEMU 正常路径不能证明真实 Flash 写入、断电中断、未来 page switch 不擦尾页、旧/新 bootloader 双槽启动或恢复。未刷板、未变更 eFuse。
 
+另有[全合成八页 NVS 容量验证](c3-eight-page-nvs-capacity.md)完成 100 代最大 v3 配置与两份旁侧 blob 的换页、回收及重启读回。该实验没有读取上述私有备份，也不改变旧 `base_store` 后 31 页的来源不明事实或当前完整分区预检阻断。
+
 ## 首次启动与一次性写入边界
 
 本仓交付离线只读预检、候选生成能力与 QEMU 探针，不提供设备写入或选槽命令。首次 v3-only 启动前，必须保全两份可恢复的完整 Flash 基线、确认身份与真实 otadata，先使两个可能启动的应用槽都具备读取 v3 的能力，完成同键配置转换和精确读回，再确认启动槽及可回退槽安全。不能让 v1/v2-only 镜像成为 v3 NVS 的自动回滚目标。

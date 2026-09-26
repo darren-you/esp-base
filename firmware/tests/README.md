@@ -49,3 +49,5 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 ## C3 私有恢复件的仓外 NVS 仿真
 
 [nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。
+
+[nvs-capacity-probe](nvs-capacity-probe/README.md) 则只用合成数据验证连续八页 NVS 对最大 v3 配置、OTA 收据和 Container 占用的反复提交、页回收与重启读回；它不修改产品分区表或实板。结果见[八页容量记录](../../docs/operations/c3-eight-page-nvs-capacity.md)。
