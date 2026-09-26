@@ -1,6 +1,6 @@
 # Base 与 Container 固件集合适配
 
-这是可选的编译与主机测试接线，当前无业务 Base 应用不调用本目录，也不安装、运行或切换业务包。现有 4 MiB 分区表没有独立 `data/undefined` 包分区；未冻结新分区和容量前，不能给 `esp_container_slots_idf_bind` 提供合法几何。
+这是可选的编译与主机测试接线，当前业务 Base 应用不调用本目录，也不安装、运行或切换业务包。C3 当前分区表没有独立 `data/undefined` 包分区；ESP32 离线新表已有 `product_pkgs` 几何，但尚未在板上迁移、挂载或验证容量。
 
 ## 架构拓扑
 
@@ -20,3 +20,5 @@ Container 回调已开始却返回 `UNCERTAIN`，或回调前后固件集合不�
 Base 在启动检查直到 pending 确认/失败期间持有 owner。`ota.start` 在登记收据前取得 claim，跨控制任务与下载 worker 保持到准备及选择目标槽结束；成功选择后持有到设备重启，明确失败且收据已确认记录后才释放，不明结果保留 claim 阻止后续操作。可选适配使用同一 owner，但当前应用没有产品调用方，Container 的包记录/Flash 写入尚未通过此入口装配；跨仓联合 OTA、实板回滚与包恢复仍未验收。
 
 Host `bash firmware/tests/run_host_tests.sh` 使用假 Container 类型和结果测试映射、busy、歧义及前后快照变化。固定 SDK 的可选 C3 组件编译需从隔离 checkout 执行，在常规 Base defaults 后附加 `esp-container/examples/c3-runtime/sdkconfig.defaults`，并传 `-DESP_BASE_CONTAINER_BINDING_PROBE=ON`。Base 在 `project()` 前按该组件的 CMake profile 开启指令计量，并关闭 bulk、shared 与 shrunk memory。这个开关加入精确公开 `esp-container@8eb805f3f12cb3cd836e9833acb4aca878ae80e7` 及其固定 WAMR `26c235e53e29acd8b43abe7f3b524577bd4d1ae5`，只验证组件装配和编译。组件静态库含 runtime/slots 入口，主应用 ELF 未链接这些入口且没有包操作调用方。Component Manager 为探针生成的七依赖锁只在隔离副本中，常规 Base 锁不加入 Container/WAMR。构建不写设备，也不证明包分区、RAM 峰值、P7-02 五能力组合或运行闭环。
+
+ESP32 离线目标也已在独立副本叠加 `esp-container/examples/esp32-runtime/sdkconfig.defaults`，以 `-DIDF_TARGET=esp32 -DESP_BASE_CONTAINER_BINDING_PROBE=ON -DESP_BASE_ESP32_OFFLINE_PROBE=ON` 从空目录全量构建。生成锁精确包含五仓与 WAMR，`container_binding` 静态库编译通过；未签名 `esp_base.bin` 为 850,432 字节。这个探针没有链接 Container 入口到主应用，不能刷写设备或证明五能力运行。
