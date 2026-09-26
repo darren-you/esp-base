@@ -34,6 +34,8 @@ IDF_PATH=<固定SDK路径> python3 tools/test_preflight_v3_migration.py
 
 真实 `base_store` 后续 31 个 4 KiB 页均被官方解析器判为 Invalid，没有可确认的有效 NVS 页结构，也无全 `0xff` 或全 `0x00` 页；32 页摘要各不相同。其中四页与同一完整 Flash 的 `ota_1` 已占用镜像页逐字节相同，余 27 页仍非空且来源未定，不能当作可丢弃的空闲区。第 0 页的 126 个条目中有 95 个 Empty、8 个 Erased、3 个 Written，说明可以设计原位单键转换探针，但不能预先断言提交不会触发页擦除。摘要重合只支持存在重复字节的判断，不能确认全部无效页的来源或授权丢弃。完整分区预检明确返回“`base_store` 含无法安全审计的 NVS 页状态”，**未生成 v3 候选**。`tools/test_preflight_v3_migration.py` 的官方生成器假件 12/12 通过只证明脚本的已覆盖分支，不替代此真实阻断；本页不公开私有 Flash 摘要、UUID 或配置值。
 
+后续[异常页只读分类](c3-base-store-page-forensics.md)给出逐页字节计数与同一备份内旧 `ota_1` 的 1 KiB/整页相等映射，不改变上述来源与处置边界。
+
 旧 v1 源码在 `c3d22c5` 对 `base_store@0x3e0000/0x20000` 只使用官方 `nvs_flash_init_partition` 和 `base_config/committed` blob 的 `nvs_get_blob`/`nvs_set_blob`，没有自有 journal 或原始块格式。固定 SDK 的 `nvs_page.cpp`、`nvs_pagemanager.cpp` 会把无有效序号的异常页放入可用页列表，已有 Active 页仍可供读取；使用这类页时才可能擦除它们。这解释了现物仍能从第 0 页读出 revision 5 的可能路径，但不证明全部异常字节可删除，也不证明旧实板二进制与当前 SDK 内部路径完全一致。
 
 同键正常路径的仓外 QEMU 探针现已证明**在本次固定输入和 SDK 下**可以仅修改第 0 页，见下节。后续 Base 的 `config.set` 与 OTA 收据仍会向同一 `0x20000` NVS 分区写入；固定 SDK `PageManager::activatePage()` 在未来切换到列为可用的异常页时会擦除该页。因此一次转换成功不足以建立长期保留后 31 页的合同，也不能将正式预检改为放行。继续迁移前仍须独立查明异常页来源，决定其可保留/可处置边界，并使后续 NVS 写入、双槽签名启动与失败恢复共同满足这个边界；当前完整分区预检保持阻断。
