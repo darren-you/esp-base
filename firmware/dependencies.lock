@@ -36,7 +36,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: 0b447d99bd2544e07deff7bfbf5d31b819e8033034840a7f4e7382dd468ac034
+    component_hash: 91f4bb87f38c4551b282bdf898889c6be11a4db1a9d9c10b5cdd728bcba31dbc
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -50,6 +50,6 @@ direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: 4ef1a18be5821ed07fc450543ef87f887e32d5e7721893ba10545acaecaffdf6
+manifest_hash: ea3fae07c8198a4ec1dc33201dcb84d3b6533c9787c35e399f211f7b045111cf
 target: esp32c3
 version: 3.0.0

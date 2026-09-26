@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""最小 USB 协议调用示例；宿主 Python，不在 ESP 固件中运行。"""
+"""最小串口协议调用示例；宿主 Python，不在 ESP 固件中运行。"""
 import argparse
 import fcntl
 import json
@@ -11,8 +11,8 @@ import time
 import uuid
 
 
-class USBSerialPort:
-    """POSIX USB 串口：不切换 DTR/RTS，关闭时不挂断，写入期限为一秒。"""
+class SerialPort:
+    """POSIX 串口：不切换 DTR/RTS，关闭时不挂断，写入期限为一秒。"""
 
     def __init__(self, path):
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC)
@@ -163,7 +163,7 @@ def wait_ready(port):
 def send(port, request):
     line = json.dumps(request, separators=(",", ":"), ensure_ascii=True).encode()
     if len(line) > 9216:
-        raise ValueError("USB 请求超过 9216 字节，未发送")
+        raise ValueError("串口请求超过 9216 字节，未发送")
     payload = b"\n" + line + b"\n"
     if port.write(payload) != len(payload):
         raise OSError("串口写入不完整；状态为 unknown")
@@ -313,7 +313,7 @@ def load_private_config(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", required=True, help="本轮枚举的 USB Serial/JTAG 端点")
+    parser.add_argument("--port", required=True, help="本轮枚举的 C3 USB Serial/JTAG 或 ESP32 UART 端点")
     parser.add_argument("--device-id", help="预期持久 UUID；写命令必填")
     parser.add_argument("--config-file", help="本机 0600 JSON 完整配置文件；仅用于 config.set")
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
@@ -326,7 +326,7 @@ def main():
     config = load_private_config(args.config_file) if args.config_file else None
     if args.device_id:
         canonical_id(args.device_id)
-    port = USBSerialPort(args.port)
+    port = SerialPort(args.port)
     try:
         wait_ready(port)
         current = status(port)
@@ -354,7 +354,7 @@ def main():
         if args.json:
             print(json.dumps(current, ensure_ascii=False))
         else:
-            print("ESP Base USB 操作\n  状态  " + current["state"] + "\n  设备  " + current["device_id"] + "\n  启动  " + current["boot_id"])
+            print("ESP Base 串口操作\n  状态  " + current["state"] + "\n  设备  " + current["device_id"] + "\n  启动  " + current["boot_id"])
     finally:
         port.close()
 
@@ -363,5 +363,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print("ESP Base USB 操作失败\n  原因  " + str(error), file=sys.stderr)
+        print("ESP Base 串口操作失败\n  原因  " + str(error), file=sys.stderr)
         sys.exit(1)

@@ -19,7 +19,14 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include "sdkconfig.h"
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
 #include "driver/usb_serial_jtag_vfs.h"
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+#include "driver/uart_vfs.h"
+#else
+#error "ESP Base serial control supports only esp32c3 and esp32"
+#endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -601,9 +608,9 @@ static void control_task(void *argument)
             s_reader.discard = true; /* Never interpret a timed-out tail as a command. */
         }
         size_t count = 0;
-        // Official no-driver VFS reads directly from the USB FIFO. Keeping the
-        // hardware packet until consumed provides USB backpressure; IDF 6.1's
-        // buffered ISR otherwise silently discards bytes on a full RX ring.
+        // Read from the selected console VFS without blocking the control loop.
+        // The C3 USB FIFO backpressures the host; UART0 has no such guarantee
+        // and needs its own physical overload check before device acceptance.
         while (count < sizeof bytes && read(STDIN_FILENO, bytes + count, 1) == 1) ++count;
         if (count > 0) {
             last_input = uptime_ms();
@@ -634,11 +641,20 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     if (s_started || !s_config_loaded) return ESP_ERR_INVALID_STATE;
     esp_err_t error = esp_base_identity_generate_uuid(s_boot_id, sizeof s_boot_id);
     if (error != ESP_OK) return error;
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
     usb_serial_jtag_vfs_use_nonblocking();
-    // In the official no-driver VFS, reads are always nonblocking. The descriptor
-    // flag must remain clear so IDF 6.1 prefetches from hardware (there is no ring).
+    // IDF 6.1 USB no-driver VFS prefetches with O_NONBLOCK clear.
     int flags = fcntl(STDIN_FILENO, F_GETFL);
     if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK) < 0) return ESP_FAIL;
+#else
+    uart_vfs_dev_use_nonblocking(CONFIG_ESP_CONSOLE_UART_NUM);
+    // UART0 has no USB packet backpressure; keep reads nonblocking so the
+    // control loop continues OTA progress and network owner polling.
+    int flags = fcntl(STDIN_FILENO, F_GETFL);
+    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) return ESP_FAIL;
+#endif
+    /* Config was loaded into s_context before starting this task. Copy only
+     * immutable metadata; replacing the whole context would erase it. */
     s_context.device_id = context->device_id;
     s_context.firmware_version = context->firmware_version;
     s_context.chip_model = context->chip_model;

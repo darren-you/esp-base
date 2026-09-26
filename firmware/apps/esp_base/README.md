@@ -15,7 +15,7 @@ flowchart LR
     receipt["ota_operation：产品约束 / operation 收据"] --> ota
     main --> time["time_runtime：SNTP 启动"]
     protocol -->|"轮询并报告 time_ready"| time
-    usb["USB 工具"] <-->|"命令与回执"| protocol
+    serial["C3 USB / ESP32 UART 工具"] <-->|"命令与回执"| protocol
     ota -->|"inactive 槽写入 / 验签 / 回滚"| sdk["ESP-IDF app_update：A/B 回滚状态"]
     protocol -->|"签名构建 ota.start"| receipt
     ota --> https["ESP-IDF esp_http_client：HTTPS 下载"]

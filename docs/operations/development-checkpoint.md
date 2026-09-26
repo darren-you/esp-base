@@ -1,5 +1,15 @@
 # 开发检查点
 
+2026-09-26 `codex/base-c3-dual-target` 集成候选：以当前 `master@2dbc24353a2eac50b6dbf5b1fa7fee8cc59d8efc` 为底，接入原 C3 分支的三轮配置/静态内存所有权修正和本轮双目标串口装配；保留主线 SDK、MQTT、FRP、OTA 与可选 Container 精确依赖，不恢复旧 C3 锁。在合并 `esp_base_protocol_start` 时，按目标选择 C3 USB 或 ESP32 UART0 VFS，随后只复制不可变元数据；完整配置已由 `esp_base_protocol_load_config` 载入长期上下文，整结构赋值会将其覆盖，故未采用。旧 C3 QEMU 数值属于当时精确锁与源码，本集成候选尚未复测五组件内存。
+
+- 固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 与唯一 `firmware/dependencies.lock` SHA-256 `aa9e16dd65c0ee8d9f53ba89fabada2a74e6eb6b6eedccbbef50ba63fd0b575f` 均核对。仓外副本 C3 普通完整构建通过，app **957872 B**、SHA-256 `d448f46604bd685ce1b3dc04c4934ad8890bfd160791d257c393e4b1e6af7a0e`，最终配置为 C3／4 MiB／USB Serial/JTAG；原分区仍为 `ota_0@0x20000/0x1e0000`、`ota_1@0x200000/0x1e0000`、`base_store@0x3e0000/0x20000`。
+- Base host ASan/UBSan 全套、离线 v3 迁移 9/9 与串口伪终端 5/5 通过。ESP32 独立配置在预期的 P6-03 新布局／OTA policy／签名链守卫退出，未产生 ESP32 Base 镜像。构建、主机回归与守卫均不证明 C3 实板配置/网络、ESP32 UART、五仓组合资源或真实迁移通过；本集成候选未刷板。
+
+2026-09-26 P2-08 双目标软件前置：现行 C3 保留原生 USB Serial/JTAG 与自己的 4 MiB 分区表；ESP32-D0WD-V3 的控制入口改为 CH340 对应的 UART0 VFS，公开主机工具改为通用 POSIX 串口。CMake 按 IDF target 选择驱动依赖，SDK defaults 拆成共用项和目标专属项，设备事实增加 ESP32 型号。ESP32 的新分区布局、OTA 产品约束及 ECDSA v1 签名启动链尚未冻结，`esp32` 镜像在 CMake 顶层明确阻断；没有沿用旧 ESP-AT 或 C3 几何。唯一 `firmware/dependencies.lock` 由本次固定 SDK 重新生成，Git revision 均未改变，仅更新 MQTT component hash 与 manifest hash，锁文件 SHA-256 为 `aa9e16dd65c0ee8d9f53ba89fabada2a74e6eb6b6eedccbbef50ba63fd0b575f`。
+
+- 仓外固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 通过 `tools/check_sdk.py`。普通 C3 全量构建成功，`esp_base.bin` 为 957696 字节（`0xe9d00`），SHA-256 `88c58e872cedf1419a730569681673bd4e9c2617084a5bfce37e9f6b1ddd887f`。生成配置确认为 `esp32c3`、4 MiB、USB Serial/JTAG、自定义分区表；官方分区解析器确认 `ota_0@0x20000/0x1e0000`、`ota_1@0x200000/0x1e0000`、`base_store@0x3e0000/0x20000`，未发生 C3 布局漂移。
+- `bash firmware/tests/run_host_tests.sh` 的 ASan/UBSan 全套通过；`python3 tools/test_preflight_v3_migration.py` 在固定 SDK 环境 9/9 通过；`python3 tools/test-device-control.py` 的 POSIX 伪终端 5/5 通过。独立 `-D IDF_TARGET=esp32` 构建在预期的 P6-03 布局、OTA policy 与签名链守卫处退出；这是明确阻断，不是 ESP32 编译通过。本轮未构建 Base 签名镜像、未刷板，也未验证 ESP32 UART 实板收发或完整 Base 启动。P2-08 仍为软件适配进行中。
+
 2026-09-24 `codex/c3-low-memory` 第二轮 Base 常驻 DRAM 复用：配置指纹规范编码在唯一控制任务中同步借用 NVS `s_load_bytes`；NVS 条件提交借用已结束解析的 `command.config` 作为工作值，返回前擦除。提交与读回两个独立编码缓冲及逐字节比较保持不变，20 秒候选配置、9,216 字节 USB 行、7,618 字节配置 blob 和 32 个去重槽容量也不变。相同七依赖精确锁 `f05c54cb7a1e15361b8a87b1e135ccc01ab3744490c3520de3ba583f05c582e2` 的签名五组件链接图中，`.dram0.bss` 从 `0x1a158` 降至 `0x165d8`，`_heap_start` 前移 **15,232 字节**至 `0x3fca9d60`，相对原始 Base 累计释放 **50,080 字节**初始堆空间。
 
 - Base ASan／UBSan 全套通过，最大配置规范编码、NVS 写前／写后／commit／读回故障和工作区完整擦除均有主机断言；固定 SDK 普通 C3 构建通过，镜像 **961,568 字节**、SHA-256 `5dff4ee274ac12afa1bd1a4fbc3a3056a9f16ad0faa4ce8fccf7ba3da555027f`。仓外临时测试键签名五组件镜像 `0x121000` 字节、SHA-256 `72ca1c080823b67531207abd1a7ce19e5628e53edb99bed6a7186491440ce813`，RSA 签名验证通过。QEMU 在 Base READY 时 free／最大连续块为 **152,124／114,688 字节**；64 KiB guest 存活且完成事件时为 **61,736／40,960 字节**，两轮生命周期完成后恢复。详细生命周期、链接图和日志摘要见 [C3 小内存 Base 复测](c3-low-memory-base-probe.md)。
