@@ -38,8 +38,14 @@ flowchart LR
     wifi["wifi_runtime：初始化故障与资源释放"] --> host
     mqtt["mqtt_owner：会话 / 认证 / 结果发布"] --> host
     idf --> image["esp_base.bin"]
+    idf --> probe["独立 NVS 同键探针"]
+    probe --> qemu["仓外 Flash 副本 / C3 QEMU"]
 ```
 
 编译不证明设备运行与断电恢复；相关结果只在实际验收后登记。
 
 MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再编译第二份运行层或重复其 SDK fake。普通 Base 的 owner 故障测试与 C3 编译只证明软件接线；设备命令与 ACK 的 Broker/实板端到端验收仍需单独执行。隔离应用使用固定公开提交做 C3 组合编译；实验实板记录见 [MQTT 集成应用](../apps/mqtt_integration/README.md)。
+
+## C3 私有恢复件的仓外 NVS 仿真
+
+[nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。

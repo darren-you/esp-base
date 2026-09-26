@@ -1,0 +1,6 @@
+idf_component_register(SRCS "nvs_same_key_probe.c" INCLUDE_DIRS "." REQUIRES nvs_flash)
+if(PROBE_INIT_ONLY)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PROBE_INIT_ONLY=1)
+elseif(PROBE_VERIFY_ONLY)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PROBE_VERIFY_ONLY=1)
+endif()
