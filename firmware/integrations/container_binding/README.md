@@ -38,3 +38,5 @@ flowchart LR
 当前清单精确锁定 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc` 与 WAMR `26c235e53e29acd8b43abe7f3b524577bd4d1ae5`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。没有持久实板包、掉电恢复或实板资源测量，不能宣称 guest 或五能力运行验收。
 
 当前 Base `3df1c33` 与上述精确锁又以仓外测试产品策略完成两目标深链接核验，两个 ELF 都确实包含 `econtainer_product_open` 与 WAMR load/instantiate/call。ESP32 测试键 ECDSA v1 签名镜像为 `0x10fff4`，官方验签通过，双 `0x120000` app 各余 `0x1000c`。C3 仅在隔离副本使用三 `0x82000` 包槽与双 `0x118000` app 的候选表，测试键 RSA v2 签名中间镜像为 `0x121000`，官方容量门判每槽溢出 `0x9000`，所以该布局没有可用构建。证据与隔离改动见[开发检查点](../../../docs/operations/development-checkpoint.md)；没有把测试策略、候选 C3 表或密钥写入本仓。
+
+后续 Base `299851f` 仅在 C3 签名且显式启用产品策略时，对 WAMR、MQTT 两库执行选择性 LTO；同一仓外候选布局的签名镜像缩至 `0x111000`，官方 RSA 验签和双槽尺寸门通过，各余 `0x7000`。正式 C3 分区仍是无包布局；测试策略与候选表仍未进入仓库，QEMU 尚无 Base READY／guest 运行证据，实板与五能力并发也未验收。[开发检查点](../../../docs/operations/development-checkpoint.md)记录输入哈希、链接差额和仿真边界。
