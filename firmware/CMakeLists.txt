@@ -6,10 +6,7 @@ if(NOT IDF_TARGET)
         set(IDF_TARGET "esp32c3")
     endif()
 endif()
-if(IDF_TARGET STREQUAL "esp32")
-    message(FATAL_ERROR
-        "ESP32 Base image is blocked until P6-03 freezes its own partition table, OTA policy and signed boot chain")
-elseif(NOT IDF_TARGET STREQUAL "esp32c3")
+if(NOT IDF_TARGET STREQUAL "esp32c3" AND NOT IDF_TARGET STREQUAL "esp32")
     message(FATAL_ERROR "ESP Base supports only esp32c3 and esp32 targets")
 endif()
 set(ESP_BASE_APP "esp_base" CACHE STRING "esp_base or mqtt_integration")
@@ -39,6 +36,9 @@ if(ESP_BASE_CONTAINER_BINDING_PROBE)
     list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/integrations/container_binding")
 endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+if(IDF_TARGET STREQUAL "esp32")
+    idf_build_set_property(DEPENDENCIES_LOCK "${CMAKE_CURRENT_LIST_DIR}/dependencies.lock.esp32")
+endif()
 project(${ESP_BASE_PROJECT})
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../tools/check_sdk.py"
@@ -59,4 +59,40 @@ endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND (NOT CONFIG_MBEDTLS_MD5_C OR NOT CONFIG_LWIP_SO_LINGER OR
     NOT CONFIG_MBEDTLS_HAVE_TIME_DATE OR CONFIG_LWIP_MAX_SOCKETS LESS 12))
     message(FATAL_ERROR "ESP Base FRP requires MD5 token auth, SO_LINGER, trusted TLS time and 12 sockets")
+endif()
+if(IDF_TARGET STREQUAL "esp32" AND (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
+    NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/esp32-partition-table.csv" OR
+    NOT CONFIG_ESPTOOLPY_FLASHSIZE_4MB OR CONFIG_ESP_WIFI_SOFTAP_SUPPORT OR
+    NOT CONFIG_MBEDTLS_TLS_CLIENT_ONLY OR CONFIG_PARTITION_TABLE_MD5 OR
+    NOT CONFIG_BOOTLOADER_LOG_LEVEL_NONE))
+    message(FATAL_ERROR "ESP32 Base requires its 4 MiB partition, STA/TLS client and v1 bootloader configuration")
+endif()
+if(IDF_TARGET STREQUAL "esp32")
+    if(CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT)
+        if(NOT CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME OR
+            NOT CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT OR
+            NOT CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT OR
+            NOT CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES OR
+            NOT CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE OR CONFIG_SECURE_BOOT)
+            message(FATAL_ERROR "ESP32 Base signed build requires ECDSA v1, signed boot/update and rollback without hardware Secure Boot")
+        endif()
+        if(NOT IS_ABSOLUTE "${CONFIG_SECURE_BOOT_SIGNING_KEY}" OR
+            NOT EXISTS "${CONFIG_SECURE_BOOT_SIGNING_KEY}")
+            message(FATAL_ERROR "ESP32 Base signed build requires an existing absolute signing key path")
+        endif()
+        get_filename_component(esp_base_source_root "${CMAKE_CURRENT_LIST_DIR}/.." REALPATH)
+        get_filename_component(esp_base_signing_key "${CONFIG_SECURE_BOOT_SIGNING_KEY}" REALPATH)
+        file(RELATIVE_PATH esp_base_signing_key_relative "${esp_base_source_root}" "${esp_base_signing_key}")
+        if(NOT esp_base_signing_key_relative MATCHES "^\\.\\./")
+            message(FATAL_ERROR "ESP32 Base signing key must remain outside the source repository")
+        endif()
+    elseif(ESP_BASE_ESP32_OFFLINE_PROBE)
+        if(CONFIG_SECURE_BOOT OR CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES OR
+            CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT OR
+            CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT)
+            message(FATAL_ERROR "ESP32 offline probe requires unsigned apps and no hardware Secure Boot")
+        endif()
+    else()
+        message(FATAL_ERROR "Unsigned ESP32 build requires explicit -DESP_BASE_ESP32_OFFLINE_PROBE=ON and is never a flash candidate")
+    endif()
 endif()

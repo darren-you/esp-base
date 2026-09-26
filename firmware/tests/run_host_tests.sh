@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${ESP_BASE_TEST_TARGET:-esp32c3}" in
+  esp32c3) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32C3 ;;
+  esp32) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32 ;;
+  *) printf 'esp-base host tests\n  error  ESP_BASE_TEST_TARGET must be esp32c3 or esp32.\n' >&2; exit 2 ;;
+esac
 BUILD_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$BUILD_DIR"' EXIT
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -49,7 +54,7 @@ fi
 # sprintf internally, which the macOS SDK marks deprecated.
 "${CC:-cc}" -std=c11 -fsanitize=address,undefined -Wno-deprecated-declarations \
   -I "$CJSON_DIR" -c "$CJSON_DIR/cJSON.c" -o "$BUILD_DIR/cJSON.o"
-"${CC:-cc}" -std=c11 -DCONFIG_IDF_TARGET_ESP32C3=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" -I "$CJSON_DIR" \
   "$ROOT/components/device_protocol/command_guard.c" \
@@ -64,13 +69,13 @@ printf '  hardware       not used\n'
   "$ROOT/components/remote_config/esp_base_remote_config.c" \
   "$ROOT/tests/config_store_test.c" -o "$BUILD_DIR/config_store_test"
 "$BUILD_DIR/config_store_test"
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -DCONFIG_IDF_TARGET_ESP32C3=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" "$ROOT/components/ota_operation/esp_base_ota_receipt.c" \
   "$ROOT/tests/ota_receipt_test.c" \
   -o "$BUILD_DIR/ota_receipt_test"
 "$BUILD_DIR/ota_receipt_test"
-"${CC:-cc}" -std=c11 -DCONFIG_IDF_TARGET_ESP32C3=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/ota_firmware" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" \
@@ -87,7 +92,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
 else
   PROTOCOL_LINK_GC=(-Wl,--gc-sections)
 fi
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -DCONFIG_IDF_TARGET_ESP32C3=1 -Wall -Wextra -Werror \
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/device_protocol" \

@@ -15,9 +15,10 @@ flowchart LR
     lab -->|"串口原始资源日志"| report["mqtt_resource_report.py：逐轮完整性、计数与栈"]
     sdk_lock["../sdk-lock.json：IDF / lwIP 提交"] --> sdk_check["check_sdk.py：源码核对"]
     idf["独立 ESP-IDF checkout"] --> sdk_check
-    sdk_check --> build["firmware：C3 当前构建 / ESP32 UART 前置"]
+    sdk_check --> build["firmware：C3 / ESP32 独立目标构建"]
     backup["两份仓外完整 Flash 备份"] --> preflight["preflight_v3_migration.py：v1/v2 离线只读预检 / v3 base_store 候选"]
     idf --> preflight
+    at_backup["两份 ESP32 旧 AT 完整 Flash 备份"] --> at_archive["archive_esp32_at.py：旧 NVS / at_customize 无损归档"]
 ```
 
 ## SDK 源码准备
@@ -38,7 +39,7 @@ source "$ESP_BASE_IDF/export.sh"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
 
-构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。Git remote 使用 HTTPS 或 SSH 不改变提交身份。普通构建与 MQTT 实验构建共用一份 `firmware/dependencies.lock`，其中 `mqtt` 精确来自公开 `esp-mqtt@9d6d95e779f4f5ff387a6d9b54015bf4e43565f2`。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
+构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，引用同一组精确组件提交，不能共用生成的 sdkconfig/build 目录。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
 
 先退出占用该端点的监控或烧录程序；工具仅使用 Python 3 标准库。从本轮系统枚举结果选择端点，不把历史端点当设备身份。
 
@@ -64,6 +65,10 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 ## v1/v2→v3 离线配置预检
 
 `preflight_v3_migration.py` 只读取两份仓外的完整 4 MiB Flash 备份和固定 SDK 源码；可选输出权限 0600 的 `base_store` v3 候选分区镜像。它不打开串口，也不刷写设备。v1 输入保持 Wi-Fi 原值与 revision，MQTT/FRP absent；v2 输入还逐字节保留既有 MQTT 字段及管理 key，FRP absent。凭据不生成或替换。完整步骤、阻断条件和两槽首启边界见[离线迁移合同](../docs/operations/base-v3-offline-migration.md)。
+
+## ESP32 旧 AT 离线原始归档
+
+ESP32 旧 ESP-AT 的一次性归档使用 `archive_esp32_at.py`。它只接受两份各 4 MiB、独立、当前用户所有且权限至多 0600 的完整备份；先比较全片字节和 SHA-256，核对旧 `nvs@0x12000/0xe000`、`at_customize@0x20000/0xe0000` 分区表，验证各区只有前两页非空，再将两区前两页顺序写为 16 KiB `at_old_raw` 原始字节。工具对**整个**旧分区补 `0xff` 后逐字节及 SHA-256 重建核对；输出父目录先解析到真实路径，只允许在 Git 仓库外、当前用户所有且不向组/其他用户开放的目录中新建 0600 文件，不覆盖已有文件，不打印敏感内容；落盘读回不符会删除新建文件。旧分区尾页若非空则直接阻断。原完整 Flash 备份仍须独立保留；此归档不包含旧启动镜像或 otadata，也不执行刷写。合成反例测试：`python3 -m unittest tools/test_archive_esp32_at.py`。后续新分区的首次写入、双签名固件、恢复与实板验收另行完成。
 
 ## MQTT 实验检查
 

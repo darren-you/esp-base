@@ -16,7 +16,7 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 - `config.set`：parameters 为 `expected_revision` 和完整类型化 `config`；只从当前 revision 开始候选事务，校验失败不写入已提交配置。Wi-Fi 候选完成取得 IP 和必要链路 proof 后才提交；超时恢复已提交配置。
 - `restart`：parameters 为空对象；发送成功不表示重启成功，必须回读相同 device_id 的新 boot_id。
-- `ota.start`：parameters 精确包含 `operation_id`（UUID v4）、`image_url`（最多 512 字节 HTTPS URL）、`sha256`（完整 signed bin 的小写 64 字符十六进制）、`image_size_bytes`（完整镜像字节数）、`target`（固定 `esp32c3/esp_base`）、`signature`（精确对象 `{"scheme":"esp_secure_boot_v2_rsa3072"}`）。签名构建要求当前运行槽 VALID、boot 与 running 一致、另一 OTA 槽可写、Wi-Fi IP 和本次启动时间同步。目标 otadata 只允许历史 VALID/INVALID/ABORTED/UNDEFINED 或尚无记录；NEW/PENDING/读取异常拒绝写入。启动下载任务前先把设备 ID、operation ID、摘要、长度与旧/目标槽写入 `base_store/base_ota/operation` 并逐字节读回；写入不确定时拒绝下载。下载期间不重复执行同一操作；切槽后先报告 running 并重启，成功须待新槽本地自检完成、otadata 为 VALID 且运行镜像完整摘要匹配。
+- `ota.start`：parameters 精确包含 `operation_id`（UUID v4）、`image_url`（最多 512 字节 HTTPS URL）、`sha256`（完整 signed bin 的小写 64 字符十六进制）、`image_size_bytes`（完整镜像字节数）、`target`（C3 固定 `esp32c3/esp_base`，ESP32 固定 `esp32/esp_base`）、`signature`（C3 精确 `{"scheme":"esp_secure_boot_v2_rsa3072"}`，ESP32 精确 `{"scheme":"esp_secure_boot_v1_ecdsa_p256"}`）。签名构建要求当前运行槽 VALID、boot 与 running 一致、另一 OTA 槽可写、Wi-Fi IP 和本次启动时间同步。目标 otadata 只允许历史 VALID/INVALID/ABORTED/UNDEFINED 或尚无记录；NEW/PENDING/读取异常拒绝写入。启动下载任务前先把设备 ID、operation ID、摘要、长度与旧/目标槽写入 `base_store/base_ota/operation` 并逐字节读回；写入不确定时拒绝下载。下载期间不重复执行同一操作；切槽后先报告 running 并重启，成功须待新槽本地自检完成、otadata 为 VALID 且运行镜像完整摘要匹配。
 - `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃或目标槽 pending 时为 `running`；目标槽运行且 VALID、完整镜像摘要匹配时为 `succeeded`；已持久记录的下载失败或目标槽 ABORTED/INVALID 且旧槽有效时为 `failed`；收据缺失/损坏、槽关系不明或仅见旧槽而无失败证据时为 `unknown`。普通未签名构建拒绝查询。
 - `business.*`：仅派发业务注册的命令与参数 schema，未知命令拒绝，不提供任意 shell、脚本或 Topic。
 

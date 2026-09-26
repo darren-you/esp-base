@@ -1,4 +1,5 @@
 #include "esp_base_ota_firmware.h"
+#include "esp_base_ota_policy.h"
 
 #include <assert.h>
 #include <stdbool.h>
@@ -31,11 +32,11 @@ static void reset(void)
     image_seed[1] = 0xb0;
     image_result[0] = image_result[1] = EOTA_UPDATE_OK;
     partitions[0] = (esp_partition_t){.type = ESP_PARTITION_TYPE_APP,
-        .subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0, .address = 0x20000, .size = 0x1e0000};
+        .subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0, .address = ESP_BASE_OTA_0_ADDRESS_BYTES, .size = ESP_BASE_OTA_SLOT_SIZE_BYTES};
     partitions[1] = (esp_partition_t){.type = ESP_PARTITION_TYPE_APP,
-        .subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1, .address = 0x200000, .size = 0x1e0000};
+        .subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1, .address = ESP_BASE_OTA_1_ADDRESS_BYTES, .size = ESP_BASE_OTA_SLOT_SIZE_BYTES};
     for (size_t i = 0; i < 2; ++i) {
-        image_chip_id[i] = 0x0005;
+        image_chip_id[i] = CONFIG_IDF_FIRMWARE_CHIP_ID;
         image_magic[i] = ESP_IMAGE_HEADER_MAGIC;
         description_magic[i] = ESP_APP_DESC_MAGIC_WORD;
         strcpy(image_project[i], "esp_base");
@@ -82,20 +83,22 @@ bool eota_available(void) { return signed_enabled; }
 eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slots)
 {
     assert(policy && slots && !strcmp(policy->project_name, "esp_base") &&
-           policy->chip_id == 0x0005 && policy->ota_0_address_bytes == 0x20000 &&
-           policy->ota_1_address_bytes == 0x200000 && policy->ota_size_bytes == 0x1e0000);
+           policy->chip_id == CONFIG_IDF_FIRMWARE_CHIP_ID &&
+           policy->ota_0_address_bytes == ESP_BASE_OTA_0_ADDRESS_BYTES &&
+           policy->ota_1_address_bytes == ESP_BASE_OTA_1_ADDRESS_BYTES &&
+           policy->ota_size_bytes == ESP_BASE_OTA_SLOT_SIZE_BYTES);
     const uint8_t other = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ?
                           ESP_PARTITION_SUBTYPE_APP_OTA_1 : ESP_PARTITION_SUBTYPE_APP_OTA_0;
     *slots = (eota_slots_t){
         .running_subtype = running_subtype,
         .boot_subtype = boot_subtype,
         .target_subtype = other,
-        .running_address_bytes = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? 0x20000 : 0x200000,
-        .boot_address_bytes = boot_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? 0x20000 : 0x200000,
-        .target_address_bytes = other == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? 0x20000 : 0x200000,
-        .running_size_bytes = 0x1e0000,
-        .boot_size_bytes = 0x1e0000,
-        .target_size_bytes = 0x1e0000,
+        .running_address_bytes = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? ESP_BASE_OTA_0_ADDRESS_BYTES : ESP_BASE_OTA_1_ADDRESS_BYTES,
+        .boot_address_bytes = boot_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? ESP_BASE_OTA_0_ADDRESS_BYTES : ESP_BASE_OTA_1_ADDRESS_BYTES,
+        .target_address_bytes = other == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? ESP_BASE_OTA_0_ADDRESS_BYTES : ESP_BASE_OTA_1_ADDRESS_BYTES,
+        .running_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
+        .boot_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
+        .target_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
         .running_state = running_state,
         .target_state = target_state,
     };

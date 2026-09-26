@@ -57,8 +57,10 @@ const char *eota_error(eota_result_t result)
 eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slots)
 {
     assert(policy && slots && !strcmp(policy->project_name, "esp_base") &&
-           policy->chip_id == 0x0005 && policy->ota_0_address_bytes == 0x20000 &&
-           policy->ota_1_address_bytes == 0x200000 && policy->ota_size_bytes == 0x1e0000 &&
+           policy->chip_id == CONFIG_IDF_FIRMWARE_CHIP_ID &&
+           policy->ota_0_address_bytes == ESP_BASE_OTA_0_ADDRESS_BYTES &&
+           policy->ota_1_address_bytes == ESP_BASE_OTA_1_ADDRESS_BYTES &&
+           policy->ota_size_bytes == ESP_BASE_OTA_SLOT_SIZE_BYTES &&
            policy->connect_timeout_ms == 5000 && policy->read_timeout_ms == 1000 &&
            policy->idle_timeout_ms == 30000 && policy->total_timeout_ms == 300000);
     const uint8_t target_subtype = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ?
@@ -67,12 +69,12 @@ eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slot
         .running_subtype = running_subtype,
         .boot_subtype = boot_subtype,
         .target_subtype = target_subtype,
-        .running_address_bytes = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? 0x20000 : 0x200000,
-        .boot_address_bytes = boot_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? 0x20000 : 0x200000,
-        .target_address_bytes = target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? 0x20000 : 0x200000,
-        .running_size_bytes = 0x1e0000,
-        .boot_size_bytes = 0x1e0000,
-        .target_size_bytes = 0x1e0000,
+        .running_address_bytes = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? ESP_BASE_OTA_0_ADDRESS_BYTES : ESP_BASE_OTA_1_ADDRESS_BYTES,
+        .boot_address_bytes = boot_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? ESP_BASE_OTA_0_ADDRESS_BYTES : ESP_BASE_OTA_1_ADDRESS_BYTES,
+        .target_address_bytes = target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? ESP_BASE_OTA_0_ADDRESS_BYTES : ESP_BASE_OTA_1_ADDRESS_BYTES,
+        .running_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
+        .boot_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
+        .target_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
         .running_state = source_state,
         .target_state = target_lookup == ESP_ERR_NOT_FOUND ? EOTA_STATE_UNTRACKED : target_state,
     };

@@ -12,10 +12,18 @@
 #define ESP_BASE_OTA_TARGET "esp32c3/esp_base"
 #define ESP_BASE_OTA_SIGNATURE_SCHEME "esp_secure_boot_v2_rsa3072"
 #elif defined(CONFIG_IDF_TARGET_ESP32)
-#error "ESP32 Base OTA policy needs its frozen layout and signed boot chain"
+#define ESP_BASE_OTA_TARGET "esp32/esp_base"
+#define ESP_BASE_OTA_SIGNATURE_SCHEME "esp_secure_boot_v1_ecdsa_p256"
+#define ESP_BASE_OTA_1_ADDRESS_BYTES 0x140000
+#define ESP_BASE_OTA_SLOT_SIZE_BYTES 0x120000
 #else
 #error "ESP Base OTA policy supports only esp32c3 and esp32"
 #endif
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+#define ESP_BASE_OTA_1_ADDRESS_BYTES 0x200000
+#define ESP_BASE_OTA_SLOT_SIZE_BYTES 0x1e0000
+#endif
+#define ESP_BASE_OTA_0_ADDRESS_BYTES 0x20000
 
 typedef struct {
     char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
