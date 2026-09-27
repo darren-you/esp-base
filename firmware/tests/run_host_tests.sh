@@ -99,6 +99,7 @@ fi
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/wifi_runtime/include" -I "$ROOT/components/time_runtime/include" \
   -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" -I "$EFRP_DIR/include" \
+  -I "$ROOT/managed_components/mqtt/runtime/include" \
   "$ROOT/components/device_protocol/command_guard.c" \
   "$ROOT/components/device_protocol/control_state.c" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \

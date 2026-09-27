@@ -12,6 +12,7 @@ static const char request[] = "{\"protocol_version\":1,\"request_id\":\"11111111
 static const char hex_tag[] = "57d8e98b33e69b075cd138712813411c036f615a240e04a54e8c54f2fa3f38ca";
 static struct emqtt_runtime { int marker; } runtime;
 static emqtt_config_t captured;
+static emqtt_config_t scratch;
 static emqtt_event_t events[24];
 static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands;
 static emqtt_state_t state = EMQTT_STOPPED;
@@ -134,16 +135,25 @@ static ebase_mqtt_config_t config(void)
     return result;
 }
 
+static esp_err_t configure(const ebase_mqtt_config_t *mqtt)
+{
+    memset(&scratch, 0xa5, sizeof scratch);
+    const esp_err_t result = esp_base_mqtt_owner_configure(mqtt, device_id, boot_id, &scratch);
+    const uint8_t *bytes = (const uint8_t *)&scratch;
+    for (size_t i = 0; i < sizeof scratch; ++i) assert(bytes[i] == 0);
+    return result;
+}
+
 int main(void)
 {
     ebase_mqtt_config_t absent = {0};
-    assert(esp_base_mqtt_owner_configure(&absent, device_id, boot_id) == ESP_OK);
+    assert(configure(&absent) == ESP_OK);
     esp_base_mqtt_owner_poll(0, true, true, received, &runtime);
     assert(!creates && !starts && !esp_base_mqtt_owner_ready());
     assert(!strcmp(esp_base_mqtt_owner_state(), "unconfigured"));
 
     ebase_mqtt_config_t mqtt = config();
-    assert(esp_base_mqtt_owner_configure(&mqtt, device_id, boot_id) == ESP_OK);
+    assert(configure(&mqtt) == ESP_OK);
     assert(creates == 1 && !strcmp(captured.client_id, device_id));
     assert(captured.tls && captured.port == 8883 && !strcmp(captured.hostname, mqtt.hostname));
     assert(!strcmp(captured.username, mqtt.username) && !strcmp(captured.password, mqtt.password));
@@ -215,13 +225,13 @@ int main(void)
     assert(esp_base_mqtt_owner_ready());
 
     /* A complete MESSAGE is consumed before the next configure phase reuses
-     * the same static scratch storage for the copied client config. */
+     * the control task's command workspace for the copied client config. */
     push_command(captured.subscriptions[0].topic, false, false);
     esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
     assert(commands == 2);
-    assert(esp_base_mqtt_owner_configure(&absent, device_id, boot_id) == ESP_OK);
+    assert(configure(&absent) == ESP_OK);
     assert(destroys == 1 && !esp_base_mqtt_owner_ready() && !strcmp(esp_base_mqtt_owner_state(), "unconfigured"));
-    assert(esp_base_mqtt_owner_configure(&mqtt, device_id, boot_id) == ESP_OK);
+    assert(configure(&mqtt) == ESP_OK);
     assert(!strcmp(captured.ca_pem, mqtt.ca_pem));
     esp_base_mqtt_owner_poll(5010, true, true, received, &runtime);
     fail_publish = true;
@@ -255,7 +265,7 @@ int main(void)
     fail_stop = true;
     ebase_mqtt_config_t changed = mqtt;
     changed.management_key[0] ^= 1;
-    assert(esp_base_mqtt_owner_configure(&changed, device_id, boot_id) == ESP_FAIL);
+    assert(configure(&changed) == ESP_FAIL);
     assert(destroy_attempts == 2 && destroys == 1 && creates == 2);
     push_command(captured.subscriptions[0].topic, false, false);
     esp_base_mqtt_owner_poll(15015, true, true, received, &runtime);

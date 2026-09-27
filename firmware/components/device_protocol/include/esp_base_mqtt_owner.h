@@ -5,13 +5,16 @@
 #include <stdint.h>
 #include "esp_base_config.h"
 #include "esp_err.h"
+#include "emqtt_contract.h"
 
 typedef void (*ebase_mqtt_command_handler_t)(const uint8_t *json, size_t length, void *context);
 
-/* Called only by the USB control task. A missing MQTT configuration does not
- * create a client or open a socket. A new revision replaces the old session. */
+/* Called only by the Base control task. scratch is distinct from config, is
+ * borrowed only until return, and is wiped on every valid call. emqtt_create
+ * copies its contents; a new revision replaces the old session. */
 esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
-                                       const char *device_id, const char *boot_id);
+                                       const char *device_id, const char *boot_id,
+                                       emqtt_config_t *scratch);
 void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_time_ready,
                               ebase_mqtt_command_handler_t handler, void *context);
 const char *esp_base_mqtt_owner_state(void);

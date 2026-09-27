@@ -62,7 +62,14 @@ static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
 static uint64_t s_trial_deadline;
 static esp_base_remote_config_t s_candidate;
-static ebase_command_t command;
+/* The control task configures MQTT between command callbacks. emqtt_create
+ * copies this short-lived input before MQTT polling may parse a new command. */
+static union {
+    ebase_command_t command;
+    emqtt_config_t mqtt_config;
+} s_control_work;
+_Static_assert(sizeof(ebase_command_t) >= sizeof(emqtt_config_t),
+               "MQTT setup must fit the existing command workspace");
 static bool s_reply_mqtt, s_mqtt_revision_set;
 static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
@@ -328,7 +335,8 @@ static void poll_configuration(uint64_t now)
         /* The control task is the sole reader/writer of s_context.config after
          * startup. Network owners copy their config before starting workers. */
         esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision,
-                                                                  &s_context.config, &command.config);
+                                                                  &s_context.config,
+                                                                  &s_control_work.command.config);
         s_trial_active = false;
         memset(&s_candidate, 0, sizeof s_candidate);
         if (error == ESP_OK) {
@@ -498,71 +506,72 @@ static void poll_ota(void)
 static void handle_line(const char *line, size_t length, void *context)
 {
     (void)context;
-    const char *error = ebase_parse_command(line, length, &command);
-    if (error) { reply(command.request.request_id, "failed", error, NULL); return; }
-    if (command.kind == EBASE_STATUS) {
+    ebase_command_t *const command = &s_control_work.command;
+    const char *error = ebase_parse_command(line, length, command);
+    if (error) { reply(command->request.request_id, "failed", error, NULL); return; }
+    if (command->kind == EBASE_STATUS) {
         status_snapshot_t current = snapshot();
-        reply(command.request.request_id, "succeeded", NULL, &current);
+        reply(command->request.request_id, "succeeded", NULL, &current);
         return;
     }
-    if (command.kind == EBASE_OTA_RESULT) {
+    if (command->kind == EBASE_OTA_RESULT) {
         esp_base_ota_receipt_view_t view;
-        const bool active = s_ota_active && !strcmp(s_ota_request.operation_id, command.operation_id);
+        const bool active = s_ota_active && !strcmp(s_ota_request.operation_id, command->operation_id);
         const esp_base_ota_receipt_result_t result = esp_base_ota_receipt_query(
-            s_context.device_id, command.operation_id, active, &view);
-        if (result == ESP_BASE_OTA_RECEIPT_OK) reply_ota_result(command.request.request_id, &view);
-        else reply(command.request.request_id, result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "failed" : "unknown",
+            s_context.device_id, command->operation_id, active, &view);
+        if (result == ESP_BASE_OTA_RECEIPT_OK) reply_ota_result(command->request.request_id, &view);
+        else reply(command->request.request_id, result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "failed" : "unknown",
                    result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "ota_signing_unavailable" :
                    result == ESP_BASE_OTA_RECEIPT_NOT_FOUND ? "ota_operation_not_found" : "storage_uncertain", NULL);
         return;
     }
-    if (command.kind == EBASE_CONFIG_SET) {
-        if (!esp_base_remote_config_with_canonical_bytes(&command.config,
-                fingerprint_config_bytes, command.request.fingerprint)) {
-            reply(command.request.request_id, "failed", "resource_failure", NULL); return;
+    if (command->kind == EBASE_CONFIG_SET) {
+        if (!esp_base_remote_config_with_canonical_bytes(&command->config,
+                fingerprint_config_bytes, command->request.fingerprint)) {
+            reply(command->request.request_id, "failed", "resource_failure", NULL); return;
         }
     }
-    if (command.kind == EBASE_OTA_START) {
+    if (command->kind == EBASE_OTA_START) {
         uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + EOTA_URL_BYTES + 1 + 32 + 4];
         size_t offset = 0;
         memcpy(bytes + offset, "ota.start", 9); offset += 9;
-        memcpy(bytes + offset, command.ota.operation_id, ESP_BASE_OTA_OPERATION_ID_BYTES); offset += ESP_BASE_OTA_OPERATION_ID_BYTES;
-        const size_t url_bytes = strlen(command.ota.image_url) + 1;
-        memcpy(bytes + offset, command.ota.image_url, url_bytes); offset += url_bytes;
-        memcpy(bytes + offset, command.ota.sha256, 32); offset += 32;
-        for (int i = 3; i >= 0; --i) bytes[offset++] = (uint8_t)(command.ota.image_size_bytes >> (8 * i));
+        memcpy(bytes + offset, command->ota.operation_id, ESP_BASE_OTA_OPERATION_ID_BYTES); offset += ESP_BASE_OTA_OPERATION_ID_BYTES;
+        const size_t url_bytes = strlen(command->ota.image_url) + 1;
+        memcpy(bytes + offset, command->ota.image_url, url_bytes); offset += url_bytes;
+        memcpy(bytes + offset, command->ota.sha256, 32); offset += 32;
+        for (int i = 3; i >= 0; --i) bytes[offset++] = (uint8_t)(command->ota.image_size_bytes >> (8 * i));
         size_t size = 0;
-        if (psa_hash_compute(PSA_ALG_SHA_256, bytes, offset, command.request.fingerprint,
-                sizeof command.request.fingerprint, &size) != PSA_SUCCESS || size != 32) {
-            reply(command.request.request_id, "failed", "resource_failure", NULL); return;
+        if (psa_hash_compute(PSA_ALG_SHA_256, bytes, offset, command->request.fingerprint,
+                sizeof command->request.fingerprint, &size) != PSA_SUCCESS || size != 32) {
+            reply(command->request.request_id, "failed", "resource_failure", NULL); return;
         }
     }
     size_t slot = 0;
-    const ebase_admission_t decision = ebase_admit(&s_guard, &command.request,
+    const ebase_admission_t decision = ebase_admit(&s_guard, &command->request,
         s_context.device_id, s_boot_id, uptime_ms(), &slot);
     if (decision == EBASE_REPLAY) { emit_outcome(slot, s_reply_mqtt); return; }
     if (decision != EBASE_ACCEPT) {
         static const char *const errors[] = {NULL, NULL, "invalid_identity", "wrong_device",
             "wrong_boot", "expired", "invalid_deadline", "request_conflict", "capacity_exceeded"};
-        reply(command.request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", errors[decision], NULL);
+        reply(command->request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", errors[decision], NULL);
         return;
     }
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
-    if (s_reply_mqtt && command.kind == EBASE_CONFIG_SET) {
+    if (s_reply_mqtt && command->kind == EBASE_CONFIG_SET) {
         save_outcome(slot, "failed", "physical_usb_required", false);
         return;
     }
-    if (command.kind == EBASE_CONFIG_SET) {
+    if (command->kind == EBASE_CONFIG_SET) {
         const char *ota_error = esp_base_control_state_config_write_error(&s_control_state);
         if (ota_error != NULL) { save_outcome(slot, "failed", ota_error, false); return; }
     }
-    if (command.kind == EBASE_OTA_START) {
+    if (command->kind == EBASE_OTA_START) {
         if (!eota_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
         eota_image_t candidate = {
-            .image_url = command.ota.image_url,
-            .image_size_bytes = command.ota.image_size_bytes,
+            .image_url = command->ota.image_url,
+            .image_size_bytes = command->ota.image_size_bytes,
         };
-        memcpy(candidate.sha256, command.ota.sha256, sizeof candidate.sha256);
+        memcpy(candidate.sha256, command->ota.sha256, sizeof candidate.sha256);
         if (eota_validate_image_request(&candidate) != EOTA_UPDATE_OK) {
             save_outcome(slot, "failed", "invalid_request", false); return;
         }
@@ -589,7 +598,7 @@ static void handle_line(const char *line, size_t length, void *context)
             return;
         }
         const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(
-            s_context.device_id, &command.ota, &snapshot);
+            s_context.device_id, &command->ota, &snapshot);
         if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
             const char *receipt_error = receipt == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
                 receipt == ESP_BASE_OTA_RECEIPT_CONFLICT ? "ota_operation_conflict" :
@@ -609,7 +618,7 @@ static void handle_line(const char *line, size_t length, void *context)
                          uncertain ? "storage_uncertain" : receipt_error, false);
             return;
         }
-        s_ota_request = command.ota;
+        s_ota_request = command->ota;
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
@@ -620,7 +629,7 @@ static void handle_line(const char *line, size_t length, void *context)
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
             memset(&s_ota_request, 0, sizeof s_ota_request);
-            if (esp_base_ota_receipt_record_failure(s_context.device_id, command.ota.operation_id,
+            if (esp_base_ota_receipt_record_failure(s_context.device_id, command->ota.operation_id,
                     EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
                 esp_base_storage_release(&s_ota_storage_claim)) {
                 save_outcome(slot, "failed", "resource_failure", false);
@@ -637,15 +646,15 @@ static void handle_line(const char *line, size_t length, void *context)
     if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
     if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
     if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
-    if (command.kind == EBASE_CONFIG_SET) {
-        if (command.config.revision != s_context.config.revision) {
+    if (command->kind == EBASE_CONFIG_SET) {
+        if (command->config.revision != s_context.config.revision) {
             save_outcome(slot, "failed", "revision_conflict", false); return;
         }
-        if (command.config.revision == UINT32_MAX) { save_outcome(slot, "failed", "revision_exhausted", false); return; }
-        if (command.config.frp.configured && s_context.frp_flash_store == NULL) {
+        if (command->config.revision == UINT32_MAX) { save_outcome(slot, "failed", "revision_exhausted", false); return; }
+        if (command->config.frp.configured && s_context.frp_flash_store == NULL) {
             save_outcome(slot, "failed", "frp_storage_unavailable", false); return;
         }
-        s_candidate = command.config;
+        s_candidate = command->config;
         s_trial_slot = slot;
         s_trial_deadline = uptime_ms() + 20000;
         save_outcome(slot, "running", NULL, false);
@@ -686,7 +695,8 @@ static void control_task(void *argument)
         }
         if (!esp_base_control_state_ota_pending(&s_control_state)) {
             if (!s_mqtt_revision_set || s_mqtt_revision != s_context.config.revision) {
-                (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id, s_boot_id);
+                (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id,
+                                                    s_boot_id, &s_control_work.mqtt_config);
                 s_mqtt_revision = s_context.config.revision;
                 s_mqtt_revision_set = true;
             }
