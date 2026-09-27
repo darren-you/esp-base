@@ -24,7 +24,7 @@ ebase_admission_t ebase_admit(ebase_request_guard_t *g, const ebase_request_t *r
     if (strcmp(device, r->device_id)) return EBASE_WRONG_DEVICE;
     if (strcmp(boot, r->boot_id)) return EBASE_WRONG_BOOT;
     for (size_t i = 0; i < g->count; ++i) {
-        const ebase_request_t *previous = &g->requests[i];
+        const ebase_guard_entry_t *previous = &g->entries[i];
         if (strcmp(previous->request_id, r->request_id)) continue;
         if (previous->expires_at_ms != r->expires_at_ms ||
             memcmp(previous->fingerprint, r->fingerprint, sizeof r->fingerprint))
@@ -37,6 +37,9 @@ ebase_admission_t ebase_admit(ebase_request_guard_t *g, const ebase_request_t *r
     if (r->expires_at_ms - now > EBASE_REQUEST_WINDOW_MS) return EBASE_BAD_WINDOW;
     if (g->count == EBASE_REQUEST_SLOTS) return EBASE_QUEUE_FULL;
     *slot = g->count;
-    g->requests[g->count++] = *r;
+    ebase_guard_entry_t *entry = &g->entries[g->count++];
+    memcpy(entry->request_id, r->request_id, sizeof entry->request_id);
+    entry->expires_at_ms = r->expires_at_ms;
+    memcpy(entry->fingerprint, r->fingerprint, sizeof entry->fingerprint);
     return EBASE_ACCEPT;
 }

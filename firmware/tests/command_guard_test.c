@@ -22,6 +22,13 @@ int main(void)
     ebase_request_t r = request(1);
     size_t slot = SIZE_MAX;
     assert(ebase_admit(&g, &r, r.device_id, r.boot_id, 1000, &slot) == EBASE_ACCEPT && slot == 0);
+    /* A previously accepted request ID cannot bypass this call's current
+     * device/boot check when either identity differs. */
+    assert(ebase_admit(&g, &r, "33333333-3333-4333-8333-333333333333", r.boot_id,
+                      1000, &slot) == EBASE_WRONG_DEVICE);
+    assert(ebase_admit(&g, &r, r.device_id, "44444444-4444-4444-8444-444444444444",
+                      1000, &slot) == EBASE_WRONG_BOOT);
+    assert(g.count == 1);
     assert(ebase_admit(&g, &r, r.device_id, r.boot_id, UINT64_MAX, &slot) == EBASE_REPLAY);
     r.fingerprint[0] = 1;
     assert(ebase_admit(&g, &r, r.device_id, r.boot_id, 1000, &slot) == EBASE_REQUEST_CONFLICT);
