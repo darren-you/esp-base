@@ -1,6 +1,6 @@
 # P6-03：MQTT 运行实例与入站消息 IRAM 精确锁
 
-2026-09-28。维护者坚持现有 ESP32-C3 与 ESP32-D0WD-V3 两块 4 MiB 板，普通内部 8BIT 堆历史最低门仍为 **49,152 B**。先前 Base 精确锁 `esp-mqtt@a67cb8f` 已把三份固定入站消息体改为按消息存活期分配；本轮精确锁定公开实现提交 `bebde3971c2f4b4ee99e150348213222bfd9e27e`。仅在经典 ESP32 同时启用单核与可字节访问 8BIT IRAM 时，MQTT 常驻运行实例和入站消息体从该区域分配；C3 保持普通 `calloc`。严格 TLS、4096 B 合法载荷、三条待处理加第四条在途消息、QoS1 与失败关闭合同未变。[源仓实现与容量收据](https://github.com/esp-space/esp-mqtt/blob/eed97e4ce13d0f73edb8128ca2537e02dca59ea3/docs/verification/mqtt-esp32-iram-placement.md)保留具体条件和原始日志边界。
+2026-09-28。维护者坚持现有 ESP32-C3 与 ESP32-D0WD-V3 两块 4 MiB 板，普通内部 8BIT 堆历史最低门仍为 **49,152 B**。先前 Base 精确锁 `esp-mqtt@a67cb8f` 已把三份固定入站消息体改为按消息存活期分配；本轮精确锁定公开实现提交 `bebde3971c2f4b4ee99e150348213222bfd9e27e`。仅在经典 ESP32 同时启用单核与可字节访问 8BIT IRAM 时，MQTT 常驻运行实例和入站消息体从该区域分配；C3 保持普通 `calloc`。严格 TLS、4096 B 合法载荷、三条待处理加第四条在途消息、QoS1 与失败关闭合同未变。[源仓实现与容量收据](https://github.com/esp-space/esp-mqtt/blob/4cf8d28a8e63f3236a3aa5ced49b37e36cdfeaeb/docs/verification/mqtt-esp32-iram-placement.md)保留具体条件和原始日志边界。
 
 固定 SDK `578cf89c` 的 Component Manager 在两个全新隔离源码目录分别解析，并核对实际受管源码 `runtime/emqtt.c` SHA-256 `ffff14b1143b7a458e0eab9838702826e3c8b1995e809d4d1c643ae2120799c8`。组件摘要 `b6e9d07b4650ae8c5cfdc12be28032f88131d0394acdd8d11bbbbbbe2dcd5557`，manifest 摘要 `9a1471dbf2990368c6192b42e366dc402eaf988715c79b20616f8e2ac0f080ad`；C3 `dependencies.lock` SHA-256 `9cda22a703432add42dd4d04f7e70294e91de74bd74041d09d4e067fb51ace42`，ESP32 `dependencies.lock.esp32` SHA-256 `8393de8448b57ba91215177c5a24cc1529f0c78fb595cb79bab3d0238a552d31`。除 MQTT 提交、组件摘要和 manifest 摘要外其余锁项不变。MQTT 源仓 host ASan／UBSan 与工具 **8/8**、Base C3／ESP32 完整 host ASan／UBSan 套件通过。
 
@@ -10,4 +10,6 @@
 
 同类试验的旧 MQTT 锁在 TLS／FRP 同存时最低 **44,792 B**，另次加最大入站消息为 **47,612 B**；只移动 MQTT 常驻实例的中间锁在无入站消息时最低 **52,224 B**、加消息后 **47,612 B**。这些是不同运行的历史低水，不能按差值宣称逐对象节省；同一场景的成功／失败与实际分配方向才是本次结论。最终 Flash 的签名 app 槽、包区和 `base_store` 与种子逐字节相同，FRP scratch 恢复为全 `0xff`，系统 NVS 和 `otadata` 分别变化 101／12 B；没有设备写入。
 
-这仍是 OpenETH、仓外测试时钟及直连 FRP 探针：MQTT 仅一条排队消息，FRP 仅一条工作流，未测三条已排队加第四条在途、双活跃加预备流、OTA HTTPS 下载、正式 Base Wi-Fi／SNTP／HMAC owner、实体 Wi-Fi 与两块板的迁移恢复。单次模拟容量高于门槛不能验收 P6-03 五能力最坏组合，也不完成 P3-08 或 P7-02。诊断脚本先停止 OpenETH 才处理 MQTT 队列，随后可见 transport/TLS 错误与断线；这不证明正式停机路径或网络长稳。
+同一签名 app、ECS2 与 Flash 种子另在 `mac-work-1:/private/tmp/esp-base-mqtt-frps-tls-three-messages-20260928/` 重放：Broker 在同一 FRP 工作流期间连续投递三条各 **4096 B** 的 QoS1 消息，工作流双向各 300001 B 回显仍通过；其后三条 MQTT MESSAGE 均以长度 4096 B 交付。普通 8BIT 堆历史最低 **53,348 B**，高于门 **4,196 B**；工作阶段 IRAM 8BIT 可用 **35,892 B**、最大连续块 **31,744 B**。UART SHA-256 `d138145ac390670dfbb449f338775181f735edf9dd30558f286c0a83c05e72d6`；签名 app、包区和 `base_store` 仍与种子逐字节相同。与单条试验的 32 B 差异只表示运行波动，不当作逐消息普通堆节省量。
+
+这些试验仍是 OpenETH、仓外测试时钟及直连 FRP 探针：FRP 仅一条工作流，未测三条已排队时第四条仍在途、双活跃加预备流、OTA HTTPS 下载、正式 Base Wi-Fi／SNTP／HMAC owner、实体 Wi-Fi 与两块板的迁移恢复。模拟容量高于门槛不能验收 P6-03 五能力最坏组合，也不完成 P3-08 或 P7-02。诊断脚本先停止 OpenETH 才处理 MQTT 队列，随后可见 transport/TLS 错误与断线；这不证明正式停机路径或网络长稳。
