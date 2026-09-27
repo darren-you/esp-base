@@ -2,7 +2,7 @@
 
 基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载、按 operation ID 查询 `ota.result` 的 V2 持久收据、只读签名固件集合观察，以及与 Container 产品绑定的无包固件 OTA 和启动恢复软件链。FRP 已接入公开组件和单 owner；受控 loopback 管理端点已有只读 `status` 软件候选，能在绑定成功后开放 FRP 启动门，但尚无同板资源及真实 FRPS 闭环；实体 C3 仍保留旧 Base、ESP32 仍保留旧 ESP-AT，五能力完整验收尚未完成。
 
-2026-09-28 当前主固件精确消费 `esp-frp@b462c1497438cfeb514f022bc2d2d6c026599a41`，成功 TLS 握手后的 client 快照回报实际验签标志；固定 SDK 双目标普通构建和宿主回归通过。Base v3 配置提交与读回复用一份 7,618 B 静态缓冲，严格解码并逐字段校验持久结果，双目标 `.bss` 各释放 7,618 B；尚未在同一签名网络组合中重测堆低水。[开发检查点](docs/operations/development-checkpoint.md)和[配置单缓冲收据](docs/operations/p6-03-config-single-buffer-checkpoint.md)记录精确输入与验收边界。
+2026-09-28 当前主固件精确消费 `esp-frp@b462c1497438cfeb514f022bc2d2d6c026599a41`，成功 TLS 握手后的 client 快照回报实际验签标志；固定 SDK 双目标普通构建和宿主回归通过。Base v3 配置提交与读回复用一份 7,618 B 静态缓冲，严格解码并逐字段校验持久结果，双目标 `.bss` 各释放 7,618 B。旧 FRP 锁与仓外 IRAM 会话变体的 ESP32 签名 QEMU 两次 FRPS 成功输入最低堆为 40,508／38,968 B，仍低于 48 KiB 门，不能代表正式 Base 五能力组合。[开发检查点](docs/operations/development-checkpoint.md)和[配置单缓冲收据](docs/operations/p6-03-config-single-buffer-checkpoint.md)记录精确输入与验收边界。
 
 2026-09-27 当前主固件将公开 FRP 精确锁更新到 `esp-frp@0af12209ee731617e635684309c026ae6b49c5ae`：该提交只复用会话私有阶段内存，公开头、ABI 和协议限额未变。固定 SDK 双目标普通构建、Base host ASan/UBSan 及各自 scratch 候选布局的仓外测试键签名容量门通过；[精确锁与签名容量检查点](docs/operations/frp-session-phase-union-base-dependency-checkpoint.md)记录输入。随后从该 Base 提交重新归档源码、解析双锁并重建 app／ECS2／Flash 的[双目标纯净签名 QEMU](docs/operations/p6-03-frp-phase-union-current-lock-qemu-checkpoint.md)均到产品 `RUNNING` 与 Base `READY`；C3／ESP32 启动内部堆历史最低空闲 54,104／52,596 B，完整 FRPS、MQTT、OTA 网络同存和实体板尚未验收。
 
