@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_remote_config.h"
 #include <string.h>
+#include "esp_attr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -8,9 +9,10 @@
 #define CONFIG_NAMESPACE "base_config"
 #define CONFIG_KEY "committed"
 
-/* Startup and the single control task own this buffer. NVS copies the encoded
- * candidate before readback reuses it; neither operation runs concurrently. */
-static uint8_t s_config_bytes[EBASE_CONFIG_MAX_BYTES];
+/* Startup and the single control task own this RTC buffer. NVS copies the
+ * encoded candidate before readback reuses it; neither operation overlaps.
+ * RTC data can survive deep sleep, so wipe it before each new use and on exit. */
+static RTC_DATA_ATTR uint8_t s_config_bytes[EBASE_CONFIG_MAX_BYTES];
 
 static void wipe(void *memory, size_t length)
 {
@@ -56,6 +58,7 @@ bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t 
                                                  void *context)
 {
     if (!config || !consume) return false;
+    wipe(s_config_bytes, sizeof s_config_bytes);
     size_t size = 0;
     const bool encoded = ebase_config_encode(config, s_config_bytes, &size);
     const bool consumed = encoded && consume(s_config_bytes, size, context);
@@ -66,6 +69,7 @@ bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t 
 esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
 {
     if (!config) return ESP_ERR_INVALID_ARG;
+    wipe(s_config_bytes, sizeof s_config_bytes);
     esp_err_t error = nvs_flash_init_partition(CONFIG_PARTITION);
     if (error != ESP_OK) return error;
     nvs_handle_t handle;
