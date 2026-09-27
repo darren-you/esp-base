@@ -71,7 +71,8 @@ printf 'container lifecycle test\n  Container %s\n  WAMR      %s\n  WAMR lib  %s
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L \
   -DCONFIG_IDF_TARGET_ESP32C3=1 \
   -DCONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES=32768 \
-  -Wall -Wextra -Werror -pthread \
+  -Wall -Wextra -Werror -pthread -fsanitize=address,undefined \
+  -fno-omit-frame-pointer \
   -I "$firmware_root/tests/fakes/container_product" \
   -I "$firmware_root/tests/fakes" \
   -I "$firmware_root/integrations/container_binding" \

@@ -55,6 +55,8 @@ flowchart LR
 
 MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再编译第二份运行层或重复其 SDK fake。普通 Base 的 owner 故障测试与 C3 编译只证明软件接线；设备命令与 ACK 的 Broker/实板端到端验收仍需单独执行。隔离应用使用固定公开提交做 C3 组合编译；实验实板记录见 [MQTT 集成应用](../apps/mqtt_integration/README.md)。
 
+`run_container_lifecycle_test.sh` 以精确锁定的公开 Container/WAMR 源和 wasi-sdk 编译真实签名 counter 包，Base 测试二进制启用 ASan/UBSan。卸载测试覆盖运行中 `stop/close/join`、已停止及损坏包启动失败但 native 资源确已回收的实例，调用公开 `econtainer_slots_uninstall` 后核对当前绑定清除、回退固件包引用与整份包 Flash 不变、同 boot 正式 `product_boot` 返回 `EMPTY`。错误 sequence/摘要在 guest 停止前拒绝；运行中失去 ECS2 key、Container 提交读回与 Base 独立读回各自失败、停止超时均返回不确定并禁止同 boot 重开；旧 OTA `SUCCEEDED` 收据在新产品 operation 推进 sequence 后仍核对原 A/C。Flash/NVS 与固件集合是宿主替身，不代表真实签名 Base 镜像或设备断电。
+
 ## NVS 仓外仿真
 
 [nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。

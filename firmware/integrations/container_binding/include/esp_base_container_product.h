@@ -41,6 +41,27 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
 bool esp_base_container_product_stop_confirmed(
     const esp_base_storage_claim_t *claim);
 
+typedef enum {
+    ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,
+    ESP_BASE_CONTAINER_UNINSTALL_NOT_CONFIGURED,
+    ESP_BASE_CONTAINER_UNINSTALL_REJECTED,
+    ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN,
+} esp_base_container_uninstall_result_t;
+
+/* Internal product operation boundary; no device command is exposed. The
+ * caller holds the same Base claim used by OTA, supplies the exact persisted
+ * sequence and current package digest, and has resolved the selected firmware
+ * OTA receipt. A RUNNING confirmed guest is stopped, closed and joined;
+ * STOPPED or BLOCKED guests need a joined worker and proven native cleanup.
+ * Container then clears only the running-firmware binding. COMPLETE includes an
+ * independent durable readback and permits same-boot product_boot to observe
+ * EMPTY. Any stop, commit, readback or firmware-observation uncertainty keeps
+ * same-boot reopening blocked and requires durable-state recovery. */
+esp_base_container_uninstall_result_t esp_base_container_product_uninstall(
+    const esp_base_storage_claim_t *claim,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);
+
 /* A complete product policy is required for the persistent binding path.
  * NO_PACKAGE can enter firmware trial; package trials need a real authorized
  * business event source and are rejected before inactive-app writing. */

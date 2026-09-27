@@ -26,6 +26,8 @@ typedef struct {
     pthread_mutex_t mutex;
     uint8_t *mapping;
     unsigned blob_writes;
+    unsigned fail_read_after_next_write;
+    unsigned read_fail_countdown;
     unsigned flash_erases;
     unsigned flash_writes;
 } store_t;
@@ -68,6 +70,10 @@ static econtainer_slot_blob_result_t read_blob(void *context, uint8_t *blob)
 {
     store_t *device = context;
     assert(device->locked);
+    if (device->read_fail_countdown != 0U &&
+        --device->read_fail_countdown == 0U) {
+        return ECONTAINER_SLOT_BLOB_READ_FAILED;
+    }
     if (!device->present) return ECONTAINER_SLOT_BLOB_NOT_FOUND;
     memcpy(blob, device->blob, sizeof device->blob);
     return ECONTAINER_SLOT_BLOB_FOUND;
@@ -80,6 +86,10 @@ static bool write_blob(void *context, const uint8_t *blob)
     memcpy(device->blob, blob, sizeof device->blob);
     device->present = true;
     ++device->blob_writes;
+    if (device->fail_read_after_next_write != 0U) {
+        device->read_fail_countdown = device->fail_read_after_next_write;
+        device->fail_read_after_next_write = 0U;
+    }
     return true;
 }
 
@@ -87,7 +97,7 @@ static bool read_flash(void *context, uint32_t offset, uint8_t *bytes, size_t si
 {
     store_t *device = context;
     assert(device->locked && in_range(offset, size));
-    memcpy(bytes, device->flash + offset - FLASH_BASE, size);
+    memcpy(bytes, device->flash + (offset - FLASH_BASE), size);
     return true;
 }
 
@@ -95,7 +105,7 @@ static bool erase_flash(void *context, uint32_t offset, uint32_t size)
 {
     store_t *device = context;
     assert(device->locked && device->mapping == NULL && in_range(offset, size));
-    memset(device->flash + offset - FLASH_BASE, 0xff, size);
+    memset(device->flash + (offset - FLASH_BASE), 0xff, size);
     ++device->flash_erases;
     return true;
 }
@@ -105,7 +115,7 @@ static bool write_flash(void *context, uint32_t offset, const uint8_t *bytes, si
     store_t *device = context;
     assert(device->locked && device->mapping == NULL && in_range(offset, size));
     for (size_t index = 0; index < size; ++index) {
-        uint8_t *destination = device->flash + offset - FLASH_BASE + index;
+        uint8_t *destination = device->flash + (offset - FLASH_BASE) + index;
         assert((*destination & bytes[index]) == bytes[index]);
         *destination &= bytes[index];
     }
@@ -120,7 +130,7 @@ static bool map_flash(void *context, uint32_t offset, size_t size,
     assert(device->locked && device->mapping == NULL && in_range(offset, size));
     device->mapping = malloc(size);
     if (device->mapping == NULL) return false;
-    memcpy(device->mapping, device->flash + offset - FLASH_BASE, size);
+    memcpy(device->mapping, device->flash + (offset - FLASH_BASE), size);
     *mapped = device->mapping;
     *handle = 0;
     return true;
@@ -322,7 +332,7 @@ static void configure(const file_t *public_key)
     configure_product(public_key);
 }
 
-typedef struct { const file_t *package; } install_context_t;
+typedef struct { const file_t *package; uint8_t operation_marker; } install_context_t;
 
 static econtainer_slots_result_t install_signed(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
@@ -332,7 +342,8 @@ static econtainer_slots_result_t install_signed(
     econtainer_slots_result_t result = econtainer_slots_load(&io, &geometry, &state);
     if (result != ECONTAINER_SLOTS_OK) { fprintf(stderr, "install load=%d\n", (int)result); return result; }
     econtainer_slot_operation_t operation = {0};
-    operation.operation_id[0] = 0x44;
+    operation.operation_id[0] = ((const install_context_t *)context)->operation_marker;
+    if (operation.operation_id[0] == 0U) operation.operation_id[0] = 0x44;
     memcpy(operation.target_firmware_sha256, firmware_set->running_firmware_sha256, 32);
     assert(SHA256(package->bytes, package->size, operation.package_sha256) != NULL);
     operation.package_size_bytes = (uint32_t)package->size;
@@ -383,6 +394,224 @@ static econtainer_slots_result_t open_after_stop(
     assert(econtainer_product_stop(runtime) == ECONTAINER_RUNTIME_OK);
     assert(econtainer_product_close(&runtime) == ECONTAINER_RUNTIME_OK && runtime == NULL);
     return ECONTAINER_SLOTS_OK;
+}
+
+static void run_uninstall_with_fallback(const file_t *key, const file_t *package,
+                                        const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install_a = {.package = package, .operation_marker = 0x44};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install_a) == ECONTAINER_SLOTS_OK);
+
+    /* The second signed firmware is selected after a real persisted binding
+     * exists for A. Its own signed package is installed under the same set. */
+    physical = (esp_base_ota_firmware_set_t){.bootable_count = 2};
+    memset(physical.bootable_firmware_sha256[0], 0x22, 32);
+    memset(physical.bootable_firmware_sha256[1], 0x11, 32);
+    memcpy(physical.running_firmware_sha256, physical.bootable_firmware_sha256[0], 32);
+    install_context_t install_b = {.package = package, .operation_marker = 0x45};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install_b) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_storage_release(&claim));
+    assert(esp_base_storage_claim(&owner, &claim));
+
+    econtainer_slots_state_t before = {0}, after = {0};
+    assert(econtainer_slots_load(&io, &geometry, &before) == ECONTAINER_SLOTS_OK);
+    const int running_index = binding_index(&before, physical.running_firmware_sha256);
+    const int fallback_index = 1 - running_index;
+    assert(running_index >= 0 && before.bindings[running_index].package_present &&
+           before.bindings[fallback_index].package_present);
+    uint8_t flash_before[FLASH_BYTES];
+    memcpy(flash_before, store.flash, sizeof flash_before);
+    const unsigned writes_before = store.blob_writes;
+    const unsigned erases_before = store.flash_erases;
+    const unsigned flash_writes_before = store.flash_writes;
+    const char uninstall_id[] = "33333333-3333-4333-8333-333333333333";
+    uint8_t wrong_digest[32] = {1};
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        before.sequence - 1U, before.bindings[running_index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_REJECTED);
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        before.sequence, wrong_digest) == ESP_BASE_CONTAINER_UNINSTALL_REJECTED);
+    assert(s_product.thread_joinable &&
+           atomic_load(&s_product.result) == ESP_BASE_CONTAINER_RUNNING &&
+           store.blob_writes == writes_before);
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        before.sequence, before.bindings[running_index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_COMPLETE);
+    assert(esp_base_storage_claim_active(&claim));
+    assert(econtainer_slots_load(&io, &geometry, &after) == ECONTAINER_SLOTS_OK);
+    assert(after.sequence == before.sequence + 1U &&
+           !after.bindings[running_index].package_present &&
+           same_binding(&before.bindings[fallback_index], &after.bindings[fallback_index]));
+    assert(store.blob_writes == writes_before + 1U &&
+           store.flash_erases == erases_before &&
+           store.flash_writes == flash_writes_before &&
+           memcmp(flash_before, store.flash, sizeof flash_before) == 0);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
+static void run_uninstall_uncertain(const file_t *key, const file_t *package,
+                                    const char boot_id[37], unsigned failed_read)
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t state = {0};
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK);
+    const int index = binding_index(&state, physical.running_firmware_sha256);
+    assert(index >= 0 && state.bindings[index].package_present);
+    const char uninstall_id[] = "44444444-4444-4444-8444-444444444444";
+    store.fail_read_after_next_write = failed_read;
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        state.sequence, state.bindings[index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN);
+    assert(!s_product.thread_joinable && !s_product.reopen_allowed &&
+           esp_base_storage_claim_active(&claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+           !state.bindings[index].package_present);
+
+    /* A new boot may resolve the durable state. The uncertain boot cannot. */
+    dispose_product();
+    configure_product(key);
+    assert(esp_base_container_product_without_ota_receipt(&claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
+static void run_uninstall_lost_state(const file_t *key, const file_t *package,
+                                     const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t state = {0};
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK);
+    const int index = binding_index(&state, physical.running_firmware_sha256);
+    assert(index >= 0 && state.bindings[index].package_present);
+    const unsigned writes_before = store.blob_writes;
+    store.present = false;
+    const char uninstall_id[] = "77777777-7777-4777-8777-777777777777";
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        state.sequence, state.bindings[index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN);
+    assert(store.blob_writes == writes_before && s_product.thread_joinable &&
+           atomic_load(&s_product.result) == ESP_BASE_CONTAINER_RUNNING &&
+           s_product.uninstall_uncertain && !s_product.reopen_allowed);
+    store.present = true;
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(!s_product.reopen_allowed &&
+           esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+           state.bindings[index].package_present);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
+static void run_uninstall_reclaimed_guest(const file_t *key, const file_t *package,
+                                          const char boot_id[37], bool corrupt_package)
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    econtainer_slots_state_t state = {0};
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK);
+    const int index = binding_index(&state, physical.running_firmware_sha256);
+    assert(index >= 0 && state.bindings[index].package_present);
+    if (corrupt_package) {
+        const size_t flash_index = geometry.slots[state.bindings[index].slot].offset_bytes -
+                                   FLASH_BASE;
+        store.flash[flash_index] ^= 1U;
+        dispose_product();
+        configure_product(key);
+        assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+        assert(!s_product.thread_joinable && s_product.native_reclaimed &&
+               !atomic_load(&s_product.instance_active));
+    } else {
+        assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+        assert(esp_base_container_product_stop_confirmed(&claim));
+        assert(!s_product.thread_joinable && s_product.native_reclaimed);
+    }
+    uint8_t flash_before[FLASH_BYTES];
+    memcpy(flash_before, store.flash, sizeof flash_before);
+    const char uninstall_id[] = "88888888-8888-4888-8888-888888888888";
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        state.sequence, state.bindings[index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_COMPLETE);
+    assert(memcmp(flash_before, store.flash, sizeof flash_before) == 0);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
+static void run_uninstall_stop_timeout(const file_t *key, const file_t *package,
+                                       const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t before = {0}, after = {0};
+    assert(econtainer_slots_load(&io, &geometry, &before) == ECONTAINER_SLOTS_OK);
+    const int index = binding_index(&before, physical.running_firmware_sha256);
+    assert(index >= 0 && before.bindings[index].package_present);
+    const unsigned writes_before = store.blob_writes;
+    timeout_stop_once = true;
+    const char uninstall_id[] = "66666666-6666-4666-8666-666666666666";
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        before.sequence, before.bindings[index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN);
+    assert(esp_base_storage_claim_active(&claim) && !s_product.reopen_allowed &&
+           store.blob_writes == writes_before);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(pthread_join(s_product.thread, NULL) == 0);
+    s_product.thread_joinable = false; /* Test teardown after unproven stop. */
+    assert(econtainer_slots_load(&io, &geometry, &after) == ECONTAINER_SLOTS_OK &&
+           same_binding(&before.bindings[index], &after.bindings[index]));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
 
 static void run_success_receipt_replay(const file_t *key, const file_t *package,
@@ -482,15 +711,26 @@ static void run_success_receipt_replay(const file_t *key, const file_t *package,
     assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &receipt, EOTA_STATE_VALID));
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
-    assert(esp_base_container_product_stop_confirmed(&claim));
-    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
-    timeout_stop_once = true;
-    assert(!esp_base_container_product_stop_confirmed(&claim));
-    assert(esp_base_storage_claim_active(&claim));
-    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
-    assert(pthread_join(s_product.thread, NULL) == 0);
-    s_product.thread_joinable = false; /* Host teardown after an unproven stop. */
-    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK);
+    const int running_index = binding_index(&state, new_c);
+    assert(running_index >= 0 && state.bindings[running_index].package_present);
+    uint8_t flash_before[FLASH_BYTES];
+    memcpy(flash_before, store.flash, sizeof flash_before);
+    const char uninstall_id[] = "55555555-5555-4555-8555-555555555555";
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        state.sequence, state.bindings[running_index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_COMPLETE);
+    assert(memcmp(flash_before, store.flash, sizeof flash_before) == 0);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    dispose_product();
+    configure_product(key);
+    assert(esp_base_container_product_reconcile_selected_ota(
+        &claim, &receipt, EOTA_STATE_VALID));
+    receipt.status = ESP_BASE_OTA_RECEIPT_PREPARED;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &receipt, EOTA_STATE_VALID));
+    receipt.status = ESP_BASE_OTA_RECEIPT_SUCCEEDED;
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
     assert(esp_base_storage_release(&claim));
     dispose_product();
     assert(pthread_mutex_destroy(&store.mutex) == 0);
@@ -542,9 +782,16 @@ int main(int argc, char **argv)
     assert(!store.locked && store.mapping == NULL);
     dispose_product();
     assert(pthread_mutex_destroy(&store.mutex) == 0);
+    run_uninstall_with_fallback(&key, &package, boot_id);
+    run_uninstall_uncertain(&key, &package, boot_id, 1U);
+    run_uninstall_uncertain(&key, &package, boot_id, 2U);
+    run_uninstall_lost_state(&key, &package, boot_id);
+    run_uninstall_reclaimed_guest(&key, &package, boot_id, false);
+    run_uninstall_reclaimed_guest(&key, &package, boot_id, true);
+    run_uninstall_stop_timeout(&key, &package, boot_id);
     run_success_receipt_replay(&key, &package, boot_id);
     free(package.bytes);
     free(key.bytes);
-    puts("container_product_lifecycle: signed EMPTY/install/stop/reopen and V2 replay passed");
+    puts("container_product_lifecycle: signed stop/uninstall/readback, fallback and V2 replay passed");
     return 0;
 }

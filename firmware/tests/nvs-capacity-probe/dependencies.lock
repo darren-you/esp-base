@@ -1,6 +1,6 @@
 dependencies:
   esp_container:
-    component_hash: d05904603539411e0d69b397634c355a75133a54e2d31a195bf96701d4c0c5a6
+    component_hash: 46285191cc8401b7892e3c1656aaf2279e03d902563880741f5011d0687a0773
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -11,7 +11,7 @@ dependencies:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: bf52b17a26e51d35a261bf852ac0c9cde76adefc
+    version: 3b5f16f01aaf4695b514b1f5f81b21e4abbd85cd
   idf:
     source:
       type: idf
@@ -35,6 +35,6 @@ dependencies:
     version: 26c235e53e29acd8b43abe7f3b524577bd4d1ae5
 direct_dependencies:
 - esp_container
-manifest_hash: a3aa04a39ed6b6510f1252ecc0da3976d945a388d76110d80ae29ea51d0bb801
+manifest_hash: d3316e3c9797a297c57d65a128f653ae232a9315e255c344ec00f09bfb3bc81f
 target: esp32c3
 version: 3.0.0
