@@ -16,8 +16,9 @@ static unsigned bind_calls;
 static unsigned retire_calls;
 static unsigned abandon_calls;
 static unsigned drop_calls;
+static unsigned confirm_calls, confirm_writes;
 static bool observation_changes;
-static bool load_fails;
+static bool load_fails, load_empty, confirm_fails;
 static esp_base_storage_owner_t owner;
 static esp_base_storage_claim_t claim;
 static const char operation_id[] = "11111111-1111-4111-8111-111111111111";
@@ -65,7 +66,8 @@ static void fixture(bool configured, bool two)
     physical_set(two);
     persisted_set(two, 7U);
     observe_calls = bind_calls = retire_calls = abandon_calls = drop_calls = 0U;
-    observation_changes = load_fails = false;
+    confirm_calls = confirm_writes = 0U;
+    observation_changes = load_fails = load_empty = confirm_fails = false;
     esp_base_storage_owner_init(&owner);
     claim = (esp_base_storage_claim_t){0};
     assert(esp_base_storage_claim(&owner, &claim));
@@ -104,6 +106,29 @@ econtainer_slots_result_t econtainer_slots_load(
 {
     assert(io && geometry && state);
     if (load_fails) return ECONTAINER_SLOTS_IO_FAILED;
+    if (load_empty) return ECONTAINER_SLOTS_EMPTY;
+    *state = persisted;
+    return ECONTAINER_SLOTS_OK;
+}
+
+econtainer_slots_result_t econtainer_slots_confirm(
+    const econtainer_slots_io_t *io, const econtainer_slots_geometry_t *geometry,
+    uint32_t expected_sequence, const uint8_t running_firmware_sha256[32],
+    const uint8_t current_boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES],
+    econtainer_slots_state_t *state)
+{
+    assert(io && geometry && running_firmware_sha256 && current_boot_id && state);
+    ++confirm_calls;
+    if (confirm_fails) return ECONTAINER_SLOTS_IO_FAILED;
+    if (persisted.sequence != expected_sequence ||
+        persisted.phase != ECONTAINER_SLOT_HEALTH_VERIFIED ||
+        memcmp(persisted.operation.target_firmware_sha256,
+               running_firmware_sha256, 32) != 0 ||
+        memcmp(persisted.operation.trial_boot_id, current_boot_id,
+               ECONTAINER_SLOT_BOOT_ID_BYTES) != 0) return ECONTAINER_SLOTS_CONFLICT;
+    persisted.phase = ECONTAINER_SLOT_CONFIRMED;
+    ++persisted.sequence;
+    ++confirm_writes;
     *state = persisted;
     return ECONTAINER_SLOTS_OK;
 }
@@ -360,53 +385,99 @@ int main(void)
     selected_physical();
     staged_candidate(9U); /* Original 7, old B retirement 8, C stage 9. */
     esp_base_ota_receipt_recovery_t selected = selected_receipt();
-    assert(esp_base_container_product_verify_selected_ota(
+    assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
     strcpy(selected.operation_id, "99999999-9999-4999-8999-999999999999");
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
     selected = selected_receipt();
     ++persisted.sequence;
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
 
     fixture(true, true);
     selected_physical();
     staged_candidate(11U);
     persisted.phase = ECONTAINER_SLOT_HEALTH_VERIFIED;
+    assert(decode_uuid(boot_id, persisted.operation.trial_boot_id));
     selected = selected_receipt();
-    assert(esp_base_container_product_verify_selected_ota(
+    assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_VALID));
+    assert(persisted.phase == ECONTAINER_SLOT_CONFIRMED &&
+           persisted.sequence == 12U && confirm_writes == 1U);
     selected.status = ESP_BASE_OTA_RECEIPT_SUCCEEDED;
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_VALID));
-    persisted.phase = ECONTAINER_SLOT_CONFIRMED;
-    persisted.sequence = 12U;
-    assert(esp_base_container_product_verify_selected_ota(
+    selected.status = ESP_BASE_OTA_RECEIPT_PREPARED;
+    assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_VALID));
+    assert(confirm_calls == 1U && confirm_writes == 1U);
     persisted.bindings[0].firmware_sha256[0] ^= 1U;
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_VALID));
+
+    fixture(true, true);
+    selected_physical();
+    staged_candidate(11U);
+    persisted.phase = ECONTAINER_SLOT_HEALTH_VERIFIED;
+    selected = selected_receipt();
+    selected.status = ESP_BASE_OTA_RECEIPT_SUCCEEDED;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    selected = selected_receipt();
+    strcpy(selected.operation_id, "99999999-9999-4999-8999-999999999999");
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    selected = selected_receipt();
+    ++selected.container_sequence;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    selected = selected_receipt();
+    selected.candidate_sha256[0] ^= 1U;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    assert(confirm_calls == 0U && confirm_writes == 0U &&
+           persisted.phase == ECONTAINER_SLOT_HEALTH_VERIFIED);
+    selected = selected_receipt();
+    confirm_fails = true;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    assert(confirm_calls == 1U && confirm_writes == 0U &&
+           persisted.phase == ECONTAINER_SLOT_HEALTH_VERIFIED);
+
+    fixture(true, false);
+    assert(esp_base_container_product_without_ota_receipt(&claim));
+    staged_candidate(8U);
+    assert(!esp_base_container_product_without_ota_receipt(&claim));
+    assert(persisted.phase == ECONTAINER_SLOT_PREPARED &&
+           confirm_writes == 0U && abandon_calls == 0U && drop_calls == 0U);
+    persisted.phase = ECONTAINER_SLOT_CONFIRMED;
+    assert(!esp_base_container_product_without_ota_receipt(&claim));
+    load_empty = true;
+    assert(esp_base_container_product_without_ota_receipt(&claim));
+    load_empty = false;
+    load_fails = true;
+    assert(!esp_base_container_product_without_ota_receipt(&claim));
 
     fixture(false, true);
     selected_physical();
     selected = selected_receipt();
     selected.container_enabled = false;
     selected.container_sequence = 0U;
-    assert(esp_base_container_product_verify_selected_ota(
+    assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
-    assert(esp_base_container_product_verify_selected_ota(
+    assert(esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_VALID));
     physical.bootable_count = 1U;
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
     selected_physical();
     physical.bootable_firmware_sha256[1][0] ^= 1U;
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
     selected_physical();
     observation_changes = true;
-    assert(!esp_base_container_product_verify_selected_ota(
+    assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_PENDING_VERIFY));
 
     puts("  container_product_retire passed (snapshot, retirement, recovery, selected C identity)");

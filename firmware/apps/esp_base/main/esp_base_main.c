@@ -101,13 +101,16 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
                                      bool *needs_success_receipt)
 {
     *needs_success_receipt = false;
-    if (!eota_available()) return true;
+    if (!eota_available())
+        return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     esp_base_ota_receipt_recovery_t receipt = {0};
     const esp_base_ota_receipt_result_t loaded =
         esp_base_ota_receipt_load_for_recovery(device_id, &receipt);
-    if (loaded == ESP_BASE_OTA_RECEIPT_NOT_FOUND) return true;
+    if (loaded == ESP_BASE_OTA_RECEIPT_NOT_FOUND)
+        return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     if (loaded != ESP_BASE_OTA_RECEIPT_OK) return false;
-    if (receipt.status == ESP_BASE_OTA_RECEIPT_FAILED) return true;
+    if (receipt.status == ESP_BASE_OTA_RECEIPT_FAILED)
+        return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     if ((receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED &&
          receipt.status != ESP_BASE_OTA_RECEIPT_SUCCEEDED) ||
         receipt.container_enabled != esp_base_container_product_configured()) {
@@ -132,7 +135,7 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
             eota_sha256_running(&policy, receipt.image_size_bytes, digest) !=
                 EOTA_UPDATE_OK ||
             memcmp(digest, receipt.candidate_sha256, sizeof digest) != 0 ||
-            !esp_base_container_product_verify_selected_ota(
+            !esp_base_container_product_reconcile_selected_ota(
                 &s_boot_storage_claim, &receipt, slots.running_state)) {
             return false;
         }

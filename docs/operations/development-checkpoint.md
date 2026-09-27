@@ -1,5 +1,10 @@
 # 开发检查点
 
+2026-09-27 Container 启动收据边界修正：原产品启动在没有 V2 收据或收据已记 `FAILED` 时，仍可能凭 ECS2 自身的 `firmware_transition` 和当前固件集合执行 `abandon`／`drop`，或在 VALID C 的 `HEALTH_VERIFIED` 窗口自行 `confirm`；即使不触发写入，普通 reconcile 也可能放行无收据的 `CONFIRMED` 固件迁移。本轮从普通产品启动删除该通用恢复；`NOT_FOUND`、`FAILED`、OTA 不可用时先在 Base 存储 claim 下只读加载真实 ECS2，残留固件迁移一律阻断，允许确实缺键的无包首装与无固件迁移的包绑定。VALID C 的 `PREPARED` V2 收据若逐项匹配原 operation ID、A/C 签名摘要、原 ECS2 sequence 和 `NO_PACKAGE`，且 ECS2 为 `HEALTH_VERIFIED`，就在收据对账中调用 Container confirm 并读回；`CONFIRMED` 同一收据幂等通过。A 仍运行的中断恢复仍只消费原收据限定的物理槽和 ECS2 状态。
+
+- 固定 SDK `578cf89`／lwIP `2758df4` 在 `mac-work-1` 的独立副本重新解析本仓 C3 精确锁；C3 与 ESP32 的 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 均通过。新 product fake 检验错 operation、sequence、摘要零确认写入，已确认状态不重写，确认失败阻断；启动 fake 检验缺失/失败收据与 OTA 不可用时不进入产品 boot，以及原收据选中 C 的恢复接线。依赖仍为 Container `bf52b17`、OTA `7f316c2`；没有改分区、组件锁、签名键或设备。
+- 本检查点仍是 host 故障注入：Container provider 的实际 NVS 掉电行为、VALID otadata 与 ECS2 提交之间复位、签名镜像读回、包的真实启动、guest 停止以及五能力同存尚未实板验证。P6-03／P7-02 保持进行中。
+
 2026-09-27 双目标签名产品局部 LTO 容量账本：在 `esp-base@8a62d27`、FRP `6609fbc`、MQTT `9d6d95e`、OTA `7f316c2`、Container `bf52b17`、WAMR `26c235e`、固定 IDF `578cf89`／lwIP `2758df4` 及同一仓外签名输入下，只给指定静态库增加 `-flto`，逐档完整重建并经官方签名验证、双 app 槽尺寸检查。没有改变组件源码、锁、正式分区或实体设备；以下均是**当前代码的仓外优化空间实验**，未来接入 FRP Flash reader、session 和 Base provider 后必须重做完整产品门。
 
 - C3 原始产品 RSA v2 app 为 `0x111000`，PADDING／当前签名台阶可吸收的非填充增长只有 **888 B**。在原有 WAMR、MQTT 局部 LTO 上新增 FRP、Container、`device_protocol`、`container_binding`、`ota_operation` 后仍为 `0x111000`，PADDING 增至 **7,656 B**；把其余 Base 自有库与 main 也纳入后最多 **8,384 B**。每档官方 RSA 验签和两个 `0x118000` app 尺寸门通过。超过当前台阶会跳至 `0x121000` 并溢出每槽 `0x9000`，不能把 `0x7000` 槽总余量误当作任意新代码预算。

@@ -39,6 +39,11 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
 bool esp_base_container_product_configured(void);
 /* Reject a blocked or uninitialized product before any inactive-app write. */
 bool esp_base_container_product_ota_ready(void);
+/* Before normal boot without an active V2 receipt, read the real ECS2 key
+ * under Base's claim. A genuinely absent key permits first initialization;
+ * any persisted firmware transition requires its original receipt. */
+bool esp_base_container_product_without_ota_receipt(
+    const esp_base_storage_claim_t *claim);
 
 /* The caller holds Base's app/otadata claim. A CONFIRMED double observation
  * supplies exact signed source/inactive digests. With a product policy, the
@@ -78,9 +83,10 @@ esp_base_container_retire_result_t esp_base_container_product_recover_retired_fi
 
 /* Before starting a guest on selected C, bind the original V2 receipt to the
  * exact A/C ECS2 transition and sequence. A successful prior receipt requires
- * a durable CONFIRMED phase; a PREPARED receipt may resume only the precise
- * pending trial or a VALID C awaiting/after Container confirmation. */
-bool esp_base_container_product_verify_selected_ota(
+ * a durable CONFIRMED phase; a PREPARED receipt permits the exact pending
+ * trial, or completes HEALTH_VERIFIED -> CONFIRMED for a VALID C and reads it
+ * back. No normal boot path changes a transition without this receipt. */
+bool esp_base_container_product_reconcile_selected_ota(
     const esp_base_storage_claim_t *claim,
     const esp_base_ota_receipt_recovery_t *receipt, eota_state_t running_state);
 
