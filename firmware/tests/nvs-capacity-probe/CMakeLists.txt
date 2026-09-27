@@ -13,6 +13,7 @@ if(IDF_TARGET STREQUAL "esp32" AND NOT PROBE_NVS_PAGES STREQUAL "6")
 endif()
 # The resolved Container component uses the same WAMR profile as the product.
 set(WAMR_BUILD_INSTRUCTION_METERING 1 CACHE BOOL "Bound guest instructions" FORCE)
+set(WAMR_BUILD_CLASSIC_WALL_CLOCK_LIMIT 1 CACHE BOOL "Bound guest entry time" FORCE)
 set(WAMR_BUILD_BULK_MEMORY 0 CACHE BOOL "Avoid implicit constructor invocation" FORCE)
 set(WAMR_BUILD_SHARED_MEMORY 0 CACHE BOOL "Disallow guest shared memory" FORCE)
 set(WAMR_BUILD_SHRUNK_MEMORY 0 CACHE BOOL "Preserve standard Wasm page sizes" FORCE)

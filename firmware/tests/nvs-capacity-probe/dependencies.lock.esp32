@@ -1,23 +1,23 @@
 dependencies:
   esp_container:
-    component_hash: 46285191cc8401b7892e3c1656aaf2279e03d902563880741f5011d0687a0773
+    component_hash: 7552b87b4ff77cc236df95e208d6b4b3f1434444bcf3101a1987bd078453ae37
     dependencies:
     - name: idf
       version: ==6.1.0
     - git: https://github.com/darren-you/wasm-micro-runtime.git
       name: wasm-micro-runtime
-      version: 26c235e53e29acd8b43abe7f3b524577bd4d1ae5
+      version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
     source:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: 3b5f16f01aaf4695b514b1f5f81b21e4abbd85cd
+    version: 6ef74faabb675bce0180570f5bdf0232af11106a
   idf:
     source:
       type: idf
     version: 6.1.0
   wasm-micro-runtime:
-    component_hash: a799be27248cadffdee6f6fae988dbdf3f5d423baab0b1008d74b8581b5ed507
+    component_hash: 713ac0a363a97ad951440e9f5a495d5cac426ee5501667a61d8aed6291c3facc
     dependencies:
     - name: idf
       version: '>=4.4'
@@ -32,9 +32,9 @@ dependencies:
     - esp32c6
     - esp32p4
     - esp32c5
-    version: 26c235e53e29acd8b43abe7f3b524577bd4d1ae5
+    version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
 direct_dependencies:
 - esp_container
-manifest_hash: d3316e3c9797a297c57d65a128f653ae232a9315e255c344ec00f09bfb3bc81f
+manifest_hash: 764978b5a7eded89d90d8977692d939678773bfacd3dc47e4ce564615a3fdab2
 target: esp32
 version: 3.0.0

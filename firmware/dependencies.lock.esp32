@@ -1,17 +1,17 @@
 dependencies:
   esp_container:
-    component_hash: 46285191cc8401b7892e3c1656aaf2279e03d902563880741f5011d0687a0773
+    component_hash: 7552b87b4ff77cc236df95e208d6b4b3f1434444bcf3101a1987bd078453ae37
     dependencies:
     - name: idf
       version: ==6.1.0
     - git: https://github.com/darren-you/wasm-micro-runtime.git
       name: wasm-micro-runtime
-      version: 26c235e53e29acd8b43abe7f3b524577bd4d1ae5
+      version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
     source:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: 3b5f16f01aaf4695b514b1f5f81b21e4abbd85cd
+    version: 6ef74faabb675bce0180570f5bdf0232af11106a
   esp_frp:
     component_hash: 4c176eff15bc4d4003178053ec52f5a2d9a0085e4fe85429942a3b21b83a9197
     dependencies:
@@ -25,7 +25,7 @@ dependencies:
       type: git
     version: 98bab0c0fbac684a6f89772c50c8bcf37aafe4fc
   esp_ota:
-    component_hash: 541ad5f2fec1178a9d4bc5820e6c48cd087519a6e0a26379195de71435d3b098
+    component_hash: 02514361eee5053de182d4d1396ea96d1fbca5de32f61f25ceb1dffd424349db
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -33,7 +33,7 @@ dependencies:
       git: https://github.com/esp-space/esp-ota.git
       path: components/esp_ota
       type: git
-    version: 7f316c2a3a71dcae234b046905aee60696a357d3
+    version: f4fb0b4f3fa7b384edf540bac626314418156d22
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -59,7 +59,7 @@ dependencies:
       type: git
     version: 9d6d95e779f4f5ff387a6d9b54015bf4e43565f2
   wasm-micro-runtime:
-    component_hash: a799be27248cadffdee6f6fae988dbdf3f5d423baab0b1008d74b8581b5ed507
+    component_hash: 713ac0a363a97ad951440e9f5a495d5cac426ee5501667a61d8aed6291c3facc
     dependencies:
     - name: idf
       version: '>=4.4'
@@ -74,13 +74,13 @@ dependencies:
     - esp32c6
     - esp32p4
     - esp32c5
-    version: 26c235e53e29acd8b43abe7f3b524577bd4d1ae5
+    version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
 direct_dependencies:
 - esp_container
 - esp_frp
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: 638a335783ec1bf441ec98164473bc5481090bffe89745e69e53123f8a366ea6
+manifest_hash: 61cbcd2081332fff852de9c8cc2e559e209854c2b64b6838b63d60e71bc8abe2
 target: esp32
 version: 3.0.0

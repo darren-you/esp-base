@@ -2,4 +2,4 @@ dependencies:
   esp_container:
     git: "https://github.com/esp-space/esp-container.git"
     path: "components/esp_container"
-    version: "3b5f16f01aaf4695b514b1f5f81b21e4abbd85cd"
+    version: "6ef74faabb675bce0180570f5bdf0232af11106a"
