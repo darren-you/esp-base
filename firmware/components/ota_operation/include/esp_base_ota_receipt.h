@@ -18,6 +18,7 @@ typedef enum {
     ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE,
     ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN,
     ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH,
+    ESP_BASE_OTA_RECEIPT_SAME_IMAGE,
     ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE,
     ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN,
 } esp_base_ota_receipt_result_t;
@@ -73,8 +74,10 @@ typedef struct {
  * the source, old distinct inactive and requested candidate identities plus
  * the current ECS2 sequence in that same blob. The caller holds the storage
  * claim and supplies a reconciled Container snapshot; register independently
- * rechecks the signed Base firmware set before commit/readback. A new operation
- * may replace only a terminal result; the same ID never downloads twice. */
+ * rechecks the signed Base firmware set before commit/readback. A candidate
+ * with the running firmware's signed digest is rejected before any receipt
+ * write or inactive-slot retirement. A new operation may replace only a
+ * terminal result; the same ID never downloads twice. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const char *device_id, const esp_base_ota_request_t *request,
     const esp_base_ota_receipt_snapshot_t *snapshot);

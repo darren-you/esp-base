@@ -19,7 +19,7 @@ static unsigned ota_ready_calls;
 static bool worker_created;
 static unsigned register_calls, failure_record_calls, task_calls, prepare_calls, stage_calls, select_calls, restart_calls;
 static unsigned snapshot_calls, load_receipt_calls, retire_calls,
-    product_retire_calls, validate_calls;
+    product_retire_calls, validate_calls, query_calls;
 static char latest_reply[1200];
 static uint32_t fake_free_heap = 1000;
 
@@ -53,7 +53,7 @@ static void reset_case(void)
     worker_created = true;
     register_calls = failure_record_calls = task_calls = prepare_calls = stage_calls = select_calls = restart_calls = 0;
     snapshot_calls = load_receipt_calls = retire_calls = product_retire_calls = 0;
-    validate_calls = 0;
+    validate_calls = query_calls = 0;
     latest_reply[0] = '\0';
     fake_free_heap = 1000;
 }
@@ -62,6 +62,16 @@ static void start(unsigned request_number)
 {
     char line[32];
     const int length = snprintf(line, sizeof line, "start-%u", request_number);
+    assert(length > 0 && (size_t)length < sizeof line);
+    s_reply_mqtt = true;
+    handle_line(line, (size_t)length, NULL);
+    s_reply_mqtt = false;
+}
+
+static void ota_result(unsigned operation_number)
+{
+    char line[32];
+    const int length = snprintf(line, sizeof line, "result-%u", operation_number);
     assert(length > 0 && (size_t)length < sizeof line);
     s_reply_mqtt = true;
     handle_line(line, (size_t)length, NULL);
@@ -203,6 +213,21 @@ int main(void)
     assert(atomic_load(&owner.active_token) == 0);
 
     reset_case();
+    register_result = ESP_BASE_OTA_RECEIPT_SAME_IMAGE;
+    start(22);
+    expect_reply("failed", "ota_same_image");
+    assert(snapshot_calls == 1 && register_calls == 1 &&
+           task_calls == 0 && retire_calls == 0 && product_retire_calls == 0 &&
+           prepare_calls == 0 && !s_ota_active &&
+           atomic_load(&owner.active_token) == 0);
+    start(22); /* The same request replays its failed result without a worker. */
+    expect_reply("failed", "ota_same_image");
+    assert(register_calls == 1 && task_calls == 0);
+    ota_result(22);
+    expect_reply("unknown", "ota_operation_not_found");
+    assert(query_calls == 1 && register_calls == 1 && task_calls == 0);
+
+    reset_case();
     register_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     start(3);
     expect_reply("unknown", "storage_uncertain");
@@ -327,9 +352,12 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
 {
     unsigned number = 0;
     const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
-    assert(configure || (length > 6U && sscanf(line, "start-%u", &number) == 1));
+    const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
+    assert(configure || query ||
+           (length > 6U && sscanf(line, "start-%u", &number) == 1));
     memset(out, 0, sizeof *out);
-    out->kind = configure ? EBASE_CONFIG_SET : EBASE_OTA_START;
+    out->kind = configure ? EBASE_CONFIG_SET :
+                query ? EBASE_OTA_RESULT : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u", number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
@@ -338,6 +366,11 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     if (configure) {
         out->config.revision = 7U;
         out->config.frp.configured = true;
+        return NULL;
+    }
+    if (query) {
+        snprintf(out->operation_id, sizeof out->operation_id,
+                 "44444444-4444-4444-8444-%012u", number);
         return NULL;
     }
     snprintf(out->ota.operation_id, sizeof out->ota.operation_id,
@@ -552,8 +585,9 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
     esp_base_ota_receipt_view_t *view)
 {
-    (void)device_id; (void)operation_id; (void)worker_active; (void)view;
-    assert(false && "ota.result is outside this test");
+    assert(device_id && operation_id && view && !worker_active &&
+           !strcmp(operation_id, "44444444-4444-4444-8444-000000000022"));
+    ++query_calls;
     return ESP_BASE_OTA_RECEIPT_NOT_FOUND;
 }
 esp_err_t esp_base_wifi_apply(const ebase_wifi_config_t *config, uint64_t now_ms)

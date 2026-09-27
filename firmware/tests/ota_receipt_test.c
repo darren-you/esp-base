@@ -202,6 +202,19 @@ int main(void)
     esp_base_ota_receipt_recovery_t recovery;
     reset();
     esp_base_ota_request_t ota = request(OP);
+    memcpy(ota.sha256, observed_source, sizeof ota.sha256);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SAME_IMAGE &&
+           writes == 0 && commits == 0);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_NOT_FOUND);
+    esp_base_ota_receipt_snapshot_t same_image_without_container = snapshot();
+    same_image_without_container.container_enabled = false;
+    same_image_without_container.container_sequence = 0U;
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &same_image_without_container) ==
+           ESP_BASE_OTA_RECEIPT_SAME_IMAGE && writes == 0);
+
+    reset();
+    ota = request(OP);
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_NOT_FOUND);
     assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_NOT_FOUND);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
@@ -308,6 +321,18 @@ int main(void)
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
     assert(view.state == ESP_BASE_OTA_OPERATION_FAILED && !strcmp(view.error_code, "ota_download_failed"));
     assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_OK);
+
+    reset(); ota = request(OP); next = request(NEXT_OP);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) ==
+           ESP_BASE_OTA_RECEIPT_OK);
+    memcpy(next.sha256, observed_source, sizeof next.sha256);
+    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_SAME_IMAGE &&
+           writes == 2 && commits == 2);
+    assert(esp_base_ota_receipt_query(DEVICE, NEXT_OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_NOT_FOUND);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_FAILED);
 
     reset(); ota = request(OP); next = request(NEXT_OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
