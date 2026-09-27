@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-27 C3 仓外合成签名包已由 Base `d3144b3` 的真实产品启动线程在 QEMU 中验签、`init` 并到达 `READY`；首次与同片二次冷启动的 ECS2、包区均未重复写入。无包与运行态堆量测、精确组件锁／输入 SHA、调试停止但未 join 的边界见 [C3 签名产品包 QEMU 检查点](c3-signed-product-qemu-checkpoint.md)。这是 `26c83d0` 卸载集成之前的签名镜像及仓外预置包，不含公开安装入口、正式停止重开或实体设备验收。
+
 2026-09-27 Base 内部产品专属卸载切片：在 `esp-base@d3144b3a7507eaddd308777b863214fa53b11fcb` 之上，将主固件及 NVS 容量探针的两目标清单和 Component Manager 生成锁精确提升到 `esp-container@3b5f16f01aaf4695b514b1f5f81b21e4abbd85cd`。Base 只有内部 `esp_base_container_product_uninstall`，没有 USB/MQTT/Tool `product.*` 写入口或设备端 `product.result`。调用方先持唯一 Base storage claim、预检当前签名固件集合、精确 ECS2 sequence／包 SHA／新 operation UUID，再对运行中的已确认 guest 停止、关闭并 join，或对已停止／启动失败 guest 验证 worker 已 join 和 native 资源确已回收；Container 公开 API 清除运行固件的包绑定，Base 再独立读取 ECS2 并确认回退固件绑定逐字段未变。成功后同 boot 正式 `product_boot` 返回 `EMPTY`；运行中失去 ECS2 key、停止、提交、独立读回或固件观察不确定均保持本 boot 重开关闭。当前包 Flash、回退包字节和数据未擦除，ECS2 最近无包 operation 不保留旧包 SHA/长度，未来跨 boot 请求结果关联仍需控制器持久账本。
 
 - 固定 WAMR `26c235e53e29acd8b43abe7f3b524577bd4d1ae5`／wasi-sdk 33 的真实签名 counter 包 host 集成在 Base ASan/UBSan、`halt_on_error=1` 下通过：双固件都有签名包时只卸载当前固件、回退引用及整份 Flash 字节不变；错误 sequence／摘要在停止前拒绝；运行中 ECS2 key 丢失、Container 提交读回与 Base 独立读回故障、唯一 pthread 停止超时均不开放同 boot 重启；已 STOPPED 与损坏包启动失败但 native 确已回收的确认绑定可卸载；旧 OTA V2 `SUCCEEDED` 收据在卸载推进 ECS2 sequence 后仍按原 A/C 核对。C3／ESP32 全套 Base host ASan/UBSan 分别 20/20、19/19 通过且无 sanitizer 报告，原始日志保存在 `mac-work-1:/private/tmp/esp-base-product-uninstall-candidate-20260927/host-esp32c3.log` 与 `host-esp32.log`。
