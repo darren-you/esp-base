@@ -99,5 +99,8 @@ config ESP_BASE_CONTAINER_MAX_ENTRY_MS
 config ESP_BASE_CONTAINER_OWNER_STACK_BYTES
     int "Product pthread stack bytes"
     default 0
+    help
+        Keep 0 with no product policy. A configured product requires at least
+        16384 bytes for the synchronous signed-package verification workspace.
 
 endmenu

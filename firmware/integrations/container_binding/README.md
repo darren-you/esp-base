@@ -31,6 +31,8 @@ flowchart LR
 
 在真实表中 `esp_container_slots_idf_bind` 校验包分区 `data/undefined`、NVS 分区、精确地址/大小、槽几何与可写属性。若指定 NVS key **确实不存在**，启动 claim 下的 `CONFIRMED` 双重观察先验证实际一个或两个签名 Base 固件，再通过公开 `econtainer_slots_initialize` 持久写入对应无包绑定；损坏、读失败或部分授权配置均不会被当成首装。既有绑定经 `reconcile` 对账。confirmed 包随后在唯一 `pthread` 中通过公开 `econtainer_product_open` 回读、映射、验签、验产品和授权，释放映射后执行 `init`；线程轮询已授权 timer 并排出 log。对账与装载结束后释放高层 claim，guest 存活不会长期占用 OTA owner；出错时保持阻断。
 
+验包与 Wasm 校验的 5,504 B 工作区在 `open_selected` 的产品 pthread 栈中，仅供同步 `econtainer_product_open` 借用；Container 自己生成本次 `verified_info`。配置了产品策略时，owner pthread 栈至少为 16,384 B；无产品策略仍为 0。双目标签名 QEMU 的启动路径已量到约 5 KiB 最低未用栈，但 ESP32 内部堆最低仍未过 48 KiB 门，event／timer／stop 与完整网络并发的栈深尚未验收，见[工作区移栈检查点](../../../docs/operations/product-workspace-stack-checkpoint.md)。
+
 同一 boot 内需要改动已确认产品绑定时，调用方先取得 Base storage claim，再调用 `esp_base_container_product_stop_confirmed`。仅在 guest 主动停止、Container `stop/close` 成功、唯一 pthread 已 join 且无实例引用后才允许再次调用 `product_boot`；失败保留 claim 并阻断重开。首次启动得到 `EMPTY` 时，已退出的线程 join 后也允许在有效 claim 下重试；重试仍由真实固件集合观察、ECS2 reconcile 和签名包 open 决定结果。`BLOCKED`、trial 和未完成停止都不开放重试；一旦卸载观察或提交进入 `UNCERTAIN`，即便后续单独停止 guest 也不开放本 boot 重试。此处只提供运行时收敛入口，尚未接入 `product.*` 命令、包来源和产品操作收据。
 
 内部 `esp_base_container_product_uninstall` 在有效 Base claim 下，以独立签名固件集合双次观察、精确 ECS2 sequence、当前包 SHA-256 和新的 operation UUID 预检当前绑定，避免把参数错误变成 guest 停机。运行中的已确认 guest 由该入口停止、关闭并 join；已 `STOPPED` 或因包损坏而 `BLOCKED` 的 guest 只有在同一 worker 已 join 且 native runtime 未创建或确已停止、关闭后才能进入卸载。它以该真实回收证明调用 `esp-container@3b5f16f` 的公开 `econtainer_slots_uninstall`，只清运行固件的包绑定。Base 在 Container 提交/读回之外再次读取 ECS2，核对新的 sequence、无包 operation、清空的当前绑定及逐字段未变的回退固件绑定。只有此读回和固件双观察全部成功才开放同次启动 `product_boot`，此时真实槽返回 `EMPTY`；失去 ECS2 key、停止、提交、独立读回或物理固件观察不确定均保留本 boot claim、禁止重开，需由新启动从持久事实重新对账。签名包原始 Flash 与回退包引用不会被擦除。

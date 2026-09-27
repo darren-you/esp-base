@@ -22,6 +22,8 @@
 
 同输入资源归因进一步用原签名镜像量到探针任务退出后的 46,776 B，并用去掉探针、其余策略相同且重新签名的 guest 镜像量到启动最低 43,636 B；后者仍低于 48 KiB 门。最大单项是 ABI 2 一页 guest 所需的 65,536 B 线性内存，未证明可安全消除足量重复分配；详见 [ESP32 产品资源归因](docs/operations/esp32-product-resource-attribution.md)。
 
+后续独立分支将 Base 同步验包工作区移至产品 pthread 栈，把配置下界提高到 16 KiB；固定 SDK 双目标宿主回归、普通及仓外测试签名构建通过。签名 QEMU 的 ESP32 guest 到达 `RUNNING/READY`，栈最低未用 5,012 B，但内部堆启动最低 49,100 B，仍比 48 KiB 门少 52 B；C3 仓外候选 guest 到达 Base `READY`，栈最低未用 5,140 B、堆最低 51,180 B。两者均未包含完整 FRPS/TLS、MQTT、OTA 并发或实板，证据见[工作区移栈检查点](docs/operations/product-workspace-stack-checkpoint.md)。
+
 ## 架构拓扑
 
 ```mermaid
