@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-03 ESP32 IRAM 容量隔离实验：在仓外签名 QEMU 诊断中使用固定 SDK 的单核／可字节访问 IRAM 与 TLS 大缓冲分配后，同一 64 KiB ABI 2 guest 下的官方 FRPS 登录、代理注册和 Pong 首次走通，普通 8BIT 堆历史最低空闲为 **17,248 B**。再将 FRP 会话本体约 14.9 KiB 严格放入 IRAM，重签、重生成 ECS2／Flash 并独立运行后仍成功，最低空闲提高到 **32,100 B**，低于 48 KiB 门 **17,052 B**。输入 SHA、签名、UART、配置差异与未验收边界见[ESP32 IRAM QEMU 检查点](esp32-p603-iram-capacity-qemu-checkpoint.md)。这两档均未改正式产品配置或 FRP 源仓，ESP32-C3 无同等 IRAM 区域，不能据此验收 P6-03／P7-02。
+
 2026-09-27 Base 消费双源码签名业务包检查点：从 `esp-base@f1603f160fe5b68aec672e5bfa126244a6a7e16c` 出发，主固件及 NVS 容量探针的 Container 清单精确更新为公开 `esp-container@adef78ff28bc868e1c930b61fd232207aad31a3e`，WAMR 仍为 `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。固定 SDK 的 Component Manager 删除旧锁后分别重算 C3／ESP32 锁；除 Container 精确版本与清单摘要外，其余依赖、Container 组件内容摘要及目标均不变。主固件两份锁 SHA-256 为 `f335d8135f5993a1daeb1d4da1a91a9bbdaddc58b4cf73024a74f19ce5e16227`／`c6961c143a9f2c5a78044209c4dbe394e04c895492de295962c147a1f09b6001`；NVS 探针两份锁为 `96095165beaae57288d73b62ed8e22485913b7afd52514ebd425b5977d46e583`／`ea276091e9325b557488f019d59925093c3356985cea1345a758558a0e7c6837`。
 
 Base 的宿主生命周期回归用锁内 Container 工具和 wasi-sdk 33 从两份无 GPIO counter 源码生成并分别签名 P1/P2。C3／ESP32 两种目标宏均在同一 boot、同一固件集合、同一 Base storage claim 中，让 P1 完成安装、确认、运行、停止及回收，事件 `{1,2,3}` 返回 3；随后 P2 经另一次五次 ECS2 提交确认，包摘要改变而固件集合不变，再次运行时相同事件返回 6。真实 WAMR、正式槽验签和 Base 产品线程均参与，Flash/NVS、调度与固件观察由宿主假件提供；同一运行还通过原有停止／卸载、100 次重装与旧 V2 收据重放及期限回归。第 10／50／100 次的 malloc 已用字节和 VM 总字节在两目标各自运行中精确相等；一次原有 macOS VM region 数断言虽多 1，但两个字节总量完全相等，现将 region 数保留在日志而以实际占用字节判断是否累积。此前测试假件仍引用已移出全局产品对象的三块工作区，本轮改由测试专有工作区承接，首次编译失败后修正并重跑通过。
