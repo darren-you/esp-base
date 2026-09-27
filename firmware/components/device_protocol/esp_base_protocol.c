@@ -72,7 +72,10 @@ const char *esp_base_protocol_boot_id(void)
 {
     return s_started && ebase_is_uuid(s_boot_id) ? s_boot_id : NULL;
 }
-static char s_mqtt_result_json[1024], s_mqtt_reported_json[512];
+#define MQTT_REPORTED_JSON_BYTES 512u
+/* The control task formats one result or one periodic report at a time.
+ * MQTT enqueue copies the payload before returning. */
+static char s_response_json[1024];
 #define FRP_STATUS_REPLAY_SLOTS 8u
 typedef struct {
     uint64_t uptime;
@@ -129,14 +132,14 @@ static void reported(void)
         frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request.image_size_bytes : 0);
-    const int size = snprintf(s_mqtt_reported_json, sizeof s_mqtt_reported_json,
+    const int size = snprintf(s_response_json, MQTT_REPORTED_JSON_BYTES,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
         "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\"}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
         esp_base_wifi_state(), time_ready ? "true" : "false", frp.state);
-    if (size > 0 && (size_t)size < sizeof s_mqtt_reported_json)
-        (void)esp_base_mqtt_owner_reported(s_mqtt_reported_json, (size_t)size);
+    if (size > 0 && (size_t)size < MQTT_REPORTED_JSON_BYTES)
+        (void)esp_base_mqtt_owner_reported(s_response_json, (size_t)size);
 }
 
 static status_snapshot_t snapshot(void)
@@ -238,16 +241,16 @@ static void reply(const char *request_id, const char *state, const char *error, 
 {
     /* USB, MQTT and FRP share one result serializer. Strings are validated
      * UUIDs or closed firmware constants; raw request bytes are never echoed. */
-    const int length = format_result_json(s_mqtt_result_json, sizeof s_mqtt_result_json,
+    const int length = format_result_json(s_response_json, sizeof s_response_json,
         request_id && request_id[0] ? request_id : NULL, state, error, status);
     if (length < 0) return;
     if (s_reply_mqtt) {
-        (void)esp_base_mqtt_owner_result(s_mqtt_result_json, (size_t)length);
+        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
         return;
     }
     flockfile(stdout);
     fputc('\n', stdout);
-    (void)fwrite(s_mqtt_result_json, 1, (size_t)length, stdout);
+    (void)fwrite(s_response_json, 1, (size_t)length, stdout);
     fputc('\n', stdout);
     fflush(stdout);
     funlockfile(stdout);
@@ -266,7 +269,7 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
     }
     digest[64] = '\0';
     if (s_reply_mqtt) {
-        const int length = snprintf(s_mqtt_result_json, sizeof s_mqtt_result_json,
+        const int length = snprintf(s_response_json, sizeof s_response_json,
             "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
             "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
             "\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
@@ -276,8 +279,8 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
             view->error_code ? "\"" : "", view->operation_id, digest, view->image_size_bytes,
             ESP_BASE_OTA_TARGET,
             view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1");
-        if (length > 0 && (size_t)length < sizeof s_mqtt_result_json)
-            (void)esp_base_mqtt_owner_result(s_mqtt_result_json, (size_t)length);
+        if (length > 0 && (size_t)length < sizeof s_response_json)
+            (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
         return;
     }
     flockfile(stdout);
