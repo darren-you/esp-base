@@ -91,6 +91,9 @@ compile_args=(-std=c11 -D_POSIX_C_SOURCE=200809L \
 "${TEST_PYTHON:-python3}" "$container_source/tests/slot_runtime_test.py" \
   "$build_dir/container_product_lifecycle_test" \
   "$build_dir/container-build/runtime-guests"
+"${TEST_PYTHON:-python3}" "$firmware_root/tests/container_product_deadline_test.py" \
+  "$build_dir/container_product_lifecycle_test" "$container_source" \
+  "$wasi_sdk_root" "$build_dir/container-build/runtime-guests"
 
 if [[ "$(uname -s)" == Darwin ]]; then
   "${CC:-cc}" -D_DARWIN_C_SOURCE=1 -DESP_BASE_TEST_RESOURCE_STATS=1 \

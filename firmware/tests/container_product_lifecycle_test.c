@@ -462,6 +462,94 @@ static econtainer_slots_result_t open_after_stop(
     return ECONTAINER_SLOTS_OK;
 }
 
+static econtainer_slots_result_t open_expired_init(
+    const econtainer_slot_firmware_set_t *firmware_set, void *context)
+{
+    (void)context;
+    econtainer_slots_state_t state = {0};
+    if (econtainer_slots_load(&io, &geometry, &state) != ECONTAINER_SLOTS_OK)
+        return ECONTAINER_SLOTS_IO_FAILED;
+    const econtainer_slot_selection_request_t request = {
+        .expected_sequence = state.sequence, .firmware_set = *firmware_set,
+        .selection = ECONTAINER_SLOT_SELECT_CONFIRMED,
+    };
+    econtainer_runtime_t *runtime = NULL;
+    const econtainer_slot_runtime_result_t opened = econtainer_product_open(
+        &io, &geometry, &request, &s_product.validation, &s_product.limits, &runtime);
+    if (opened.slots != ECONTAINER_SLOTS_OK) return opened.slots;
+    assert(opened.runtime == ECONTAINER_RUNTIME_OK && runtime != NULL);
+    /* The signed ABI 2 guest logs, starts one timer, then spins in pure Wasm. */
+    assert(econtainer_product_init(runtime) == ECONTAINER_RUNTIME_ENTRY_EXPIRED);
+    uint8_t log[16] = {0};
+    size_t log_size = 99;
+    assert(econtainer_product_take_log(runtime, log, sizeof log, &log_size) ==
+           ECONTAINER_RUNTIME_NO_LOG && log_size == 99);
+    uint64_t deadline_ms = 0;
+    econtainer_timer_event_t timer_event = {0};
+    int32_t guest_result = 123;
+    assert(econtainer_product_next_timer_deadline(runtime, &deadline_ms) ==
+           ECONTAINER_RUNTIME_INVALID_STATE);
+    assert(econtainer_product_poll_timer(runtime, &timer_event, &guest_result) ==
+           ECONTAINER_RUNTIME_INVALID_STATE && guest_result == 123);
+    assert(econtainer_product_stop(runtime) == ECONTAINER_RUNTIME_INVALID_STATE);
+    assert(econtainer_product_close(&runtime) == ECONTAINER_RUNTIME_OK && runtime == NULL);
+    return ECONTAINER_SLOTS_OK;
+}
+
+static void run_deadline_product(const char *directory)
+{
+    file_t key = read_file(directory, "public.der");
+    file_t deadline_package = read_file(directory, "deadline.pkg");
+    file_t normal_package = read_file(directory, "normal.pkg");
+    const char boot_id[] = "22222222-2222-4222-8222-222222222222";
+    esp_base_storage_owner_t owner;
+    esp_base_storage_claim_t claim = {0};
+
+    configure(&key);
+    s_product.validation.max_instruction_budget = 100000000U;
+    s_product.limits.init_instruction_budget = 100000000;
+    s_product.limits.max_entry_duration_ms = 20;
+    esp_base_storage_owner_init(&owner);
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = &deadline_package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, open_expired_init, NULL) == ECONTAINER_SLOTS_OK);
+    const unsigned writes_before = store.blob_writes;
+    const unsigned flash_before = store.flash_writes;
+    const unsigned erases_before = store.flash_erases;
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(s_product.native_reclaimed && !s_product.thread_joinable &&
+           !s_product.reopen_allowed && !store.locked && store.mapping == NULL);
+    assert(store.blob_writes == writes_before && store.flash_writes == flash_before &&
+           store.flash_erases == erases_before);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+
+    /* A fresh boot fixture in this process must be able to open the normal guest. */
+    configure(&key);
+    esp_base_storage_owner_init(&owner);
+    claim = (esp_base_storage_claim_t){0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t normal_install = {.package = &normal_package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &normal_install) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+    free(key.bytes);
+    free(deadline_package.bytes);
+    free(normal_package.bytes);
+    puts("container_product_deadline: signed ABI 2 expiry, cleanup, Base blocked boot and fresh-boot reopen passed");
+}
+
 static void run_uninstall_with_fallback(const file_t *key, const file_t *package,
                                         const char boot_id[37])
 {
@@ -872,6 +960,10 @@ static void run_success_receipt_replay(const file_t *key, const file_t *package,
 
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[2], "deadline") == 0) {
+        run_deadline_product(argv[1]);
+        return 0;
+    }
     assert(argc == 2);
     file_t key = read_file(argv[1], "public.der");
     file_t package = read_file(argv[1], "p0.pkg");
