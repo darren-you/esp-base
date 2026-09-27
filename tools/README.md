@@ -20,12 +20,18 @@ flowchart LR
     idf --> preflight
     archive["独立 Base 源码归档"] --> uninstall_probe["prepare_qemu_product_uninstall_probe.py：测试任务注入"]
     uninstall_probe --> qemu["仓外签名 QEMU：产品 stop / uninstall / reboot"]
+    archive --> frp_probe["prepare_qemu_frp_authenticated_probe.py：认证记录测试任务注入"]
+    frp_probe --> frp_qemu["仓外签名 ESP32 QEMU：RUNNING guest / FRP Flash reader"]
     at_backup["两份 ESP32 旧 AT 完整 Flash 备份"] --> at_archive["archive_esp32_at.py：旧 NVS / at_customize 无损归档"]
 ```
 
 ## 产品卸载 QEMU 测试源码准备
 
 `prepare_qemu_product_uninstall_probe.py` 只对**不含 `.git` 的独立 Base 源码归档**插入 FreeRTOS 测试任务，接收本轮已签名包的 SHA-256 和预置 ECS2 sequence，并在 READY 后用正式 Base API 执行确认停止、产品卸载、同 boot 空绑定读回及 storage claim 释放。不注入签名键或包内容，不修改纳管源码、真实设备、Flash、SDK 或组件。构建仍须提供仓外候选分区、签名输入，并按[双目标 QEMU 检查点](../docs/operations/product-uninstall-qemu-checkpoint.md)区分合成状态与真实产品入口。
+
+## ESP32 FRP 认证记录 QEMU 测试源码准备
+
+`prepare_qemu_frp_authenticated_probe.py --source-root <独立 Git 归档目录>` 仅修改无 `.git` 的仓外源码副本。它用公开固定公式生成真实 AES-256-GCM 的 64 KiB 合法记录，向 Base `READY container=running` 后的测试任务注入 16 字节整头分段、1 KiB 密文分段、完整认证、16 个 4 KiB 明文窗口复验、坏 tag 零交付与 storage owner／heap／栈读数。测试任务直接调用受管 FRP 的正式 IDF Flash provider 和正式 AEAD reader；明文不构成 FRPS 控制消息，所以结果只证明该读写切片，不证明正式 session。脚本需要宿主 Python `cryptography`，不包含生产凭据、不生成 Flash 镜像，也不调用烧录工具。仓外分区、ECDSA 测试签名、包状态预置、QEMU MTD 运行与独立读回见[ESP32 认证记录检查点](../docs/operations/esp32-frp-authenticated-record-qemu-checkpoint.md)。每次 QEMU 运行须使用全新的串口日志，不能把旧 marker 当作本次结果。
 
 ## SDK 源码准备
 
