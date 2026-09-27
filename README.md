@@ -134,6 +134,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 - [ESP32 FRP 认证记录 QEMU 检查点](docs/operations/esp32-frp-authenticated-record-qemu-checkpoint.md)
 - [当前锁 ESP32 FRP 会话容量检查点](docs/operations/esp32-frps-current-lock-qemu-capacity-checkpoint.md)
 - [当前锁 ESP32 签名产品冷启动检查点](docs/operations/p6-03-current-lock-signed-product-qemu-checkpoint.md)
+- [当前锁 C3 签名产品冷启动检查点](docs/operations/p6-03-current-lock-c3-signed-product-qemu-checkpoint.md)
 - [当前 FRP 锁 ESP32 会话内存归因](docs/operations/p6-03-current-frp-session-placement-checkpoint.md)
 - [产品验包工作区移栈检查点](docs/operations/product-workspace-stack-checkpoint.md)
 - [P6-03 网络回执工作区复用检查点](docs/operations/p6-03-network-json-scratch-checkpoint.md)
