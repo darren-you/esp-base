@@ -98,7 +98,7 @@ fi
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/device_protocol" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/wifi_runtime/include" -I "$ROOT/components/time_runtime/include" \
-  -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
+  -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" -I "$EFRP_DIR/include" \
   "$ROOT/components/device_protocol/command_guard.c" \
   "$ROOT/components/device_protocol/control_state.c" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
@@ -143,11 +143,30 @@ fi
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$EOTA_DIR/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/safety_runtime/include" -I "$ROOT/components/time_runtime/include" \
-  -I "$ROOT/components/ota_operation/include" \
+  -I "$ROOT/components/ota_operation/include" -I "$EFRP_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/apps/esp_base/main/esp_base_main.c" \
   "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_test"
 "$BUILD_DIR/ota_startup_test"
+if [[ "${ESP_BASE_TEST_TARGET:-esp32c3}" == esp32c3 ]]; then
+  "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 \
+    -DCONFIG_ESP_BASE_FRP_SCRATCH_ENABLED=1 \
+    -DCONFIG_ESP_BASE_FRP_SCRATCH_LABEL=\"frp_scratch\" \
+    -DCONFIG_ESP_BASE_FRP_SCRATCH_OFFSET=0x3e6000 \
+    -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$ROOT/tests/fakes/app_main" -I "$ROOT/tests/fakes" \
+    -I "$ROOT/components/device_identity/include" \
+    -I "$ROOT/components/device_protocol/include" -I "$EOTA_DIR/include" \
+    -I "$ROOT/managed_components/esp_frp/include" \
+    -I "$ROOT/components/remote_config/include" \
+    -I "$ROOT/components/safety_runtime/include" \
+    -I "$ROOT/components/time_runtime/include" \
+    -I "$ROOT/components/ota_operation/include" \
+    "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
+    "$ROOT/apps/esp_base/main/esp_base_main.c" \
+    "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_scratch_test"
+  "$BUILD_DIR/ota_startup_scratch_test"
+fi
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/time_runtime/include" \
   "$ROOT/components/time_runtime/esp_base_time.c" "$ROOT/tests/time_runtime_test.c" \

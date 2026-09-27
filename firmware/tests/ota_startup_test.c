@@ -9,6 +9,9 @@
 #include "esp_base_safety.h"
 #include "esp_base_time.h"
 #include "esp_base_container_product.h"
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+#include "esp_frp_idf_flash_store.h"
+#endif
 #include "freertos/task.h"
 
 #include <assert.h>
@@ -48,6 +51,10 @@ static unsigned container_confirm_calls, container_stop_calls;
 static esp_base_storage_owner_t *storage_owner;
 static unsigned ota_gate_clears;
 static jmp_buf reboot_target;
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+static bool scratch_bind_ok, scratch_recover_ok;
+static unsigned scratch_bind_calls, scratch_recover_calls, scratch_erase_calls;
+#endif
 
 static void reset_case(void)
 {
@@ -79,7 +86,55 @@ static void reset_case(void)
     control_exits_late = control_pauses_cross_window = false;
     ota_gate_clears = 0;
     storage_owner = NULL;
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    scratch_bind_ok = scratch_recover_ok = true;
+    scratch_bind_calls = scratch_recover_calls = scratch_erase_calls = 0U;
+#endif
 }
+
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+bool efrp_idf_flash_store_bind(efrp_idf_flash_store_t *provider,
+                                const efrp_idf_flash_store_config_t *config)
+{
+    assert(provider != NULL && config != NULL &&
+           !strcmp(config->partition_label, "frp_scratch") &&
+           config->partition_type == ESP_PARTITION_TYPE_DATA &&
+           config->partition_subtype == ESP_PARTITION_SUBTYPE_DATA_UNDEFINED &&
+           config->partition_offset_bytes == 0x3e6000U &&
+           config->partition_size_bytes == UINT32_C(0x10000) &&
+           config->with_owner != NULL);
+    ++scratch_bind_calls;
+    storage_owner = config->owner_context;
+    provider->config = *config;
+    return scratch_bind_ok;
+}
+
+const efrp_aead_flash_store_t *efrp_idf_flash_store_callbacks(
+    const efrp_idf_flash_store_t *provider)
+{
+    static efrp_aead_flash_store_t store;
+    store.context = (void *)provider;
+    return &store;
+}
+
+static efrp_result_t scratch_erase(void *context)
+{
+    assert(context != NULL);
+    ++scratch_erase_calls;
+    esp_base_storage_claim_t competing = {0};
+    assert(!esp_base_storage_claim(storage_owner, &competing));
+    return scratch_recover_ok ? EFRP_OK : EFRP_STORAGE_ERROR;
+}
+
+efrp_result_t efrp_aead_flash_store_recover(const efrp_aead_flash_store_t *store)
+{
+    assert(store != NULL && store->context != NULL);
+    const efrp_idf_flash_store_t *provider = store->context;
+    ++scratch_recover_calls;
+    return provider->config.with_owner(provider->config.owner_context,
+                                       scratch_erase, (void *)provider);
+}
+#endif
 
 void test_log(const char *format, ...)
 {
@@ -272,6 +327,11 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     assert(context != NULL);
     assert(context->storage_owner != NULL);
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    assert(context->frp_flash_store != NULL);
+#else
+    assert(context->frp_flash_store == NULL);
+#endif
     assert(config_load_calls == 1 && config_result == ESP_OK);
     storage_owner = context->storage_owner;
     esp_base_storage_claim_t competing = {0};
@@ -431,6 +491,22 @@ static void interrupted_receipt(bool enabled)
 
 int main(void)
 {
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    reset_case();
+    scratch_bind_ok = false;
+    assert(!rebooted() && scratch_bind_calls == 1U &&
+           scratch_recover_calls == 0U && scratch_erase_calls == 0U &&
+           nvs_calls == 0U && mark_calls == 0U);
+
+    reset_case();
+    scratch_recover_ok = false;
+    assert(!rebooted() && scratch_bind_calls == 1U &&
+           scratch_recover_calls == 1U && scratch_erase_calls == 1U &&
+           nvs_calls == 0U && mark_calls == 0U);
+    esp_base_storage_claim_t after_recover_failure = {0};
+    assert(esp_base_storage_claim(storage_owner, &after_recover_failure));
+    assert(esp_base_storage_release(&after_recover_failure));
+#endif
     reset_case();
     image_state = EOTA_STATE_VALID;
     nvs_result = ESP_FAIL;
@@ -714,5 +790,9 @@ int main(void)
            container_recover_calls == 0 && receipt_failure_calls == 0 &&
            rollback_calls == 0);
 
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    puts("  ota_startup_scratch passed (boot recover precedes OTA confirmation; owner released)");
+#else
     puts("  ota_startup passed (startup faults, control progress, rollback, readback)");
+#endif
 }

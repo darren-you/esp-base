@@ -1,0 +1,17 @@
+menu "ESP Base FRP scratch candidate"
+
+config ESP_BASE_FRP_SCRATCH_ENABLED
+    bool "Require a dedicated FRP ciphertext scratch partition at startup"
+    default n
+
+config ESP_BASE_FRP_SCRATCH_LABEL
+    string "Approved FRP scratch partition label"
+    depends on ESP_BASE_FRP_SCRATCH_ENABLED
+    default "frp_scratch"
+
+config ESP_BASE_FRP_SCRATCH_OFFSET
+    hex "Approved FRP scratch partition offset"
+    depends on ESP_BASE_FRP_SCRATCH_ENABLED
+    default 0x0
+
+endmenu

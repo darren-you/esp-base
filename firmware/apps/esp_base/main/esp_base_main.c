@@ -13,6 +13,9 @@
 
 #include "esp_base_identity.h"
 #include "esp_base_container_product.h"
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+#include "esp_frp_idf_flash_store.h"
+#endif
 #include "eota.h"
 #include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
@@ -25,6 +28,19 @@
 static const char *TAG = "esp_base";
 static esp_base_storage_owner_t s_storage_owner;
 static esp_base_storage_claim_t s_boot_storage_claim;
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+static efrp_idf_flash_store_t s_frp_scratch;
+
+static efrp_result_t frp_scratch_with_owner(
+    void *owner_context, efrp_result_t (*operation)(void *), void *operation_context)
+{
+    if (owner_context == NULL || operation == NULL) return EFRP_INVALID_ARGUMENT;
+    esp_base_storage_claim_t claim = {0};
+    if (!esp_base_storage_claim(owner_context, &claim)) return EFRP_STORAGE_ERROR;
+    const efrp_result_t result = operation(operation_context);
+    return esp_base_storage_release(&claim) ? result : EFRP_STORAGE_ERROR;
+}
+#endif
 
 #define ESP_BASE_CONTROL_START_TIMEOUT_MS UINT64_C(5000)
 #define ESP_BASE_OTA_STABLE_WINDOW_MS UINT64_C(30000)
@@ -149,6 +165,25 @@ void app_main(void)
     /* Hold the same owner as OTA and the optional Container adapter through
      * startup's storage operations. The guest's lifetime is not a claim. */
     esp_base_storage_owner_init(&s_storage_owner);
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    /* Recover interrupted ciphertext before any pending OTA slot can be
+     * confirmed. No other storage operation has started in this boot. */
+    const efrp_idf_flash_store_config_t scratch = {
+        .partition_label = CONFIG_ESP_BASE_FRP_SCRATCH_LABEL,
+        .partition_type = ESP_PARTITION_TYPE_DATA,
+        .partition_subtype = ESP_PARTITION_SUBTYPE_DATA_UNDEFINED,
+        .partition_offset_bytes = CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET,
+        .partition_size_bytes = UINT32_C(0x10000),
+        .owner_context = &s_storage_owner,
+        .with_owner = frp_scratch_with_owner,
+    };
+    if (!efrp_idf_flash_store_bind(&s_frp_scratch, &scratch) ||
+        efrp_aead_flash_store_recover(
+            efrp_idf_flash_store_callbacks(&s_frp_scratch)) != EFRP_OK) {
+        ESP_LOGE(TAG, "ESP_BASE_FRP_SCRATCH_BLOCKED partition or boot recovery failed");
+        return;
+    }
+#endif
     s_boot_storage_claim = (esp_base_storage_claim_t){0};
     if (!esp_base_storage_claim(&s_storage_owner, &s_boot_storage_claim)) {
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED storage owner unavailable");
@@ -219,6 +254,9 @@ void app_main(void)
         .flash_size_bytes = identity.flash_size_bytes,
         .reset_reason = safety.reset_reason,
         .storage_owner = &s_storage_owner,
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+        .frp_flash_store = efrp_idf_flash_store_callbacks(&s_frp_scratch),
+#endif
     };
     const esp_err_t protocol_status = esp_base_protocol_start(&protocol);
     if (protocol_status != ESP_OK) {

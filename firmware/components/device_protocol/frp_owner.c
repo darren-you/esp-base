@@ -6,6 +6,7 @@
 
 static ebase_frp_config_t s_config;
 static efrp_client_t *s_client;
+static const efrp_aead_flash_store_t *s_flash_store;
 static char s_device_id[37];
 static uint64_t s_retry_at_ms;
 static int32_t s_error;
@@ -34,7 +35,8 @@ static bool release_client(void)
 }
 
 esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
-                                       const char *device_id)
+                                       const char *device_id,
+                                       const efrp_aead_flash_store_t *flash_store)
 {
     if (!config || !device_id || strlen(device_id) != 36) return ESP_ERR_INVALID_ARG;
     /* Keep the old config and handle until destroy proves worker, DNS and all
@@ -43,11 +45,16 @@ esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
     if (!release_client()) return ESP_ERR_TIMEOUT;
     wipe(&s_config, sizeof s_config);
     s_config = *config;
+    s_flash_store = flash_store;
     memcpy(s_device_id, device_id, sizeof s_device_id);
     s_retry_at_ms = 0;
     s_error = 0;
     s_endpoint_ready = s_network_ready = false;
     s_reconfiguring = false;
+    if (s_config.configured && s_flash_store == NULL) {
+        s_error = EFRP_STORAGE_ERROR;
+        return ESP_ERR_INVALID_STATE;
+    }
     return ESP_OK;
 }
 
@@ -56,7 +63,8 @@ void esp_base_frp_owner_poll(uint64_t now_ms, bool network_ready,
 {
     s_network_ready = network_ready && trusted_time_ready && esp_base_time_ready();
     s_endpoint_ready = endpoint_ready;
-    if (s_reconfiguring || !s_config.configured || !s_network_ready || !s_endpoint_ready) {
+    if (s_reconfiguring || !s_config.configured || s_flash_store == NULL ||
+        !s_network_ready || !s_endpoint_ready) {
         (void)release_client();
         return;
     }
@@ -75,6 +83,7 @@ void esp_base_frp_owner_poll(uint64_t now_ms, bool network_ready,
         .local_ipv4 = {127, 0, 0, 1},
         .local_port = s_config.local_port,
         .time_is_trusted = trusted_time,
+        .flash_store = s_flash_store,
     };
     efrp_result_t result = efrp_create(&config, &s_client);
     if (result == EFRP_OK) result = efrp_start(s_client);
@@ -90,6 +99,7 @@ esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void)
     esp_base_frp_snapshot_t out = {0};
     out.error = s_error;
     if (!s_config.configured) out.state = "unconfigured";
+    else if (s_flash_store == NULL) out.state = "failed";
     else if (!s_endpoint_ready) out.state = "endpoint_unavailable";
     else if (!s_network_ready) out.state = "network_unavailable";
     else if (s_draining || s_reconfiguring) out.state = "stopping";

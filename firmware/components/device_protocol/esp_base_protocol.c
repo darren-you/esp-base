@@ -43,6 +43,7 @@ typedef struct {
     esp_base_remote_config_t config;
     const char *reset_reason;
     esp_base_storage_owner_t *storage_owner;
+    const efrp_aead_flash_store_t *frp_flash_store;
 } protocol_state_t;
 static protocol_state_t s_context;
 static char s_boot_id[EBASE_ID_BYTES];
@@ -637,6 +638,9 @@ static void handle_line(const char *line, size_t length, void *context)
             save_outcome(slot, "failed", "revision_conflict", false); return;
         }
         if (command.config.revision == UINT32_MAX) { save_outcome(slot, "failed", "revision_exhausted", false); return; }
+        if (command.config.frp.configured && s_context.frp_flash_store == NULL) {
+            save_outcome(slot, "failed", "frp_storage_unavailable", false); return;
+        }
         s_candidate = command.config;
         s_trial_slot = slot;
         s_trial_deadline = uptime_ms() + 20000;
@@ -688,8 +692,15 @@ static void control_task(void *argument)
                 /* Revoke the old endpoint before waiting for the old FRP worker
                  * to finish; no stale management key remains reachable. */
                 esp_base_frp_status_listener_configure(NULL);
-                if (esp_base_frp_owner_configure(&s_context.config.frp, s_context.device_id) == ESP_OK) {
+                const esp_err_t frp_configured = esp_base_frp_owner_configure(
+                    &s_context.config.frp, s_context.device_id, s_context.frp_flash_store);
+                if (frp_configured == ESP_OK) {
                     esp_base_frp_status_listener_configure(&s_context.config.frp);
+                    s_frp_revision = s_context.config.revision;
+                    s_frp_revision_set = true;
+                } else if (frp_configured == ESP_ERR_INVALID_STATE) {
+                    /* No recovered scratch exists for this boot. No endpoint or
+                     * FRP client can start; retry only after a new revision. */
                     s_frp_revision = s_context.config.revision;
                     s_frp_revision_set = true;
                 }
@@ -757,6 +768,7 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     s_context.flash_size_bytes = context->flash_size_bytes;
     s_context.reset_reason = context->reset_reason;
     s_context.storage_owner = context->storage_owner;
+    s_context.frp_flash_store = context->frp_flash_store;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     error = esp_base_wifi_start(&s_context.config.wifi);
     if (error != ESP_OK) {

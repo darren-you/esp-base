@@ -27,6 +27,8 @@ flowchart LR
     owner --> rollback
     binding["integrations/container_binding：确认绑定与产品启动"] -->|"真实 provider / 验签 / WAMR"| container["公开 esp-container：槽与 runtime API"]
     owner --> binding
+    owner --> frp_scratch["FRP scratch：公开 IDF provider / 短 claim / boot recover"]
+    frp_scratch --> frp
     receipt --> binding
     main --> safety["safety_runtime：复位事实 / WDT"]
     main --> protocol["device_protocol：串口心跳 / 有界命令 / 回执"]
@@ -49,7 +51,7 @@ flowchart LR
 
 ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`，并要求关闭硬件 Secure Boot 与签名输出；它只用于离线容量与源码检查，**绝非可刷写候选**。ESP32 签名构建必须提供仓外绝对路径的 P-256 签名键，并在独立 sdkconfig 中启用 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y`、`CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、`CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y` 与 rollback；CMake 会拒绝缺失或错目标。测试键只用于仓外软件验证，不能作为设备首次启动密钥。签名 bin 还必须经固定 SDK 的 `espsecure verify-signature --version 1` 验证，并核对双槽与分区表。旧 ESP-AT 板卡的新启动链、两个已签名 Base 槽、otadata、旧区归档与完整恢复仍待 P7-01 受控实板验收。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@9d6d95e779f4f5ff387a6d9b54015bf4e43565f2`，`esp_ota` 唯一来源是公开 `esp-ota@7f316c2a3a71dcae234b046905aee60696a357d3`，`esp_frp` 唯一来源是公开 `esp-frp@6609fbc9b324c5e10615731a1a994ec0bfacd258`，`esp_container` 唯一来源是公开 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@9d6d95e779f4f5ff387a6d9b54015bf4e43565f2`，`esp_ota` 唯一来源是公开 `esp-ota@7f316c2a3a71dcae234b046905aee60696a357d3`，`esp_frp` 唯一来源是公开 `esp-frp@98bab0c0fbac684a6f89772c50c8bcf37aafe4fc`，`esp_container` 唯一来源是公开 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
 默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座，并只读装载 v3 持久配置，经物理 USB `config.set` 写入完整 Wi-Fi/MQTT/FRP 凭据；未配置时不创建相应客户端。MQTT 已配置时只在 Wi-Fi IP 和本次启动可信时间齐备后启动严格 TLS，会在 command SUBACK 后报告 ready，并通过同一控制任务执行已认证命令、发布 QoS 1 结果和脱敏 reported；远端 config.set 被拒绝。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。现有实板仍为 v1 存储，未完成双槽与 NVS 离线迁移前不得启动 v3-only 镜像；正式 Broker/Tool 和实板网络 ACK 闭环尚待联调。FRP owner 只有独立 HMAC 鉴权的只读 HTTP listener 成功绑定配置中的 `127.0.0.1:local_port` 后才允许启动；端点失败仍报告 `endpoint_unavailable`。当前只完成软件装配，不表示 P4-05 或真实 FRPS 闭环完成。
 
@@ -68,3 +70,5 @@ C3 签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SEC
 MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELETED_MESSAGES=y`。新 sdkconfig 从 defaults 得到这些值；已有 sdkconfig 若显式关闭，需在 menuconfig 启用，编译器会拒绝缺少日期验证或消息过期通知的配置。
 
 FRP 组件还要求 `CONFIG_MBEDTLS_MD5_C=y`、`CONFIG_LWIP_SO_LINGER=y` 和至少 12 个 lwIP socket；默认配置与 CMake 同时检查。普通镜像中保留库符号只证明编译组合，不能代替真实管理端点、FRPS/MQTT 同时运行或堆峰值测量。
+
+FRP Flash reader 的可选 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制，默认关闭。启用时显式传当前目标的 scratch label 和 offset，公开 FRP provider 核对实际 64 KiB 分区并在任何 pending OTA 确认前擦除本次启动遗留的密文。Base 只提供同一个 storage owner 的短 claim 包装；`clear` 不再次擦除。正式 C3、ESP32 分区表都尚未加入 scratch，生产配置不启用；仓外 C3 条件几何及签名容量、ESP32 几何取舍仍按五仓计划单独裁决。小记录在 FRP RAM reader 中可不碰 Flash，大记录与 OTA 长 claim 冲突时会安全结束 FRP session，当前没有并发活性或实板验证。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
