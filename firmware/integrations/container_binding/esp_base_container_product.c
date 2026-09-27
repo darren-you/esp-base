@@ -23,6 +23,14 @@
 
 static const char *TAG = "base_container";
 
+/* After retirement, success persists stage, begin_trial, mark_healthy and
+ * confirm. A rollback from HEALTH_VERIFIED instead persists abandon and drop,
+ * requiring five commits after retirement. A/B adds the retirement commit. */
+enum {
+    ESP_BASE_CONTAINER_OTA_CONFIRM_COMMITS = 4U,
+    ESP_BASE_CONTAINER_OTA_RECOVERY_COMMITS = 5U,
+};
+
 typedef struct {
     econtainer_slots_idf_provider_t provider;
     econtainer_package_workspace_t package_workspace;
@@ -634,6 +642,11 @@ static econtainer_slots_result_t snapshot_for_ota(
      * would have lost a previous candidate without an explicit transition. */
     if (firmware_set->bootable_count == 1U && state.phase != ECONTAINER_SLOT_IDLE)
         return ECONTAINER_SLOTS_CONFLICT;
+    const uint32_t retirement_steps =
+        firmware_set->bootable_count == 2U ? 1U : 0U;
+    if (state.sequence > UINT32_MAX - retirement_steps -
+                             ESP_BASE_CONTAINER_OTA_RECOVERY_COMMITS)
+        return ECONTAINER_SLOTS_CONFLICT;
     snapshot->container_enabled = true;
     snapshot->container_sequence = state.sequence;
     return ECONTAINER_SLOTS_OK;
@@ -969,7 +982,8 @@ bool esp_base_container_product_reconcile_selected_ota(
     const uint32_t retirement_steps =
         digest_zero(receipt->inactive_sha256) ? 0U : 1U;
     if (receipt->container_sequence == 0U ||
-        receipt->container_sequence > UINT32_MAX - retirement_steps - 4U ||
+        receipt->container_sequence > UINT32_MAX - retirement_steps -
+                                          ESP_BASE_CONTAINER_OTA_CONFIRM_COMMITS ||
         s_product.ready != NULL ||
         atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
         !ensure_provider(claim)) return false;
