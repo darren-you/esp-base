@@ -27,3 +27,11 @@
 固定 SDK 下，C3 正式分区的 RSA v2 签名 app 为 `0x111000` B，SHA-256 `b120d54f7e4bc0b6a1f1b5bd7d00f328d2209a5fb70d0585ddedbf0406a5e0e2`；官方验签和 app 尺寸检查通过，现行 `0x1e0000` 槽余 `0xcf000` B。若仅与保持三份 `0x82000` 包槽的 `0x118000` 候选 app 槽作算术比较，产品 app 尚余 `0x7000` B；这不等于整张候选表、scratch 与测试探针已经装入 4 MiB。双目标签名配置均为仓外测试键。ESP32 正式分区的 ECDSA v1 签名 app 为 `0x10fff4` B，SHA-256 `8625d002a91c73d9d92a76f576c11e48d4983ac4fc06f063fa17237f48dbaad7`；官方 app 与分区验签、尺寸检查通过，`0x120000` 槽余 `0x1000c` B。两目标的 Base host ASan/UBSan 套件各自通过，构建和生成配置均保留在上述目录。
 
 此处验证的是已落盘 defaults 的**签名编译与正式分区容量**。无 FRP scratch 的正式镜像无法运行上述 FRPS 大记录诊断；它也没有同机 MQTT／OTA／Container 联网低水、无线实板吞吐、断线重连或掉电证据。因此 23,876 B 诊断低水继续作为失败事实，不能由正式签名构建替换；P6-03、P7-02 仍未验收。
+
+## C3 六个静态 RX 缓冲续验
+
+继续在 `mac-work-1:/private/tmp/esp-base-c3-rx6-frps-20260928/` 对上一组动态 TLS 缓冲诊断只改变 C3 `ESP_WIFI_STATIC_RX_BUFFER_NUM`：10 → 6；`ESP_WIFI_RX_BA_WIN=6`、动态 RX 上限 32、两项 IRAM 关闭、TLS 16 KiB／4 KiB 上限、源码、锁、签名 guest、FRPS 与测试键均不变。固定 SDK Kconfig 说明每个静态 RX 缓冲约占 1.6 KiB，且启用 AMPDU RX 时推荐缓冲数不小于 BA 窗口。首次只改生成配置的规范字段时，遗留的两个 `ESP32_WIFI_STATIC_RX_BUFFER_NUM` 同义行令重新生成值落为 2，SDK 编译期拒绝其与 BA 窗口 6 的组合；删除生成文件中的同义输入，并在 target defaults 声明 6 后，三个最终生成值均为 6，正式编译通过。该失败构建没有运行 QEMU。
+
+隔离诊断 RSA v2 签名 app 仍为 `0x121000` B，SHA-256 `62677ba8ba49789e0a8b74eeb13b29795779ad8352edd9bafa1ad1cd1285a17e`，官方验签、候选诊断分区解码及尺寸检查通过。按此摘要重建 ECS2 与 4 MiB 合成 Flash 后，GDB 再次读得 Container 产品返回 `RUNNING=3`、Base `READY`；官方 FRPS 严格 TLS `verify=0`，完成注册、Pong 和双向各 **300001 B** 逐字节回显，`work.completed=1`、`work.failed=0`，销毁成功。普通内部 8BIT 堆历史最低为 **29,856 B**，相对同条件 10 缓冲组的 **23,876 B** 多 **5,980 B**，但仍低于 **49,152 B** 门 **19,296 B**。原始 GDB SHA-256 为 `951017c123a487b13923169eb77bed21a132b586dfd18f472381d053e23cee5f`；逐区读回确认双 app、产品包区和 `base_store` 均未改变。运行时差值是两次单独 QEMU 历史低水之差，不把它当成所有时序下恒定节省。
+
+随后将 6 个静态 RX 缓冲及 C3 的两项 IRAM 关闭值写入 Base defaults，并由 CMake 检查实际生成配置；共同的 TLS 动态缓冲也进入 CMake 门。现行 C3 正式分区、无 FRP scratch／探针的仓外 RSA v2 签名产品重建为 **`0x111000` B**，SHA-256 `26379d5c5aae355ca507a014e278fbf9938c34cc5c1c898a73789f2054b1e865`，官方验签及 app 槽尺寸检查通过。此正式镜像未做五能力同机网络运行；OpenETH 诊断没有流经实体 Wi-Fi，故 6 缓冲配置的真实无线吞吐、重传与断线恢复仍待两块原定 4 MiB 板中的 C3 实板验收。P6-03／P7-02 继续进行中。

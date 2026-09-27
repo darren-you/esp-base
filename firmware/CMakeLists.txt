@@ -59,8 +59,15 @@ if(ESP_BASE_APP STREQUAL "esp_base" AND (CONFIG_EMQTT_PLAINTEXT_LAB OR ESP_BASE_
     message(FATAL_ERROR "Normal ESP Base build rejects MQTT lab inputs and plaintext test mode")
 endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND (NOT CONFIG_MBEDTLS_MD5_C OR NOT CONFIG_LWIP_SO_LINGER OR
-    NOT CONFIG_MBEDTLS_HAVE_TIME_DATE OR CONFIG_LWIP_MAX_SOCKETS LESS 12))
-    message(FATAL_ERROR "ESP Base FRP requires MD5 token auth, SO_LINGER, trusted TLS time and 12 sockets")
+    NOT CONFIG_MBEDTLS_HAVE_TIME_DATE OR NOT CONFIG_MBEDTLS_DYNAMIC_BUFFER OR
+    CONFIG_LWIP_MAX_SOCKETS LESS 12))
+    message(FATAL_ERROR "ESP Base FRP requires MD5 token auth, SO_LINGER, trusted TLS time, dynamic TLS buffers and 12 sockets")
+endif()
+if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
+    (CONFIG_ESP_WIFI_IRAM_OPT OR CONFIG_ESP_WIFI_RX_IRAM_OPT OR
+    NOT CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM EQUAL 6 OR
+    NOT CONFIG_ESP_WIFI_RX_BA_WIN EQUAL 6))
+    message(FATAL_ERROR "ESP Base C3 requires six static Wi-Fi RX buffers, BA window six and both Wi-Fi IRAM optimizations disabled")
 endif()
 if(IDF_TARGET STREQUAL "esp32" AND (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
     NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/esp32-partition-table.csv" OR
