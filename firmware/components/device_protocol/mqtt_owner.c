@@ -21,12 +21,8 @@ static void wipe(void *memory, size_t length)
     while (length--) *bytes++ = 0;
 }
 
-esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
-                                       const char *device_id, const char *boot_id,
-                                       emqtt_config_t *scratch)
+esp_err_t esp_base_mqtt_owner_revoke(void)
 {
-    if (!config || !device_id || !boot_id || !scratch) return ESP_ERR_INVALID_ARG;
-    wipe(scratch, sizeof *scratch);
     s_ready = false;
     s_network_ready = false;
     if (s_runtime) {
@@ -35,6 +31,7 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
             s_failed = true;
             s_configured = false;
             wipe(s_management_key, sizeof s_management_key);
+            memset(s_device_id, 0, sizeof s_device_id);
             return stopped;
         }
         s_runtime = NULL;
@@ -43,6 +40,17 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     s_retry_after_ms = 0;
     wipe(s_management_key, sizeof s_management_key);
     memset(s_device_id, 0, sizeof s_device_id);
+    return ESP_OK;
+}
+
+esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
+                                       const char *device_id, const char *boot_id,
+                                       emqtt_config_t *scratch)
+{
+    if (!config || !device_id || !boot_id || !scratch) return ESP_ERR_INVALID_ARG;
+    wipe(scratch, sizeof *scratch);
+    const esp_err_t revoked = esp_base_mqtt_owner_revoke();
+    if (revoked != ESP_OK) return revoked;
     if (!config->configured) return ESP_OK;
     for (unsigned channel = 0; channel < 4; ++channel) {
         if (!ebase_mqtt_topic(s_topics[channel], device_id, (ebase_mqtt_channel_t)channel)) {

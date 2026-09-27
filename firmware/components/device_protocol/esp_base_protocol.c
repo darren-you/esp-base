@@ -17,6 +17,7 @@
 #include <stdatomic.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -48,7 +49,11 @@ typedef struct {
 static protocol_state_t s_context;
 static char s_boot_id[EBASE_ID_BYTES];
 static ebase_request_guard_t s_guard;
-static ebase_line_reader_t s_reader;
+/* A USB/UART command is the only consumer of the full line buffer. Keep it
+ * alive only while a physical line is arriving; network owners do not need
+ * 9 KiB reserved while no serial input exists. */
+static ebase_line_reader_t *s_reader;
+static bool s_serial_discard;
 static bool s_started, s_config_loaded, s_config_uncertain, s_trial_active;
 static bool s_ota_active, s_ota_boot_uncertain;
 static esp_base_storage_claim_t s_ota_storage_claim;
@@ -61,15 +66,9 @@ static atomic_uint_fast32_t s_ota_received;
 static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
 static uint64_t s_trial_deadline;
-static esp_base_remote_config_t s_candidate;
-/* The control task configures MQTT between command callbacks. emqtt_create
- * copies this short-lived input before MQTT polling may parse a new command. */
-static union {
-    ebase_command_t command;
-    emqtt_config_t mqtt_config;
-} s_control_work;
-_Static_assert(sizeof(ebase_command_t) >= sizeof(emqtt_config_t),
-               "MQTT setup must fit the existing command workspace");
+static esp_base_remote_config_t *s_candidate;
+/* Parsed commands and MQTT setup both live within synchronous callbacks.
+ * The commit path gets separate temporary storage after the Wi-Fi proof. */
 static bool s_reply_mqtt, s_mqtt_revision_set;
 static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
@@ -326,19 +325,36 @@ static void restore_committed(uint64_t now)
     if (esp_base_wifi_apply(&s_context.config.wifi, now) != ESP_OK) s_config_uncertain = true;
 }
 
+static void clear_candidate(void)
+{
+    if (s_candidate == NULL) return;
+    memset(s_candidate, 0, sizeof *s_candidate);
+    free(s_candidate);
+    s_candidate = NULL;
+}
+
 static void poll_configuration(uint64_t now)
 {
     if (!s_trial_active) return;
-    const bool ready = s_candidate.wifi.configured ? esp_base_wifi_ready() :
+    const bool ready = s_candidate->wifi.configured ? esp_base_wifi_ready() :
         !strcmp(esp_base_wifi_state(), "unconfigured");
     if (ready && now < s_trial_deadline) {
         /* The control task is the sole reader/writer of s_context.config after
          * startup. Network owners copy their config before starting workers. */
-        esp_err_t error = esp_base_remote_config_commit_verified(&s_candidate, s_candidate.revision,
-                                                                  &s_context.config,
-                                                                  &s_control_work.command.config);
+        esp_base_remote_config_t *work = malloc(sizeof *work);
+        if (work == NULL) {
+            s_trial_active = false;
+            clear_candidate();
+            restore_committed(now);
+            save_outcome(s_trial_slot, "failed", "resource_failure", false);
+            return;
+        }
+        esp_err_t error = esp_base_remote_config_commit_verified(s_candidate, s_candidate->revision,
+                                                                  &s_context.config, work);
+        memset(work, 0, sizeof *work);
+        free(work);
         s_trial_active = false;
-        memset(&s_candidate, 0, sizeof s_candidate);
+        clear_candidate();
         if (error == ESP_OK) {
             save_outcome(s_trial_slot, "succeeded", NULL, true);
         } else if (error == ESP_BASE_CONFIG_UNCERTAIN) {
@@ -358,7 +374,7 @@ static void poll_configuration(uint64_t now)
         }
     } else if (now >= s_trial_deadline || !strcmp(esp_base_wifi_state(), "failed")) {
         s_trial_active = false;
-        memset(&s_candidate, 0, sizeof s_candidate);
+        clear_candidate();
         restore_committed(now);
         save_outcome(s_trial_slot, "failed", "connection_proof_failed", false);
     }
@@ -503,10 +519,8 @@ static void poll_ota(void)
     memset(&s_ota_request, 0, sizeof s_ota_request);
 }
 
-static void handle_line(const char *line, size_t length, void *context)
+static void handle_command_line(const char *line, size_t length, ebase_command_t *command)
 {
-    (void)context;
-    ebase_command_t *const command = &s_control_work.command;
     const char *error = ebase_parse_command(line, length, command);
     if (error) { reply(command->request.request_id, "failed", error, NULL); return; }
     if (command->kind == EBASE_STATUS) {
@@ -654,12 +668,16 @@ static void handle_line(const char *line, size_t length, void *context)
         if (command->config.frp.configured && s_context.frp_flash_store == NULL) {
             save_outcome(slot, "failed", "frp_storage_unavailable", false); return;
         }
-        s_candidate = command->config;
+        s_candidate = malloc(sizeof *s_candidate);
+        if (s_candidate == NULL) {
+            save_outcome(slot, "failed", "resource_failure", false); return;
+        }
+        *s_candidate = command->config;
         s_trial_slot = slot;
         s_trial_deadline = uptime_ms() + 20000;
         save_outcome(slot, "running", NULL, false);
-        if (esp_base_wifi_apply(&s_candidate.wifi, uptime_ms()) != ESP_OK) {
-            memset(&s_candidate, 0, sizeof s_candidate);
+        if (esp_base_wifi_apply(&s_candidate->wifi, uptime_ms()) != ESP_OK) {
+            clear_candidate();
             restore_committed(uptime_ms());
             save_outcome(slot, "failed", "connection_proof_failed", false);
         } else s_trial_active = true;
@@ -671,12 +689,56 @@ static void handle_line(const char *line, size_t length, void *context)
     esp_restart();
 }
 
+static void handle_line(const char *line, size_t length, void *context)
+{
+    (void)context;
+    ebase_command_t *command = malloc(sizeof *command);
+    if (command == NULL) {
+        reply("", "failed", "resource_failure", NULL);
+        return;
+    }
+    handle_command_line(line, length, command);
+    memset(command, 0, sizeof *command);
+    free(command);
+}
+
 static void handle_mqtt_command(const uint8_t *json, size_t length, void *context)
 {
     (void)context;
     s_reply_mqtt = true;
     handle_line((const char *)json, length, NULL);
     s_reply_mqtt = false;
+}
+
+static void feed_serial(const unsigned char *bytes, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) {
+        const unsigned char c = bytes[i];
+        if (s_serial_discard) {
+            if (c == '\n') {
+                s_serial_discard = false;
+                handle_line(NULL, 0, NULL);
+            }
+            continue;
+        }
+        if (s_reader == NULL) {
+            if (c == '\n') continue;
+            s_reader = calloc(1, sizeof *s_reader);
+            if (s_reader == NULL) {
+                s_serial_discard = true;
+                continue;
+            }
+        }
+        ebase_line_feed(s_reader, &c, 1, handle_line, NULL);
+        if (c == '\n' || s_reader->discard) {
+            const bool discard = s_reader->discard;
+            free(s_reader);
+            s_reader = NULL;
+            /* ebase_line_feed reports an invalid line only at LF. Preserve
+             * that contract after releasing the unused oversized buffer. */
+            if (discard) s_serial_discard = true;
+        }
+    }
 }
 
 static void control_task(void *argument)
@@ -694,14 +756,26 @@ static void control_task(void *argument)
             next_time_poll = now + 1000;
         }
         if (!esp_base_control_state_ota_pending(&s_control_state)) {
+            bool mqtt_can_poll = true;
             if (!s_mqtt_revision_set || s_mqtt_revision != s_context.config.revision) {
-                (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id,
-                                                    s_boot_id, &s_control_work.mqtt_config);
-                s_mqtt_revision = s_context.config.revision;
-                s_mqtt_revision_set = true;
+                emqtt_config_t *mqtt_work = malloc(sizeof *mqtt_work);
+                if (mqtt_work == NULL) {
+                    /* Revoke the previous revision before retrying setup. Never
+                     * poll an old endpoint with the new configuration active. */
+                    (void)esp_base_mqtt_owner_revoke();
+                    mqtt_can_poll = false;
+                } else {
+                    (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id,
+                                                        s_boot_id, mqtt_work);
+                    memset(mqtt_work, 0, sizeof *mqtt_work);
+                    free(mqtt_work);
+                    s_mqtt_revision = s_context.config.revision;
+                    s_mqtt_revision_set = true;
+                }
             }
-            esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
-                                     handle_mqtt_command, NULL);
+            if (mqtt_can_poll)
+                esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
+                                         handle_mqtt_command, NULL);
             if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
                 /* Revoke the old endpoint before waiting for the old FRP worker
                  * to finish; no stale management key remains reachable. */
@@ -724,9 +798,10 @@ static void control_task(void *argument)
                                     esp_base_frp_status_listener_ready());
         }
         if (now >= next_report) { reported(); next_report = now + 5000; }
-        if (s_reader.length && now - last_input >= 2000) {
-            s_reader.length = 0;
-            s_reader.discard = true; /* Never interpret a timed-out tail as a command. */
+        if (s_reader != NULL && s_reader->length && now - last_input >= 2000) {
+            free(s_reader);
+            s_reader = NULL;
+            s_serial_discard = true; /* Never interpret a timed-out tail as a command. */
         }
         size_t count = 0;
         // Read from the selected console VFS without blocking the control loop.
@@ -735,7 +810,7 @@ static void control_task(void *argument)
         while (count < sizeof bytes && read(STDIN_FILENO, bytes + count, 1) == 1) ++count;
         if (count > 0) {
             last_input = uptime_ms();
-            ebase_line_feed(&s_reader, bytes, count, handle_line, NULL);
+            feed_serial(bytes, count);
         }
         esp_base_control_state_note_progress(&s_control_state);
         vTaskDelay(1); /* Let idle/WDT and other capabilities run under sustained input. */

@@ -35,3 +35,27 @@
 隔离诊断 RSA v2 签名 app 仍为 `0x121000` B，SHA-256 `62677ba8ba49789e0a8b74eeb13b29795779ad8352edd9bafa1ad1cd1285a17e`，官方验签、候选诊断分区解码及尺寸检查通过。按此摘要重建 ECS2 与 4 MiB 合成 Flash 后，GDB 再次读得 Container 产品返回 `RUNNING=3`、Base `READY`；官方 FRPS 严格 TLS `verify=0`，完成注册、Pong 和双向各 **300001 B** 逐字节回显，`work.completed=1`、`work.failed=0`，销毁成功。普通内部 8BIT 堆历史最低为 **29,856 B**，相对同条件 10 缓冲组的 **23,876 B** 多 **5,980 B**，但仍低于 **49,152 B** 门 **19,296 B**。原始 GDB SHA-256 为 `951017c123a487b13923169eb77bed21a132b586dfd18f472381d053e23cee5f`；逐区读回确认双 app、产品包区和 `base_store` 均未改变。运行时差值是两次单独 QEMU 历史低水之差，不把它当成所有时序下恒定节省。
 
 随后将 6 个静态 RX 缓冲及 C3 的两项 IRAM 关闭值写入 Base defaults，并由 CMake 检查实际生成配置；共同的 TLS 动态缓冲也进入 CMake 门。现行 C3 正式分区、无 FRP scratch／探针的仓外 RSA v2 签名产品重建为 **`0x111000` B**，SHA-256 `26379d5c5aae355ca507a014e278fbf9938c34cc5c1c898a73789f2054b1e865`，官方验签及 app 槽尺寸检查通过。此正式镜像未做五能力同机网络运行；OpenETH 诊断没有流经实体 Wi-Fi，故 6 缓冲配置的真实无线吞吐、重传与断线恢复仍待两块原定 4 MiB 板中的 C3 实板验收。P6-03／P7-02 继续进行中。
+
+## C3 TLS 发送片段 2 KiB 单变量排除
+
+在仓外 `mac-work-1:/private/tmp/esp-base-c3-rx6-out2k-frps-20260928/` 复制上一组 6 缓冲诊断，仅将固定 SDK 的 `MBEDTLS_SSL_OUT_CONTENT_LEN` 从 **4096 B** 降到 **2048 B**；入站最大片段仍为 **16384 B**，`source/firmware` 仅在 `sdkconfig.defaults` 增加这一行，实际生成配置也仅改变对应值。RSA v2 签名诊断 app 仍为 `0x121000` B，SHA-256 `ebabbf38b8177a4cb40b2667be85acd73158e10230198c2949ad0fe7e4bd3bef`，官方验签及诊断分区尺寸门通过；重绑 ECS2 后的种子 Flash SHA-256 为 `86920709ac101789247ff4abc67d29a8460f4a858d58673e10f22b7fefef59e8`。
+
+再次由 GDB 确认签名 Container 产品返回 `RUNNING=3`、Base `READY`，官方 FRPS 严格 TLS `verify=0`、注册、Pong、双向各 **300001 B** 逐字节回显、`work.completed=1`／`work.failed=0` 和销毁均完成。普通内部 8BIT 堆历史最低为 **30,652 B**，较 4 KiB 出站组 **29,856 B** 只多 **796 B**，仍低于 **49,152 B** 门 **18,500 B**。原始 GDB SHA-256 `9da72cfc9a300e438bdc31b4d08ebf31a5a7e13b6de46af0c425769af61e676c`，逐区读回 JSON SHA-256 `ccc7916a29ceb2ed8cb29348b7a979d1d7933c08b85b014d136fd7e827f0eb85`；双 app、包区、产品 NVS 维持原验证结果。两次独立运行的历史低水差额不能外推为稳定节省。该变量收益不足以弥补容量缺口，故**未改产品默认值**；P6-03／P7-02 仍未验收。
+
+## Base 控制工作区存活期收敛
+
+继续保持 C3 六个静态 RX 缓冲、TLS 16 KiB／4 KiB 上限、签名 ABI 2 guest、官方 FRPS、OpenETH、测试时钟、4 KiB 探针任务及同一 4 MiB 诊断几何，在仓外逐步替换 Base 控制工作区。普通内部 8BIT 堆历史低水如下；各行来自独立签名构建与初始 Flash 启动，**不能把行间差值当作固定节省**。
+
+| 隔离输入及唯一主要改动 | FRPS 工作流历史低水 | 与 49,152 B 门相比 |
+| --- | ---: | ---: |
+| `esp-base-c3-rx6-frps-20260928`，原有固定工作区 | 29,856 B | -19,296 B |
+| `esp-base-c3-serial-lazy-frps-20260928`，USB/UART 行缓冲仅在物理行到达时分配 | 38,780 B | -10,372 B |
+| `esp-base-c3-serial-candidate-lazy-frps-20260928`，再将配置候选限定在 20 秒 Wi-Fi 试连期 | 45,928 B | -3,224 B |
+| `esp-base-c3-command-lazy-frps-20260928`，命令解析区按回调持有 | 49,408／48,984 B | +256／-168 B |
+| `esp-base-c3-mqtt-scratch-lazy-frps-20260928`，MQTT 修订装配区也按调用持有，分配失败先撤销旧端点和管理密钥 | **57,020 B** | **+7,868 B** |
+
+前两块 9,228 B 串口行区和 7,608 B 候选区改为指针；原命令／MQTT 共用区 7,768 B 退出常驻 `.bss`。最终链接图中这些符号相对原 6 缓冲组净少 **24,596 B** 常驻空间，但物理长命令、配置试连、持久提交和 MQTT 装配时仍按需消耗真实堆。串口非法／超长／超时行继续读到 LF 后拒绝；提交路径另配独立工作区，完成后清除；MQTT 新 revision 分配失败时撤销旧连接和管理密钥并继续重试，避免继续轮询旧端点。Base 两目标 host ASan/UBSan 全套通过，覆盖实际行 reader 的分包和超长清退、配置成功提交后候选释放、MQTT 撤销后的停用；日志留在 `mac-work-1:/private/tmp/esp-base-serial-candidate-host-20260928/`。
+
+最终组固定 SDK 的 RSA v2 签名诊断 app 仍为 **`0x121000` B**，SHA-256 `21a3afb943d369f0d6bda1e610cd35566e3fd6be80bb9185891fb8c5ce76dfda`，官方验签、诊断分区解码及尺寸门通过；新 ECS2 seed Flash SHA-256 `931b3611906556a7d757e27bf641dd5721940202d91517c65e0ef655e0adda6b`。GDB 再次确认产品 `RUNNING=3`、Base `READY`、严格 TLS `verify=0`、FRPS 注册／Pong、双向各 **300001 B** 逐字节回显、`work.completed=1`／`work.failed=0` 和销毁成功；历史最低 57,020 B，工作流采样最大连续块 65,536 B。原始 GDB SHA-256 `efee055a9acb87a5839624e6e869d1fd09ce2b58427440be3ce3afbc0236fe9c`，逐区读回 JSON SHA-256 `f1c1e59786c5c332b6cb3513b64537e7458ec053c0fd69d0c67a70e44f748452`；双 app、产品包区与 `base_store` 均零改动。
+
+该结果只把**当前 FRPS 诊断切片**推过历史低水门，没有正式 MQTT Broker／OTA HTTPS 同机负载、物理串口命令与 FRP 工作流并发、64 KiB AEAD 最大记录、真实 Wi-Fi 或实板掉电证据。诊断 app 仍比保持三份 `0x82000` 包槽的 C3 `0x118000` 候选 app 槽大 `0x9000`，这里的三份 `0x78000` 包槽不可当成正式方案；正式分区尚未冻结。P6-03／P7-02 继续开放。

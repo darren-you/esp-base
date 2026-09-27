@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-28 P6-03 Base 控制工作区存活期收敛：串口行、配置候选、命令解析和 MQTT 修订装配区退出常驻 `.bss`；新修订装配内存不足时撤销旧 MQTT 端点及管理密钥。固定 SDK 的 C3／ESP32 host ASan/UBSan 全套通过；当前锁的 C3 仓外签名 guest、严格 TLS／官方 FRPS 和双向各 300001 B 工作流再次通过，普通内部 8BIT 堆历史低水 **57,020 B**，比 49,152 B 门高 7,868 B。该诊断暂用缩小包槽的几何，且没有 MQTT Broker／OTA HTTPS 同机负载；[逐轮容量检查点](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#base-控制工作区存活期收敛)记录前后读数和未测边界。
+
+同日另在仓外验证严格对齐的 C3 **4 MiB** 软件分区候选：双 `0x118000` app 起点 `0x20000`／`0x140000`，三份 `0x82000` 包槽、独立 `0x10000` FRP scratch 和 18 页 Base NVS 同时装入。首次紧贴排列因 `ota_1@0x138000` 未按 64 KiB 对齐被官方工具拒绝；修正后当前源码 RSA v2 签名 app `0x111000`、官方验签及尺寸门通过，合成 Flash 的真签名 guest 返回 `RUNNING`、Base 到 `READY`，双 app／包区／NVS 读回未变。旧 C3 存储重叠迁移、五能力同存和实板仍未验收；[候选几何与原始证据](p6-03-c3-aligned-layout-software-probe.md)单独记账。
+
 2026-09-28 P6-03 C3 静态 Wi-Fi RX 容量续验：保持 AMPDU RX BA 窗口 6，把常驻 RX 缓冲 10 → 6；同一当前锁签名 guest／官方 FRPS 严格验签、注册、Pong 和双向各 300001 B 回显再次通过，普通内部 8BIT 堆历史最低 **29,856 B**，比同输入 10 缓冲组高 **5,980 B**，但距 **49,152 B** 门仍差 **19,296 B**。新默认项和实际生成值纳入 CMake 检查；C3 正式分区 RSA v2 产品重签为 `0x111000` B 并经官方验签、尺寸门。诊断使用 OpenETH，不证明实体 Wi-Fi 吞吐或完整五能力并发；[单变量输入、原始 GDB 与读回](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#c3-六个静态-rx-缓冲续验)保留，P6-03/P7-02 未验收。
 
 2026-09-28 P6-03 产品默认内存项落盘：Base 两目标共同启用 SDK TLS 动态收发缓冲，C3 关闭两项 Wi-Fi IRAM 优化；保持完整 TLS 片段、证书校验和 49,152 B 堆门。仓外复制当前源码／锁并用测试键重建正式分区的双目标签名产品：C3 RSA v2 app `0x111000` B、ESP32 ECDSA v1 app `0x10fff4` B，官方签名、分区与 app 尺寸检查和双目标 host ASan/UBSan 通过。正式 CSV 仍无 FRP scratch，本轮没有烧录设备，也没有把上一轮 C3 FRPS 工作流的最低 23,876 B 当成通过容量门；[完整输入与边界](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#产品默认项与双目标签名构建)。

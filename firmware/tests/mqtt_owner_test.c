@@ -224,8 +224,8 @@ int main(void)
     esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
     assert(esp_base_mqtt_owner_ready());
 
-    /* A complete MESSAGE is consumed before the next configure phase reuses
-     * the control task's command workspace for the copied client config. */
+    /* A complete MESSAGE is consumed before the next revision configures
+     * its copied client connection. */
     push_command(captured.subscriptions[0].topic, false, false);
     esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
     assert(commands == 2);
@@ -271,5 +271,9 @@ int main(void)
     esp_base_mqtt_owner_poll(15015, true, true, received, &runtime);
     assert(commands == 2 && !esp_base_mqtt_owner_result("{}", 2));
     assert(!strcmp(esp_base_mqtt_owner_state(), "failed") && !esp_base_mqtt_owner_ready());
+    fail_stop = false;
+    assert(esp_base_mqtt_owner_revoke() == ESP_OK);
+    assert(destroys == 2 && !strcmp(esp_base_mqtt_owner_state(), "unconfigured") &&
+           !esp_base_mqtt_owner_result("{}", 2));
     puts("mqtt_owner passed (TLS/UUID, SUBACK gate, auth, retain, reconnect, outbox expiry, fail closed)");
 }

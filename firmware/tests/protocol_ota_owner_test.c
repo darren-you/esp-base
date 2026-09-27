@@ -9,6 +9,7 @@
 #include "../components/device_protocol/esp_base_protocol.c"
 
 static esp_base_storage_owner_t owner;
+static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
     validate_result;
@@ -23,11 +24,15 @@ static unsigned snapshot_calls, load_receipt_calls, retire_calls,
 static char latest_reply[1200];
 static char latest_reported[512];
 static unsigned reported_calls;
+static unsigned wifi_apply_calls, config_commit_calls;
 static const char *fake_frp_state = "stopped";
 static uint32_t fake_free_heap = 1000;
 
 static void reset_case(void)
 {
+    free(s_reader);
+    s_reader = NULL;
+    s_serial_discard = false;
     esp_base_storage_owner_init(&owner);
     memset(&s_context, 0, sizeof s_context);
     s_context.device_id = "22222222-2222-4222-8222-222222222222";
@@ -62,6 +67,7 @@ static void reset_case(void)
     reported_calls = 0;
     fake_frp_state = "stopped";
     fake_free_heap = 1000;
+    wifi_apply_calls = config_commit_calls = 0;
 }
 
 static void start(unsigned request_number)
@@ -174,8 +180,31 @@ int main(void)
            strstr(usb_reply, "\"error_code\":\"frp_storage_unavailable\""));
     assert(s_context.config.revision == 7U && s_context.config.frp.configured &&
            !strcmp(s_context.config.frp.server_hostname, "old-frp.example") &&
-           !s_trial_active && s_candidate.revision == 0U &&
+           !s_trial_active && s_candidate == NULL &&
            atomic_load(&owner.active_token) == 0U);
+
+    reset_case();
+    s_context.config.revision = 7U;
+    feed_serial((const unsigned char *)"config-20", 9U);
+    assert(s_reader != NULL && s_reader->length == 9U && !s_serial_discard);
+    feed_serial((const unsigned char *)"\n", 1U);
+    assert(s_reader == NULL && !s_serial_discard && !s_trial_active);
+    unsigned char invalid[EBASE_LINE_LIMIT + 1U];
+    memset(invalid, 'x', sizeof invalid);
+    feed_serial(invalid, sizeof invalid);
+    assert(s_reader == NULL && s_serial_discard);
+    feed_serial((const unsigned char *)"tail\nconfig-24\n", 15U);
+    assert(s_reader == NULL && !s_serial_discard && !s_trial_active);
+
+    reset_case();
+    s_context.config.revision = 7U;
+    s_context.frp_flash_store = &frp_store;
+    config_set(23U, false, usb_reply, sizeof usb_reply);
+    assert(strstr(usb_reply, "\"state\":\"running\"") && s_trial_active &&
+           s_candidate != NULL && s_candidate->revision == 7U && wifi_apply_calls == 1U);
+    poll_configuration(1001U);
+    assert(!s_trial_active && s_candidate == NULL && config_commit_calls == 1U &&
+           s_context.config.revision == 8U && wifi_apply_calls == 1U);
 
     reset_case();
     s_context.config.revision = 7U;
@@ -185,7 +214,7 @@ int main(void)
     expect_reply("failed", "physical_usb_required");
     assert(s_context.config.revision == 7U && s_context.config.frp.configured &&
            !strcmp(s_context.config.frp.server_hostname, "old-frp.example") &&
-           !s_trial_active && s_candidate.revision == 0U &&
+           !s_trial_active && s_candidate == NULL &&
            atomic_load(&owner.active_token) == 0U);
 
     reset_case();
@@ -379,6 +408,10 @@ int main(void)
 
 const char *ebase_parse_command(const char *line, size_t length, ebase_command_t *out)
 {
+    if (line == NULL) {
+        memset(out, 0, sizeof *out);
+        return "invalid_request";
+    }
     unsigned number = 0;
     const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
     const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
@@ -395,6 +428,7 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     if (configure) {
         out->config.revision = 7U;
         out->config.frp.configured = true;
+        out->config.wifi.configured = true;
         return NULL;
     }
     if (query) {
@@ -630,7 +664,24 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
 esp_err_t esp_base_wifi_apply(const ebase_wifi_config_t *config, uint64_t now_ms)
 {
     (void)config; (void)now_ms;
-    assert(false && "rejected config.set must not start a Wi-Fi trial");
+    ++wifi_apply_calls;
+    return ESP_OK;
+}
+esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t *candidate,
+                                                 uint32_t expected_revision,
+                                                 esp_base_remote_config_t *committed,
+                                                 esp_base_remote_config_t *work)
+{
+    assert(candidate != NULL && expected_revision == 7U && committed != NULL && work != NULL);
+    ++config_commit_calls;
+    *committed = *candidate;
+    committed->revision = expected_revision + 1U;
+    return ESP_OK;
+}
+esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
+{
+    (void)config;
+    assert(false && "successful config commit must not reload storage");
     return ESP_FAIL;
 }
 psa_status_t psa_hash_setup(psa_hash_operation_t *operation, int algorithm)

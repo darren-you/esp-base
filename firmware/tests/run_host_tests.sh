@@ -92,6 +92,14 @@ if [[ "$(uname -s)" == Darwin ]]; then
 else
   PROTOCOL_LINK_GC=(-Wl,--gc-sections)
 fi
+"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
+  -fsanitize=address,undefined -ffunction-sections -fdata-sections \
+  -Debase_parse_command=ebase_parse_command_real \
+  -Debase_parse_frp_status=ebase_parse_frp_status_real \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
+  -I "$ROOT/components/remote_config/include" -I "$ROOT/components/ota_operation/include" \
+  -I "$EOTA_DIR/include" -I "$CJSON_DIR" \
+  -c "$ROOT/components/device_protocol/command_decoder.c" -o "$BUILD_DIR/line_feed.o"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
@@ -103,6 +111,7 @@ fi
   "$ROOT/components/device_protocol/command_guard.c" \
   "$ROOT/components/device_protocol/control_state.c" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
+  "$BUILD_DIR/line_feed.o" \
   "$ROOT/tests/protocol_ota_owner_test.c" -o "$BUILD_DIR/protocol_ota_owner_test"
 "$BUILD_DIR/protocol_ota_owner_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
