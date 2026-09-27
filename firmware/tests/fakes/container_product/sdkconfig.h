@@ -2,6 +2,7 @@
 #include <stdbool.h>
 
 extern bool test_policy_enabled;
+extern int test_owner_stack_bytes;
 
 #define CONFIG_ESP_BASE_CONTAINER_PRODUCT_ID (test_policy_enabled ? "product" : "")
 #define CONFIG_ESP_BASE_CONTAINER_KEY_ID (test_policy_enabled ? "key" : "")
@@ -28,5 +29,5 @@ extern bool test_policy_enabled;
 #define CONFIG_ESP_BASE_CONTAINER_MAX_LOG_BYTES 0
 #define CONFIG_ESP_BASE_CONTAINER_MAX_ENTRY_MS (test_policy_enabled ? 100 : 0)
 #ifndef CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES
-#define CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES (test_policy_enabled ? 8192 : 0)
+#define CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES (test_policy_enabled ? test_owner_stack_bytes : 0)
 #endif

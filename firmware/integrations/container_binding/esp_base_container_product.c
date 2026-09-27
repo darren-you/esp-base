@@ -33,9 +33,6 @@ enum {
 
 typedef struct {
     econtainer_slots_idf_provider_t provider;
-    econtainer_package_workspace_t package_workspace;
-    econtainer_wasm_workspace_t wasm_workspace;
-    econtainer_package_info_t verified_info;
     econtainer_package_slot_validation_t validation;
     econtainer_runtime_limits_t limits;
     uint8_t public_key[512];
@@ -178,7 +175,7 @@ static bool configure_policy(void)
         CONFIG_ESP_BASE_CONTAINER_MAX_INSTRUCTIONS > INT32_MAX ||
         CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS <= 0 ||
         CONFIG_ESP_BASE_CONTAINER_MAX_ENTRY_MS <= 0 ||
-        CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES < 8192 ||
+        CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES < 16384 ||
         (CONFIG_ESP_BASE_CONTAINER_ALLOWED_CAPABILITIES & ~ECONTAINER_CAP_ALL) != 0 ||
         ((CONFIG_ESP_BASE_CONTAINER_ALLOWED_CAPABILITIES & ECONTAINER_CAP_TIMER) != 0 ?
              CONFIG_ESP_BASE_CONTAINER_MAX_TIMERS <= 0 :
@@ -204,9 +201,6 @@ static bool configure_policy(void)
         .max_instruction_budget = CONFIG_ESP_BASE_CONTAINER_MAX_INSTRUCTIONS,
         .max_host_call_timeout_ms = CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS,
         .max_storage_limit_bytes = 0U,
-        .package_workspace = &s_product.package_workspace,
-        .wasm_workspace = &s_product.wasm_workspace,
-        .verified_info = &s_product.verified_info,
     };
     s_product.limits = (econtainer_runtime_limits_t){
         .max_wasm_bytes = CONFIG_ESP_BASE_CONTAINER_MAX_WASM_BYTES,
@@ -302,6 +296,13 @@ static econtainer_slots_result_t open_selected(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
 {
     open_context_t *open = context;
+    /* Product open consumes these only while this pthread call is active.
+     * The Container's selected-slot path supplies its own verified_info. */
+    econtainer_package_workspace_t package_workspace;
+    econtainer_wasm_workspace_t wasm_workspace;
+    econtainer_package_slot_validation_t validation = s_product.validation;
+    validation.package_workspace = &package_workspace;
+    validation.wasm_workspace = &wasm_workspace;
     econtainer_slot_selection_request_t request = {
         .expected_sequence = open->sequence,
         .firmware_set = *firmware_set,
@@ -314,7 +315,7 @@ static econtainer_slots_result_t open_selected(
     }
     const econtainer_slot_runtime_result_t result = econtainer_product_open(
         &s_product.provider.io, &s_product.provider.geometry, &request,
-        &s_product.validation, &s_product.limits, &open->runtime);
+        &validation, &s_product.limits, &open->runtime);
     open->runtime_result = result.runtime;
     return result.slots;
 }

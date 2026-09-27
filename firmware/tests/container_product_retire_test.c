@@ -7,6 +7,7 @@
 #include <string.h>
 
 bool test_policy_enabled = true;
+int test_owner_stack_bytes = 16384;
 #include "esp_base_container_product.c"
 
 static esp_base_ota_firmware_set_t physical;
@@ -63,6 +64,7 @@ static void fixture(bool configured, bool two)
 {
     memset(&s_product, 0, sizeof s_product);
     test_policy_enabled = configured;
+    test_owner_stack_bytes = 16384;
     physical_set(two);
     persisted_set(two, 7U);
     observe_calls = bind_calls = retire_calls = abandon_calls = drop_calls = 0U;
@@ -292,6 +294,16 @@ int main(void)
     fill_sha(source, 0xa1);
     fill_sha(inactive, 0xb2);
     esp_base_ota_receipt_snapshot_t snapshot = {0};
+
+    fixture(false, true);
+    assert(!policy_present());
+    fixture(true, true);
+    test_owner_stack_bytes = 8192;
+    assert(!configure_policy());
+    test_owner_stack_bytes = 16383;
+    assert(!configure_policy());
+    test_owner_stack_bytes = 16384;
+    assert(configure_policy());
 
     fixture(true, true);
     assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
