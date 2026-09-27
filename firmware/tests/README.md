@@ -20,6 +20,10 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `storage_owner_test` 验证跨任务 release、10 万次 BUSY 重试不消耗 token、下次成功只加 1、过期 token 拒绝和 `UINT_MAX` 耗尽后释放保留值。`protocol_ota_owner_test` 编译真实 `esp_base_protocol.c` 命令与异步完成分支，注入已解析请求、收据和 OTA worker 结果，验证 owner 忙时不登记收据、收据已知失败释放、收据不确定保留、worker 创建失败先记录再释放、下载失败完成后释放、选槽状态不明时保留，以及成功选槽到重启仍持有 owner；它不执行真实命令解析、NVS、Flash 或 FreeRTOS 并发。`container_binding_test` 以假 Container 类型与调用记录验证真实 Base 固件集合逐字段映射、同 owner 互斥、观察失败及前后镜像变化时拒绝启动。可选固定 SDK 探针再用公开 Container 真头文件和组件编译本适配，但并不调用包槽 provider 或证明实板写入串行。
 
+`ota_startup_scratch_test` 在 C3 候选几何下编译真实 Base 启动与 storage owner 胶水、假 FRP provider，验证分区绑定/恢复失败均早于 NVS、pending 确认和网络启动，恢复回调运行时 owner 独占且返回后 token 释放。FRP 源仓的假 `esp_partition` 测试负责真实 provider 的分区精确绑定、短读/短写、lease、并发 guard 下 clear 重试、boot 擦除，以及 RAM/Flash reader 在 owner 争用时的路径；本仓启动假件不能替代 FRP provider 测试。当前 OTA 长持 owner 可能使 >4 KiB FRP 记录的 scratch I/O BUSY，记录安全失败，clear 只撤销 RAM lease 并允许关闭 session；这不代表并发活性通过。`frp_owner_test` 另以显式清理错误注入验证旧 client handle 保留和重试，不把该错误归因于 OTA BUSY。测试也不证明真实 Flash 掉电、实板网络或 P6-03。
+
+`protocol_ota_owner_test` 的同一真实命令入口还验证无已恢复 scratch store 时，物理 USB `config.set` 返回 `frp_storage_unavailable`，MQTT `config.set` 仍先返回 `physical_usb_required`；两种拒绝均不启动 Wi-Fi 候选、不写新 revision 或覆盖旧配置。测试使用假规范字节与假哈希，只验证这两个路由的门禁顺序与无副作用。
+
 ## 架构拓扑
 
 ```mermaid

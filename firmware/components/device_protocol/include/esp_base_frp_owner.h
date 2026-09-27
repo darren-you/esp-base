@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "esp_base_config.h"
 #include "esp_err.h"
+#include "esp_frp_flash_reader.h"
 
 typedef struct {
     const char *state;
@@ -23,7 +24,8 @@ typedef struct {
  * previous library instance; ESP_ERR_TIMEOUT means cleanup is still active and
  * the caller must retry without dropping the old handle. */
 esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
-                                       const char *device_id);
+                                       const char *device_id,
+                                       const efrp_aead_flash_store_t *flash_store);
 /* The endpoint gate is true only after the separate, authenticated loopback
  * management listener is bound to config.local_port. A failed bind keeps
  * FRPS disconnected rather than exposing an unauthenticated local target. */

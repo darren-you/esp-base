@@ -8,7 +8,8 @@
 
 struct efrp_client { unsigned marker; };
 static struct efrp_client client_object;
-static unsigned creates, starts, destroys, blocked_destroys;
+static efrp_aead_flash_store_t scratch_store;
+static unsigned creates, starts, destroys, blocked_destroys, storage_destroys;
 static efrp_phase_t phase = EFRP_PHASE_READY;
 static bool time_ready = true;
 
@@ -26,6 +27,7 @@ efrp_result_t efrp_create(const efrp_config_t *c, efrp_client_t **out)
     assert(c->local_ipv4[0] == 127 && c->local_ipv4[1] == 0 &&
            c->local_ipv4[2] == 0 && c->local_ipv4[3] == 1 && c->local_port == 8123);
     assert(c->time_is_trusted(c->context) == time_ready);
+    assert(c->flash_store == &scratch_store);
     *out = &client_object; ++creates; return EFRP_OK;
 }
 efrp_result_t efrp_start(efrp_client_t *c)
@@ -36,6 +38,7 @@ efrp_result_t efrp_destroy(efrp_client_t **c, uint32_t timeout)
 {
     assert(c && *c == &client_object && timeout == 0); ++destroys;
     if (blocked_destroys) { --blocked_destroys; return EFRP_WOULD_BLOCK; }
+    if (storage_destroys) { --storage_destroys; return EFRP_STORAGE_ERROR; }
     *c = NULL; return EFRP_OK;
 }
 efrp_result_t efrp_get_status(efrp_client_t *c, efrp_status_t *status)
@@ -56,8 +59,10 @@ int main(void)
     strcpy(config.ca_pem, "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n");
     strcpy(config.proxy_name, "base-device");
     config.management_key[0] = 2;
-    assert(esp_base_frp_owner_configure(NULL, device) == ESP_ERR_INVALID_ARG);
-    assert(esp_base_frp_owner_configure(&config, device) == ESP_OK);
+    assert(esp_base_frp_owner_configure(NULL, device, &scratch_store) == ESP_ERR_INVALID_ARG);
+    assert(esp_base_frp_owner_configure(&config, device, NULL) == ESP_ERR_INVALID_STATE);
+    assert(!strcmp(esp_base_frp_owner_snapshot().state, "failed"));
+    assert(esp_base_frp_owner_configure(&config, device, &scratch_store) == ESP_OK);
     assert(!strcmp(esp_base_frp_owner_snapshot().state, "endpoint_unavailable"));
     esp_base_frp_owner_poll(100, true, true, false);
     assert(!creates && !starts);
@@ -74,10 +79,10 @@ int main(void)
     phase = EFRP_PHASE_BACKOFF;
     assert(!strcmp(esp_base_frp_owner_snapshot().state, "backoff"));
     blocked_destroys = 2;
-    assert(esp_base_frp_owner_configure(&config, device) == ESP_ERR_TIMEOUT);
+    assert(esp_base_frp_owner_configure(&config, device, &scratch_store) == ESP_ERR_TIMEOUT);
     esp_base_frp_owner_poll(450, true, true, true);
     assert(creates == 2 && starts == 2);
-    assert(esp_base_frp_owner_configure(&config, device) == ESP_OK);
+    assert(esp_base_frp_owner_configure(&config, device, &scratch_store) == ESP_OK);
     esp_base_frp_owner_poll(500, true, false, true);
     assert(creates == 2);
     time_ready = false;
@@ -86,9 +91,17 @@ int main(void)
     time_ready = true;
     esp_base_frp_owner_poll(700, true, true, true);
     assert(creates == 3 && starts == 3);
+    storage_destroys = 1;
+    assert(esp_base_frp_owner_configure(&config, device, &scratch_store) == ESP_ERR_TIMEOUT);
+    assert(!strcmp(esp_base_frp_owner_snapshot().state, "stopping"));
+    esp_base_frp_owner_poll(710, true, true, true);
+    assert(creates == 3 && starts == 3); /* old handle retained until clear retry */
+    assert(esp_base_frp_owner_configure(&config, device, &scratch_store) == ESP_OK);
+    esp_base_frp_owner_poll(720, true, true, true);
+    assert(creates == 4 && starts == 4);
     config = (ebase_frp_config_t){0};
-    assert(esp_base_frp_owner_configure(&config, device) == ESP_OK);
+    assert(esp_base_frp_owner_configure(&config, device, NULL) == ESP_OK);
     assert(!strcmp(esp_base_frp_owner_snapshot().state, "unconfigured"));
-    assert(destroys == 6);
-    puts("  frp_owner       passed (endpoint gate, status, stop/reconfigure convergence)");
+    assert(destroys == 8);
+    puts("  frp_owner       passed (endpoint gate, Flash store, clear retry, reconfigure)");
 }

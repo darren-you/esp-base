@@ -1,4 +1,4 @@
-- 在首次擦写旧 B 前校验 OTA 请求并保存 V2 原始意图，按物理槽与 ECS2 退役后下载 C
-- 启动时以原收据核对 A/C 签名、回退资格、operation 与 Container sequence，确认后持久记录 SUCCEEDED
-- 更新 C3/ESP32 精确依赖锁、host 故障回归和双目标离线签名证据
-- 记录 C3 精确签名产品的 QEMU 启动定位与空包 READY 证据
+- 精确锁定 FRP Flash reader 与唯一公开 IDF scratch provider，启动早于 OTA pending 确认执行恢复
+- 复用 Base 全局存储 owner 的短 claim，贯通 protocol 到 FRP client 的 store 生命周期
+- 在无已恢复 store 时拒绝 USB FRP 配置提交，保留旧 revision/配置与 MQTT 物理入口边界
+- 覆盖 host 故障时序与双目标固定 SDK；记录 C3 scratch 签名容量阻断和 ESP32 现有布局结果

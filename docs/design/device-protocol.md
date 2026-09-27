@@ -66,6 +66,8 @@ USB 配置候选在 RAM 验证最多 20 秒，取得 IP 后核对当前关联；
 
 候选失败返回 connection_proof_failed，重新选择已提交配置；离线环境不伪造已经恢复连接。候选执行期间其他写命令返回 configuration_busy，status 仍可用。NVS 写后状态不确定返回 unknown/storage_uncertain，不自动重放，不承诺旧配置已恢复；重新读取存储事实后保持写入关闭，重启重新核验。已提交配置的真实断电恢复已验收；候选及 Flash 提交中间态掉电仍待实测。
 
+FRP Flash reader 硬切候选要求启动时已有精确分区且 boot recover 成功。当前固件没有已恢复 scratch store 时，物理 USB `config.set` 若请求启用 FRP，返回 `failed/frp_storage_unavailable`，不进入 Wi-Fi 候选或 NVS 提交；MQTT 仍先按原合同返回 `failed/physical_usb_required`。已存 FRP 配置只保持原值并报告 FRP failed，不在启动时自动改写。
+
 OTA pending 新槽完成本地确认前，`config.set` 在身份、期限与去重裁决后返回 `failed/ota_verification_pending`，不执行候选连接或配置提交；下载期间返回 `ota_in_progress`。`status` 保持可读。确认成功后新 request_id 可执行配置写入，原 request_id 重放仍返回原失败结果。签名构建的 OTA 下载与配置候选互斥；外部 flash 租约仍须工具侧实现。
 
 ## FRP Base 软件接线边界

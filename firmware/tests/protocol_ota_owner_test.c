@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Exercise the real command branch and its asynchronous completion branch. */
 #include "../components/device_protocol/esp_base_protocol.c"
@@ -67,6 +68,34 @@ static void start(unsigned request_number)
     s_reply_mqtt = false;
 }
 
+static void config_set(unsigned request_number, bool via_mqtt, char *usb_reply,
+                       size_t usb_reply_capacity)
+{
+    char line[32];
+    const int length = snprintf(line, sizeof line, "config-%u", request_number);
+    assert(length > 0 && (size_t)length < sizeof line);
+    if (via_mqtt) {
+        s_reply_mqtt = true;
+        handle_line(line, (size_t)length, NULL);
+        s_reply_mqtt = false;
+        return;
+    }
+    assert(usb_reply != NULL && usb_reply_capacity > 0U);
+    fflush(stdout);
+    FILE *capture = tmpfile();
+    assert(capture != NULL);
+    const int original = dup(fileno(stdout));
+    assert(original >= 0 && dup2(fileno(capture), fileno(stdout)) >= 0);
+    handle_line(line, (size_t)length, NULL);
+    fflush(stdout);
+    assert(fseek(capture, 0, SEEK_SET) == 0);
+    const size_t got = fread(usb_reply, 1, usb_reply_capacity - 1U, capture);
+    usb_reply[got] = '\0';
+    assert(dup2(original, fileno(stdout)) >= 0);
+    close(original);
+    fclose(capture);
+}
+
 static void expect_reply(const char *state, const char *error)
 {
     char field[100];
@@ -97,6 +126,30 @@ static void check_frp_status(const char *request, int expected_http,
 
 int main(void)
 {
+    reset_case();
+    s_context.config.revision = 7U;
+    s_context.config.frp.configured = true;
+    strcpy(s_context.config.frp.server_hostname, "old-frp.example");
+    char usb_reply[1200];
+    config_set(20U, false, usb_reply, sizeof usb_reply);
+    assert(strstr(usb_reply, "\"state\":\"failed\"") &&
+           strstr(usb_reply, "\"error_code\":\"frp_storage_unavailable\""));
+    assert(s_context.config.revision == 7U && s_context.config.frp.configured &&
+           !strcmp(s_context.config.frp.server_hostname, "old-frp.example") &&
+           !s_trial_active && s_candidate.revision == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+
+    reset_case();
+    s_context.config.revision = 7U;
+    s_context.config.frp.configured = true;
+    strcpy(s_context.config.frp.server_hostname, "old-frp.example");
+    config_set(21U, true, NULL, 0U);
+    expect_reply("failed", "physical_usb_required");
+    assert(s_context.config.revision == 7U && s_context.config.frp.configured &&
+           !strcmp(s_context.config.frp.server_hostname, "old-frp.example") &&
+           !s_trial_active && s_candidate.revision == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+
     reset_case();
     check_frp_status("status-1", 200, NULL);
     fake_free_heap = 500;
@@ -267,20 +320,26 @@ int main(void)
     poll_ota();
     expect_reply("unknown", "storage_uncertain");
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
-    puts("  protocol_ota_owner passed (busy, receipt failure, worker failure, async success and retained owner)");
+    puts("  protocol_ota_owner passed (OTA owner faults; USB FRP storage gate; MQTT write rejection)");
 }
 
 const char *ebase_parse_command(const char *line, size_t length, ebase_command_t *out)
 {
     unsigned number = 0;
-    assert(length > 6 && sscanf(line, "start-%u", &number) == 1);
+    const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
+    assert(configure || (length > 6U && sscanf(line, "start-%u", &number) == 1));
     memset(out, 0, sizeof *out);
-    out->kind = EBASE_OTA_START;
+    out->kind = configure ? EBASE_CONFIG_SET : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u", number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
     strcpy(out->request.boot_id, "33333333-3333-4333-8333-333333333333");
     out->request.expires_at_ms = 10000;
+    if (configure) {
+        out->config.revision = 7U;
+        out->config.frp.configured = true;
+        return NULL;
+    }
     snprintf(out->ota.operation_id, sizeof out->ota.operation_id,
              "44444444-4444-4444-8444-%012u", number);
     strcpy(out->ota.image_url, "https://example.invalid/signed.bin");
@@ -484,9 +543,10 @@ bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t 
                                                  esp_base_config_bytes_consumer_t consume,
                                                  void *context)
 {
-    (void)config; (void)consume; (void)context;
-    assert(false && "config.set is outside this test");
-    return false;
+    assert(config != NULL && config->revision == 7U && config->frp.configured &&
+           consume != NULL && context != NULL);
+    const uint8_t canonical[] = "config-frp-scratch-candidate";
+    return consume(canonical, sizeof canonical - 1U, context);
 }
 esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
@@ -499,32 +559,32 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
 esp_err_t esp_base_wifi_apply(const ebase_wifi_config_t *config, uint64_t now_ms)
 {
     (void)config; (void)now_ms;
-    assert(false && "config.set is outside this test");
+    assert(false && "rejected config.set must not start a Wi-Fi trial");
     return ESP_FAIL;
 }
 psa_status_t psa_hash_setup(psa_hash_operation_t *operation, int algorithm)
 {
-    (void)operation; (void)algorithm;
-    assert(false && "config.set is outside this test");
-    return -1;
+    assert(operation != NULL && algorithm == PSA_ALG_SHA_256);
+    operation->sum = 0U;
+    return PSA_SUCCESS;
 }
 psa_status_t psa_hash_update(psa_hash_operation_t *operation, const uint8_t *bytes, size_t length)
 {
-    (void)operation; (void)bytes; (void)length;
-    assert(false && "config.set is outside this test");
-    return -1;
+    assert(operation != NULL && bytes != NULL && length > 0U);
+    for (size_t i = 0; i < length; ++i) operation->sum += bytes[i];
+    return PSA_SUCCESS;
 }
 psa_status_t psa_hash_finish(psa_hash_operation_t *operation, uint8_t *out, size_t out_size, size_t *actual)
 {
-    (void)operation; (void)out; (void)out_size; (void)actual;
-    assert(false && "config.set is outside this test");
-    return -1;
+    assert(operation != NULL && out != NULL && out_size >= 32U && actual != NULL);
+    memset(out, (uint8_t)operation->sum, 32U);
+    *actual = 32U;
+    return PSA_SUCCESS;
 }
 psa_status_t psa_hash_abort(psa_hash_operation_t *operation)
 {
-    (void)operation;
-    assert(false && "config.set is outside this test");
-    return -1;
+    assert(operation != NULL);
+    return PSA_SUCCESS;
 }
 void vTaskDelay(TickType_t ticks)
 {
