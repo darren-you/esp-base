@@ -55,6 +55,8 @@ ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`�
 
 本轮 FRP 会话阶段复用仅改变公开组件的私有 `src/session.c`；两目标主固件锁由官方 Component Manager 重新生成，固定 SDK 普通构建、host ASan/UBSan 与仓外 scratch 候选布局的测试键签名容量通过。正式 ESP32 CSV 没有 `frp_scratch`，本轮签名 ESP32 镜像使用仓外候选 CSV；[精确锁检查点](../docs/operations/frp-session-phase-union-base-dependency-checkpoint.md)记录静态输入。从该提交另行重建双目标签名 app、ECS2 和 Flash 的[无网络 QEMU 检查点](../docs/operations/p6-03-frp-phase-union-current-lock-qemu-checkpoint.md)均到产品 `RUNNING` 与 Base `READY`，不代表 FRPS、Broker、HTTPS 同存或实体板验收。
 
+另签的[ESP32 FRPS 容量诊断](../docs/operations/esp32-frps-phase-union-current-lock-qemu-checkpoint.md)使用额外任务和测试时钟：静态 TLS 缓冲未完成验签；SDK 原生动态缓冲完成严格验签后仍因内存失败，没有注册或 Pong。诊断镜像与无网络原样产品不能混作同一容量读数。
+
 默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座，并只读装载 v3 持久配置，经物理 USB `config.set` 写入完整 Wi-Fi/MQTT/FRP 凭据；未配置时不创建相应客户端。MQTT 已配置时只在 Wi-Fi IP 和本次启动可信时间齐备后启动严格 TLS，会在 command SUBACK 后报告 ready，并通过同一控制任务执行已认证命令、发布 QoS 1 结果和脱敏 reported；远端 config.set 被拒绝。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。现有实板仍为 v1 存储，未完成双槽与 NVS 离线迁移前不得启动 v3-only 镜像；正式 Broker/Tool 和实板网络 ACK 闭环尚待联调。FRP owner 只有独立 HMAC 鉴权的只读 HTTP listener 成功绑定配置中的 `127.0.0.1:local_port` 后才允许启动；端点失败仍报告 `endpoint_unavailable`。当前只完成软件装配，不表示 P4-05 或真实 FRPS 闭环完成。
 
 普通应用仅在本地启动检查成功、控制循环已实际运行且持续 30 秒报告进展，并跨过窗口终点再完成一轮后确认 pending OTA 槽；构建要求 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`。pending 窗口内拒绝 `config.set`，确认后恢复。SDK 确认失败后读回持久槽状态，若已 VALID 则清门。无可回退镜像时当前执行虽保留，下次复位仍有失去可启动槽风险。控制循环进展的 5 秒阈值是策略值，复杂负载、真实新槽和回滚仍待实板验收。
