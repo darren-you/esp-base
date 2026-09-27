@@ -57,6 +57,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 `run_container_lifecycle_test.sh` 以精确锁定的公开 Container/WAMR 源和 wasi-sdk 编译真实签名 counter 包，Base 测试二进制启用 ASan/UBSan。卸载测试覆盖运行中 `stop/close/join`、已停止及损坏包启动失败但 native 资源确已回收的实例，调用公开 `econtainer_slots_uninstall` 后核对当前绑定清除、回退固件包引用与整份包 Flash 不变、同 boot 正式 `product_boot` 返回 `EMPTY`。错误 sequence/摘要在 guest 停止前拒绝；运行中失去 ECS2 key、Container 提交读回与 Base 独立读回各自失败、停止超时均返回不确定并禁止同 boot 重开；旧 OTA `SUCCEEDED` 收据在新产品 operation 推进 sequence 后仍核对原 A/C。Flash/NVS 与固件集合是宿主替身，不代表真实签名 Base 镜像或设备断电。
 
+同一入口另用临时 RSA 测试键签发真实 ABI 2 guest：`init` 成功写入一条日志、登记一次性定时器后进入纯 Wasm 无限循环。签名包沿真实槽的安装、验签、授权、WAMR 装载和 `econtainer_product_init` 执行；在测试策略的 100,000,000 条指令额度与 20 ms 期限下必须先返回 `ENTRY_EXPIRED`，本次日志不可取、计时器不可投递、失败实例不可 `stop`，`close` 释放原生实例。正式 Base `product_boot` 对同一包须返回 `BLOCKED`，worker 已 join、native 已回收，同 boot 重试仍阻断且槽/包不被失败入口改写。随后在同一测试进程的新启动替身中，普通签名 counter 包仍可 `product_boot → stop_confirmed`。这两个数值不代表当前默认关闭的产品授权。测试使用宿主假 Flash/NVS 与固件摘要；新启动替身会重置其假存储，不证明同一物理 boot 解阻、NVS 持久恢复、设备调度上界或同步原生导入可抢占。
+
 同一测试进程还重复 100 次真实签名包安装、正式 Base `product_boot`、产品卸载、同 boot `EMPTY`，每轮保持唯一 storage claim，读取正式 ECS2 状态并核对每次安装 5 次、卸载 1 次提交。guest 实际执行 `init` 与 `stop`；当前没有授权的业务事件源，循环不调用 `on_event`。运行中卸载必须证明 `stop/close/join`、native 已回收，并确认卸载不擦写包 Flash。macOS 另编译非 sanitizer 二进制，先校准 64 KiB 堆与 VM 映射能被采样，再比较第 10／50／100 次后的默认 malloc zone 已用字节、`TASK_VM_INFO` 虚拟字节与 region 数；ASan/UBSan 二进制也执行同一循环。这是宿主分配和线程回收检查，不代表 ESP 堆、Flash 耐久、公开安装或实板 100 次运行。
 
 仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
