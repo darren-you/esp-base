@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-03 Base 配置提交单缓冲：v3 NVS 提交前编码、写入后读回与配置指纹在唯一控制 owner 中复用同一 7,618 B 静态缓冲；读回仍经严格解码，并逐字段核对候选和下一 revision，任何不同保持不确定结果。固定 SDK 双目标 ELF 各减少 **7,618 B** 常驻 `.bss`，主固件普通构建及 host ASan/UBSan **20/20／19/19** 通过，包含 Wi-Fi、MQTT、FRP 有效但被改写的持久读回拒绝。输入、镜像摘要与未测边界见[配置单缓冲检查点](p6-03-config-single-buffer-checkpoint.md)。未重测签名组合的堆低水，不据此验收 P6-03。
+
 2026-09-28 FRP 严格 TLS 成功状态精确消费：公开 `esp-frp@b462c1497438cfeb514f022bc2d2d6c026599a41` 在握手成功后把 TLS 验签标志复制到 client 就绪状态，修正先前 `verify=UINT_MAX` 的状态快照；FRP 的官方 FRPS `client_contract`／`client_upstream` 两项宿主测试通过，包含初次连接和重连的 `verify_flags==0` 断言。Base 主固件清单与固定 ESP-IDF `578cf89c` 的 Component Manager **全新解析**出的 C3／ESP32 锁精确消费该提交，FRP 组件摘要均为 `f0ce6da3d1db2598e28798a2e97c8ad89d91e53cc18b0770c45e353d17d65a32`；两锁 SHA-256 分别为 `1ef8526ea6e8238d58c5c26bc25f7a23534524b9f8a5df96cb6132596cd87ac3`／`9685b02e3e7c1c730e2a3d89daa7e3e0a84d5f8f3213323ac5de3c18a23eb856`，除 FRP 提交、组件摘要及清单摘要外其余依赖不变。NVS 容量探针不引用 FRP，其两份锁保持原样。
 
 隔离 `mac-work-1:/private/tmp/esp-base-frp-status-consumer-20260928/` 完成 C3 与 ESP32 普通完整构建和 Base 双目标 host ASan/UBSan 回归。C3 未签名 app 为 `0xdefd0` B、SHA-256 `a8acb0289526449808d7a0d2cdade8916e884cde12e070e3ecfa629a996d65a3`；ESP32 显式离线探针未签名 app 为 `0xd2bc0` B、SHA-256 `736d90b47d5faebb1fdd269219151721c4d65c62d56ef95ec961eb0a0c34b8fc`，两目标官方 app 分区尺寸检查均通过。这一轮只修正状态上报并闭合新依赖，没有改变 TLS 严格校验、P6-03 堆水位或实体板验收结论；镜像不是刷写候选。

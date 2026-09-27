@@ -13,7 +13,21 @@ static unsigned writes, commits, handles;
 static int fault;
 static bool after_write;
 enum { INIT_ERROR = 1, READ_ERROR, OPEN_ERROR, WRITE_ERROR_BEFORE,
-       WRITE_ERROR_AFTER, COMMIT_ERROR, READBACK_ERROR, READBACK_MISMATCH };
+       WRITE_ERROR_AFTER, COMMIT_ERROR, READBACK_ERROR, READBACK_MISMATCH,
+       READBACK_PAYLOAD_MISMATCH, READBACK_MQTT_MISMATCH, READBACK_FRP_MISMATCH };
+
+static void corrupt_text(uint8_t *bytes, size_t length, const char *text)
+{
+    const size_t text_length = strlen(text);
+    for (size_t offset = EBASE_CONFIG_HEADER_BYTES;
+         offset + text_length <= length; ++offset) {
+        if (!memcmp(bytes + offset, text, text_length)) {
+            bytes[offset] ^= 1;
+            return;
+        }
+    }
+    assert(!"expected configured field in readback");
+}
 
 esp_err_t nvs_flash_init_partition(const char *p)
 {
@@ -37,6 +51,12 @@ esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *out, size_t *
     if (*size < stored_size) return ESP_ERR_NVS_INVALID_LENGTH;
     memcpy(out, stored, stored_size); *size = stored_size;
     if (fault == READBACK_MISMATCH && after_write) ((uint8_t *)out)[8] ^= 1;
+    if (fault == READBACK_PAYLOAD_MISMATCH && after_write)
+        ((uint8_t *)out)[EBASE_CONFIG_HEADER_BYTES] ^= 1;
+    if (fault == READBACK_MQTT_MISMATCH && after_write)
+        corrupt_text(out, *size, "broker.example.test");
+    if (fault == READBACK_FRP_MISMATCH && after_write)
+        corrupt_text(out, *size, "frp.example.test");
     return ESP_OK;
 }
 esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *data, size_t size)
@@ -223,8 +243,16 @@ int main(void)
     assert_work_wiped();
     assert(esp_base_remote_config_commit_verified(&candidate, 0, &current, &work) == ESP_BASE_CONFIG_CONFLICT && writes == 1);
     assert(esp_base_remote_config_load(&current) == ESP_OK && current.revision == 1);
-    for (fault = INIT_ERROR; fault <= READBACK_MISMATCH; ++fault) {
-        esp_base_remote_config_t baseline = configured(1);
+    esp_base_remote_config_t baseline = configured(1);
+    save(&baseline);
+    candidate = configured(1);
+    add_mqtt(&candidate);
+    add_frp(&candidate);
+    assert(esp_base_remote_config_commit_verified(&candidate, 1, &current, &work) == ESP_OK);
+    assert(current.revision == 2 && current.mqtt.configured && current.frp.configured);
+    assert_work_wiped();
+    for (fault = INIT_ERROR; fault <= READBACK_PAYLOAD_MISMATCH; ++fault) {
+        baseline = configured(1);
         save(&baseline);
         candidate = configured(1); current = configured(99);
         unsigned before = writes;
@@ -235,6 +263,18 @@ int main(void)
         assert_work_wiped();
         if (fault == WRITE_ERROR_BEFORE) assert(stored[8] == 1);
         if (fault >= WRITE_ERROR_AFTER) assert(stored[8] == 2);
+    }
+    for (fault = READBACK_MQTT_MISMATCH; fault <= READBACK_FRP_MISMATCH; ++fault) {
+        baseline = configured(1);
+        save(&baseline);
+        candidate = configured(1);
+        add_mqtt(&candidate);
+        add_frp(&candidate);
+        current = configured(99);
+        assert(esp_base_remote_config_commit_verified(&candidate, 1, &current, &work) ==
+               ESP_BASE_CONFIG_UNCERTAIN);
+        assert(current.revision == 99 && handles == 0);
+        assert_work_wiped();
     }
     fault = 0; after_write = false;
     candidate = configured(UINT32_MAX); save(&candidate);

@@ -2,6 +2,8 @@
 
 基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载、按 operation ID 查询 `ota.result` 的 V2 持久收据、只读签名固件集合观察，以及与 Container 产品绑定的无包固件 OTA 和启动恢复软件链。FRP 已接入公开组件和单 owner；受控 loopback 管理端点已有只读 `status` 软件候选，能在绑定成功后开放 FRP 启动门，但尚无同板资源及真实 FRPS 闭环；实体 C3 仍保留旧 Base、ESP32 仍保留旧 ESP-AT，五能力完整验收尚未完成。
 
+2026-09-28 当前主固件精确消费 `esp-frp@b462c1497438cfeb514f022bc2d2d6c026599a41`，成功 TLS 握手后的 client 快照回报实际验签标志；固定 SDK 双目标普通构建和宿主回归通过。Base v3 配置提交与读回复用一份 7,618 B 静态缓冲，严格解码并逐字段校验持久结果，双目标 `.bss` 各释放 7,618 B；尚未在同一签名网络组合中重测堆低水。[开发检查点](docs/operations/development-checkpoint.md)和[配置单缓冲收据](docs/operations/p6-03-config-single-buffer-checkpoint.md)记录精确输入与验收边界。
+
 2026-09-27 当前主固件将公开 FRP 精确锁更新到 `esp-frp@0af12209ee731617e635684309c026ae6b49c5ae`：该提交只复用会话私有阶段内存，公开头、ABI 和协议限额未变。固定 SDK 双目标普通构建、Base host ASan/UBSan 及各自 scratch 候选布局的仓外测试键签名容量门通过；[精确锁与签名容量检查点](docs/operations/frp-session-phase-union-base-dependency-checkpoint.md)记录输入。随后从该 Base 提交重新归档源码、解析双锁并重建 app／ECS2／Flash 的[双目标纯净签名 QEMU](docs/operations/p6-03-frp-phase-union-current-lock-qemu-checkpoint.md)均到产品 `RUNNING` 与 Base `READY`；C3／ESP32 启动内部堆历史最低空闲 54,104／52,596 B，完整 FRPS、MQTT、OTA 网络同存和实体板尚未验收。
 
 同一新锁的[ESP32 仓外 FRPS 诊断](docs/operations/esp32-frps-phase-union-current-lock-qemu-checkpoint.md)另用额外 4 KiB 任务、OpenETH 和测试时钟：原样静态 TLS 缓冲三次握手超时且未验签，SDK 原生动态缓冲完成严格 CA/IP SAN 验签后在认证阶段因低内存停止；两份输入的启动堆历史最低分别只有 1,020／1,524 B。再次运行同一动态 app 时失败申请尺寸与先后停点变化，尚无唯一分配来源；正式 SNTP、FRPS 注册及五能力资源门未通过。
@@ -16,7 +18,7 @@
 
 同锁的命令去重历史槽只保留重放判定及异步回执实际消费的字段，固定 SDK 双目标链接图各释放 2,304 B 常驻 `.bss`；host 回归通过。纯净锁双目标签名 guest 在无网络启动时均到 `RUNNING/READY`，C3／ESP32 的内部堆最低分别为 53,208／51,456 B，产品线程栈最低未用 5,140／5,012 B；仅该启动切片超过 48 KiB 初始观察门，P6-03 仍未通过。详见[命令去重表容量检查点](docs/operations/p6-03-request-guard-capacity-checkpoint.md)与[纯净签名 QEMU 检查点](docs/operations/p6-03-request-guard-clean-signed-qemu-checkpoint.md)。
 
-命令配置、OTA 请求与结果 operation ID 的解析载荷互斥；合并后固定 SDK 双目标链接图各再释放 632 B 常驻 `.bss`，旧／新 host ASan／UBSan 与普通构建均通过。候选配置、已提交配置、NVS 提交双缓冲和 MQTT 事件仍须保持独立；该源码组合尚无签名 guest 运行堆读数，P6-03 未据此验收。见[命令载荷容量检查点](docs/operations/p6-03-command-payload-capacity-checkpoint.md)。
+命令配置、OTA 请求与结果 operation ID 的解析载荷互斥；该阶段固定 SDK 双目标链接图各释放 632 B 常驻 `.bss`，旧／新 host ASan／UBSan 与普通构建均通过。当时的候选配置、已提交配置、NVS 提交双缓冲和 MQTT 事件分别保留；后续 NVS 单缓冲改动见本页顶部。该阶段没有签名 guest 运行堆读数，P6-03 未据此验收。见[命令载荷容量检查点](docs/operations/p6-03-command-payload-capacity-checkpoint.md)。
 
 控制任务复用互斥使用的 JSON result 与周期 reported 工作区，保留后者 512 B 的原容量门。精确锁 MQTT 的默认 outbox 在 enqueue 返回前复制报文；双目标 host 回归及普通构建通过，链接图各再释放 512 B 常驻 `.bss`。该组合尚无网络运行堆或实板测量，见[网络回执工作区检查点](docs/operations/p6-03-network-json-scratch-checkpoint.md)。
 
