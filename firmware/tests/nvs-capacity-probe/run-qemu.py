@@ -19,6 +19,7 @@ def main() -> int:
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--flash", required=True, type=Path)
     parser.add_argument("--stage", required=True, type=int, choices=(1, 2, 3))
+    parser.add_argument("--nvs-pages", required=True, type=int, choices=(6, 8))
     parser.add_argument("--qemu", default="qemu-system-riscv32",
                         help="Espressif QEMU binary with esp32c3 machine support")
     parser.add_argument("--timeout-seconds", type=int, default=180)
@@ -119,7 +120,10 @@ def main() -> int:
     steps = sum(line.startswith("PROBE_STEP=") for line in probe_lines)
     expected_steps = (args.stop_after_revision - 3 if stop_marker is not None
                       else {1: 3, 2: 97, 3: 0}[args.stage])
-    restart_ok = args.stage == 1 or "PROBE_RESTART_MATCH=1" in probe_lines
+    restart_ok = args.stage == 1 or any(
+        line.startswith("PROBE_RESTART_MATCH=1 ") for line in probe_lines
+    )
+    pages_ok = f"PROBE_PAGES={args.nvs_pages}" in probe_lines
     stale_cas_ok = args.stage != 1 or any(
         line.startswith("PROBE_STALE_CAS=") and
         len(line.split()) == 2 and
@@ -134,10 +138,10 @@ def main() -> int:
     )
     completion_ok = (completed_stop_line(output) if stop_marker is not None
                      else expected in output)
-    success = (completion_ok and b"PROBE_FAIL=" not in output and
+    success = (completion_ok and pages_ok and b"PROBE_FAIL=" not in output and
                steps == expected_steps and restart_ok and stale_cas_ok and revision_ok)
     print(f"stage={args.stage} steps={steps} marker={completion_ok} "
-          f"restart_ok={restart_ok} stale_cas_ok={stale_cas_ok} "
+          f"pages_ok={pages_ok} restart_ok={restart_ok} stale_cas_ok={stale_cas_ok} "
           f"revision_ok={revision_ok} terminated_after_sdk_return={stop_marker is not None} "
           f"log={evidence}")
     for line in probe_lines[-8:]:

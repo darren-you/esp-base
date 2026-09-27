@@ -1,6 +1,8 @@
-# 合成 QEMU 证据
+# 2026-09-26 历史合成 QEMU 证据
 
-本目录只保留 `PROBE_` 行及固定 SDK 官方 NVS parser 的无内容完整性输出。所有配置与收据均为合成值；没有私有设备 Flash、身份、凭据或完整镜像摘要。
+本目录已提交的日志只对应旧八页实验：118 字节 OTA blob 与 `base_container/state` 占位键。它们不是当前 OTA V2 186 字节、`base_pkg/slots` ECS2 记录的证据。当前六／八页独立复跑的输入、构建日志、`PROBE_` 日志、官方 parser 和最终合成 NVS 摘要记录在[容量记录](../../../../docs/operations/c3-eight-page-nvs-capacity.md)，原始文件留在仓外。
+
+以下历史文件只保留 `PROBE_` 行及固定 SDK 官方 NVS parser 的无内容完整性输出。所有配置与收据均为合成值；没有私有设备 Flash、身份、凭据或完整镜像摘要。
 
 | 文件 | 范围 |
 | --- | --- |

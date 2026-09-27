@@ -7,6 +7,9 @@
 #include <string.h>
 
 #include "esp_base_remote_config.h"
+#include "esp_container_slots.h"
+#include "esp_container_slots_idf.h"
+#include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -16,10 +19,10 @@
 #define PARTITION "base_store"
 #define OTA_NAMESPACE "base_ota"
 #define OTA_KEY "operation"
-#define CONTAINER_NAMESPACE "base_container"
-#define CONTAINER_KEY "state"
-#define OTA_BYTES 118U
-#define CONTAINER_BYTES 288U
+#define CONTAINER_NAMESPACE "base_pkg"
+#define CONTAINER_KEY "slots"
+#define OTA_BYTES 186U
+#define CONTAINER_BYTES ECONTAINER_SLOT_BLOB_BYTES
 #define FINAL_REVISION 100U
 
 static esp_base_remote_config_t current_config;
@@ -31,6 +34,8 @@ static uint8_t ota_bytes[OTA_BYTES];
 static uint8_t container_bytes[CONTAINER_BYTES];
 static uint8_t side_readback[CONTAINER_BYTES];
 static uint8_t previous_digest[32];
+static econtainer_slots_idf_provider_t container_provider;
+static SemaphoreHandle_t container_storage_lock;
 
 static void put_u32(uint8_t *bytes, uint32_t value)
 {
@@ -42,6 +47,62 @@ static uint32_t get_u32(const uint8_t *bytes)
     uint32_t value = 0;
     for (unsigned i = 0; i < 4; ++i) value |= (uint32_t)bytes[i] << (i * 8);
     return value;
+}
+
+static uint32_t container_crc32(const uint8_t *bytes, size_t size)
+{
+    uint32_t crc = UINT32_MAX;
+    for (size_t index = 0; index < size; ++index) {
+        crc ^= bytes[index];
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1U) ^ ((crc & 1U) ? UINT32_C(0xedb88320) : 0U);
+    }
+    return ~crc;
+}
+
+static bool container_initialize_or_load(void)
+{
+    container_storage_lock = xSemaphoreCreateMutex();
+    if (container_storage_lock == NULL) return false;
+    const econtainer_slots_idf_config_t config = {
+        .package_partition_label = "product_pkgs",
+        .package_partition_offset_bytes = 0x260000,
+        .package_partition_size_bytes = 0x186000,
+        .slots = {{0x260000, 0x82000}, {0x2e2000, 0x82000},
+                  {0x364000, 0x82000}},
+        .nvs_partition_label = PARTITION,
+        .nvs_partition_offset_bytes = 0x138000,
+        .nvs_partition_size_bytes = PROBE_NVS_PAGES * 0x1000,
+        .nvs_namespace = CONTAINER_NAMESPACE,
+        .nvs_key = CONTAINER_KEY,
+        .storage_lock = container_storage_lock,
+    };
+    if (!econtainer_slots_idf_bind(&container_provider, &config)) return false;
+    econtainer_slots_state_t state;
+    econtainer_slots_result_t result = econtainer_slots_load(
+        &container_provider.io, &container_provider.geometry, &state);
+    if (result == ECONTAINER_SLOTS_EMPTY && PROBE_STAGE == 1) {
+        econtainer_slot_firmware_set_t firmware = {.bootable_count = 1};
+        econtainer_slot_binding_t bindings[ECONTAINER_SLOT_BINDING_COUNT] = {0};
+        memset(firmware.bootable_firmware_sha256[0], 0xa0, 32);
+        memset(firmware.running_firmware_sha256, 0xa0, 32);
+        bindings[0].present = true;
+        memset(bindings[0].firmware_sha256, 0xa0, 32);
+        result = econtainer_slots_initialize(&container_provider.io,
+                                             &container_provider.geometry,
+                                             &firmware, bindings);
+        if (result != ECONTAINER_SLOTS_OK) return false;
+        result = econtainer_slots_load(&container_provider.io,
+                                       &container_provider.geometry, &state);
+    }
+    if (result != ECONTAINER_SLOTS_OK ||
+        !container_provider.io.lock(container_provider.io.context)) return false;
+    const econtainer_slot_blob_result_t read =
+        container_provider.io.read_blob(container_provider.io.context, container_bytes);
+    container_provider.io.unlock(container_provider.io.context);
+    if (read != ECONTAINER_SLOT_BLOB_FOUND) return false;
+    printf("PROBE_CONTAINER_SOURCE=ECS2 sequence=%" PRIu32 "\n", state.sequence);
+    return true;
 }
 
 static void fill_host(char host[254])
@@ -88,26 +149,29 @@ static void make_ota(uint32_t revision)
 {
     memset(ota_bytes, 0, sizeof ota_bytes);
     memcpy(ota_bytes, "EOTA", 4);
-    ota_bytes[4] = 1;       // v1
+    ota_bytes[4] = 2;       // Current V2 wire layout.
     ota_bytes[5] = 1;       // PREPARED
     ota_bytes[6] = 0x10;    // OTA_0
     ota_bytes[7] = 0x11;    // OTA_1
+    ota_bytes[9] = 1;       // Container enabled, sequence below.
     put_u32(ota_bytes + 10, 0x100000);
     static const char synthetic_id[] = "00000000-0000-4000-8000-000000000000";
     memcpy(ota_bytes + 14, synthetic_id, 36);
     memcpy(ota_bytes + 50, synthetic_id, 36);
-    for (unsigned i = 86; i < OTA_BYTES; ++i) ota_bytes[i] = (uint8_t)(i * 7U);
+    memset(ota_bytes + 86, 0xc0, 32);
+    memset(ota_bytes + 118, 0xa0, 32);
+    memset(ota_bytes + 150, 0xb0, 32);
     put_u32(ota_bytes + 86, revision);
+    put_u32(ota_bytes + 182, revision + 1U);
 }
 
 static void make_container(uint32_t revision)
 {
-    // Container's future product namespace/key is not frozen. Only exact NVS
-    // blob length and write/readback pressure are tested here.
-    for (unsigned i = 0; i < CONTAINER_BYTES; ++i)
-        container_bytes[i] = (uint8_t)(i * 11U + 3U);
-    memcpy(container_bytes, "ECAP", 4);
-    put_u32(container_bytes + 4, revision);
+    // Keep the exact binding/operation emitted by econtainer_slots_initialize.
+    // Only sequence and CRC change, then the real decoder validates each commit.
+    put_u32(container_bytes + 8, revision + 1U);
+    put_u32(container_bytes + CONTAINER_BYTES - 4U,
+            container_crc32(container_bytes, CONTAINER_BYTES - 4U));
 }
 
 static esp_err_t write_and_check(const char *name, const char *key,
@@ -126,6 +190,19 @@ static esp_err_t write_and_check(const char *name, const char *key,
     error = nvs_get_blob(handle, key, side_readback, &received);
     nvs_close(handle);
     return error == ESP_OK && received == size && memcmp(bytes, side_readback, size) == 0 ?
+           ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+static esp_err_t write_container_and_check(void)
+{
+    const econtainer_slots_io_t *io = &container_provider.io;
+    if (!io->lock(io->context)) return ESP_ERR_INVALID_STATE;
+    const bool committed = io->write_blob(io->context, container_bytes);
+    uint8_t observed[CONTAINER_BYTES];
+    const econtainer_slot_blob_result_t read = io->read_blob(io->context, observed);
+    io->unlock(io->context);
+    return committed && read == ECONTAINER_SLOT_BLOB_FOUND &&
+           memcmp(observed, container_bytes, sizeof observed) == 0 ?
            ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
@@ -196,19 +273,26 @@ static bool run_steps(uint32_t first, uint32_t last)
             printf("PROBE_FAIL=config_readback desired=%" PRIu32 "\n", revision);
             return false;
         }
-        make_ota(revision);
-        esp_err_t side_error = write_and_check(OTA_NAMESPACE, OTA_KEY,
-                                               ota_bytes, sizeof ota_bytes);
+        make_container(revision);
+        esp_err_t side_error = write_container_and_check();
         if (side_error != ESP_OK) {
-            printf("PROBE_FAIL=ota desired=%" PRIu32 " code=%d\n",
+            printf("PROBE_FAIL=container desired=%" PRIu32 " code=%d\n",
                    revision, (int)side_error);
             return false;
         }
-        make_container(revision);
-        side_error = write_and_check(CONTAINER_NAMESPACE, CONTAINER_KEY,
-                                     container_bytes, sizeof container_bytes);
+        econtainer_slots_state_t state;
+        if (econtainer_slots_load(&container_provider.io,
+                                  &container_provider.geometry,
+                                  &state) != ECONTAINER_SLOTS_OK ||
+            state.sequence != revision + 1U) {
+            printf("PROBE_FAIL=container_decode desired=%" PRIu32 "\n", revision);
+            return false;
+        }
+        make_ota(revision);
+        side_error = write_and_check(OTA_NAMESPACE, OTA_KEY,
+                                     ota_bytes, sizeof ota_bytes);
         if (side_error != ESP_OK) {
-            printf("PROBE_FAIL=container desired=%" PRIu32 " code=%d\n",
+            printf("PROBE_FAIL=ota desired=%" PRIu32 " code=%d\n",
                    revision, (int)side_error);
             return false;
         }
@@ -236,7 +320,7 @@ static bool verify_reboot(void)
                                                 sizeof observed_container);
     const uint32_t ota_revision = ota_error == ESP_OK ? get_u32(observed_ota + 86) : 0;
     const uint32_t container_revision =
-        container_error == ESP_OK ? get_u32(observed_container + 4) : 0;
+        container_error == ESP_OK ? get_u32(observed_container + 8) - 1U : 0;
     printf("PROBE_RESTART_CONFIG_REV=%" PRIu32 " valid=%d sha256=",
            current_config.revision, config_valid);
     if (config_valid) print_digest(digest);
@@ -253,9 +337,14 @@ static bool verify_reboot(void)
         memcmp(observed_container, container_bytes, CONTAINER_BYTES) == 0 &&
         ota_revision == current_config.revision &&
         container_revision == current_config.revision;
-    printf("PROBE_RESTART_MATCH=%d\n", intact);
+    econtainer_slots_state_t state;
+    const bool decoded = econtainer_slots_load(&container_provider.io,
+                                               &container_provider.geometry,
+                                               &state) == ECONTAINER_SLOTS_OK &&
+                         state.sequence == container_revision + 1U;
+    printf("PROBE_RESTART_MATCH=%d container_decoded=%d\n", intact && decoded, decoded);
     print_stats(current_config.revision);
-    return intact;
+    return intact && decoded;
 }
 
 void app_main(void)
@@ -267,10 +356,15 @@ void app_main(void)
     const esp_err_t init_error = nvs_flash_init_partition(PARTITION);
     printf("PROBE_INIT=%d stage=%d\n", (int)init_error, PROBE_STAGE);
     if (init_error != ESP_OK) goto done;
+    printf("PROBE_PAGES=%d\n", PROBE_NVS_PAGES);
     const esp_err_t load_error = esp_base_remote_config_load(&current_config);
     printf("PROBE_LOAD=%d revision=%" PRIu32 "\n",
            (int)load_error, current_config.revision);
     if (load_error != ESP_OK) goto done;
+    if (!container_initialize_or_load()) {
+        printf("PROBE_FAIL=container_initialization\n");
+        goto done;
+    }
 #if PROBE_STAGE == 1
     if (current_config.revision != 0 || !make_max_config(&candidate_config)) {
         printf("PROBE_FAIL=initial_state\n");
