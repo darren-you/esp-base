@@ -437,8 +437,10 @@ static void *product_thread(void *unused)
         s_product.claim, observation, NULL, open_selected, &open);
     if (slots != ECONTAINER_SLOTS_OK ||
         open.runtime_result != ECONTAINER_RUNTIME_OK || open.runtime == NULL) {
-        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED open_slots=%d open_runtime=%d",
-                 (int)slots, (int)open.runtime_result);
+        if (slots != ECONTAINER_SLOTS_EMPTY) {
+            ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED open_slots=%d open_runtime=%d",
+                     (int)slots, (int)open.runtime_result);
+        }
         if (open.runtime != NULL) (void)econtainer_product_close(&open.runtime);
         s_product.stop_succeeded = open.runtime == NULL;
         xSemaphoreGive(s_product.stopped);
