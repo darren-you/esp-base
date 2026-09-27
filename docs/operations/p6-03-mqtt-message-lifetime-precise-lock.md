@@ -8,4 +8,12 @@
 
 本次从空 `sdkconfig` 重建 ESP32 时还发现旧默认项 `CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y` 是 SDK 派生选项，Kconfig 会忽略直接赋值，使 8BIT IRAM 条件不成立。默认项改为可设置的 `CONFIG_FREERTOS_UNICORE=y`，CMake 同时核对它与派生的 `CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y`、`CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y`。全新默认配置生成和显式 unsigned 离线探针构建均通过，三项在生成配置中为 `y`；该 probe app 为 `0xd31b0` B，SHA-256 `755528a21a1f0c68149a2a4f804c9f8937b35f8c393b9baf9a7165c5988f3fc4`，**不可刷写**。
 
-两份签名镜像只证明编译、签名与当前正式 CSV 的 app 尺寸。当前正式 CSV 尚未容纳全部三份最大 Container 包槽及 FRP scratch；新 MQTT 锁也没有与 FRP、OTA 和 Container guest 同机完成联网资源试验，更没有测两块实板无线与掉电迁移。因此 P6-03 的五能力共存和 **49,152 B** 普通内部堆门仍未验收；先前单 FRP 工作流的堆低水不能与本次结构尺寸直接相加。本轮未刷写设备。
+上述两份正式 CSV 签名镜像只证明编译、签名与 app 尺寸。当前正式 CSV 尚未容纳全部三份最大 Container 包槽及 FRP scratch；新 MQTT 锁也尚未完成 Broker、FRP、OTA 和 Container guest 同机联网，更没有测两块实板无线与掉电迁移。因此 P6-03 的五能力共存和 **49,152 B** 普通内部堆门仍未验收；先前单 FRP 工作流的堆低水不能与本次结构尺寸直接相加。本轮未刷写设备。
+
+## ESP32 签名 QEMU 的空闲 MQTT 与 FRP 工作流切片
+
+同日另在 `mac-work-1:/private/tmp/esp-base-mqtt-frps-idle-20260928/` 从本次 Base／MQTT 精确源码仓外增加 OpenETH、固定测试时钟和直连 FRP 探针，并在 FRP 前创建一个正式 `emqtt_create` 实例，持续持有官方 MQTT client、运行实例与队列；该 MQTT 实例**未连接 Broker**。以独立的三包槽、FRP scratch 候选 CSV 和测试键构建 ESP32 ECDSA v1 签名 app **`0x10fff4` B**，官方 `espsecure verify-signature --version 1` 和 app 尺寸检查通过；app SHA-256 `523c9ea1f0eb085f53bf8115b10d3580622cf9f9891110c875e1db65642b9538`，ESP32 锁仍为上述 `6ac0aa88...`。按本次 app 摘要重新生成 ECS2 sequence 6 和 4 MiB Flash，种子 SHA-256 `79d8fa4819076d8213082d65b25b1ae87665a2f9b7f691ec96c3896538526497`。
+
+真签名 guest 到 Container `RUNNING`、Base `READY` 后，`emqtt_create` 返回 `ESP_OK`，普通 8BIT 堆即时空闲 **115,796 → 102,304 B**；这是整个官方 MQTT client／队列的本轮分配差额，不能只归因于三份消息体。实例存活期间，官方 FRPS 严格 CA／IP SAN TLS 验签标志 `verify=0`，完成登录、注册、Pong 和一条双向各 **300,001 B** 的工作流逐字节回显，`completed=1 failed=0`；历史最低普通 8BIT 堆 **65,780 B**，比 49,152 B 门高 **16,628 B**。停止 FRP 后 MQTT destroy 返回成功，空闲回到 **115,028 B**；它与创建前差 768 B，不将单次即时读数视为泄漏结论。原始 UART SHA-256 `402552908c33d1e140a2a918ab176070cce63fc646bf4a9226ffc9a242e10392`，官方 FRPS 日志 SHA-256 `7a2f4b332cfa54b705bbc8a8e8d97444a06d59e7a03e198d2b7801d1803d2b30`，机器结果为 `network-run-result.json`。
+
+运行后签名 app 槽、包区与 `base_store` 分区逐字节未变；FRP scratch 按启动恢复擦除，系统 NVS 和 `otadata` 分别变化 101／12 B。这个切片确认新锁的空闲 MQTT 实例与单条 FRP 工作流可在同一签名 guest 镜像共存，仍绕过正式 Base Wi-Fi／SNTP／HMAC owner，且没有 Broker 连接、入站消息队列、OTA HTTPS、双活跃加预备 FRP 流或实板无线。`65,780 B` 不能证明 P6-03 五能力最坏组合达到容量门；上述正式 CSV 的分区缺口与设备迁移也未关闭。
