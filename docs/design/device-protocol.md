@@ -28,7 +28,7 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 同 boot 下缓存有界 request_id 与规范内容 SHA-256；同 ID 不同内容返回 request_conflict。缓存满时拒绝新操作，不驱逐尚可被重复投递的有效条目后再次执行。重启后的未终态只能报告 unknown 或基于持久裁决对账，不宣称物理 exactly-once。
 
-OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下载：摘要/长度相同返回 `ota_operation_exists`，不同返回 `ota_operation_conflict`。前次结果未能裁决时，新 ID 返回 `ota_previous_unresolved`，不能覆盖唯一持久证据；可能需要外部恢复后才能继续 OTA。一个新操作仅在前次有成功或失败证据时覆盖收据。目标状态不安全、selector 不一致、当前槽非 VALID 或目标状态读回异常分别拒绝并返回 `ota_target_not_safe`、`ota_selector_mismatch`、`ota_source_not_valid` 或 `ota_target_state_unknown`。`ota.result` 不重放写动作；查询旧 ID 在收据被新操作替换后返回 `unknown/ota_operation_not_found`。回滚若进入尚未实现 `ota.result` 的旧镜像，该镜像无法读取新收据，工具必须报告 unknown，不能推断失败或成功。
+OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下载：摘要/长度相同返回 `ota_operation_exists`，不同返回 `ota_operation_conflict`。前次结果未能裁决时，新 ID 返回 `ota_previous_unresolved`，不能覆盖唯一持久证据；可能需要外部恢复后才能继续 OTA。一个新操作仅在前次有成功或失败证据时覆盖收据。新镜像摘要等于已复核的运行镜像摘要时，`ota.start` 返回 `failed/ota_same_image`，不写新收据、不退役旧备用槽、不创建下载任务；查询这个未登记的 operation 返回 `unknown/ota_operation_not_found`。目标状态不安全、selector 不一致、当前槽非 VALID 或目标状态读回异常分别拒绝并返回 `ota_target_not_safe`、`ota_selector_mismatch`、`ota_source_not_valid` 或 `ota_target_state_unknown`。`ota.result` 不重放写动作；查询旧 ID 在收据被新操作替换后返回 `unknown/ota_operation_not_found`。回滚若进入尚未实现 `ota.result` 的旧镜像，该镜像无法读取新收据，工具必须报告 unknown，不能推断失败或成功。
 
 ## 网络授权与首配
 

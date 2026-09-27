@@ -597,6 +597,7 @@ static void handle_line(const char *line, size_t length, void *context)
                 receipt == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE ? "ota_target_not_safe" :
                 receipt == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
                 receipt == ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH ? "ota_snapshot_mismatch" :
+                receipt == ESP_BASE_OTA_RECEIPT_SAME_IMAGE ? "ota_same_image" :
                 receipt == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
             bool uncertain = receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
             if (!uncertain && !esp_base_storage_release(&s_ota_storage_claim)) uncertain = true;

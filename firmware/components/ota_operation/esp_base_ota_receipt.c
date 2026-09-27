@@ -313,6 +313,10 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
         (observed.bootable_count == 2U && zero_sha256(snapshot->inactive_sha256))) {
         return ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH;
     }
+    /* Only the independently rechecked signed A identity can reject C as a
+     * same-image update. Do so before writing the intent or retiring old B. */
+    if (memcmp(request->sha256, observed.running_firmware_sha256, 32) == 0)
+        return ESP_BASE_OTA_RECEIPT_SAME_IMAGE;
     receipt_t next = {.status = OTA_STATUS_PREPARED, .source_subtype = slots.running_subtype,
         .target_subtype = slots.target_subtype, .image_size_bytes = request->image_size_bytes,
         .container_enabled = snapshot->container_enabled,
