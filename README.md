@@ -81,6 +81,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 - [设备协议](docs/design/device-protocol.md)
 - [公开串口主机示例](tools/README.md)
 - [配置候选断电验收](docs/operations/config-power-loss-acceptance.md)
+- [ESP32 六页 NVS 合成容量验证](docs/operations/esp32-six-page-nvs-capacity.md)
 - [官方 MQTT 集成测试应用](firmware/apps/mqtt_integration/README.md)
 - [MQTT 实板验收记录](docs/operations/mqtt-hardware-acceptance.md)
 - [MQTT 公开组件硬切软件候选](docs/operations/mqtt-hard-cut-candidate.md)

@@ -71,7 +71,7 @@ static bool container_initialize_or_load(void)
         .slots = {{0x260000, 0x82000}, {0x2e2000, 0x82000},
                   {0x364000, 0x82000}},
         .nvs_partition_label = PARTITION,
-        .nvs_partition_offset_bytes = 0x138000,
+        .nvs_partition_offset_bytes = PROBE_NVS_OFFSET,
         .nvs_partition_size_bytes = PROBE_NVS_PAGES * 0x1000,
         .nvs_namespace = CONTAINER_NAMESPACE,
         .nvs_key = CONTAINER_KEY,

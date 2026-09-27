@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one synthetic ESP32-C3 NVS phase in QEMU; never opens a serial device."""
+"""Run one synthetic ESP NVS phase in QEMU; never opens a serial device."""
 import argparse
 import json
 import os
@@ -19,9 +19,9 @@ def main() -> int:
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--flash", required=True, type=Path)
     parser.add_argument("--stage", required=True, type=int, choices=(1, 2, 3))
+    parser.add_argument("--target", required=True, choices=("esp32c3", "esp32"))
     parser.add_argument("--nvs-pages", required=True, type=int, choices=(6, 8))
-    parser.add_argument("--qemu", default="qemu-system-riscv32",
-                        help="Espressif QEMU binary with esp32c3 machine support")
+    parser.add_argument("--qemu", help="Espressif QEMU binary for the selected target")
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--stop-after-revision", type=int,
                         help="stage 2 only: terminate after completed stats for this revision")
@@ -30,6 +30,8 @@ def main() -> int:
     parser.add_argument("--log-prefix", type=str,
                         help="safe output prefix for an additional synthetic run")
     args = parser.parse_args()
+    if args.target == "esp32" and args.nvs_pages != 6:
+        parser.error("ESP32 candidate base_store is exactly six pages")
     if args.stop_after_revision is not None and (
         args.stage != 2 or not 4 <= args.stop_after_revision <= 100
     ):
@@ -45,6 +47,9 @@ def main() -> int:
         parser.error("--flash must be outside the repository")
     image.parent.mkdir(parents=True, exist_ok=True)
     build = args.build_dir.resolve()
+    description = json.loads((build / "project_description.json").read_text())
+    if description["target"] != args.target:
+        parser.error("build target does not match --target")
     manifest = json.loads((build / "flasher_args.json").read_text())
     flash_files = {int(offset, 16): build / name
                    for offset, name in manifest["flash_files"].items()}
@@ -74,7 +79,9 @@ def main() -> int:
             file.seek(APP_OFFSET)
             file.write(app_bytes)
 
-    command = [args.qemu, "-nographic", "-machine", "esp32c3",
+    qemu = args.qemu or ("qemu-system-xtensa" if args.target == "esp32" else
+                         "qemu-system-riscv32")
+    command = [qemu, "-nographic", "-machine", args.target,
                "-drive", f"file={image},if=mtd,format=raw"]
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

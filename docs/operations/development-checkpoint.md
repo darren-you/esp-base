@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-27 P6-03 ESP32 六页 `base_store@0x3fa000/0x6000` 的[独立合成容量验证](esp32-six-page-nvs-capacity.md)：固定 IDF/lwIP、公开 Container ECS2、Xtensa Espressif QEMU 在仓外 4 MiB Flash 上完成 100 代最大 Base v3 配置 CAS、当前 OTA V2 形态及 ECS2 元数据同分区写读；两次新进程重启读回最终 revision 100，官方 NVS parser 核验五页 CRC 正确、一页 Empty。测试专用 factory app 不是双槽签名产品，正式分区、旧 AT 迁移、掉电与实体板均未验证，P6-03 保持未验收。
+
 2026-09-27 双目标签名产品局部 LTO 容量账本：在 `esp-base@8a62d27`、FRP `6609fbc`、MQTT `9d6d95e`、OTA `7f316c2`、Container `bf52b17`、WAMR `26c235e`、固定 IDF `578cf89`／lwIP `2758df4` 及同一仓外签名输入下，只给指定静态库增加 `-flto`，逐档完整重建并经官方签名验证、双 app 槽尺寸检查。没有改变组件源码、锁、正式分区或实体设备；以下均是**当前代码的仓外优化空间实验**，未来接入 FRP Flash reader、session 和 Base provider 后必须重做完整产品门。
 
 - C3 原始产品 RSA v2 app 为 `0x111000`，PADDING／当前签名台阶可吸收的非填充增长只有 **888 B**。在原有 WAMR、MQTT 局部 LTO 上新增 FRP、Container、`device_protocol`、`container_binding`、`ota_operation` 后仍为 `0x111000`，PADDING 增至 **7,656 B**；把其余 Base 自有库与 main 也纳入后最多 **8,384 B**。每档官方 RSA 验签和两个 `0x118000` app 尺寸门通过。超过当前台阶会跳至 `0x121000` 并溢出每槽 `0x9000`，不能把 `0x7000` 槽总余量误当作任意新代码预算。

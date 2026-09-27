@@ -2,3 +2,4 @@
 - 启动时以原收据核对 A/C 签名、回退资格、operation 与 Container sequence，确认后持久记录 SUCCEEDED
 - 更新 C3/ESP32 精确依赖锁、host 故障回归和双目标离线签名证据
 - 记录 C3 精确签名产品的 QEMU 启动定位与空包 READY 证据
+- 扩展容量探针到 ESP32 六页 NVS，验证固定 SDK 下 100 代三记录写读与重启并记录边界
