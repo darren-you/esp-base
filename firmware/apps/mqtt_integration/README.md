@@ -1,6 +1,6 @@
 # 官方 MQTT 集成测试应用
 
-此应用直接消费公开 `esp-mqtt@a67cb8fd4f146550c210487dc281248967b6c61a` 的 `emqtt_` 接口，运行在同一 ESP32-C3 / 4 MiB 分区布局。它是带 `ESP_BASE_LAB_ONLY MQTT_INTEGRATION` 标记的实验固件；旧 Base 适配层的部分实板结果不自动继承到本候选，不能作为产品或 OTA 发布。
+此应用直接消费公开 `esp-mqtt@bebde3971c2f4b4ee99e150348213222bfd9e27e` 的 `emqtt_` 接口，运行在同一 ESP32-C3 / 4 MiB 分区布局。它是带 `ESP_BASE_LAB_ONLY MQTT_INTEGRATION` 标记的实验固件；旧 Base 适配层的部分实板结果不自动继承到本候选，不能作为产品或 OTA 发布。
 
 ## 架构拓扑
 
