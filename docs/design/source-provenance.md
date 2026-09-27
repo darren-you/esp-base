@@ -18,7 +18,7 @@ JSON 解析通过 Component Manager 依赖 [espressif/cjson 1.7.19~2](https://co
 
 Wi-Fi 生命周期、候选控制与配置 codec 为本仓新增实现，调用 ESP-IDF v6.1 的 esp_wifi、esp_netif、esp_event、NVS 和 PSA SHA-256；未复制旧 FRP 调试连接器或重写 SDK 驱动/密码原语。
 
-MQTT 从公开 [esp-space/esp-mqtt](https://github.com/esp-space/esp-mqtt) 的完整提交 `c0677e5e779c3e51e814f2920420be7ec54f1d88` 获取，组件名仍为 `mqtt`，在两目标依赖锁中固定。该仓以官方 [ESP-MQTT v1.1.0](https://github.com/espressif/esp-mqtt/tree/1a1e5788a5cf57a0f44a3c6c061407f6c9be1026) 为基线并保留 Apache-2.0 许可；维护源码修正 clean session 断线后旧 SUB/UNSUB outbox 重放及运行层复用消息槽遗留旧 Topic／payload 尾部的问题。通用 `emqtt_` 运行层归该仓；Base 只保留持久 UUID、设备 Topic/LWT 与设备命令归属，不持有 `mqtt_runtime` 或官方 Registry 的第二份 MQTT 依赖。真实 Broker 的旧回归与消息槽宿主回归分别留证，当前精确组合的设备 Broker/TLS 尚未验收。
+MQTT 从公开 [esp-space/esp-mqtt](https://github.com/esp-space/esp-mqtt) 的完整提交 `a67cb8fd4f146550c210487dc281248967b6c61a` 获取，组件名仍为 `mqtt`，在两目标依赖锁中固定。该仓以官方 [ESP-MQTT v1.1.0](https://github.com/espressif/esp-mqtt/tree/1a1e5788a5cf57a0f44a3c6c061407f6c9be1026) 为基线并保留 Apache-2.0 许可；维护源码修正 clean session 断线后旧 SUB/UNSUB outbox 重放、运行层复用消息槽遗留旧 Topic／payload 尾部，并让入站消息体按实际存活期分配。通用 `emqtt_` 运行层归该仓；Base 只保留持久 UUID、设备 Topic/LWT 与设备命令归属，不持有 `mqtt_runtime` 或官方 Registry 的第二份 MQTT 依赖。真实 Broker 的源仓回归与 Base 宿主回归分别留证，当前精确组合的设备 Broker/TLS 尚未验收。
 
 OTA 通用机制由公开 [esp-space/esp-ota](https://github.com/esp-space/esp-ota) 完整提交 `d98361f348e19e965efd7462277dde0ae13056fa` 提供，Component Manager 在两目标依赖锁中锁定其 `components/esp_ota`。该仓[来源记录](https://github.com/esp-space/esp-ota/blob/master/docs/design/source-provenance.md)绑定迁自 Base 的精确源码与许可；Base 仅维护产品约束、operation 收据、自检及调度。退役旧备用固件前的 HTTPS URL authority 预检由 OTA 库统一提供。
 

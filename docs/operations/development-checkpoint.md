@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-03 MQTT 入站消息存活期精确消费：Base 双目标锁定公开 `esp-mqtt@a67cb8fd4f146550c210487dc281248967b6c61a`，空闲 MQTT 实例中三份固定消息体改为按入站消息实际存活期分配，字段静态差额 **13,092 B**，不计作五能力堆低水增量。固定 SDK 的双目标 host ASan／UBSan、正式 CSV 签名产品构建、尺寸与官方验签通过；ESP32 从空配置生成的单核／8BIT IRAM 默认项修正也通过独立离线构建。[双目标输入与未验收边界](p6-03-mqtt-message-lifetime-precise-lock.md)。
+
 2026-09-28 P6-03 Base 控制工作区存活期收敛：串口行、配置候选、命令解析和 MQTT 修订装配区退出常驻 `.bss`；新修订装配内存不足时撤销旧 MQTT 端点及管理密钥。固定 SDK 的 C3／ESP32 host ASan/UBSan 全套通过；当前锁的 C3 仓外签名 guest、严格 TLS／官方 FRPS 和双向各 300001 B 工作流再次通过，普通内部 8BIT 堆历史低水 **57,020 B**，比 49,152 B 门高 7,868 B。该诊断暂用缩小包槽的几何，且没有 MQTT Broker／OTA HTTPS 同机负载；[逐轮容量检查点](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#base-控制工作区存活期收敛)记录前后读数和未测边界。
 
 同日另在仓外验证严格对齐的 C3 **4 MiB** 软件分区候选：双 `0x118000` app 起点 `0x20000`／`0x140000`，三份 `0x82000` 包槽、独立 `0x10000` FRP scratch 和 18 页 Base NVS 同时装入。首次紧贴排列因 `ota_1@0x138000` 未按 64 KiB 对齐被官方工具拒绝；修正后当前源码 RSA v2 签名 app `0x111000`、官方验签及尺寸门通过，合成 Flash 的真签名 guest 返回 `RUNNING`、Base 到 `READY`，双 app／包区／NVS 读回未变。旧 C3 存储重叠迁移、五能力同存和实板仍未验收；[候选几何与原始证据](p6-03-c3-aligned-layout-software-probe.md)单独记账。
