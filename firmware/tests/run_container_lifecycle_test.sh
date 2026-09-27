@@ -10,6 +10,11 @@ container_source="$1"
 wamr_source="$2"
 wasi_sdk_root="$3"
 firmware_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${ESP_BASE_TEST_TARGET:-esp32c3}" in
+  esp32c3) target_define=CONFIG_IDF_TARGET_ESP32C3 ;;
+  esp32) target_define=CONFIG_IDF_TARGET_ESP32 ;;
+  *) printf 'container lifecycle test\n  error  ESP_BASE_TEST_TARGET must be esp32c3 or esp32.\n' >&2; exit 2 ;;
+esac
 locked_sha="$(awk -F '"' '/^[[:space:]]*version: / {print $2; exit}' \
   "$firmware_root/integrations/container_binding/idf_component.yml")"
 actual_sha="$(git -C "$container_source" rev-parse HEAD)"
@@ -69,7 +74,7 @@ printf 'container lifecycle test\n  Container %s\n  WAMR      %s\n  WAMR lib  %s
   "$(openssl dgst -sha256 -r "$wamr_library" | awk '{print $1}')"
 
 compile_args=(-std=c11 -D_POSIX_C_SOURCE=200809L \
-  -DCONFIG_IDF_TARGET_ESP32C3=1 \
+  -D"$target_define"=1 \
   -DCONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES=32768 \
   -Wall -Wextra -Werror -pthread \
   -I "$firmware_root/tests/fakes/container_product" \

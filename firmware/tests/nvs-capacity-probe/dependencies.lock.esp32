@@ -11,7 +11,7 @@ dependencies:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: 6ef74faabb675bce0180570f5bdf0232af11106a
+    version: adef78ff28bc868e1c930b61fd232207aad31a3e
   idf:
     source:
       type: idf
@@ -35,6 +35,6 @@ dependencies:
     version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
 direct_dependencies:
 - esp_container
-manifest_hash: 764978b5a7eded89d90d8977692d939678773bfacd3dc47e4ce564615a3fdab2
+manifest_hash: 1870b784feedef1237e20196081841873a06ccb8d2ff341aa3a84855de51deda
 target: esp32
 version: 3.0.0

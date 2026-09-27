@@ -49,10 +49,12 @@ flowchart LR
 
 带包产品在 OTA 写 inactive app **之前**拒绝：Base 尚无真实业务事件来源与代表性事件授权，不能以 `init`、平台管理命令或可选 timer 冒充 guest 事件进展。Container 已提供 REUSE 与 WRITE 状态合同，但 Base 目前也没有新包来源；两条路径仍未接线。已确认包的正常启动入口继续可用。退役、下载、签名、stage 或选 boot 中事实不确定时，worker 留住本 boot 的 claim 并报告 `unknown/storage_uncertain`，不会当作普通失败释放；claim 本身不跨重启，跨重启恢复仅由原 V2 收据授权。上述是软件恢复合同，host 假件不能模拟实板掉电时的 Flash/NVS 原子性、bootloader 后备扫描、双槽迁移或 guest 与 FRP/MQTT 并发。
 
-当前清单精确锁定 `esp-container@6ef74faabb675bce0180570f5bdf0232af11106a` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
+当前清单精确锁定 `esp-container@adef78ff28bc868e1c930b61fd232207aad31a3e` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
 
 历史 Base `3df1c33` 与当时的精确锁曾以仓外测试产品策略完成两目标深链接核验，两个 ELF 都确实包含 `econtainer_product_open` 与 WAMR load/instantiate/call。ESP32 测试键 ECDSA v1 签名镜像为 `0x10fff4`，官方验签通过，双 `0x120000` app 各余 `0x1000c`。C3 仅在隔离副本使用三 `0x82000` 包槽与双 `0x118000` app 的候选表，测试键 RSA v2 签名中间镜像为 `0x121000`，官方容量门判每槽溢出 `0x9000`，所以该布局没有可用构建。证据与隔离改动见[开发检查点](../../../docs/operations/development-checkpoint.md)；没有把测试策略、候选 C3 表或密钥写入本仓。
 
 后续 Base `299851f` 仅在 C3 签名且显式启用产品策略时，对 WAMR、MQTT 两库执行选择性 LTO；同一仓外候选布局的签名镜像缩至 `0x111000`，官方 RSA 验签和双槽尺寸门通过，各余 `0x7000`。正式 C3 分区仍是无包布局；测试策略与候选表仍未进入仓库，QEMU 尚无 Base READY／guest 运行证据，实板与五能力并发也未验收。[开发检查点](../../../docs/operations/development-checkpoint.md)记录输入哈希、链接差额和仿真边界。
 
 `tests/run_container_lifecycle_test.sh` 核对精确锁定的 Container/WAMR 源码并从该源码构建 host 库，再调用 Container 原有脚本生成真实签名 counter 包。测试覆盖 `EMPTY→reserve/write/trial/confirm→RUNNING→stop/reopen`、guest event、ECS2 不额外写入、停止等待超时后禁止重开，以及原 V2 `SUCCEEDED` 收据之后的新产品操作和新 boot 重放；Flash/NVS、调度与固件摘要观察由 host 替身提供，不能代替已签名固件或实板验收。脚本三个参数依次为 Container 源码、WAMR 源码、wasi-sdk 根目录；仓外依赖需提供 CMake、Python `cryptography` 和已锁定的 `esp_ota` 头文件。
+
+同一宿主回归还从锁定 Container 的两份独立 counter 源码分别生成签名 P1/P2：Base 在同一 boot、同一固件集合及同一 storage claim 内先安装并执行 P1，事件 `{1,2,3}` 返回 3；停止、关闭并回收实例后安装 P2，持久绑定序号推进 5，重新启动后相同事件返回 6。此处安装由测试在 Base claim 内直接调用正式 Container 槽 API；设备尚无公开包来源、`product.*` 请求与持久原 ID 结果，因此这项宿主证据不等于 P6-11 或设备安装验收。

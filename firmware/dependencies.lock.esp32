@@ -11,7 +11,7 @@ dependencies:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: 6ef74faabb675bce0180570f5bdf0232af11106a
+    version: adef78ff28bc868e1c930b61fd232207aad31a3e
   esp_frp:
     component_hash: 03b1232bf0802553edc2b47982d9ab9c6d4640f389b22d466f1557b1e3fa3f05
     dependencies:
@@ -81,6 +81,6 @@ direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: 9438e333e8429fffdfb8cce51abd7d3dde04cc445b9d41f09f0867abe46cbf8a
+manifest_hash: a476cf464a9bf6197440b02029d5a61271ce61f4582cc98d20aedd7155dc6a8f
 target: esp32
 version: 3.0.0
