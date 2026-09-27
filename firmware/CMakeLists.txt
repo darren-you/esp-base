@@ -100,14 +100,16 @@ endif()
 
 # Keep the C3 product image within its signed A/B slot without changing the
 # guest, network or verification feature set. ESP-IDF disables project-wide
-# LTO because SDK IRAM/DRAM section types conflict. WAMR and MQTT together
-# cross the signed image size threshold with the fixed SDK and product policy.
+# LTO because SDK IRAM/DRAM section types conflict. WAMR, MQTT and FRP cross
+# the signed image size threshold with the fixed SDK and scratch candidate.
 if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT AND
     NOT CONFIG_ESP_BASE_CONTAINER_PRODUCT_ID STREQUAL "")
     idf_component_get_property(esp_base_wamr_lib wasm-micro-runtime COMPONENT_LIB)
     idf_component_get_property(esp_base_mqtt_lib mqtt COMPONENT_LIB)
+    idf_component_get_property(esp_base_frp_lib esp_frp COMPONENT_LIB)
     target_compile_options(${esp_base_wamr_lib} PRIVATE -flto)
     target_compile_options(${esp_base_mqtt_lib} PRIVATE -flto)
+    target_compile_options(${esp_base_frp_lib} PRIVATE -flto)
     target_link_options(${PROJECT_NAME}.elf PRIVATE -flto)
 endif()
