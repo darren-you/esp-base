@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-27 C3 仓外合成签名包已由当前 Base 产品启动线程在 QEMU 中验签、`init` 并到达 `READY`；首次与同片二次冷启动的 ECS2、包区均未重复写入。无包与运行态堆量测、精确组件锁／输入 SHA、调试停止的未 join 边界见 [C3 签名产品包 QEMU 检查点](c3-signed-product-qemu-checkpoint.md)。此项不含产品安装入口或实体设备验收。
+
 2026-09-27 当前软件集成 `esp-base@9967b3a2d77a4a3889df9bff67f0b7f93d01d206`：产品执行线程在真实停止、关闭、回收后允许同次启动再次接入；`EMPTY` 只有在新签名包真实写入且仍持有 Base 存储 owner 时才重新打开，失败、阻断和超时状态不得重开。无包 OTA 的 `SUCCEEDED` 收据在后续独立产品绑定提交后仍按原固件 A/C、operation 与 ECS2 序号核对，不把较新的非固件提交误判为 OTA 收据漂移。固定 WAMR／wasi-sdk 的真实签名 counter 包完成无包安装、trial、confirm、执行、停止和同次重开，以及旧成功收据与较新产品提交、损坏包和停止超时的 host 故障注入；C3／ESP32 源码编译通过。Container 新增的产品专属卸载入口仍在独立 `esp-container@3b5f16f` 分支，Base 当前精确锁 `bf52b17` 尚未消费它。
 
 - C3：在原有 WAMR／MQTT／FRP 局部 LTO 基础上，仅给 `container_binding` 与 `esp_container` 增加局部 LTO，避免当前新代码使签名应用越过容量门。使用与本提交完全相同的 CMake SHA-256 `02295ea5e6a5edfe7524dfbf73ddf3bd6ad3908d8df2f301606a213927a425b9`、固定 IDF／lwIP、仓外几何 CSV SHA-256 `73a36f6c55ac26d904d5dc3c48eecdb1f12d10152b3e746686ab28cd237c0601` 与测试 RSA v2 键，官方签名验签及容量门通过：签名应用 `0x111000`、SHA-256 `4ab810aeb3faf545b530a556cfed037cce74666d48fc50d0942f8381a118f0a9`，双 `0x120000` 槽各余 `0xf000`。独立合成 4 MiB Flash 的 QEMU 在唯一 ADC2 校准模拟限制下，FRP scratch 恢复返回 `EFRP_OK`／IDLE、Container 为 `EMPTY` 且线程已回收、重开门就绪；Base 到 `READY` 时存储 claim 的 owner/token 为 0，无本地失败断点。精确日志与收据见 `mac-work-1:/private/tmp/esp-base-30e608f-signed-qemu-20260927/c3-verification-summary.json`。
