@@ -2,5 +2,5 @@
 # Name, Type, SubType, Offset, Size, Flags
 nvs, data, nvs, 0x9000, 0x6000,
 factory, app, factory, 0x10000, 0x100000,
-base_store, data, nvs, 0x138000, 0x8000,
+base_store, data, nvs, 0x138000, 0x6000,
 product_pkgs, data, undefined, 0x260000, 0x186000,
