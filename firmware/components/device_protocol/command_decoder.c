@@ -4,6 +4,12 @@
 #include <math.h>
 #include <string.h>
 
+/* Error cleanup wipes the largest union member without erasing request_id,
+ * which the caller may still use in its failure response. */
+_Static_assert(sizeof(esp_base_remote_config_t) >= sizeof(esp_base_ota_request_t) &&
+               sizeof(esp_base_remote_config_t) >= ESP_BASE_OTA_OPERATION_ID_BYTES,
+               "config wipe must cover every command payload");
+
 /* cJSON supplies the JSON tree. Before allocation, bound nesting and enforce
  * UTF-8, integer spelling and absence of embedded NUL (also escaped NUL). */
 static bool valid_bytes(const unsigned char *s, size_t length)
