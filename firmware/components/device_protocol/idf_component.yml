@@ -3,7 +3,7 @@ dependencies:
     version: "==1.7.19~2"
   mqtt:
     git: "https://github.com/esp-space/esp-mqtt.git"
-    version: "9d6d95e779f4f5ff387a6d9b54015bf4e43565f2"
+    version: "c0677e5e779c3e51e814f2920420be7ec54f1d88"
   esp_ota:
     git: "https://github.com/esp-space/esp-ota.git"
     path: "components/esp_ota"
