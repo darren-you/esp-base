@@ -68,11 +68,10 @@ printf 'container lifecycle test\n  Container %s\n  WAMR      %s\n  WAMR lib  %s
   "$actual_sha" "$actual_wamr_sha" \
   "$(openssl dgst -sha256 -r "$wamr_library" | awk '{print $1}')"
 
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L \
+compile_args=(-std=c11 -D_POSIX_C_SOURCE=200809L \
   -DCONFIG_IDF_TARGET_ESP32C3=1 \
   -DCONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES=32768 \
-  -Wall -Wextra -Werror -pthread -fsanitize=address,undefined \
-  -fno-omit-frame-pointer \
+  -Wall -Wextra -Werror -pthread \
   -I "$firmware_root/tests/fakes/container_product" \
   -I "$firmware_root/tests/fakes" \
   -I "$firmware_root/integrations/container_binding" \
@@ -84,9 +83,19 @@ printf 'container lifecycle test\n  Container %s\n  WAMR      %s\n  WAMR lib  %s
   "$firmware_root/integrations/container_binding/esp_base_container_binding.c" \
   "$firmware_root/integrations/container_binding/esp_base_container_no_package.c" \
   "$build_dir/container-build/libesp_container.a" "$wamr_library" \
-  "${openssl_libs[@]}" -lm -ldl \
-  -o "$build_dir/container_product_lifecycle_test"
+  "${openssl_libs[@]}" -lm -ldl)
+
+"${CC:-cc}" -fsanitize=address,undefined -fno-omit-frame-pointer \
+  "${compile_args[@]}" -o "$build_dir/container_product_lifecycle_test"
 
 "${TEST_PYTHON:-python3}" "$container_source/tests/slot_runtime_test.py" \
   "$build_dir/container_product_lifecycle_test" \
   "$build_dir/container-build/runtime-guests"
+
+if [[ "$(uname -s)" == Darwin ]]; then
+  "${CC:-cc}" -D_DARWIN_C_SOURCE=1 -DESP_BASE_TEST_RESOURCE_STATS=1 \
+    "${compile_args[@]}" -o "$build_dir/container_product_resource_test"
+  "${TEST_PYTHON:-python3}" "$container_source/tests/slot_runtime_test.py" \
+    "$build_dir/container_product_resource_test" \
+    "$build_dir/container-build/runtime-guests"
+fi

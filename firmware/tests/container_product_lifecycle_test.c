@@ -12,6 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef ESP_BASE_TEST_RESOURCE_STATS
+#include <malloc/malloc.h>
+#include <mach/mach.h>
+#include <mach/task_info.h>
+#include <sys/mman.h>
+#endif
 
 bool test_policy_enabled = true;
 #include "esp_base_container_product.c"
@@ -42,6 +48,66 @@ static const econtainer_slots_geometry_t geometry = {
               {FLASH_BASE + 2 * SLOT_BYTES, SLOT_BYTES}},
 };
 static esp_base_ota_firmware_set_t physical;
+
+#ifdef ESP_BASE_TEST_RESOURCE_STATS
+typedef struct {
+    size_t malloc_bytes;
+    mach_vm_size_t virtual_bytes;
+    integer_t regions;
+} resource_stats_t;
+
+static bool sample_resources(resource_stats_t *sample)
+{
+    malloc_statistics_t statistics = {0};
+    malloc_zone_statistics(malloc_default_zone(), &statistics);
+    task_vm_info_data_t vm = {0};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &count) !=
+        KERN_SUCCESS) return false;
+    *sample = (resource_stats_t){statistics.size_in_use, vm.virtual_size,
+                                 vm.region_count};
+    return sample->malloc_bytes > 0 && sample->virtual_bytes > 0 &&
+           sample->regions > 0;
+}
+
+static bool resource_probes_calibrated(void)
+{
+    resource_stats_t before = {0}, during = {0};
+    if (!sample_resources(&before)) return false;
+    void *heap = malloc(65536);
+    if (heap == NULL) return false;
+    memset(heap, 0x5a, 65536);
+    const bool heap_visible = sample_resources(&during) &&
+                              during.malloc_bytes >= before.malloc_bytes + 65536;
+    free(heap);
+    if (!heap_visible || !sample_resources(&before)) return false;
+    void *mapping = mmap(NULL, 65536, PROT_READ | PROT_WRITE,
+                         MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (mapping == MAP_FAILED) return false;
+    const bool mapping_visible = sample_resources(&during) &&
+                                 during.virtual_bytes >= before.virtual_bytes + 65536;
+    return munmap(mapping, 65536) == 0 && mapping_visible;
+}
+
+static bool resources_stable(resource_stats_t after_ten,
+                             resource_stats_t after_fifty,
+                             resource_stats_t after_hundred)
+{
+    fprintf(stderr, "Base product resources 10/50/100: malloc=%zu/%zu/%zu "
+            "virtual=%llu/%llu/%llu regions=%d/%d/%d\n",
+            after_ten.malloc_bytes, after_fifty.malloc_bytes,
+            after_hundred.malloc_bytes,
+            (unsigned long long)after_ten.virtual_bytes,
+            (unsigned long long)after_fifty.virtual_bytes,
+            (unsigned long long)after_hundred.virtual_bytes,
+            after_ten.regions, after_fifty.regions, after_hundred.regions);
+    return after_ten.malloc_bytes == after_fifty.malloc_bytes &&
+           after_fifty.malloc_bytes == after_hundred.malloc_bytes &&
+           after_ten.virtual_bytes == after_fifty.virtual_bytes &&
+           after_fifty.virtual_bytes == after_hundred.virtual_bytes &&
+           after_hundred.regions <= after_fifty.regions;
+}
+#endif
 
 static bool in_range(uint32_t offset, size_t size)
 {
@@ -614,6 +680,74 @@ static void run_uninstall_stop_timeout(const file_t *key, const file_t *package,
     assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
 
+static void run_signed_reinstall_cycles(const file_t *key, const file_t *package,
+                                        const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    econtainer_slots_state_t initial = {0};
+    assert(econtainer_slots_load(&io, &geometry, &initial) == ECONTAINER_SLOTS_OK);
+    uint32_t last_sequence = initial.sequence;
+#ifdef ESP_BASE_TEST_RESOURCE_STATS
+    assert(resource_probes_calibrated());
+    resource_stats_t after_ten = {0}, after_fifty = {0}, after_hundred = {0};
+#endif
+    for (unsigned cycle = 0; cycle < 100U; ++cycle) {
+        install_context_t install = {
+            .package = package, .operation_marker = (uint8_t)(0x90U + cycle)};
+        assert(esp_base_container_with_firmware_set(&claim,
+            ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed,
+            &install) == ECONTAINER_SLOTS_OK);
+        econtainer_slots_state_t before = {0}, after = {0};
+        assert(econtainer_slots_load(&io, &geometry, &before) == ECONTAINER_SLOTS_OK);
+        assert(before.sequence == last_sequence + 5U);
+        const int index = binding_index(&before, physical.running_firmware_sha256);
+        assert(index >= 0 && before.bindings[index].package_present);
+        assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+        assert(s_product.thread_joinable &&
+               atomic_load(&s_product.instance_active));
+
+        uint8_t flash_before[FLASH_BYTES];
+        memcpy(flash_before, store.flash, sizeof flash_before);
+        char uninstall_id[37];
+        assert(snprintf(uninstall_id, sizeof uninstall_id,
+                        "90100000-0000-4000-8000-%012x", cycle + 1U) == 36);
+        const unsigned erases = store.flash_erases;
+        const unsigned writes = store.flash_writes;
+        assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+            before.sequence, before.bindings[index].package_sha256) ==
+            ESP_BASE_CONTAINER_UNINSTALL_COMPLETE);
+        assert(!s_product.thread_joinable && s_product.native_reclaimed &&
+               !atomic_load(&s_product.instance_active));
+        assert(econtainer_slots_load(&io, &geometry, &after) == ECONTAINER_SLOTS_OK);
+        assert(after.sequence == before.sequence + 1U &&
+               !after.bindings[index].package_present);
+        last_sequence = after.sequence;
+        assert(store.flash_erases == erases && store.flash_writes == writes &&
+               memcmp(flash_before, store.flash, sizeof flash_before) == 0);
+        assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+        assert(!s_product.thread_joinable && store.mapping == NULL && !store.locked);
+#ifdef ESP_BASE_TEST_RESOURCE_STATS
+        if (cycle == 9U) assert(sample_resources(&after_ten));
+        if (cycle == 49U) assert(sample_resources(&after_fifty));
+        if (cycle == 99U) assert(sample_resources(&after_hundred));
+#endif
+    }
+    assert(last_sequence == initial.sequence + 600U);
+    fprintf(stderr, "Base product sequence 100 cycles: %u -> %u\n",
+            (unsigned)initial.sequence, (unsigned)last_sequence);
+#ifdef ESP_BASE_TEST_RESOURCE_STATS
+    assert(resources_stable(after_ten, after_fifty, after_hundred));
+#endif
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
 static void run_success_receipt_replay(const file_t *key, const file_t *package,
                                        const char boot_id[37])
 {
@@ -789,9 +923,10 @@ int main(int argc, char **argv)
     run_uninstall_reclaimed_guest(&key, &package, boot_id, false);
     run_uninstall_reclaimed_guest(&key, &package, boot_id, true);
     run_uninstall_stop_timeout(&key, &package, boot_id);
+    run_signed_reinstall_cycles(&key, &package, boot_id);
     run_success_receipt_replay(&key, &package, boot_id);
     free(package.bytes);
     free(key.bytes);
-    puts("container_product_lifecycle: signed stop/uninstall/readback, fallback and V2 replay passed");
+    puts("container_product_lifecycle: signed stop/uninstall/readback, 100 reinstall cycles, fallback and V2 replay passed");
     return 0;
 }
