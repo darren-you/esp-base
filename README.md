@@ -20,6 +20,8 @@
 
 移栈后 FRPS 探针的同 app trace 及另一份独立签名超时字段输入进一步确认：官方服务端识别 TLS，却没有接受首个 Yamux 控制流；四次认证超时中两次记录首个 12 B SYN 输出停滞约 5 秒，另两次由 TLS 待写期限先触发。TLS 内部待写字节数未采集，额外探针任务、测试时钟和插桩使容量读数不能回填正式 owner；没有可证明的 FRP 正式源码错误。见[认证输出追踪检查点](docs/operations/esp32-frps-auth-output-qemu-trace-checkpoint.md)。
 
+对旧 Base `6ef7a02` 的两份新签名 FRPS 仓外探针做 TLS 发送回调取证：前置打印镜像在 socket 前遇 PSA 内存错误，低扰动镜像恢复五秒认证超时，其同一窗口内 178 次底层 `send` 均返回 WOULD_BLOCK、成功 0 次，最后 errno 为 EAGAIN；首个 12 B Yamux SYN 从未确认交付。两份输入的停止点不同，低堆和 OpenETH 收包不足并不能单独定位 lwIP 内部原因；正式 Base SNTP 门仍为 false。见[TLS 发送追踪检查点](docs/operations/esp32-frps-tls-send-qemu-trace-checkpoint.md)。
+
 此前 Classic 期限组合消费 `esp-container@6ef74fa`、WAMR `c10736f` 和 `esp-ota@f4fb0b4`；当时 Base 与 NVS 探针的 C3／ESP32 四份锁均已重新生成。Container 在 WAMR Classic 安全分派点协作检查三个 guest 入口的墙钟期限。该组合的 Base 双目标普通构建和测试键签名产品构建通过；当时正式 ESP32 CSV 的隔离 ECDSA v1 签名应用为 `0x10fff4`，C3 候选 RSA v2 为 `0x111000`。Base 宿主 ASan/UBSan 的 C3 20 项、ESP32 19 项和真实签名包 100 次停止／卸载／重装循环通过。同步原生导入与 OS 调度仍不能被硬抢占，实板期限及五能力并发尚未验收；精确证据见[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-09-27 当前集成候选补齐 Container 产品线程的确认停止、回收与同次启动重新接入，以及成功 OTA 收据与后续产品独立提交的对账。C3 新增 Container 相关局部 LTO 后，仓外测试键签名应用为 `0x111000`，双 `0x120000` 槽各余 `0xf000`；ESP32 签名应用为 `0x10fff4`。两目标官方签名和容量门通过，C3 合成 Flash 的 QEMU 到达 Base `READY`，ESP32 合成 Flash 两次冷启动均到达 `READY container=empty`。这仍不代表实板 guest、网络并发或正式分区迁移验收；输入与原始日志见[开发检查点](docs/operations/development-checkpoint.md)。
