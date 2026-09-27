@@ -6,12 +6,14 @@
 
 | 输入 | 固定事实 |
 | --- | --- |
-| Base 源码 | `d3144b3a7507eaddd308777b863214fa53b11fcb`；构建副本来自其父提交 `30e608febcf7791857f69fc9eb1fddf39bfb822a` 的归档，`firmware/CMakeLists.txt` 已加入相同的 Container 局部 LTO，SHA-256 `02295ea5e6a5edfe7524dfbf73ddf3bd6ad3908d8df2f301606a213927a425b9`；两提交之间其余构建相关源码未变 |
+| Base 源码 | `d3144b3a7507eaddd308777b863214fa53b11fcb`；构建副本来自其父提交 `30e608febcf7791857f69fc9eb1fddf39bfb822a` 的归档，`firmware/CMakeLists.txt` 已加入相同的 Container 局部 LTO，SHA-256 `02295ea5e6a5edfe7524dfbf73ddf3bd6ad3908d8df2f301606a213927a425b9`；隔离副本还对 C3 OTA policy 作了下文所列的两行条件性候选改写 |
 | SDK | ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`，lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` |
 | 组件锁 | Container `bf52b17a26e51d35a261bf852ac0c9cde76adefc`、FRP `98bab0c0fbac684a6f89772c50c8bcf37aafe4fc`、MQTT `9d6d95e779f4f5ff387a6d9b54015bf4e43565f2`、OTA `7f316c2a3a71dcae234b046905aee60696a357d3`、WAMR `26c235e53e29acd8b43abe7f3b524577bd4d1ae5` |
 | 仓外 C3 策略 | 候选 CSV SHA-256 `73a36f6c55ac26d904d5dc3c48eecdb1f12d10152b3e746686ab28cd237c0601`，sdkconfig SHA-256 `da50b245aea3dd78cc292885d0e2d68c609602e49051ca1650c2dc93c24aefb2`；双 `0x120000` app、三份 `0x82000` 包槽、`product_pkgs@0x260000/0x186000`、`base_store@0x3f6000/0x8000` |
 | 签名 Base app | 测试 RSA v2，`0x111000`／1,118,208 B，SHA-256 `4ab810aeb3faf545b530a556cfed037cce74666d48fc50d0942f8381a118f0a9`；官方容量门与 `espsecure.py verify-signature --version 2` 通过，双 app 槽各余 `0xf000` |
 | 产品包 | Container `bf52b17` 工具 SHA-256 `d0bcf846e168b0a173c1c866b8b98c09f99a471cf5a3c50682fe2901f812ed51`；ABI 2、固定一页 64 KiB 的 counter Wasm SHA-256 `b9422cb4cb72983141988c4a9a59b602026d94729e2362403a04d1723f98a739`；产品 ID `esp-base-capacity-test`、key ID `capacity-rsa-20260927`；策略内 PKCS#1 公钥 DER SHA-256 `ac352916cc880c8ae78273f975647b68db5e58ad63288ec2071b826a7a8c0c55` 与仓外测试私钥衍生公钥逐字节一致；签名 `product.pkg` 10,240 B，SHA-256 `9a95b5e8fa5619f0559eb673865ce287e058a1646c9f4f0b4e5964feb4508f8e` |
+
+上述原检查点遗漏了一项构建副本差异，现按保留的候选源码补记：正式 Base `esp_base_ota_policy.h` 的 C3 分支原为 `ESP_BASE_OTA_1_ADDRESS_BYTES=0x200000`、`ESP_BASE_OTA_SLOT_SIZE_BYTES=0x1e0000`，正式头文件 SHA-256 `831ece0b19a7c2d2a0c8078b4934152c5074140f38df1b0bc9ddb34958f7401b`；**只在仓外候选副本**把这两行改为 `0x140000`、`0x120000`，以匹配表中候选 CSV，候选头文件 SHA-256 `1541d9bdd8eab8ad9e0322988a0f28c6a84c706934e9dcd199cdaf5af8532944`。正式 policy／CSV 均未改。此补记纠正旧文中的“其余构建相关源码未变”，不改变旧 QEMU 运行结果；新版 Base/Container 的独立重测见 [C3 产品卸载版本检查点](c3-product-uninstall-branch-qemu-checkpoint.md)。
 
 仓外 seed 使用**锁定 Container 的正式 `slots.c` 与 `econtainer_package_slot_validate`**，仅以测试内存 IO 承接 Flash／NVS：按 `initialize → reserve → write_and_prepare`（从槽读回整包并验签、Wasm、产品及授权）`→ begin_trial → mark_healthy → confirm → reconcile` 执行。最终 ECS2 为 sequence `6`、`CONFIRMED`、slot `0`，288 B blob SHA-256 `f2636a491a5f72033a480c5a2e05bb66747011d400b13a7718c639e59bbbc683`；slot 0 的包字节与原包逐字节相同。仓外 seed 源码 SHA-256 `2e4071952aef3b913042ab7d6edf5365c9b0282460a3a5c90ac4039b8a35c2b6`。它生成测试状态，不是 Base 产品安装入口。
 
