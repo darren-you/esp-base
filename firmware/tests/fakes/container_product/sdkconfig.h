@@ -27,4 +27,6 @@ extern bool test_policy_enabled;
 #define CONFIG_ESP_BASE_CONTAINER_MAX_TIMERS 0
 #define CONFIG_ESP_BASE_CONTAINER_MAX_LOG_BYTES 0
 #define CONFIG_ESP_BASE_CONTAINER_MAX_ENTRY_MS (test_policy_enabled ? 100 : 0)
+#ifndef CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES
 #define CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES (test_policy_enabled ? 8192 : 0)
+#endif

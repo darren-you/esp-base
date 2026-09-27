@@ -35,6 +35,7 @@ typedef struct {
     econtainer_slots_idf_provider_t provider;
     econtainer_package_workspace_t package_workspace;
     econtainer_wasm_workspace_t wasm_workspace;
+    econtainer_package_info_t verified_info;
     econtainer_package_slot_validation_t validation;
     econtainer_runtime_limits_t limits;
     uint8_t public_key[512];
@@ -43,6 +44,10 @@ typedef struct {
     SemaphoreHandle_t stopped;
     SemaphoreHandle_t storage_lock;
     const esp_base_storage_claim_t *claim;
+    pthread_t thread;
+    bool thread_joinable;
+    bool start_attempted;
+    bool reopen_allowed;
     atomic_int result;
     bool trial_mode;
     uint8_t boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
@@ -197,6 +202,7 @@ static bool configure_policy(void)
         .max_storage_limit_bytes = 0U,
         .package_workspace = &s_product.package_workspace,
         .wasm_workspace = &s_product.wasm_workspace,
+        .verified_info = &s_product.verified_info,
     };
     s_product.limits = (econtainer_runtime_limits_t){
         .max_wasm_bytes = CONFIG_ESP_BASE_CONTAINER_MAX_WASM_BYTES,
@@ -466,8 +472,12 @@ static void *product_thread(void *unused)
     atomic_store_explicit(&s_product.instance_active, true, memory_order_release);
     report_result(ESP_BASE_CONTAINER_RUNNING);
 
+    bool requested_stop = false;
     for (;;) {
-        if (atomic_load_explicit(&s_product.stop_requested, memory_order_acquire)) break;
+        if (atomic_load_explicit(&s_product.stop_requested, memory_order_acquire)) {
+            requested_stop = true;
+            break;
+        }
         if (!drain_log(open.runtime)) break;
         uint64_t deadline_ms = 0;
         const econtainer_runtime_result_t timer =
@@ -495,14 +505,18 @@ static void *product_thread(void *unused)
     }
     const econtainer_runtime_result_t stopped = econtainer_product_stop(open.runtime);
     const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
-    s_product.stop_succeeded = stopped == ECONTAINER_RUNTIME_OK &&
+    s_product.stop_succeeded = requested_stop && stopped == ECONTAINER_RUNTIME_OK &&
                                closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
     atomic_store_explicit(&s_product.instance_active, false, memory_order_release);
-    xSemaphoreGive(s_product.stopped);
-    ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED stopped=%d closed=%d",
-             (int)stopped, (int)closed);
-    atomic_store_explicit(&s_product.result, ESP_BASE_CONTAINER_BLOCKED,
+    if (!s_product.stop_succeeded) {
+        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED stopped=%d closed=%d",
+                 (int)stopped, (int)closed);
+    }
+    atomic_store_explicit(&s_product.result,
+                          s_product.stop_succeeded ? ESP_BASE_CONTAINER_STOPPED :
+                          ESP_BASE_CONTAINER_BLOCKED,
                           memory_order_release);
+    xSemaphoreGive(s_product.stopped);
     return NULL;
 }
 
@@ -902,6 +916,43 @@ static econtainer_slots_result_t reconcile_selected_ota(
         return ECONTAINER_SLOTS_CONFLICT;
     const selected_ota_context_t *selected = context;
     const esp_base_ota_receipt_recovery_t *receipt = selected->receipt;
+    const uint32_t retired_sequence = receipt->container_sequence +
+        (digest_zero(receipt->inactive_sha256) ? 0U : 1U);
+    const uint32_t confirmed_sequence = retired_sequence +
+        ESP_BASE_CONTAINER_OTA_CONFIRM_COMMITS;
+    if (receipt->status == ESP_BASE_OTA_RECEIPT_SUCCEEDED) {
+        /* SUCCEEDED was persisted only after C was signed, VALID and the
+         * receipt-bound ECS2 confirm completed. Later product-only operations
+         * may replace that operation, but may not change the firmware set or
+         * hide an incomplete firmware transition. Reconcile also rehashes all
+         * confirmed package references and a complete pending candidate. */
+        econtainer_slots_state_t current = {0};
+        econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
+        const econtainer_slots_result_t reconciled = econtainer_slots_reconcile(
+            &s_product.provider.io, &s_product.provider.geometry,
+            firmware_set, &current, &decision);
+        if (reconciled != ECONTAINER_SLOTS_OK) return reconciled;
+        if (decision != ECONTAINER_SLOT_BOOT_CONFIRMED &&
+            decision != ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED)
+            return ECONTAINER_SLOTS_CONFLICT;
+        if (current.sequence < confirmed_sequence) return ECONTAINER_SLOTS_CONFLICT;
+        if (current.sequence > confirmed_sequence)
+            return !current.operation.firmware_transition &&
+                current.phase != ECONTAINER_SLOT_IDLE &&
+                memcmp(current.operation.target_firmware_sha256,
+                       receipt->candidate_sha256, 32) == 0 ?
+                ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_CONFLICT;
+        return current.phase == ECONTAINER_SLOT_CONFIRMED &&
+            current.operation.firmware_transition &&
+            current.operation.kind == ECONTAINER_SLOT_NO_PACKAGE &&
+            memcmp(current.operation.operation_id, selected->operation_id,
+                   sizeof selected->operation_id) == 0 &&
+            memcmp(current.operation.target_firmware_sha256,
+                   receipt->candidate_sha256, 32) == 0 &&
+            state_has_firmware(&current, receipt->source_sha256,
+                               receipt->candidate_sha256, true) ?
+            ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_CONFLICT;
+    }
     econtainer_slots_state_t state = {0};
     const econtainer_slots_result_t loaded = econtainer_slots_load(
         &s_product.provider.io, &s_product.provider.geometry, &state);
@@ -916,8 +967,6 @@ static econtainer_slots_result_t reconcile_selected_ota(
                             receipt->candidate_sha256, true)) {
         return ECONTAINER_SLOTS_CONFLICT;
     }
-    const uint32_t retired_sequence = receipt->container_sequence +
-        (digest_zero(receipt->inactive_sha256) ? 0U : 1U);
     if (selected->running_state == EOTA_STATE_PENDING_VERIFY) {
         return receipt->status == ESP_BASE_OTA_RECEIPT_PREPARED &&
                state.phase == ECONTAINER_SLOT_PREPARED &&
@@ -1005,7 +1054,10 @@ static esp_base_container_boot_result_t start_product(
 {
     if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_BLOCKED;
     if (!policy_present()) return ESP_BASE_CONTAINER_NOT_CONFIGURED;
-    if (s_product.ready != NULL) return ESP_BASE_CONTAINER_BLOCKED;
+    if (s_product.thread_joinable ||
+        (s_product.start_attempted && !s_product.reopen_allowed)) {
+        return ESP_BASE_CONTAINER_BLOCKED;
+    }
     if (!decode_uuid(boot_id, s_product.boot_id)) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED invalid boot identity");
         return ESP_BASE_CONTAINER_BLOCKED;
@@ -1017,28 +1069,49 @@ static esp_base_container_boot_result_t start_product(
     atomic_store_explicit(&s_product.boot_admitted, false, memory_order_relaxed);
     atomic_store_explicit(&s_product.result, ESP_BASE_CONTAINER_BLOCKED,
                           memory_order_relaxed);
+    s_product.stop_succeeded = false;
     s_product.claim = claim;
-    s_product.ready = xSemaphoreCreateBinary();
+    if (s_product.ready == NULL) s_product.ready = xSemaphoreCreateBinary();
     if (s_product.ready == NULL) return ESP_BASE_CONTAINER_BLOCKED;
-    s_product.stopped = xSemaphoreCreateBinary();
+    if (s_product.stopped == NULL) s_product.stopped = xSemaphoreCreateBinary();
     if (s_product.stopped == NULL) return ESP_BASE_CONTAINER_BLOCKED;
     pthread_attr_t attributes;
     if (pthread_attr_init(&attributes) != 0) return ESP_BASE_CONTAINER_BLOCKED;
     const bool valid_thread =
-        pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED) == 0 &&
+        pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_JOINABLE) == 0 &&
         pthread_attr_setstacksize(&attributes,
             CONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES) == 0;
-    pthread_t thread;
+    s_product.start_attempted = true;
+    s_product.reopen_allowed = false;
     const int created = valid_thread ?
-        pthread_create(&thread, &attributes, product_thread, NULL) : -1;
+        pthread_create(&s_product.thread, &attributes, product_thread, NULL) : -1;
     (void)pthread_attr_destroy(&attributes);
     if (created != 0) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED executor create=%d", created);
         return ESP_BASE_CONTAINER_BLOCKED;
     }
-    (void)xSemaphoreTake(s_product.ready, portMAX_DELAY);
-    return (esp_base_container_boot_result_t)atomic_load_explicit(
+    s_product.thread_joinable = true;
+    if (xSemaphoreTake(s_product.ready, portMAX_DELAY) != pdTRUE) {
+        return ESP_BASE_CONTAINER_BLOCKED;
+    }
+    /* The worker used the borrowed claim only before publishing readiness. */
+    s_product.claim = NULL;
+    const esp_base_container_boot_result_t result =
+        (esp_base_container_boot_result_t)atomic_load_explicit(
         &s_product.result, memory_order_acquire);
+    if (result != ESP_BASE_CONTAINER_RUNNING) {
+        if (xSemaphoreTake(s_product.stopped, portMAX_DELAY) != pdTRUE ||
+            pthread_join(s_product.thread, NULL) != 0) {
+            return ESP_BASE_CONTAINER_BLOCKED;
+        }
+        s_product.thread_joinable = false;
+        /* EMPTY has no executor to reclaim. A later caller still needs an
+         * active Base owner, and the next worker rechecks the real slot. */
+        s_product.reopen_allowed = !trial_mode && result == ESP_BASE_CONTAINER_EMPTY &&
+            s_product.stop_succeeded &&
+            !atomic_load_explicit(&s_product.instance_active, memory_order_acquire);
+    }
+    return result;
 }
 
 esp_base_container_boot_result_t esp_base_container_product_boot(
@@ -1122,15 +1195,48 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
 {
     if (!s_product.trial_mode) return true;
     if (!esp_base_storage_claim_active(claim) || s_product.stopped == NULL) return false;
+    if (!s_product.thread_joinable) {
+        return s_product.stop_succeeded &&
+            !atomic_load_explicit(&s_product.instance_active, memory_order_acquire);
+    }
     atomic_store_explicit(&s_product.stop_requested, true, memory_order_release);
     if (xSemaphoreTake(s_product.stopped, pdMS_TO_TICKS(5000U)) != pdTRUE) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_STOP_UNPROVEN executor timeout");
         return false;
     }
+    if (pthread_join(s_product.thread, NULL) != 0) return false;
+    s_product.thread_joinable = false;
+    s_product.claim = NULL;
     if (!s_product.stop_succeeded ||
         atomic_load_explicit(&s_product.instance_active, memory_order_acquire)) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_STOP_UNPROVEN native cleanup");
         return false;
     }
+    return true;
+}
+
+bool esp_base_container_product_stop_confirmed(
+    const esp_base_storage_claim_t *claim)
+{
+    if (!esp_base_storage_claim_active(claim) || s_product.trial_mode ||
+        !s_product.thread_joinable ||
+        atomic_load_explicit(&s_product.result, memory_order_acquire) !=
+            ESP_BASE_CONTAINER_RUNNING) {
+        return false;
+    }
+    atomic_store_explicit(&s_product.stop_requested, true, memory_order_release);
+    if (xSemaphoreTake(s_product.stopped, pdMS_TO_TICKS(5000U)) != pdTRUE ||
+        pthread_join(s_product.thread, NULL) != 0) {
+        return false;
+    }
+    s_product.thread_joinable = false;
+    s_product.claim = NULL;
+    if (!s_product.stop_succeeded ||
+        atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
+        atomic_load_explicit(&s_product.result, memory_order_acquire) !=
+            ESP_BASE_CONTAINER_STOPPED) {
+        return false;
+    }
+    s_product.reopen_allowed = true;
     return true;
 }

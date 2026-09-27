@@ -11,6 +11,7 @@ typedef enum {
     ESP_BASE_CONTAINER_BLOCKED,
     ESP_BASE_CONTAINER_EMPTY,
     ESP_BASE_CONTAINER_RUNNING,
+    ESP_BASE_CONTAINER_STOPPED,
 } esp_base_container_boot_result_t;
 
 /* Called with Base's already active boot claim after NVS and control start.
@@ -32,6 +33,13 @@ bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t 
  * False means native reclamation or guest stop was not proven: retain owner
  * and do not ask IDF to roll back while candidate code may still execute. */
 bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim);
+
+/* Product-only changes use the same Base storage claim as firmware OTA. Stop
+ * and join the confirmed guest's unique executor before changing its binding.
+ * Success proves native reclamation and permits product_boot to reopen the
+ * persisted confirmed binding in this boot. Failure retains the claim. */
+bool esp_base_container_product_stop_confirmed(
+    const esp_base_storage_claim_t *claim);
 
 /* A complete product policy is required for the persistent binding path.
  * NO_PACKAGE can enter firmware trial; package trials need a real authorized

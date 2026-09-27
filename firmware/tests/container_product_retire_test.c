@@ -18,7 +18,7 @@ static unsigned abandon_calls;
 static unsigned drop_calls;
 static unsigned confirm_calls, confirm_writes;
 static bool observation_changes;
-static bool load_fails, load_empty, confirm_fails;
+static bool load_fails, load_empty, confirm_fails, reconcile_untrusted;
 static esp_base_storage_owner_t owner;
 static esp_base_storage_claim_t claim;
 static const char operation_id[] = "11111111-1111-4111-8111-111111111111";
@@ -67,7 +67,8 @@ static void fixture(bool configured, bool two)
     persisted_set(two, 7U);
     observe_calls = bind_calls = retire_calls = abandon_calls = drop_calls = 0U;
     confirm_calls = confirm_writes = 0U;
-    observation_changes = load_fails = load_empty = confirm_fails = false;
+    observation_changes = load_fails = load_empty = confirm_fails =
+        reconcile_untrusted = false;
     esp_base_storage_owner_init(&owner);
     claim = (esp_base_storage_claim_t){0};
     assert(esp_base_storage_claim(&owner, &claim));
@@ -94,10 +95,22 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
 
 static bool fake_set_matches(const econtainer_slot_firmware_set_t *set)
 {
-    const uint8_t zero[32] = {0};
-    const uint8_t *other = set->bootable_count == 2U ?
-        set->bootable_firmware_sha256[1] : zero;
-    return state_has_firmware(&persisted, set->running_firmware_sha256, other, false);
+    unsigned matched = 0;
+    for (unsigned binding = 0; binding < ECONTAINER_SLOT_BINDING_COUNT; ++binding) {
+        if (!persisted.bindings[binding].present) continue;
+        bool found = false;
+        for (unsigned index = 0; index < set->bootable_count; ++index) {
+            if (memcmp(persisted.bindings[binding].firmware_sha256,
+                       set->bootable_firmware_sha256[index], 32) == 0) {
+                if ((matched & (1U << index)) != 0U) return false;
+                matched |= 1U << index;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return matched == ((1U << set->bootable_count) - 1U);
 }
 
 econtainer_slots_result_t econtainer_slots_load(
@@ -139,10 +152,25 @@ econtainer_slots_result_t econtainer_slots_reconcile(
     econtainer_slot_boot_decision_t *decision)
 {
     assert(io && geometry && set && state && decision);
+    *decision = ECONTAINER_SLOT_BOOT_BLOCKED;
     if (load_fails) return ECONTAINER_SLOTS_IO_FAILED;
     if (!fake_set_matches(set)) return ECONTAINER_SLOTS_CONFLICT;
     *state = persisted;
-    *decision = ECONTAINER_SLOT_BOOT_CONFIRMED;
+    if (reconcile_untrusted) {
+        *decision = ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED_CANDIDATE_INVALID;
+        return ECONTAINER_SLOTS_UNTRUSTED;
+    }
+    const bool running_target = memcmp(persisted.operation.target_firmware_sha256,
+                                      set->running_firmware_sha256, 32) == 0;
+    if (persisted.operation.firmware_transition && running_target &&
+        persisted.phase >= ECONTAINER_SLOT_WRITING &&
+        persisted.phase <= ECONTAINER_SLOT_HEALTH_VERIFIED) {
+        return ECONTAINER_SLOTS_CONFLICT;
+    }
+    *decision = persisted.phase >= ECONTAINER_SLOT_WRITING &&
+                persisted.phase <= ECONTAINER_SLOT_HEALTH_VERIFIED ?
+                ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED :
+                ECONTAINER_SLOT_BOOT_CONFIRMED;
     return ECONTAINER_SLOTS_OK;
 }
 
@@ -459,6 +487,36 @@ int main(void)
         &claim, &selected, EOTA_STATE_VALID));
     assert(confirm_calls == 1U && confirm_writes == 1U);
     persisted.bindings[0].firmware_sha256[0] ^= 1U;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+
+    fixture(true, true);
+    selected_physical();
+    staged_candidate(12U);
+    persisted.phase = ECONTAINER_SLOT_CONFIRMED;
+    selected = selected_receipt();
+    selected.status = ESP_BASE_OTA_RECEIPT_SUCCEEDED;
+    assert(esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    ++persisted.sequence;
+    persisted.phase = ECONTAINER_SLOT_IDLE;
+    persisted.operation = (econtainer_slot_operation_t){0};
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    persisted.phase = ECONTAINER_SLOT_CONFIRMED;
+    persisted.operation.firmware_transition = true;
+    memcpy(persisted.operation.target_firmware_sha256,
+           selected.candidate_sha256, 32);
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    persisted.operation.firmware_transition = false;
+    memcpy(persisted.operation.target_firmware_sha256,
+           selected.source_sha256, 32);
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &selected, EOTA_STATE_VALID));
+    memcpy(persisted.operation.target_firmware_sha256,
+           selected.candidate_sha256, 32);
+    reconcile_untrusted = true;
     assert(!esp_base_container_product_reconcile_selected_ota(
         &claim, &selected, EOTA_STATE_VALID));
 
