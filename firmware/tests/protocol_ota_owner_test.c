@@ -304,6 +304,7 @@ int main(void)
     start(16);
     expect_reply("failed", "product_ota_unavailable");
     assert(snapshot_calls == 1 && register_calls == 0 &&
+           retire_calls == 0 && product_retire_calls == 0 && task_calls == 0 &&
            atomic_load(&owner.active_token) == 0);
 
     reset_case();

@@ -275,6 +275,32 @@ int main(void)
     assert(!esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
     assert(snapshot.container_sequence == 0U);
 
+    /* A/B needs retirement plus five candidate/trial/rollback commits. The
+     * first rejected sequence must leave the original bindings untouched. */
+    fixture(true, true);
+    persisted.sequence = UINT32_MAX - 6U;
+    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(snapshot.container_sequence == UINT32_MAX - 6U &&
+           retire_calls == 0U && persisted.bindings[1].present);
+    persisted.sequence = UINT32_MAX - 5U;
+    assert(!esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(snapshot.container_sequence == 0U &&
+           persisted.sequence == UINT32_MAX - 5U &&
+           retire_calls == 0U && persisted.bindings[1].present);
+
+    /* A-only skips retirement and therefore has exactly one more usable
+     * starting sequence. */
+    fixture(true, false);
+    persisted.sequence = UINT32_MAX - 5U;
+    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(snapshot.container_sequence == UINT32_MAX - 5U &&
+           retire_calls == 0U && !persisted.bindings[1].present);
+    persisted.sequence = UINT32_MAX - 4U;
+    assert(!esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(snapshot.container_sequence == 0U &&
+           persisted.sequence == UINT32_MAX - 4U &&
+           retire_calls == 0U && !persisted.bindings[1].present);
+
     fixture(false, true);
     assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
     assert(!snapshot.container_enabled && snapshot.container_sequence == 0U &&
@@ -338,6 +364,26 @@ int main(void)
         &claim, true, 7U, source, no_inactive, candidate,
         operation_id, boot_id) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
     assert(persisted.sequence == 10U && abandon_calls == 1U && drop_calls == 1U);
+
+    /* The admitted boundary leaves exactly enough sequence for rollback
+     * after HEALTH_VERIFIED, including both recovery writes. */
+    fixture(true, true);
+    physical_set(false);
+    staged_candidate(UINT32_MAX - 2U); /* S=max-6, retire/stage/trial/health. */
+    persisted.phase = ECONTAINER_SLOT_HEALTH_VERIFIED;
+    assert(recover(true, UINT32_MAX - 6U, 0xc3, operation_id) ==
+           ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+    assert(persisted.sequence == UINT32_MAX &&
+           abandon_calls == 1U && drop_calls == 1U);
+
+    fixture(true, false);
+    staged_candidate(UINT32_MAX - 2U); /* S=max-5, stage/trial/health. */
+    persisted.phase = ECONTAINER_SLOT_HEALTH_VERIFIED;
+    assert(esp_base_container_product_recover_retired_firmware(
+        &claim, true, UINT32_MAX - 5U, source, no_inactive, candidate,
+        operation_id, boot_id) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+    assert(persisted.sequence == UINT32_MAX &&
+           abandon_calls == 1U && drop_calls == 1U);
 
     fixture(true, true);
     physical_set(false);
