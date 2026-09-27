@@ -14,6 +14,8 @@
 
 命令配置、OTA 请求与结果 operation ID 的解析载荷互斥；合并后固定 SDK 双目标链接图各再释放 632 B 常驻 `.bss`，旧／新 host ASan／UBSan 与普通构建均通过。候选配置、已提交配置、NVS 提交双缓冲和 MQTT 事件仍须保持独立；该源码组合尚无签名 guest 运行堆读数，P6-03 未据此验收。见[命令载荷容量检查点](docs/operations/p6-03-command-payload-capacity-checkpoint.md)。
 
+控制任务复用互斥使用的 JSON result 与周期 reported 工作区，保留后者 512 B 的原容量门。精确锁 MQTT 的默认 outbox 在 enqueue 返回前复制报文；双目标 host 回归及普通构建通过，链接图各再释放 512 B 常驻 `.bss`。该组合尚无网络运行堆或实板测量，见[网络回执工作区检查点](docs/operations/p6-03-network-json-scratch-checkpoint.md)。
+
 移栈后的 Base `6ef7a02` 另用三份独立签名 ESP32 QEMU 探针接 OpenETH 与官方 FRPS：原样静态 TLS 在 `CONNECTING` 阶段因 2,212 B 分配失败；仓外 SDK 动态缓冲完成严格验签和 session 建立，进入 `AUTHENTICATING` 后认证超时，尚未证明 Login 收发、注册或 Pong。额外 4 KiB 探针任务与测试时钟不属于正式 FRP owner，Base SNTP 门保持 false；这批镜像也早于上述命令去重表收缩，堆读数不得混用。详见[移栈后 FRPS 容量检查点](docs/operations/esp32-frps-stack-workspace-qemu-capacity-checkpoint.md)。该批三份镜像的受管组件已严格重算并匹配精确锁，未受前述另一仓外目录的插桩影响；[认证超时只读诊断](docs/operations/esp32-frps-stack-auth-timeout-diagnosis.md)仍无法判定 Hello／Login 的实际收发。
 
 移栈后 FRPS 探针的同 app trace 及另一份独立签名超时字段输入进一步确认：官方服务端识别 TLS，却没有接受首个 Yamux 控制流；四次认证超时中两次记录首个 12 B SYN 输出停滞约 5 秒，另两次由 TLS 待写期限先触发。TLS 内部待写字节数未采集，额外探针任务、测试时钟和插桩使容量读数不能回填正式 owner；没有可证明的 FRP 正式源码错误。见[认证输出追踪检查点](docs/operations/esp32-frps-auth-output-qemu-trace-checkpoint.md)。
@@ -124,6 +126,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 - [ESP32 FRP 认证记录 QEMU 检查点](docs/operations/esp32-frp-authenticated-record-qemu-checkpoint.md)
 - [当前锁 ESP32 FRP 会话容量检查点](docs/operations/esp32-frps-current-lock-qemu-capacity-checkpoint.md)
 - [产品验包工作区移栈检查点](docs/operations/product-workspace-stack-checkpoint.md)
+- [P6-03 网络回执工作区复用检查点](docs/operations/p6-03-network-json-scratch-checkpoint.md)
 - [设备协议](docs/design/device-protocol.md)
 - [公开串口主机示例](tools/README.md)
 - [配置候选断电验收](docs/operations/config-power-loss-acceptance.md)

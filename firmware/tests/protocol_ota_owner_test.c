@@ -21,6 +21,9 @@ static unsigned register_calls, failure_record_calls, task_calls, prepare_calls,
 static unsigned snapshot_calls, load_receipt_calls, retire_calls,
     product_retire_calls, validate_calls, query_calls;
 static char latest_reply[1200];
+static char latest_reported[512];
+static unsigned reported_calls;
+static const char *fake_frp_state = "stopped";
 static uint32_t fake_free_heap = 1000;
 
 static void reset_case(void)
@@ -55,6 +58,9 @@ static void reset_case(void)
     snapshot_calls = load_receipt_calls = retire_calls = product_retire_calls = 0;
     validate_calls = query_calls = 0;
     latest_reply[0] = '\0';
+    latest_reported[0] = '\0';
+    reported_calls = 0;
+    fake_frp_state = "stopped";
     fake_free_heap = 1000;
 }
 
@@ -136,6 +142,28 @@ static void check_frp_status(const char *request, int expected_http,
 
 int main(void)
 {
+    reset_case();
+    s_reply_mqtt = true;
+    reply("11111111-1111-4111-8111-111111111111", "succeeded", NULL, NULL);
+    s_reply_mqtt = false;
+    char copied_result[sizeof latest_reply];
+    strcpy(copied_result, latest_reply);
+    reported();
+    assert(reported_calls == 1 && strstr(latest_reported, "\"frp_state\":\"stopped\"") &&
+           !strcmp(latest_reply, copied_result));
+    char copied_reported[sizeof latest_reported];
+    strcpy(copied_reported, latest_reported);
+    s_reply_mqtt = true;
+    reply("11111111-1111-4111-8111-111111111112", "failed", "invalid_request", NULL);
+    s_reply_mqtt = false;
+    assert(!strcmp(latest_reported, copied_reported));
+    char oversized_state[512];
+    memset(oversized_state, 'x', sizeof oversized_state - 1);
+    oversized_state[sizeof oversized_state - 1] = '\0';
+    fake_frp_state = oversized_state;
+    reported();
+    assert(reported_calls == 1 && !strcmp(latest_reported, copied_reported));
+
     reset_case();
     s_context.config.revision = 7U;
     s_context.config.frp.configured = true;
@@ -423,7 +451,7 @@ bool esp_base_wifi_ready(void) { return true; }
 bool esp_base_time_ready(void) { return true; }
 const char *esp_base_wifi_state(void) { return "ready"; }
 const char *esp_base_mqtt_owner_state(void) { return "ready"; }
-esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = "stopped"}; }
+esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = fake_frp_state}; }
 uint32_t esp_get_free_heap_size(void) { return fake_free_heap; }
 size_t heap_caps_get_minimum_free_size(unsigned caps) { (void)caps; return 1000; }
 int64_t esp_timer_get_time(void) { return 1000000; }
@@ -432,6 +460,14 @@ bool esp_base_mqtt_owner_result(const char *json, size_t length)
     assert(length < sizeof latest_reply);
     memcpy(latest_reply, json, length);
     latest_reply[length] = '\0';
+    return true;
+}
+bool esp_base_mqtt_owner_reported(const char *json, size_t length)
+{
+    assert(length < sizeof latest_reported);
+    memcpy(latest_reported, json, length);
+    latest_reported[length] = '\0';
+    ++reported_calls;
     return true;
 }
 
