@@ -4,6 +4,7 @@
 
 - 固定 SDK `578cf89`／lwIP `2758df4` 在 `mac-work-1` 的独立副本重新解析本仓 C3 精确锁；C3 与 ESP32 的 `bash firmware/tests/run_host_tests.sh` 全套 ASan/UBSan 均通过。新 product fake 检验错 operation、sequence、摘要零确认写入，已确认状态不重写，确认失败阻断；启动 fake 检验缺失/失败收据与 OTA 不可用时不进入产品 boot，以及原收据选中 C 的恢复接线。依赖仍为 Container `bf52b17`、OTA `7f316c2`；没有改分区、组件锁、签名键或设备。
 - 本检查点仍是 host 故障注入：Container provider 的实际 NVS 掉电行为、VALID otadata 与 ECS2 提交之间复位、签名镜像读回、包的真实启动、guest 停止以及五能力同存尚未实板验证。P6-03／P7-02 保持进行中。
+2026-09-27 P6-03 ESP32 六页 `base_store@0x3fa000/0x6000` 的[独立合成容量验证](esp32-six-page-nvs-capacity.md)：固定 IDF/lwIP、公开 Container ECS2、Xtensa Espressif QEMU 在仓外 4 MiB Flash 上完成 100 代最大 Base v3 配置 CAS、当前 OTA V2 形态及 ECS2 元数据同分区写读；两次新进程重启读回最终 revision 100，官方 NVS parser 核验五页 CRC 正确、一页 Empty。测试专用 factory app 不是双槽签名产品，正式分区、旧 AT 迁移、掉电与实体板均未验证，P6-03 保持未验收。
 
 2026-09-27 双目标签名产品局部 LTO 容量账本：在 `esp-base@8a62d27`、FRP `6609fbc`、MQTT `9d6d95e`、OTA `7f316c2`、Container `bf52b17`、WAMR `26c235e`、固定 IDF `578cf89`／lwIP `2758df4` 及同一仓外签名输入下，只给指定静态库增加 `-flto`，逐档完整重建并经官方签名验证、双 app 槽尺寸检查。没有改变组件源码、锁、正式分区或实体设备；以下均是**当前代码的仓外优化空间实验**，未来接入 FRP Flash reader、session 和 Base provider 后必须重做完整产品门。
 

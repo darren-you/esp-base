@@ -1,0 +1,8 @@
+# Synthetic ESP32 QEMU factory app; final 0x6000 NVS offset follows the conditional product geometry.
+# Name, Type, SubType, Offset, Size, Flags
+nvs, data, nvs, 0x9000, 0x6000,
+factory, app, factory, 0x10000, 0x100000,
+product_pkgs, data, undefined, 0x260000, 0x186000,
+at_old_raw, data, undefined, 0x3e6000, 0x4000, readonly
+frp_scratch, data, undefined, 0x3ea000, 0x10000,
+base_store, data, nvs, 0x3fa000, 0x6000,

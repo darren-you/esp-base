@@ -1,4 +1,3 @@
-- 精确锁定 FRP Flash reader 与唯一公开 IDF scratch provider，启动早于 OTA pending 确认执行恢复
-- 复用 Base 全局存储 owner 的短 claim，贯通 protocol 到 FRP client 的 store 生命周期
-- 在无已恢复 store 时拒绝 USB FRP 配置提交，保留旧 revision/配置与 MQTT 物理入口边界
-- 覆盖 host 故障时序与双目标固定 SDK；记录 C3 scratch 签名容量阻断和 ESP32 现有布局结果
+- 合并 FRP 独立 Flash scratch 接线和 Container 原 V2 收据恢复边界
+- 扩展容量探针至 ESP32 六页 NVS，验证固定 SDK 下 100 代三记录写读及两次重启
+- 保留候选几何与合成证据边界，不修改正式分区或设备
