@@ -26,3 +26,5 @@ C3 分区表由官方生成器解码并与既有候选哈希一致；该签名�
 原始完整构建、官方验签、`image-info`、分区解码、锁与制品，以及机器校验收据在 `mac-work-1:/private/tmp/esp-base-087f9ba-p603-signed-20260927/`。最终 ESP32 结果取自其中 `esp32-locked/`，C3 取自 `c3/`，汇总为 `verification-summary.json`；`pristine/` 是未改动的 `087f9ba` 归档。
 
 这验证了**该精确锁与这两份仓外候选布局**的离线静态签名容量。C3 正式表仍是双 `0x1e0000` 槽，ESP32 正式表未启用此 scratch 候选；未修改它们。没有运行实体板、真实产品包 guest、FRPS/Broker/HTTPS/OTA 同时活跃、动态 RAM 峰值、旧 AT/NVS 迁移、物理 Flash 暂存或掉电恢复。P6-03 的运行资源与设备验收仍未由此关闭。
+
+该原样 C3 签名 app 的后续无网络 guest 动态复测见[当前锁 C3 QEMU 检查点](p6-03-current-lock-c3-signed-guest-qemu-checkpoint.md)；它不改变本页离线容量证据的范围。
