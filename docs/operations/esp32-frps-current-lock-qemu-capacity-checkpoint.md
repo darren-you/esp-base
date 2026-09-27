@@ -28,3 +28,21 @@
 `mac-work-1:/private/tmp/esp-frp-current-session-20260927/attempt-*/` 保留每次原始 `qemu-uart.log`、`qemu-process.log`、`frps.log`、命令 JSON、4 MiB 合成 Flash、独立 efuse 副本和官方验签输出。关键 UART SHA-256：8 KiB 容量失败 `77c5cd2d85b92897f4c1ed08752a1266b41d55f879c9c58c4a02fd4c05b316d8`；4 KiB 容量失败 `065d279f6e9b732eb91aa0c3cba3cff7dcdd2995c431559bcc8885a26df53333`；3 KiB 原始／复跑／固定 RTC 分别为 `fc6e1f39613ad0205fe95807b149bd56bd54b2ead9d5ea76710ae25f2a6ccf40`、`b4dae7c98d27a0ca0cee39bc2737baf0e31cab279a0dd17f57efed76191c8f25`、`59de049674e42be4c22d22ae992862dd877e4c5ef97dc1bbf51fd01789137573`。8 KiB 与 4 KiB 镜像完整 SHA-256 分别为 `9e8b7bb54abb6bfc2bc9000233a680a7bc13036721ed70433488e1ab49334236`、`d32f465e0b23d834d104c370ba87020ac25a5f04b4207254bcbcf8fca5849ca1`；三次 3 KiB 为 `d326518ab6f10f6d5aa65f99b8fbc2953d498b79ad87d4adca9ab89427db8e59`。FRPS 每次均有 `READY/STOPPED`，退出后无 29372 端口监听。
 
 本实验只确定**当前锁、测试输入与该网络负载下，在 TLS 握手前的内存失败**。正式 SNTP、证书验签、FRP 会话及 Flash 加密记录、MQTT Broker TLS、OTA HTTPS、五能力同时运行和实体板资源门均未完成。没有降低 48 KiB free、24 KiB largest 或 1 KiB 栈余门；P6-03 继续开放。
+
+## 仓外固定时钟与 SDK 动态缓冲对照
+
+为去掉上段 QEMU 时钟偶发性，另一组**纯仓外**测试探针在 DHCP 后调用 `settimeofday` 设置 `2026-09-27T10:00:00Z`。两份签名镜像使用同一 4,096 B 探针栈、同一测试包／证书／FRPS、相同 Base／五仓锁、相同探针 C 源与 QEMU 命令；源码 SHA-256 分别为 `frps-probe.c=511bad5dcc9fa4db077ea49272a6e650cfa466a5ef842d1f51a450cbde148f20`、`base-main.c=0372e93f95c46f5df68b13abc9c6beb0f2cdd4ccc90b3d729eca6a25f03b15d4`。每次都以新签名 app 摘要重建 ECS2，并经官方 ECDSA v1 验签。`sdkconfig` 唯一启用项差异是 `CONFIG_MBEDTLS_DYNAMIC_BUFFER=y`；Kconfig 同时展开一个仍为 `not set` 的 `CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA` 可见项。入站／出站内容上限都保持 16,384／4,096 B，未改变产品源或正式配置。
+
+| 同输入阶段 | 静态缓冲，`sdkconfig` SHA `20ba69bf6456e6a71fc6362c325e380ef287c082b425b0ce950be41f81f1b97a` | 动态缓冲，`sdkconfig` SHA `1a4a148b1e23bd6c197e7dc4abda2a44ea3590a1e9244922b6d61d8964baea4d` |
+| --- | --- | --- |
+| 签名 app SHA-256 | `efebf1feb2a3776cc8eb9e9192cca0007746093fd4388eb07af36ffb3788b641` | `456b400cea4705427e1a7d9f703780f02583437c652982846270781adbcdc91c` |
+| guest／网络／时间 | `RUNNING`／Base `READY`／DHCP；`base_sntp_ready=0`、探针时间 `1790503200` | 同左 |
+| `efrp_create` 后 free／largest／minimum | 22,756／20,480／22,628 B | 22,756／20,480／22,756 B |
+| `efrp_start` 已排队后 free／largest／minimum | 22,036／20,480／18,888 B | 22,036／20,480／22,036 B；相邻 OpenETH 采样已到 20,428／18,432／18,888 B |
+| 最后阶段与失败 | `failure_phase=CONNECTING(1)`，4,429 B/caps 2052 分配失败，minimum **460 B**，证书验证尚未发生 | 进入 `TLS_HANDSHAKING(2)`；随后 `failure_phase=2`，1,024 B/caps 6144 分配失败，minimum **320 B**，`tls_error=0`、`verify=0` |
+| 收敛结果 | `FAILED=8`，没有 FRP session | `FAILED=8`，`ready=0`、`pongs=0`，未进入 `AUTHENTICATING`、没有 Login／注册 |
+| 探针自身最低未用栈 | 2,316 B | 2,236 B |
+
+当前 FRP `client.c` 只有 `efrp_tls_step` 返回成功后才调用 `efrp_session_create`，并在后者成功时才把阶段切到 `AUTHENTICATING`。动态缓冲运行的 `verify=0` 与 `tls_error=0`、随后 `failure_phase=2` 且 `EFRP_NO_MEMORY=-20`，据此可确认严格 TLS 握手及证书检查已成功，**下一步建立 session 时容量失败**。现有失败回调没有调用栈；虽然 FRP 源码中 Yamux 控制流 ring 的申请也是 1,024 B，本记录不将那笔失败强行归因给它。两份镜像均未完成 FRP Login 或进入 READY。动态缓冲只改变本仓外实验的停止点，仍未满足 48 KiB free／24 KiB largest 门。
+
+原始证据分别保留在 `mac-work-1:/private/tmp/esp-frp-current-session-20260927/attempt-fixed-clock-static-4096/` 与 `attempt-fixed-clock-dynamic-4096/`，包括合成 Flash、官方验签输出、未脱敏 UART、FRPS 日志、输入 `sdkconfig`、探针源码与 QEMU 命令；UART SHA-256 为 `c667f5f435241a19f1a5d397c93fb237cfda783e5335478ff248be3099f25a44`／`a4f256dab614c84a65fad79de75e0d7c4327fc72f897b94f8deb782def408f24`。两份官方本地 FRPS 均 `READY/STOPPED`，退出后端口不再监听。`settimeofday` 是用于诊断内存的仓外时间输入，Base 正式 SNTP 门仍为 false；本对照不计入五能力并发或设备级验收。
