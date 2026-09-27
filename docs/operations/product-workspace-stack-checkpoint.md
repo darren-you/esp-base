@@ -1,6 +1,6 @@
 # 产品验包工作区移入线程栈的双目标检查点
 
-**证据勘误（2026-09-27）**：后续按受管组件锁复核仓外目录时发现，两端旧签名 QEMU 所用 `managed_components/esp_container/slot_runtime.c` 含未纳入 `esp-container@6ef74fa` 的 `P603_SAMPLE` 诊断插桩；C3／ESP32 签名 ELF 均有对应标记。下文 **49,100／51,180 B 堆低水、5,012／5,140 B 栈余量和 guest 运行结果仅属于这两份诊断镜像**，不得称为未插桩精确锁的运行容量验证，也不得与其他镜像做节省量推算。原始镜像、日志和摘要保留；纯净锁重签复测另行记录。独立 host 假件测试不使用该受管组件；两份普通构建未检出该插桩标记，但这不补足签名 guest 的源码一致性。
+**证据勘误（2026-09-27）**：后续按受管组件锁复核仓外目录时发现，两端旧签名 QEMU 所用 `managed_components/esp_container/slot_runtime.c` 含未纳入 `esp-container@6ef74fa` 的 `P603_SAMPLE` 诊断插桩；C3／ESP32 签名 ELF 均有对应标记。下文 **49,100／51,180 B 堆低水、5,012／5,140 B 栈余量和 guest 运行结果仅属于这两份诊断镜像**，不得称为未插桩精确锁的运行容量验证，也不得与其他镜像做节省量推算。原始镜像、日志和摘要保留；后续[纯净锁重签复测](p6-03-request-guard-clean-signed-qemu-checkpoint.md)在 guard 源码也收缩后的独立输入中记录，不能与本诊断输入相减归因单项节省。独立 host 假件测试不使用该受管组件；两份普通构建未检出该插桩标记，但这不补足签名 guest 的源码一致性。
 
 2026-09-27，P6-03 独立源码实验。输入 Base 为 `24b41752256b10c5887a92a5f2b4f3107b7077e5` 加本分支的四处源码／测试改动；固定 IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`，C3／ESP32 锁文件 SHA-256 分别为 `9ee783f487a527a0c050aabce754683bf21f41490b163239d8c42019c293193e`、`5510c046f2fe68bf05e18afa3ff657954160d52f2c2b5874c8efd709e5ba03b8`。锁内 Container `6ef74fa`、WAMR `c10736f`、FRP `9a0839a`、MQTT `c0677e5`、OTA `d98361f`。仓外测试目录为 `mac-work-1:/private/tmp/esp-base-p603-workspace-stack-verify-20260927/`，仅使用测试签名键、真实签名 ABI 2 counter 包和合成 4 MiB Flash；没有访问实体设备、正式分区或产品凭据。
 
