@@ -298,7 +298,7 @@ static void emit_outcome(size_t slot, bool via_mqtt)
     command_outcome_t *out = &s_outcomes[slot];
     const bool previous_route = s_reply_mqtt;
     s_reply_mqtt = via_mqtt;
-    reply(s_guard.requests[slot].request_id, out->state, out->error, out->has_status ? &out->status : NULL);
+    reply(s_guard.entries[slot].request_id, out->state, out->error, out->has_status ? &out->status : NULL);
     s_reply_mqtt = previous_route;
 }
 

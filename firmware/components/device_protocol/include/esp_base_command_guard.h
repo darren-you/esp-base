@@ -23,7 +23,15 @@ typedef struct {
 } ebase_request_t;
 
 typedef struct {
-    ebase_request_t requests[EBASE_REQUEST_SLOTS];
+    /* Admission validates the current device and boot before reading history.
+     * Historical entries only need fields used by replay and async replies. */
+    char request_id[EBASE_ID_BYTES];
+    uint64_t expires_at_ms;
+    uint8_t fingerprint[32];
+} ebase_guard_entry_t;
+
+typedef struct {
+    ebase_guard_entry_t entries[EBASE_REQUEST_SLOTS];
     size_t count;
 } ebase_request_guard_t;
 
