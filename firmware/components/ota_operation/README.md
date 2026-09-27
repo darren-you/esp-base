@@ -22,7 +22,7 @@ flowchart LR
     binding -->|"已持有 claim + 集合映射"| firmware_set
 ```
 
-通用 HTTPS 下载、镜像头/完整摘要、SDK 验签、槽观察、物理退役与确认/回滚均由锁定的 `esp-ota` 维护。`eota_validate_image_request` 与下载准备共用 HTTPS URL 和最小镜像头长度规则，在旧 B 首次擦除前先拒绝静态无效请求；本组件不保留这些实现或旧 `esp_base_ota_*` 转发入口。收据查询通过 `eota_observe_slots` 和 `eota_sha256_running` 读取当前事实：worker 活跃或新槽 pending 为 running，新槽 VALID 且完整 signed bin 摘要吻合、产品确认并持久写入读回 `SUCCEEDED` 收据后才 succeeded；A 仍运行且失败已持久记录才 failed，该失败须发生于目标槽写入前，或写入后完成原收据驱动的物理槽与 Container 对账。其余 unknown。存储写入或读回不确定时拒绝启动升级。普通未签名构建不登记收据。
+通用 HTTPS 下载、镜像头/完整摘要、SDK 验签、槽观察、物理退役与确认/回滚均由锁定的 `esp-ota` 维护。`eota_validate_image_request` 与下载准备共用 HTTPS URL、非空主机、可选端口基本结构和最小镜像头长度规则，在旧 B 首次擦除前先拒绝静态无效请求；本组件不保留这些实现或旧 `esp_base_ota_*` 转发入口。收据查询通过 `eota_observe_slots` 和 `eota_sha256_running` 读取当前事实：worker 活跃或新槽 pending 为 running，新槽 VALID 且完整 signed bin 摘要吻合、产品确认并持久写入读回 `SUCCEEDED` 收据后才 succeeded；A 仍运行且失败已持久记录才 failed，该失败须发生于目标槽写入前，或写入后完成原收据驱动的物理槽与 Container 对账。其余 unknown。存储写入或读回不确定时拒绝启动升级。普通未签名构建不登记收据。
 
 当前实板仍是旧固件，签名首次迁移与真实 HTTPS、Flash、bootloader 回滚尚未验收；构建和 host 假件不代表实板结果。ESP32 的 16 KiB 旧 AT 归档及新分区表只提供离线候选，不允许直接向旧分区执行 OTA。
 

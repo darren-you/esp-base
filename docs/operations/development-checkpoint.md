@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-27 Base OTA authority 预检精确消费：从已提交的 MQTT 消费 `esp-base@3eae866e5d6dcfad91655587620dbdf5daebdb79` 出发，主固件唯一 `esp_ota` 清单及官方重新生成的 C3／ESP32 两份锁精确指向公开 `esp-ota@d98361f348e19e965efd7462277dde0ae13056fa`。两锁除 target 外相同，OTA component hash 为 `58dbb4b4cd22596ec9604b634b4f24f2417da77f66c57c5d0ed7ba6afce3693c`，C3／ESP32 锁 SHA-256 分别为 `9ee783f487a527a0c050aabce754683bf21f41490b163239d8c42019c293193e`／`5510c046f2fe68bf05e18afa3ff657954160d52f2c2b5874c8efd709e5ba03b8`；受管 `update.c` 与上游源码 SHA-256 均为 `b3f3eec08364334135786da63a73885a32874aa1810e28909f35c2b0cc45f5dc`。上游用同一 URL authority 基本结构规则在旧 B 物理退役前拒绝空主机、空方括号主机和非法端口；它不预先证明 DNS、CA、镜像内容或网络可达。上游先用 C3／ESP32 真实更新源码及 SDK 假件的 ASan/UBSan 回归复现旧版失败，修正后固定 SDK 原生 mbedTLS HTTPS 在内的 host CTest **6/6** 通过。
+
+本 Base 组合使用固定 ESP-IDF `578cf89c`／lwIP `2758df4`，双目标主固件从隔离 checkout 完整编译：C3 默认未签名 app `0xdefc0` 字节、SHA-256 `bd22d4615bb7a5dbbcbc9695fbb3a449a74e5c2baeef901a0ef26bb762142713`；ESP32 在独立 sdkconfig 和显式 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 下未签名 app `0xd2bc0` 字节、SHA-256 `de9a4cf385578f58e015fa961526a7db763a915d6d8a16e29b6611d81eb5b169`。官方分区尺寸门通过；Base host ASan/UBSan C3 **20/20**、ESP32 **19/19** 通过。未使用签名键、网络凭据或设备，未生成本精确组合的签名产品镜像，也未执行 HTTPS／Flash／bootloader 的实体升级、断电恢复或五能力并发；P5、P6-03、P7 设备与资源验收状态不变。
+
 2026-09-27 Base MQTT 消息槽清零精确消费：主固件唯一 MQTT 清单和官方重新生成的 C3／ESP32 两份锁均指向公开 `esp-mqtt@c0677e5e779c3e51e814f2920420be7ec54f1d88`，受管源码逐字节核对，两目标完整离线构建与 Base host ASan/UBSan **20/20／19/19** 通过。其他组件、产品策略及正式分区未改；本轮未签名、联网或刷板。[精确输入、镜像与边界](mqtt-slot-clear-base-dependency-checkpoint.md)单独记账。旧锁下无认证探针的 ESP32 签名 guest QEMU 启动 minimum **43,636 B**，仍低于 **49,152 B** 门；本轮未重测资源，不把依赖更新计为 P6-03 通过。
 
 2026-09-27 Base FRP `1660ac2` 精确消费：固定 SDK 重新生成 C3／ESP32 主固件锁并完成双目标普通、仓外测试签名构建，官方 app／分区签名及容量门通过，Base host ASan/UBSan **20/20／19/19**。NVS 探针没有 FRP 依赖，其锁保持原样，另在两目标完成全量构建。集成签名产品入口的纯 Wasm 期限宿主测试后，双目标 host 仍通过；签名 guest 超期阻断与清理、原有 100 次安装／卸载回归在新锁组合下通过。输入摘要、镜像、原始日志及未覆盖的 FRPS／实板边界见 [FRP 1660ac2 精确消费检查点](frp-1660-base-dependency-checkpoint.md)。
