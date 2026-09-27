@@ -5,3 +5,4 @@
 - 记录 C3 与 ESP32 测试签名 QEMU 中的正式 Base 产品停止、卸载及冷启动空绑定
 - 复验新 Container 与 WAMR 精确锁的双目标签名 QEMU 产品卸载和持久读回
 - 验证 ESP32 FRP scratch 与六页 NVS 候选的签名 guest 卸载和启动擦除
+- 将 Base 双目标主固件精确锁定公开 FRP 会话测试提交并复验构建与签名容量
