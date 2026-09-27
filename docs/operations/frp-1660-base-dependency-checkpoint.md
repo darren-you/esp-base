@@ -18,4 +18,6 @@
 
 两目标 `firmware/tests/run_host_tests.sh` 在同一新受管组件源码下以 ASan/UBSan 跑完：C3 **20/20**、ESP32 **19/19**。原始日志为构建宿主上述目录中的 `host-c3.log`（SHA-256 `d150db972747e6dffde5f742490b9da3f403215bca62fb6788f3723d315924a1`）与 `host-esp32.log`（SHA-256 `e940c700729a1692ae418df8749bc26501dd42c6f862767e7eef20bf328e6e53`）。FRP 公开头文件与固件源码无变化，因此这些主机输出与上一精确锁测试的摘要相同；此处仍以新锁实际编译、运行的日志为证。
 
+随后把 Base `6a26cbb67d244c5cd5378c51352368b235fd31a7` 的**仅测试**变更集成在此 FRP 锁之上；签名构建源码、配置、锁和上述容量事实均未更改。集成副本重跑 C3／ESP32 host ASan/UBSan，仍分别 **20/20**、**19/19**，日志 `integration-host-c3.log`／`integration-host-esp32.log` 的 SHA-256 与上段逐一相同。再用干净 Container `6ef74fa...`、WAMR `c10736f...` 与 wasi-sdk 33 执行 `run_container_lifecycle_test.sh`：真实签名 ABI 2 纯 Wasm 超期得到 `ENTRY_EXPIRED`、Base 启动阻断和清理、同进程新启动替身可重新打开；原有签名包 100 次安装／卸载回归完成 ECS2 sequence **1→601**，ASan/UBSan 无报告。新锁集成日志为 `integration-product-lifecycle.log`，SHA-256 `f5dc4fc546e9f3b98b83974a029c3936addc6627542e1a3e9c1c5852d6b11005`。宿主 Flash/NVS 与固件集合仍是替身，新的启动替身不证明同一实体 boot 恢复。
+
 以上只验证精确源码消费、静态容量、签名和 Base 宿主替身路径。未建立 FRPS 会话，未运行新版锁的网络/guest 并发或 P6-03 复合场景；没有写实体 Flash、迁移 AT、启用硬件 Secure Boot 或证明实板验收。签名镜像使用仓外测试键，不是设备发布制品。

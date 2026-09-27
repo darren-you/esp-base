@@ -1,6 +1,6 @@
 # 开发检查点
 
-2026-09-27 Base FRP `1660ac2` 精确消费：固定 SDK 重新生成 C3／ESP32 主固件锁并完成双目标普通、仓外测试签名构建，官方 app／分区签名及容量门通过，Base host ASan/UBSan **20/20／19/19**。NVS 探针没有 FRP 依赖，其锁保持原样，另在两目标完成全量构建。输入摘要、镜像、原始日志及未覆盖的 FRPS／实板边界见 [FRP 1660ac2 精确消费检查点](frp-1660-base-dependency-checkpoint.md)。
+2026-09-27 Base FRP `1660ac2` 精确消费：固定 SDK 重新生成 C3／ESP32 主固件锁并完成双目标普通、仓外测试签名构建，官方 app／分区签名及容量门通过，Base host ASan/UBSan **20/20／19/19**。NVS 探针没有 FRP 依赖，其锁保持原样，另在两目标完成全量构建。集成签名产品入口的纯 Wasm 期限宿主测试后，双目标 host 仍通过；签名 guest 超期阻断与清理、原有 100 次安装／卸载回归在新锁组合下通过。输入摘要、镜像、原始日志及未覆盖的 FRPS／实板边界见 [FRP 1660ac2 精确消费检查点](frp-1660-base-dependency-checkpoint.md)。
 
 2026-09-27 Classic 入口期限精确消费：Base 主应用和 NVS 容量探针均在 `project()` 前启用 WAMR Classic 协作式墙钟检查。两目标各自的主固件与探针 `dependencies.lock` 精确锁定 Container `6ef74faabb675bce0180570f5bdf0232af11106a`、WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`；主固件同时升级 OTA `f4fb0b4f3fa7b384edf540bac626314418156d22`。官方 Component Manager 重新生成四份锁；ESP32 曾在保留旧锁时只更新 manifest hash、继续选择旧提交，隔离副本删除旧生成锁后重新求解，日志确认全部新 SHA。固定 ESP-IDF `578cf89`／lwIP `2758df4` 的普通 C3 和 ESP32 主应用完整构建分别得到 `0xdefb0`／`0xd2bb0` 字节，官方分区尺寸门通过；两目标编译命令均确认 WAMR Classic 与 Container runtime 实际收到期限宏。普通构建不含产品签名策略，尺寸不能当作最终候选。
 
