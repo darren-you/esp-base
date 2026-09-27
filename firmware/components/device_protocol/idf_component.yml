@@ -10,4 +10,4 @@ dependencies:
     version: "d98361f348e19e965efd7462277dde0ae13056fa"
   esp_frp:
     git: "https://github.com/esp-space/esp-frp.git"
-    version: "9a0839a603ed1f6bbce0d1b3c65a6bb43e501cf3"
+    version: "0af12209ee731617e635684309c026ae6b49c5ae"
