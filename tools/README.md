@@ -18,8 +18,14 @@ flowchart LR
     sdk_check --> build["firmware：C3 / ESP32 独立目标构建"]
     backup["两份仓外完整 Flash 备份"] --> preflight["preflight_v3_migration.py：v1/v2 离线只读预检 / v3 base_store 候选"]
     idf --> preflight
+    archive["独立 Base 源码归档"] --> uninstall_probe["prepare_qemu_product_uninstall_probe.py：测试任务注入"]
+    uninstall_probe --> qemu["仓外签名 QEMU：产品 stop / uninstall / reboot"]
     at_backup["两份 ESP32 旧 AT 完整 Flash 备份"] --> at_archive["archive_esp32_at.py：旧 NVS / at_customize 无损归档"]
 ```
+
+## 产品卸载 QEMU 测试源码准备
+
+`prepare_qemu_product_uninstall_probe.py` 只对**不含 `.git` 的独立 Base 源码归档**插入 FreeRTOS 测试任务，接收本轮已签名包的 SHA-256 和预置 ECS2 sequence，并在 READY 后用正式 Base API 执行确认停止、产品卸载、同 boot 空绑定读回及 storage claim 释放。不注入签名键或包内容，不修改纳管源码、真实设备、Flash、SDK 或组件。构建仍须提供仓外候选分区、签名输入，并按[双目标 QEMU 检查点](../docs/operations/product-uninstall-qemu-checkpoint.md)区分合成状态与真实产品入口。
 
 ## SDK 源码准备
 
