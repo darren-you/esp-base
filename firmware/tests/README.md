@@ -20,6 +20,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `storage_owner_test` 验证跨任务 release、10 万次 BUSY 重试不消耗 token、下次成功只加 1、过期 token 拒绝和 `UINT_MAX` 耗尽后释放保留值。`protocol_ota_owner_test` 编译真实 `esp_base_protocol.c` 命令与异步完成分支，注入已解析请求、收据和 OTA worker 结果，验证 owner 忙时不登记收据、收据已知失败释放、收据不确定保留、worker 创建失败先记录再释放、下载失败完成后释放、选槽状态不明时保留，以及成功选槽到重启仍持有 owner；它不执行真实命令解析、NVS、Flash 或 FreeRTOS 并发。`container_binding_test` 以假 Container 类型与调用记录验证真实 Base 固件集合逐字段映射、同 owner 互斥、观察失败及前后镜像变化时拒绝启动。可选固定 SDK 探针再用公开 Container 真头文件和组件编译本适配，但并不调用包槽 provider 或证明实板写入串行。
 
+`container_product_retire_test` 编译真实产品入口和 Base 双观察适配，使用假 ECS2/SDK 注入精确 A/B 退役、A/C 中断恢复、selected C 身份与 sequence；本轮另覆盖 V2 `PREPARED` + VALID C + `HEALTH_VERIFIED` 的一次确认、`CONFIRMED` 幂等、错误 operation/sequence/摘要与确认失败不写、无收据时 `PREPARED`/`CONFIRMED` 迁移只读拒绝，以及确实缺键首装。`ota_startup_test` 用产品假件验证 `NOT_FOUND`/`FAILED`/OTA 不可用时的阻断接线、原收据 selected C 成功/失败和本地 pending 窗口。这些假件不模拟 NVS 掉电原子性、真实包映射、bootloader 回退或 guest 执行。
+
 ## 架构拓扑
 
 ```mermaid

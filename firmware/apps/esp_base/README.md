@@ -1,6 +1,6 @@
 # 无业务基座应用
 
-装配身份、完整配置读取、Wi-Fi、SNTP 同步门、槽状态、复位事实、串口心跳及 status/restart/config.set 命令；无包产品的 pending 新槽通过本地启动检查、控制循环进展与 30 秒窗口后确认。配置 Container 产品授权时仅装载现有 confirmed 绑定；pending 在联合 OTA 合同完成前请求回滚。不配置 GPIO。
+装配身份、完整配置读取、Wi-Fi、SNTP 同步门、槽状态、复位事实、串口心跳及 status/restart/config.set 命令；无包产品的 pending 新槽通过本地启动检查、控制循环进展与 30 秒窗口后确认。配置 Container 产品授权时可装载现有 confirmed 绑定；无包联合 OTA 的 pending 新槽先以原 V2 收据核对 A/C 和 ECS2，再进入本地确认。缺少可信收据而 ECS2 留有固件迁移时阻断产品启动。不配置 GPIO。
 
 ## 架构拓扑
 

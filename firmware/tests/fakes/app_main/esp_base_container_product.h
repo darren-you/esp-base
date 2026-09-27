@@ -20,7 +20,9 @@ bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *cla
 bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_configured(void);
-bool esp_base_container_product_verify_selected_ota(
+bool esp_base_container_product_without_ota_receipt(
+    const esp_base_storage_claim_t *claim);
+bool esp_base_container_product_reconcile_selected_ota(
     const esp_base_storage_claim_t *claim,
     const esp_base_ota_receipt_recovery_t *receipt, eota_state_t running_state);
 typedef enum {
