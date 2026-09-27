@@ -59,6 +59,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 同一测试进程还重复 100 次真实签名包安装、正式 Base `product_boot`、产品卸载、同 boot `EMPTY`，每轮保持唯一 storage claim，读取正式 ECS2 状态并核对每次安装 5 次、卸载 1 次提交。guest 实际执行 `init` 与 `stop`；当前没有授权的业务事件源，循环不调用 `on_event`。运行中卸载必须证明 `stop/close/join`、native 已回收，并确认卸载不擦写包 Flash。macOS 另编译非 sanitizer 二进制，先校准 64 KiB 堆与 VM 映射能被采样，再比较第 10／50／100 次后的默认 malloc zone 已用字节、`TASK_VM_INFO` 虚拟字节与 region 数；ASan/UBSan 二进制也执行同一循环。这是宿主分配和线程回收检查，不代表 ESP 堆、Flash 耐久、公开安装或实板 100 次运行。
 
+仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
+
 ## NVS 仓外仿真
 
 [nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。
