@@ -62,6 +62,18 @@ static void config_tests(void)
     for (size_t i = 0; i < sizeof bad / sizeof *bad; ++i) {
         snprintf(json, sizeof json, "%s%s}", prefix, bad[i]); reject(json);
     }
+    /* A new command must not retain credentials from a previous parse. A
+     * partial failure still keeps the request ID needed for its error reply. */
+    const esp_base_remote_config_t cleared = {0};
+    snprintf(json, sizeof json, "%s%s}", prefix, valid[2]);
+    assert(!ebase_parse_command(json, strlen(json), &out));
+    assert(out.config.mqtt.configured && !strcmp(out.config.mqtt.password, "secret"));
+    assert(!ebase_parse_command(status, sizeof status - 1, &out));
+    assert(!memcmp(&out.config, &cleared, sizeof cleared));
+    snprintf(json, sizeof json, "%s%s}", prefix, bad[10]);
+    assert(ebase_parse_command(json, strlen(json), &out));
+    assert(!strcmp(out.request.request_id, REQUEST));
+    assert(!memcmp(&out.config, &cleared, sizeof cleared));
 }
 static void ota_tests(void)
 {

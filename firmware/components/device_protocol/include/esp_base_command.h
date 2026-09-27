@@ -9,9 +9,14 @@ typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, E
 typedef struct {
     ebase_command_kind_t kind;
     ebase_request_t request;
-    esp_base_remote_config_t config;
-    esp_base_ota_request_t ota;
-    char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+    /* Each command kind owns exactly one payload. The control task copies
+     * config/OTA data into their independent long-lived storage before another
+     * command is parsed; status and restart have no payload. */
+    union {
+        esp_base_remote_config_t config;
+        esp_base_ota_request_t ota;
+        char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+    };
 } ebase_command_t;
 
 /* The parser never mutates hardware or storage. request_id is empty unless a
