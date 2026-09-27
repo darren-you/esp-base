@@ -1,8 +1,10 @@
 # 开发检查点
 
-2026-09-28 P6-03 C3 当前锁签名 guest／FRPS 工作流容量：仓外仅关闭两项 Wi-Fi IRAM 开关的诊断，在正式 Container `RUNNING`、Base `READY` 后完成官方 FRPS 严格 TLS／注册／Pong 和一条双向各 **300001 B** 的真实工作代理回显，`work.completed=1`、`work.failed=0`。两次 QEMU 历史最低普通内部 8BIT 堆为 **6,460／7,072 B**；含 guest 返回断点的第二次比 **49,152 B** 门低 **42,080 B**。诊断签名 app `0x121000` 超出保留三份最大产品包的既有 `0x118000` app 候选槽，只能在仓外缩小包槽的几何中验签运行。默认 IRAM 配置的同锁诊断到 `AUTHENTICATING`、`verify=0`，未注册。正式配置与分区未变，FRP 仍绕过 Base owner，MQTT／OTA 和实板未测；[原始输入、签名、GDB 与读回](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md)不构成 P6-03／P7-02 验收。
+2026-09-28 P6-03 产品默认内存项落盘：Base 两目标共同启用 SDK TLS 动态收发缓冲，C3 关闭两项 Wi-Fi IRAM 优化；保持完整 TLS 片段、证书校验和 49,152 B 堆门。仓外复制当前源码／锁并用测试键重建正式分区的双目标签名产品：C3 RSA v2 app `0x111000` B、ESP32 ECDSA v1 app `0x10fff4` B，官方签名、分区与 app 尺寸检查和双目标 host ASan/UBSan 通过。正式 CSV 仍无 FRP scratch，本轮没有烧录设备，也没有把上一轮 C3 FRPS 工作流的最低 23,876 B 当成通过容量门；[完整输入与边界](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#产品默认项与双目标签名构建)。
 
-同一关闭 Wi-Fi IRAM 的输入仅在仓外启用固定 SDK TLS 动态收发缓冲，最大入站／出站 TLS 片段仍为 16 KiB／4 KiB。新签名 guest 与官方 FRPS 登录、注册、Pong、同一 **300001 B** 双向工作流再次通过，普通内部堆历史最低升至 **23,876 B**，比 49,152 B 门仍低 **25,276 B**。签名、配置单变量、GDB 和 Flash 读回补入上述检查点；动态缓冲未进入产品配置，断线重连与实板未测。
+2026-09-28 P6-03 C3 当前锁签名 guest／FRPS 工作流容量：仓外仅关闭两项 Wi-Fi IRAM 开关的诊断，在正式 Container `RUNNING`、Base `READY` 后完成官方 FRPS 严格 TLS／注册／Pong 和一条双向各 **300001 B** 的真实工作代理回显，`work.completed=1`、`work.failed=0`。两次 QEMU 历史最低普通内部 8BIT 堆为 **6,460／7,072 B**；含 guest 返回断点的第二次比 **49,152 B** 门低 **42,080 B**。诊断签名 app `0x121000` 超出保留三份最大产品包的既有 `0x118000` app 候选槽，只能在仓外缩小包槽的几何中验签运行。默认 IRAM 配置的同锁诊断到 `AUTHENTICATING`、`verify=0`，未注册。该次实验时正式配置与分区未变，FRP 仍绕过 Base owner，MQTT／OTA 和实板未测；[原始输入、签名、GDB 与读回](p6-03-c3-current-lock-frps-work-qemu-checkpoint.md)不构成 P6-03／P7-02 验收。
+
+同一关闭 Wi-Fi IRAM 的输入仅在仓外启用固定 SDK TLS 动态收发缓冲，最大入站／出站 TLS 片段仍为 16 KiB／4 KiB。新签名 guest 与官方 FRPS 登录、注册、Pong、同一 **300001 B** 双向工作流再次通过，普通内部堆历史最低升至 **23,876 B**，比 49,152 B 门仍低 **25,276 B**。签名、配置单变量、GDB 和 Flash 读回补入上述检查点；该实验时点动态缓冲尚未进入产品配置，断线重连与实板未测。
 
 2026-09-28 P6-03 Base 配置提交单缓冲：v3 NVS 提交前编码、写入后读回与配置指纹在唯一控制 owner 中复用同一 7,618 B 静态缓冲；读回仍经严格解码，并逐字段核对候选和下一 revision，任何不同保持不确定结果。固定 SDK 双目标 ELF 各减少 **7,618 B** 常驻 `.bss`，主固件普通构建及 host ASan/UBSan **20/20／19/19** 通过，包含 Wi-Fi、MQTT、FRP 有效但被改写的持久读回拒绝。同源 ESP32 仓外 IRAM／官方 FRPS 签名 QEMU 两次运行的普通堆历史最低为 **40,508／38,968 B**，低于 **49,152 B** 门；与旧单次 **32,100 B** 对照有运行时波动，不把静态释放机械等同堆增益。输入、镜像摘要与未测边界见[配置单缓冲检查点](p6-03-config-single-buffer-checkpoint.md)，P6-03 仍未验收。
 
