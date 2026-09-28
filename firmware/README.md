@@ -65,7 +65,7 @@ ESP32 控制任务栈与命令／配置临时工作区已按[协议工作区容�
 
 ESP32 静态 Wi-Fi RX 缓冲后续与 BA 窗口一同收敛为 6；[六缓冲 OTA 同片续验](../docs/operations/p6-03-esp32-rx6-ota-capacity-checkpoint.md)的签名 QEMU 完成相同完整下载、双 FRP 与三 MQTT 工作流，普通堆历史最低 **30,052 B**，仍比容量门低 **19,100 B**。正式 ESP32 产品分区签名构建和 app 槽尺寸门通过，实体 Wi-Fi 与完整产品 OTA 调用链尚未验收。
 
-仓外[静态 IRAM BSS 容量实验](../docs/operations/p6-03-esp32-iram-bss-ota-experiment.md)将 Base 协议与 MQTT 的五个静态对象共 **17,408 B** 放入可字节访问 IRAM，双 FRP／三 MQTT／公开 `eota_prepare` HTTPS 下载同片成功轮次的普通堆最低 **50,708 B**，高于容量门 **1,556 B**；但 IRAM 最大连续块降到 **12,800 B**，预备流／重连和正式产品调用链未验证，首轮还遭遇 QEMU OpenETH 在 Flash 擦除期间的 cache 错误。因此该属性变更未进入产品源码，不能据此验收 P6-03。
+早期仓外[静态 IRAM BSS 容量实验](../docs/operations/p6-03-esp32-iram-bss-ota-experiment.md)将 Base 协议与 MQTT 的五个静态对象共 **17,408 B** 放入可字节访问 IRAM，双 FRP／三 MQTT／公开 `eota_prepare` HTTPS 下载同片成功轮次的普通堆最低 **50,708 B**，高于容量门 **1,556 B**；实验首轮遭遇 QEMU OpenETH 在 Flash 擦除期间的 cache 错误。后续[产品静态 IRAM 检查点](../docs/operations/p6-03-esp32-static-iram-product-checkpoint.md)将这五个对象放置落入 Base 源码，双目标 host 和正式签名构建通过；额外第三预备 FRP 请求在双流活跃时被正式容量规则拒绝，前两流完整回显、HTTPS OTA 准备及三 MQTT 交付，普通堆最低 **52,664 B**，高于门 **3,512 B**。第三请求时 IRAM 最大连续块仅 **2,176 B**，正式产品 OTA 调用链、重连和实体 Wi-Fi 仍待验收，P6-03/P7-01/P7-02 均开放。
 
 本轮 FRP 会话阶段复用仅改变公开组件的私有 `src/session.c`；两目标主固件锁由官方 Component Manager 重新生成，固定 SDK 普通构建、host ASan/UBSan 与仓外 scratch 候选布局的测试键签名容量通过。正式 ESP32 CSV 没有 `frp_scratch`，本轮签名 ESP32 镜像使用仓外候选 CSV；[精确锁检查点](../docs/operations/frp-session-phase-union-base-dependency-checkpoint.md)记录静态输入。从该提交另行重建双目标签名 app、ECS2 和 Flash 的[无网络 QEMU 检查点](../docs/operations/p6-03-frp-phase-union-current-lock-qemu-checkpoint.md)均到产品 `RUNNING` 与 Base `READY`，不代表 FRPS、Broker、HTTPS 同存或实体板验收。
 

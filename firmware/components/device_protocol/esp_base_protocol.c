@@ -12,6 +12,7 @@
 #include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
 #include "esp_base_container_product.h"
+#include "esp_attr.h"
 #include "esp_partition.h"
 #include "psa/crypto.h"
 #include <stdatomic.h>
@@ -46,9 +47,9 @@ typedef struct {
     esp_base_storage_owner_t *storage_owner;
     const efrp_aead_flash_store_t *frp_flash_store;
 } protocol_state_t;
-static protocol_state_t s_context;
+static protocol_state_t s_context IRAM_BSS_ATTR;
 static char s_boot_id[EBASE_ID_BYTES];
-static ebase_request_guard_t s_guard;
+static ebase_request_guard_t s_guard IRAM_BSS_ATTR;
 /* A USB/UART command is the only consumer of the full line buffer. Keep it
  * alive only while a physical line is arriving; network owners do not need
  * 9 KiB reserved while no serial input exists. */
@@ -94,13 +95,13 @@ static struct {
     /* Capability names come from static owner state strings, not transient
      * network buffers; retain the first read-only result for same-ID retry. */
     status_snapshot_t status;
-} s_frp_status_seen[FRP_STATUS_REPLAY_SLOTS];
+} s_frp_status_seen[FRP_STATUS_REPLAY_SLOTS] IRAM_BSS_ATTR;
 typedef struct {
     const char *state, *error;
     bool has_status, via_mqtt;
     status_snapshot_t status;
 } command_outcome_t;
-static command_outcome_t s_outcomes[EBASE_REQUEST_SLOTS];
+static command_outcome_t s_outcomes[EBASE_REQUEST_SLOTS] IRAM_BSS_ATTR;
 
 static bool fingerprint_config_bytes(const uint8_t *bytes, size_t length, void *context)
 {

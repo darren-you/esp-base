@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_mqtt_owner.h"
+#include "esp_attr.h"
 #include "esp_base_mqtt_command.h"
 #include "emqtt.h"
 #include <stdio.h>
@@ -7,7 +8,7 @@
 
 static emqtt_runtime_t *s_runtime;
 /* Incoming MESSAGE remains live while its handler parses a command. */
-static emqtt_event_t s_event;
+static emqtt_event_t s_event IRAM_BSS_ATTR;
 static char s_topics[4][EBASE_MQTT_TOPIC_BYTES];
 static char s_device_id[37];
 static char s_online[192];
