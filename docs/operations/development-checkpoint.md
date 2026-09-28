@@ -1,5 +1,9 @@
 # 开发检查点
 
+## 2026-09-29 Base 启动与配置 NVS 仲裁
+
+正式 Base 启动的默认 NVS 初始化、设备身份读取和 v3 配置读取现各自持有与 FRP scratch／OTA／Container 相同的短时 Flash I/O owner；配置连接证明后的提交和读回也持有该 owner。控制任务发现 owner 忙时保留候选及原截止时间，在下一轮重试，不分配配置工作区或写 NVS；提交后的 owner 释放失败报告 `storage_uncertain`。C3／ESP32 主机 ASan/UBSan 回归覆盖 NVS／身份访问持有、配置忙时不读取、候选延期提交和正常释放。固定 SDK 双目标签名应用构建与官方验签通过：测试键 RSA v2 C3 镜像 `0x111000`，对 `0x118000` 槽余 `0x7000`；ECDSA v1 ESP32 镜像 `0xffff4`，对 `0x120000` 槽余 `0x2000c`。本检查点不代表真实 Flash 时延、磨损或五能力实板并发通过。
+
 ## 2026-09-29 Container Flash 租约释放失败闭合
 
 Base 将短时 Flash I/O owner 的释放结果交给公开 `esp-container@e8a0d0b6384bbba813b955ed08ebc315c134a707`，C3／ESP32 主应用和 NVS 容量探针各自的 Component Manager 锁均更新到这一精确版本。Container 的 NVS 与包 Flash 读写在释放失败时报告 I/O 失败；映射解除失败时关闭刚装载的 WAMR runtime，不进入 guest。Container 真实 WAMR 主机 CTest 9/9、Base 双目标 ASan/UBSan 主机测试与真实签名 guest 生命周期（各 100 次停止／卸载／重装）通过；固定 SDK 下两目标签名主应用和 NVS 探针均完整构建。测试键 RSA v2 C3 镜像 `0x111000`，低于 `0x118000` 槽 `0x7000`；ECDSA v1 ESP32 镜像 `0xffff4`，低于 `0x120000` 槽 `0x2000c`，官方验签均通过。本轮没有写设备；最长映射占用、真实 Flash 故障和五能力同机并发未验收。

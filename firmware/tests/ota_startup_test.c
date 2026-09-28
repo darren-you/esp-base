@@ -328,12 +328,18 @@ esp_err_t eota_reject_pending(eota_current_t *current)
 
 esp_err_t nvs_flash_init(void)
 {
+    esp_base_storage_claim_t competing = {0};
+    assert(bound_flash_io.context != NULL &&
+           !esp_base_storage_claim(bound_flash_io.context, &competing));
     ++nvs_calls;
     return nvs_result;
 }
 
 esp_err_t esp_base_identity_read(esp_base_identity_t *identity)
 {
+    esp_base_storage_claim_t competing = {0};
+    assert(bound_flash_io.context != NULL &&
+           !esp_base_storage_claim(bound_flash_io.context, &competing));
     if (identity_result == ESP_OK) {
         (void)snprintf(identity->device_id, sizeof identity->device_id,
                        "00000000-0000-4000-8000-000000000001");
@@ -357,8 +363,10 @@ esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
     return config_result;
 }
 
-esp_err_t esp_base_protocol_load_config(uint32_t *revision)
+esp_err_t esp_base_protocol_load_config(uint32_t *revision,
+                                        esp_base_storage_owner_t *flash_io_owner)
 {
+    assert(flash_io_owner == bound_flash_io.context);
     ++config_load_calls;
     esp_base_remote_config_t config;
     const esp_err_t result = esp_base_remote_config_load(&config);

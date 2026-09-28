@@ -54,7 +54,8 @@ static unsigned snapshot_calls, load_receipt_calls, retire_calls,
 static char latest_reply[1200];
 static char latest_reported[768];
 static unsigned reported_calls;
-static unsigned wifi_apply_calls, config_commit_calls;
+static unsigned wifi_apply_calls, config_commit_calls, config_load_calls;
+static bool allow_config_load;
 static const char *fake_frp_state = "stopped";
 static uint32_t fake_free_heap = 1000;
 static esp_base_container_event_observation_result_t fake_event_observation_state;
@@ -151,7 +152,8 @@ static void reset_case(void)
 #if defined(CONFIG_IDF_TARGET_ESP32)
     iram_work_allocations = 0;
 #endif
-    wifi_apply_calls = config_commit_calls = 0;
+    wifi_apply_calls = config_commit_calls = config_load_calls = 0;
+    allow_config_load = false;
 }
 
 static void start(unsigned request_number)
@@ -582,6 +584,18 @@ static void check_frp_status(const char *request, int expected_http,
 int main(void)
 {
     reset_case();
+    allow_config_load = true;
+    uint32_t config_revision = 0U;
+    assert(esp_base_protocol_load_config(&config_revision, &owner) == ESP_OK &&
+           config_revision == 7U && config_load_calls == 1U && s_config_loaded);
+    assert(atomic_load(&owner.active_token) == 0U);
+    esp_base_storage_claim_t held_flash = {0};
+    assert(esp_base_storage_claim(&owner, &held_flash));
+    assert(esp_base_protocol_load_config(&config_revision, &owner) == ESP_ERR_TIMEOUT &&
+           config_load_calls == 1U && !s_config_loaded);
+    assert(esp_base_storage_claim_active(&held_flash));
+    assert(esp_base_storage_release(&held_flash));
+    reset_case();
     s_reply_mqtt = true;
     handle_line("product-status-1", strlen("product-status-1"), NULL);
     s_reply_mqtt = false;
@@ -727,7 +741,13 @@ int main(void)
     config_set(23U, false, usb_reply, sizeof usb_reply);
     assert(strstr(usb_reply, "\"state\":\"running\"") && s_trial_active &&
            s_candidate != NULL && s_candidate->revision == 7U && wifi_apply_calls == 1U);
+    esp_base_storage_claim_t held_config_flash = {0};
+    assert(esp_base_storage_claim(&owner, &held_config_flash));
     poll_configuration(1001U);
+    assert(s_trial_active && s_candidate != NULL && config_commit_calls == 0U &&
+           esp_base_storage_claim_active(&held_config_flash));
+    assert(esp_base_storage_release(&held_config_flash));
+    poll_configuration(1002U);
     assert(!s_trial_active && s_candidate == NULL && config_commit_calls == 1U &&
            s_context.config.revision == 8U && wifi_apply_calls == 1U);
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -1471,6 +1491,9 @@ esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t 
                                                  esp_base_remote_config_t *work)
 {
     assert(candidate != NULL && expected_revision == 7U && committed != NULL && work != NULL);
+    esp_base_storage_claim_t competing = {0};
+    assert(s_context.flash_io_owner != NULL &&
+           !esp_base_storage_claim(s_context.flash_io_owner, &competing));
     ++config_commit_calls;
     *committed = *candidate;
     committed->revision = expected_revision + 1U;
@@ -1478,9 +1501,12 @@ esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t 
 }
 esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
 {
-    (void)config;
-    assert(false && "successful config commit must not reload storage");
-    return ESP_FAIL;
+    assert(allow_config_load && config != NULL);
+    esp_base_storage_claim_t competing = {0};
+    assert(!esp_base_storage_claim(&owner, &competing));
+    ++config_load_calls;
+    *config = (esp_base_remote_config_t){.revision = 7U};
+    return ESP_OK;
 }
 psa_status_t psa_hash_setup(psa_hash_operation_t *operation, int algorithm)
 {

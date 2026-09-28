@@ -20,7 +20,8 @@ typedef struct {
 } esp_base_protocol_context_t;
 
 /* Load directly into the protocol's long-lived config before the control task starts. */
-esp_err_t esp_base_protocol_load_config(uint32_t *revision);
+esp_err_t esp_base_protocol_load_config(uint32_t *revision,
+                                        esp_base_storage_owner_t *flash_io_owner);
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context);
 /* Before ordinary Container boot, resolve only the exact old-boot pending
  * install/upgrade from the durable ledger and ECS2; leave missing or

@@ -20,6 +20,8 @@ USB `config.set` 使用 schema_version 3 的完整配置。Wi-Fi 为 null，或�
 
 写入前重新读取 revision，拒绝冲突和溢出；完整 blob 写入、`nvs_commit` 与读回一致后才成功。失败不回显密码、PEM 或管理密钥；status 仍仅返回现有 revision、能力与资源事实。旧迁移代码读取的 `nvs/base_config/generation` 在已核对实板上不存在，不保留兼容读取或双写。
 
+正式 Base 的启动读取和连接证明后的提交由 `device_protocol` 使用与 OTA、FRP scratch、Container 相同的短时 Flash I/O owner。启动读取无法取得 owner 时停止初始化；控制任务在 owner 忙时保留已验证候选，在原试运行期限内下一轮再尝试，不占用工作区也不执行 NVS。提交和读回期间持有 owner；释放失败按 `storage_uncertain` 处理。此软件合同尚未测量最大配置 NVS 提交的单步占用和实板并发时延。
+
 配置候选只在 RAM；没有连接证明不调用写接口。写入开始后的错误为 `storage_uncertain`，不能假设原值未变，也不自动重试；控制任务重新读取真实持久状态并停止后续写命令，待重启重新核验。读取失败或格式损坏停止初始化，不自动擦除。身份 namespace 和分区布局保持不变。
 
 NVS blob 的底层原子更新与掉电恢复使用[官方 NVS 实现](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/api-reference/storage/nvs_flash.html)。host 故障注入验证调用层的错误语义，不能替代真实断电测试。

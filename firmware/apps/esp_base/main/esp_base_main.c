@@ -100,8 +100,18 @@ static efrp_result_t frp_scratch_with_owner(
 
 static esp_err_t initialise_nvs(void)
 {
-    esp_err_t result = nvs_flash_init();
-    return result;
+    esp_base_storage_claim_t claim = {0};
+    if (!claim_flash_io(&s_flash_io_owner, &claim)) return ESP_ERR_TIMEOUT;
+    const esp_err_t result = nvs_flash_init();
+    return esp_base_storage_release(&claim) ? result : ESP_FAIL;
+}
+
+static esp_err_t read_identity_with_flash_io(esp_base_identity_t *identity)
+{
+    esp_base_storage_claim_t claim = {0};
+    if (!claim_flash_io(&s_flash_io_owner, &claim)) return ESP_ERR_TIMEOUT;
+    const esp_err_t result = esp_base_identity_read(identity);
+    return esp_base_storage_release(&claim) ? result : ESP_FAIL;
 }
 
 static uint64_t uptime_ms(void)
@@ -277,7 +287,7 @@ void app_main(void)
     }
 
     static esp_base_identity_t identity = {0};
-    const esp_err_t identity_status = esp_base_identity_read(&identity);
+    const esp_err_t identity_status = read_identity_with_flash_io(&identity);
     if (identity_status != ESP_OK) {
         ESP_LOGE(TAG, "Identity unavailable (%s); initialization stopped", esp_err_to_name(identity_status));
         stop_after_local_failure(&ota, pending_boot, "identity", identity_status);
@@ -292,7 +302,8 @@ void app_main(void)
     }
 
     uint32_t config_revision = 0;
-    const esp_err_t config_status = esp_base_protocol_load_config(&config_revision);
+    const esp_err_t config_status = esp_base_protocol_load_config(
+        &config_revision, &s_flash_io_owner);
     if (config_status != ESP_OK) {
         ESP_LOGE(TAG, "Configuration unavailable (%s); storage preserved, initialization stopped", esp_err_to_name(config_status));
         stop_after_local_failure(&ota, pending_boot, "config", config_status);

@@ -644,24 +644,52 @@ static void clear_candidate(void)
     s_candidate = NULL;
 }
 
+static bool claim_config_flash_io(esp_base_storage_owner_t *owner,
+                                  esp_base_storage_claim_t *claim)
+{
+    return owner != NULL && claim != NULL && esp_base_storage_claim(owner, claim);
+}
+
+static esp_err_t load_config_with_flash_io(
+    esp_base_remote_config_t *config, esp_base_storage_owner_t *owner)
+{
+    esp_base_storage_claim_t claim = {0};
+    if (!claim_config_flash_io(owner, &claim)) return ESP_ERR_TIMEOUT;
+    const esp_err_t result = esp_base_remote_config_load(config);
+    return esp_base_storage_release(&claim) ? result : ESP_FAIL;
+}
+
 static void poll_configuration(uint64_t now)
 {
     if (!s_trial_active) return;
     const bool ready = s_candidate->wifi.configured ? esp_base_wifi_ready() :
         !strcmp(esp_base_wifi_state(), "unconfigured");
     if (ready && now < s_trial_deadline) {
+        /* Another short Flash operation may finish on a later control pass.
+         * Keep both the candidate and its original proof deadline intact. */
+        esp_base_storage_claim_t claim = {0};
+        if (!claim_config_flash_io(s_context.flash_io_owner, &claim)) return;
         /* The control task is the sole reader/writer of s_context.config after
          * startup. Network owners copy their config before starting workers. */
         esp_base_remote_config_t *work = protocol_work_alloc(sizeof *work);
         if (work == NULL) {
+            const bool released = esp_base_storage_release(&claim);
             s_trial_active = false;
             clear_candidate();
-            restore_committed(now);
-            save_outcome(s_trial_slot, "failed", "resource_failure", false);
+            if (released) {
+                restore_committed(now);
+                save_outcome(s_trial_slot, "failed", "resource_failure", false);
+            } else {
+                s_config_uncertain = true;
+                ebase_wifi_config_t disabled = {0};
+                (void)esp_base_wifi_apply(&disabled, now);
+                save_outcome(s_trial_slot, "unknown", "storage_uncertain", false);
+            }
             return;
         }
-        esp_err_t error = esp_base_remote_config_commit_verified(s_candidate, s_candidate->revision,
-                                                                  &s_context.config, work);
+        esp_err_t error = esp_base_remote_config_commit_verified(
+            s_candidate, s_candidate->revision, &s_context.config, work);
+        if (!esp_base_storage_release(&claim)) error = ESP_BASE_CONFIG_UNCERTAIN;
         memset(work, 0, sizeof *work);
         free(work);
         s_trial_active = false;
@@ -672,7 +700,8 @@ static void poll_configuration(uint64_t now)
             s_config_uncertain = true;
             /* A write error may follow a durable commit. Reload before selecting
              * connectivity, never claim the old configuration was restored. */
-            if (esp_base_remote_config_load(&s_context.config) == ESP_OK) {
+            if (load_config_with_flash_io(
+                    &s_context.config, s_context.flash_io_owner) == ESP_OK) {
                 restore_committed(now);
             } else {
                 ebase_wifi_config_t disabled = {0};
@@ -1765,14 +1794,17 @@ static void control_task(void *argument)
     }
 }
 
-esp_err_t esp_base_protocol_load_config(uint32_t *revision)
+esp_err_t esp_base_protocol_load_config(uint32_t *revision,
+                                        esp_base_storage_owner_t *flash_io_owner)
 {
-    if (!revision) return ESP_ERR_INVALID_ARG;
+    if (!revision || flash_io_owner == NULL) return ESP_ERR_INVALID_ARG;
     if (s_started) return ESP_ERR_INVALID_STATE;
     s_config_loaded = false;
-    const esp_err_t error = esp_base_remote_config_load(&s_context.config);
+    const esp_err_t error = load_config_with_flash_io(
+        &s_context.config, flash_io_owner);
     if (error != ESP_OK) return error;
     *revision = s_context.config.revision;
+    s_context.flash_io_owner = flash_io_owner;
     s_config_loaded = true;
     return ESP_OK;
 }
@@ -1783,7 +1815,8 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
         context->flash_io_owner == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_started || !s_config_loaded) return ESP_ERR_INVALID_STATE;
+    if (s_started || !s_config_loaded ||
+        context->flash_io_owner != s_context.flash_io_owner) return ESP_ERR_INVALID_STATE;
     esp_err_t error = esp_base_identity_generate_uuid(s_boot_id, sizeof s_boot_id);
     if (error != ESP_OK) return error;
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
