@@ -16,4 +16,14 @@
 
 Container 通用打包器允许 512 KiB Wasm，现有最大规范签名样包实际为 `0x82000` B，因此这组 `0x77000` 物理槽会拒绝那类包。当前 Base C3 固件配置的 `max_wasm_bytes` 是 131,072 B；Container 设备验包器按此值加 4,096 B manifest 与 8,192 B 额外开销限制包长，当前上界为 `0x23000` B，落在候选槽内。包槽缩小是否成为正式产品上限仍由维护者裁决，不能因当前固件上限较低就宣称通用签名格式的最大包仍受支持。
 
-本探针只证明分区解析、当前签名源码的静态尺寸及签名校验。公开安装／升级调用路径还未完成，新增代码可能再次吃掉 60 KiB；没有用这组精确镜像验证 QEMU guest、真实 HTTPS/MQTT/FRPS 并存、11 页 NVS 的持久负载、分区迁移、物理 Flash 时延或实体板。P6-03、P6-04 和 P7 继续开放，且未获得任何刷板授权。
+## 同几何无包启动与主任务栈
+
+另从上述正式 TLS 候选复制仓外源码，仅将 QEMU 看不到的 C3 USB Serial/JTAG 控制台改接 UART0，并在 `app_main` 末尾增加主任务栈最低余量日志；候选分区、Container policy 和 TLS 曲线不变。完整输入、`run_boot.py`、签名镜像、Flash、GDB／UART 原始日志位于 `mac-work-1:/private/tmp/esp-base-57b19fc-c3-slot77000-qemu-20260928/`。QEMU 9.2.2 的 ADC2 校准缺口仍用 GDB 在函数入口设置 PC 为返回地址；没有改写签名 app 字节。
+
+首次保留 C3 默认主任务栈 **3,584 B** 的完整签名镜像，设备已校验 app、识别 `ota_1` 空槽，并持久建立 `firmware_count=1` 的无包 Container；之后在 `app_main` 再次校验签名镜像时报告 `***ERROR*** A stack overflow in task main`，未到 READY。原始失败保留在 `first-overflow-uart.log`。这是一条真实软件运行阻断，不能把此前静态尺寸通过视为启动通过。
+
+仓外把主任务栈升到 **6,144 B** 后，同布局 UART 诊断签名 app 仍为 `0x121000` B，SHA-256 `2b1076f592f4f2edbf8e0771a3e040b2424272e6efe91cf4dcddee04c5220c04`。QEMU 到达 `ESP_BASE_READY ... container=empty`，公开串口 `status` 返回成功，`product.status` 返回操作高水位 0、下一序号 1、Container sequence 1、空包摘要；`app_main` 栈最低剩余 **2,440 B**。首启后相对种子只修改系统 NVS 101 B、otadata 12 B、Base NVS 1,385 B；双 app、三包槽和 FRP scratch 均逐字节不变。`boot-receipt.json` 和 `uart.log` 保存应答与原始输出；此处未验证第二次冷启动。
+
+根据该失败，正式 C3 `sdkconfig.defaults.esp32c3` 将主任务栈设为 6,144 B，CMake 对低于此值的产品配置拒绝构建。在正式 USB Serial/JTAG 候选副本重生成配置并完整构建后，6,144 B 配置的 RSA v2 签名 app 仍为 `0x121000` B、SHA-256 `264d6a93bc37d136997e003b8c12ea9ec728aa13a773151c124ba476a251a94a`；官方签名验证成功，双 `0x130000` app 槽各余 `0xf000` B。`build-main-stack.log` 保留正式控制台容量门；仓外 QEMU 的 UART 诊断镜像与该正式镜像分别记账。
+
+当前证据只证明静态容量与同几何无包启动。公开安装／升级调用路径还未完成，新增代码可能再次吃掉 60 KiB；没有验证该候选的签名 guest、真实 HTTPS/MQTT/FRPS 并存、11 页 NVS 的持续负载、分区迁移、物理 Flash 时延或实体板。P6-03、P6-04 和 P7 继续开放，且未获得任何刷板授权。
