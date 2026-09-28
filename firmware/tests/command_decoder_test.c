@@ -156,6 +156,68 @@ static void product_uninstall_tests(void)
     assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
     reject(json);
 }
+static void product_package_tests(void)
+{
+    const char *format =
+        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\","
+        "\"command\":\"product.%s\",\"device_id\":\"" DEVICE "\","
+        "\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,"
+        "\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
+        "\"operation_sequence\":%s,\"expected_container_sequence\":%s,"
+        "\"previous_package_sha256\":%s,\"package_url\":\"%s\","
+        "\"package_sha256\":\"%s\",\"package_size_bytes\":%s,"
+        "\"guest_abi_version\":%s,\"data_schema_version\":%s}}";
+    const char *digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    char json[2300];
+    ebase_command_t out;
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
+    assert(!ebase_parse_command(json, strlen(json), &out) &&
+        out.kind == EBASE_PRODUCT_INSTALL_COMMAND &&
+        !out.product_package.previous_package_present &&
+        out.product_package.operation_sequence == 1U &&
+        out.product_package.expected_container_sequence == 6U &&
+        out.product_package.package_size_bytes == 10240U &&
+        out.product_package.guest_abi_version == 2U &&
+        out.product_package.data_schema_version == 1U &&
+        out.product_package.package_sha256[0] == 0xaaU);
+    assert(snprintf(json, sizeof json, format, "upgrade", "2", "11", "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
+        "https://packages.example.test/app-v2.pkg", digest, "10240", "2", "1") > 0);
+    assert(!ebase_parse_command(json, strlen(json), &out) &&
+        out.kind == EBASE_PRODUCT_UPGRADE_COMMAND &&
+        out.product_package.previous_package_present &&
+        out.product_package.previous_package_sha256[0] == 0xbbU);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
+        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "upgrade", "2", "11", "null",
+        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "0", "6", "null",
+        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "4294967291", "null",
+        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "http://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "https://packages.example.test/app.pkg", digest, "0", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "https://packages.example.test/app.pkg", digest, "10240", "0", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "https://packages.example.test/app.pkg", digest, "10240", "2", "0") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "https://packages.example.test/app.pkg", digest, "2147483648", "2", "1") > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
+        "https://packages.example.test/app.pkg", "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "10240", "2", "1") > 0);
+    reject(json);
+}
 static void frp_status_tests(void)
 {
     static const char valid[] =
@@ -187,6 +249,7 @@ int main(void)
     product_result_tests();
     product_status_tests();
     product_uninstall_tests();
+    product_package_tests();
     frp_status_tests();
     ebase_command_t out;
     assert(!ebase_parse_command(status, strlen(status), &out) && out.kind == EBASE_STATUS);

@@ -143,6 +143,16 @@ static void product_uninstall(unsigned request_number)
     s_reply_mqtt = false;
 }
 
+static void product_package(unsigned request_number)
+{
+    char line[40];
+    const int length = snprintf(line, sizeof line, "package-%u", request_number);
+    assert(length > 0 && (size_t)length < sizeof line);
+    s_reply_mqtt = true;
+    handle_line(line, (size_t)length, NULL);
+    s_reply_mqtt = false;
+}
+
 static void config_set(unsigned request_number, bool via_mqtt, char *usb_reply,
                        size_t usb_reply_capacity)
 {
@@ -256,6 +266,38 @@ static void check_product_uninstall_path(void)
            ledger.records[0].state == EBASE_PRODUCT_FAILED &&
            ledger.records[0].result_code == 1U &&
            ledger.records[0].container_sequence == 6U);
+}
+
+static void check_product_package_guard(void)
+{
+    reset_case();
+    product_package(40U);
+    expect_reply("failed", "product_install_unavailable");
+    assert(restart_calls == 0U && task_calls == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+    product_package(41U); /* Same request ID, different signed package URL. */
+    expect_reply("failed", "request_conflict");
+    assert(restart_calls == 0U && task_calls == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+    product_package(50U);
+    expect_reply("failed", "product_install_unavailable");
+    assert(restart_calls == 0U && task_calls == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+    product_package(42U); /* URL preflight runs before request admission. */
+    expect_reply("failed", "invalid_request");
+    assert(restart_calls == 0U && task_calls == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+    assert(!product_present && !binding_snapshot_calls && !product_uninstall_calls);
+    const uint8_t empty[EBASE_PRODUCT_LEDGER_BYTES] = {0};
+    assert(memcmp(product_bytes, empty, sizeof empty) == 0);
+}
+
+bool esp_base_product_package_source_request_valid(
+    const char *url, uint32_t expected_size_bytes)
+{
+    return url != NULL && expected_size_bytes != 0U &&
+        (strcmp(url, "https://packages.example.test/a.pkg") == 0 ||
+         strcmp(url, "https://packages.example.test/b.pkg") == 0);
 }
 
 static void check_product_package_preboot_recovery(void)
@@ -662,6 +704,7 @@ int main(void)
     expect_reply("unknown", "storage_uncertain");
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
     check_product_uninstall_path();
+    check_product_package_guard();
     check_product_package_preboot_recovery();
     puts("  protocol_ota_owner passed (OTA owner faults; product ledger/uninstall/recovery; USB FRP storage gate; MQTT write rejection)");
 }
@@ -679,17 +722,22 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     const bool product_status_query = length > 15U && sscanf(line, "product-status-%u", &number) == 1;
     const bool product_uninstall_command =
         length > 10U && sscanf(line, "uninstall-%u", &number) == 1;
+    const bool product_package_command =
+        length > 8U && sscanf(line, "package-%u", &number) == 1;
     assert(configure || query || product_query || product_status_query ||
-           product_uninstall_command ||
+           product_uninstall_command || product_package_command ||
            (length > 6U && sscanf(line, "start-%u", &number) == 1));
     memset(out, 0, sizeof *out);
     out->kind = configure ? EBASE_CONFIG_SET :
                 query ? EBASE_OTA_RESULT :
                 product_query ? EBASE_PRODUCT_RESULT :
                 product_status_query ? EBASE_PRODUCT_STATUS :
+                product_package_command ? (number < 50U ?
+                    EBASE_PRODUCT_INSTALL_COMMAND : EBASE_PRODUCT_UPGRADE_COMMAND) :
                 product_uninstall_command ? EBASE_PRODUCT_UNINSTALL_COMMAND : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
-             "11111111-1111-4111-8111-%012u", number);
+             "11111111-1111-4111-8111-%012u",
+             product_package_command && number == 41U ? 40U : number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
     strcpy(out->request.boot_id, "33333333-3333-4333-8333-333333333333");
     out->request.expires_at_ms = 10000;
@@ -710,6 +758,24 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
         out->product_uninstall.operation_sequence = number == 34U ? 2U : 1U;
         out->product_uninstall.expected_container_sequence = 6U;
         memset(out->product_uninstall.package_sha256, 0x7b, 32);
+        return NULL;
+    }
+    if (product_package_command) {
+        ebase_product_package_request_t *package = &out->product_package;
+        strcpy(package->operation_id, "44444444-4444-4444-8444-000000000040");
+        package->operation_sequence = 1U;
+        package->expected_container_sequence = 6U;
+        package->package_size_bytes = 10240U;
+        package->guest_abi_version = 2U;
+        package->data_schema_version = 1U;
+        package->previous_package_present = number >= 50U;
+        if (package->previous_package_present)
+            memset(package->previous_package_sha256, 0x7a, 32);
+        memset(package->package_sha256, 0x7b, 32);
+        strcpy(package->package_url, number == 42U ?
+            "https://user@packages.example.test/a.pkg" :
+            number == 41U ? "https://packages.example.test/b.pkg" :
+            "https://packages.example.test/a.pkg");
         return NULL;
     }
     snprintf(out->ota.operation_id, sizeof out->ota.operation_id,

@@ -3,15 +3,28 @@
 #include "esp_base_command_guard.h"
 #include "esp_base_config.h"
 #include "esp_base_ota_policy.h"
+#include "esp_base_product_package_source.h"
 
 #define EBASE_LINE_LIMIT 9216
-typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT, EBASE_PRODUCT_STATUS, EBASE_PRODUCT_RESULT, EBASE_PRODUCT_UNINSTALL_COMMAND } ebase_command_kind_t;
+typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT, EBASE_PRODUCT_STATUS, EBASE_PRODUCT_RESULT, EBASE_PRODUCT_UNINSTALL_COMMAND, EBASE_PRODUCT_INSTALL_COMMAND, EBASE_PRODUCT_UPGRADE_COMMAND } ebase_command_kind_t;
 typedef struct {
     char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
     uint32_t operation_sequence;
     uint32_t expected_container_sequence;
     uint8_t package_sha256[32];
 } ebase_product_uninstall_request_t;
+typedef struct {
+    char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+    uint32_t operation_sequence;
+    uint32_t expected_container_sequence;
+    bool previous_package_present;
+    uint8_t previous_package_sha256[32];
+    uint8_t package_sha256[32];
+    uint32_t package_size_bytes;
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
+    char package_url[ESP_BASE_PRODUCT_PACKAGE_URL_BYTES + 1U];
+} ebase_product_package_request_t;
 typedef struct {
     ebase_command_kind_t kind;
     ebase_request_t request;
@@ -23,6 +36,7 @@ typedef struct {
         esp_base_ota_request_t ota;
         char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
         ebase_product_uninstall_request_t product_uninstall;
+        ebase_product_package_request_t product_package;
     };
 } ebase_command_t;
 

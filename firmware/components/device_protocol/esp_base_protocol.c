@@ -142,6 +142,42 @@ static bool fingerprint_product_uninstall(
                             &written) == PSA_SUCCESS && written == 32U;
 }
 
+static bool fingerprint_product_package(const ebase_command_t *command,
+                                        uint8_t fingerprint[32])
+{
+    const ebase_product_package_request_t *request = &command->product_package;
+    const char *domain = command->kind == EBASE_PRODUCT_INSTALL_COMMAND ?
+                         "product.install" : "product.upgrade";
+    psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
+    size_t written = 0U;
+    uint8_t number[4];
+    const uint32_t values[] = {request->operation_sequence,
+        request->expected_container_sequence, request->package_size_bytes,
+        request->guest_abi_version, request->data_schema_version};
+    const uint8_t previous = request->previous_package_present ? 1U : 0U;
+    bool valid = psa_hash_setup(&hash, PSA_ALG_SHA_256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)domain, strlen(domain) + 1U) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->operation_id,
+                        sizeof request->operation_id) == PSA_SUCCESS;
+    for (size_t index = 0; valid && index < sizeof values / sizeof values[0]; ++index) {
+        for (int shift = 24, byte = 0; shift >= 0; shift -= 8, ++byte)
+            number[byte] = (uint8_t)(values[index] >> shift);
+        valid = psa_hash_update(&hash, number, sizeof number) == PSA_SUCCESS;
+    }
+    valid = valid &&
+        psa_hash_update(&hash, &previous, sizeof previous) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->previous_package_sha256,
+                        sizeof request->previous_package_sha256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->package_sha256,
+                        sizeof request->package_sha256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->package_url,
+                        strlen(request->package_url) + 1U) == PSA_SUCCESS &&
+        psa_hash_finish(&hash, fingerprint, 32U, &written) == PSA_SUCCESS &&
+        written == 32U;
+    if (!valid) (void)psa_hash_abort(&hash);
+    return valid;
+}
+
 static uint64_t uptime_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
 
 static void package_digest_hex(char output[67], const uint8_t digest[32])
@@ -1004,6 +1040,20 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         reply(command->request.request_id, "failed", "resource_failure", NULL);
         return;
     }
+    if ((command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
+         command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) &&
+        !esp_base_product_package_source_request_valid(
+            command->product_package.package_url,
+            command->product_package.package_size_bytes)) {
+        reply(command->request.request_id, "failed", "invalid_request", NULL);
+        return;
+    }
+    if ((command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
+         command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) &&
+        !fingerprint_product_package(command, command->request.fingerprint)) {
+        reply(command->request.request_id, "failed", "resource_failure", NULL);
+        return;
+    }
     if (command->kind == EBASE_OTA_START) {
         uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + EOTA_URL_BYTES + 1 + 32 + 4];
         size_t offset = 0;
@@ -1030,6 +1080,11 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
+    if (command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
+        command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) {
+        save_outcome(slot, "failed", "product_install_unavailable", false);
+        return;
+    }
     if (command->kind == EBASE_PRODUCT_UNINSTALL_COMMAND) {
         handle_product_uninstall(slot, command);
         return;

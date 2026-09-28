@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_command.h"
 #include "cJSON.h"
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -8,7 +9,8 @@
  * which the caller may still use in its failure response. */
 _Static_assert(sizeof(esp_base_remote_config_t) >= sizeof(esp_base_ota_request_t) &&
                sizeof(esp_base_remote_config_t) >= ESP_BASE_OTA_OPERATION_ID_BYTES &&
-               sizeof(esp_base_remote_config_t) >= sizeof(ebase_product_uninstall_request_t),
+               sizeof(esp_base_remote_config_t) >= sizeof(ebase_product_uninstall_request_t) &&
+               sizeof(esp_base_remote_config_t) >= sizeof(ebase_product_package_request_t),
                "config wipe must cover every command payload");
 
 /* cJSON supplies the JSON tree. Before allocation, bound nesting and enforce
@@ -87,6 +89,29 @@ static int hex_digit(char c)
     return -1;
 }
 
+static bool positive_u32(const cJSON *item, uint32_t maximum, uint32_t *out)
+{
+    if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) ||
+        item->valuedouble < 1 || item->valuedouble > maximum ||
+        floor(item->valuedouble) != item->valuedouble) return false;
+    *out = (uint32_t)item->valuedouble;
+    return true;
+}
+
+static bool digest32(const cJSON *item, uint8_t output[32])
+{
+    if (!cJSON_IsString(item) || strlen(item->valuestring) != 64U) return false;
+    uint8_t nonzero = 0U;
+    for (size_t index = 0; index < 32U; ++index) {
+        const int upper = hex_digit(item->valuestring[index * 2U]);
+        const int lower = hex_digit(item->valuestring[index * 2U + 1U]);
+        if (upper < 0 || lower < 0) return false;
+        output[index] = (uint8_t)((upper << 4) | lower);
+        nonzero |= output[index];
+    }
+    return nonzero != 0U;
+}
+
 const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out)
 {
     if (!out) return "invalid_request";
@@ -126,6 +151,45 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     if (!cJSON_IsNumber(deadline) || !isfinite(deadline->valuedouble) || deadline->valuedouble < 0 ||
         deadline->valuedouble > 9007199254740991.0 || floor(deadline->valuedouble) != deadline->valuedouble) goto done;
     out->request.expires_at_ms = (uint64_t)deadline->valuedouble;
+    const bool product_install = !strcmp(command->valuestring, "product.install");
+    const bool product_upgrade = !strcmp(command->valuestring, "product.upgrade");
+    if (product_install || product_upgrade) {
+        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
+        const char *const keys[] = {"operation_id", "operation_sequence",
+            "expected_container_sequence", "previous_package_sha256",
+            "package_url", "package_sha256", "package_size_bytes",
+            "guest_abi_version", "data_schema_version"};
+        ebase_product_package_request_t *request = &out->product_package;
+        if (!exact_keys(parameters, keys, 9) ||
+            !copy_id(parameters, "operation_id", request->operation_id) ||
+            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "operation_sequence"),
+                          UINT32_MAX, &request->operation_sequence) ||
+            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "expected_container_sequence"),
+                          UINT32_MAX - 5U, &request->expected_container_sequence) ||
+            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "package_size_bytes"),
+                          INT_MAX, &request->package_size_bytes) ||
+            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "guest_abi_version"),
+                          UINT32_MAX, &request->guest_abi_version) ||
+            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "data_schema_version"),
+                          UINT32_MAX, &request->data_schema_version) ||
+            !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
+                      request->package_sha256)) goto done;
+        const cJSON *previous = cJSON_GetObjectItemCaseSensitive(parameters,
+                                                                   "previous_package_sha256");
+        if (product_install ? !cJSON_IsNull(previous) :
+            !digest32(previous, request->previous_package_sha256)) goto done;
+        request->previous_package_present = product_upgrade;
+        const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "package_url");
+        if (!cJSON_IsString(url)) goto done;
+        const size_t url_size = strlen(url->valuestring);
+        if (url_size == 0U || url_size > ESP_BASE_PRODUCT_PACKAGE_URL_BYTES ||
+            strncmp(url->valuestring, "https://", 8U) != 0) goto done;
+        memcpy(request->package_url, url->valuestring, url_size + 1U);
+        out->kind = product_install ? EBASE_PRODUCT_INSTALL_COMMAND :
+                                      EBASE_PRODUCT_UPGRADE_COMMAND;
+        error = NULL;
+        goto done;
+    }
     if (!strcmp(command->valuestring, "product.uninstall")) {
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const keys[] = {"operation_id", "operation_sequence",
