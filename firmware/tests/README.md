@@ -2,7 +2,7 @@
 
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
-`command_decoder_test` 另检查只读 `product.status`／`product.result` 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown`、持久序号快照与成功记录的结果序列化。公开 Python 串口工具的伪设备测试核对原 ID 查询、窗口外 `unknown` 与序号快照；正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
+`command_decoder_test` 另检查只读 `product.status`／`product.result` 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown`、持久序号与绑定快照、成功记录的结果序列化，以及绑定观察不确定后保留存储 claim。公开 Python 串口工具的伪设备测试核对原 ID 查询、窗口外 `unknown`、序号与可选包摘要；真实签名 guest 生命周期测试覆盖空绑定、已安装和卸载后的 ECS2 快照。正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
 
 `bash firmware/tests/run_host_tests.sh`（仓库根执行）验证命令身份、启动条件、期限、指纹冲突、重复请求与容量拒绝，并启用 ASan/UBSan。解析测试覆盖逐字节分片、重复/转义键、非法 UTF-8、整数边界、超限排空和 10000 次确定性畸形输入。先运行 `idf.py -C firmware reconfigure` 解析锁定的 cJSON 依赖；测试直接使用该组件。配置测试覆盖最大 7,618 字节规范编码的同步复用、消费失败、工作配置擦除、revision 冲突/耗尽、损坏读取和写前/写后/commit/读回故障；注入的是 SDK 调用结果，不是 NVS 掉电仿真。OTA 测试覆盖槽状态读回、30 秒边界、第 29 秒后控制任务退出、跨窗口新一轮进展、启动失败、控制循环 5 秒活性边界、pending 配置写门、无回退镜像与确认失败后的持久状态；假件不模拟真实 bootloader、Flash 掉电或任务并发。完整 ESP-IDF 编译检查 USB VFS、Wi-Fi 与任务装配。
 

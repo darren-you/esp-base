@@ -574,6 +574,10 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
     esp_base_storage_claim_t claim = {0};
     assert(esp_base_storage_claim(&owner, &claim));
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    esp_base_container_binding_snapshot_t binding = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &binding) ==
+           ESP_BASE_CONTAINER_BINDING_OK && binding.container_sequence == 1U &&
+           !binding.package_present && digest_zero(binding.package_sha256));
     install_context_t install_a = {.package = package, .operation_marker = 0x44};
     assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
         NULL, install_signed, &install_a) == ECONTAINER_SLOTS_OK);
@@ -597,6 +601,11 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
     const int fallback_index = 1 - running_index;
     assert(running_index >= 0 && before.bindings[running_index].package_present &&
            before.bindings[fallback_index].package_present);
+    assert(esp_base_container_product_binding_snapshot(&claim, &binding) ==
+           ESP_BASE_CONTAINER_BINDING_OK &&
+           binding.container_sequence == before.sequence && binding.package_present &&
+           memcmp(binding.package_sha256,
+                  before.bindings[running_index].package_sha256, 32) == 0);
     uint8_t flash_before[FLASH_BYTES];
     memcpy(flash_before, store.flash, sizeof flash_before);
     const unsigned writes_before = store.blob_writes;
@@ -620,6 +629,10 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
     assert(after.sequence == before.sequence + 1U &&
            !after.bindings[running_index].package_present &&
            same_binding(&before.bindings[fallback_index], &after.bindings[fallback_index]));
+    assert(esp_base_container_product_binding_snapshot(&claim, &binding) ==
+           ESP_BASE_CONTAINER_BINDING_OK &&
+           binding.container_sequence == after.sequence &&
+           !binding.package_present && digest_zero(binding.package_sha256));
     assert(store.blob_writes == writes_before + 1U &&
            store.flash_erases == erases_before &&
            store.flash_writes == flash_writes_before &&

@@ -13,6 +13,9 @@ static uint8_t product_bytes[EBASE_PRODUCT_LEDGER_BYTES];
 static bool product_present;
 static bool pristine_product_baseline;
 static unsigned pristine_product_calls;
+static esp_base_container_binding_result_t binding_result;
+static bool binding_package_present;
+static unsigned binding_snapshot_calls;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -51,6 +54,9 @@ static void reset_case(void)
     product_present = false;
     pristine_product_baseline = false;
     pristine_product_calls = 0;
+    binding_result = ESP_BASE_CONTAINER_BINDING_OK;
+    binding_package_present = false;
+    binding_snapshot_calls = 0;
     memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
@@ -174,6 +180,7 @@ int main(void)
     handle_line("product-status-1", strlen("product-status-1"), NULL);
     s_reply_mqtt = false;
     expect_reply("unknown", "product_ledger_uninitialized");
+    assert(binding_snapshot_calls == 0U);
     s_reply_mqtt = true;
     handle_line("product-1", 9, NULL);
     s_reply_mqtt = false;
@@ -218,7 +225,10 @@ int main(void)
     expect_reply("succeeded", NULL);
     assert(strstr(latest_reply, "\"operation_sequence_high_watermark\":1") &&
            strstr(latest_reply, "\"next_operation_sequence\":2") &&
-           strstr(latest_reply, "\"pending_operation_id\":null"));
+           strstr(latest_reply, "\"pending_operation_id\":null") &&
+           strstr(latest_reply, "\"container_sequence\":6") &&
+           strstr(latest_reply, "\"package_sha256\":null") &&
+           binding_snapshot_calls == 1U);
     product_intent.sequence = 2U;
     strcpy(product_intent.operation_id, "44444444-4444-4444-8444-000000000002");
     assert(ebase_product_ledger_begin(&product_ledger, &product_io, &product_intent) == EBASE_LEDGER_OK);
@@ -228,6 +238,18 @@ int main(void)
     expect_reply("succeeded", NULL);
     assert(strstr(latest_reply, "\"next_operation_sequence\":3") &&
            strstr(latest_reply, "\"pending_operation_id\":\"44444444-4444-4444-8444-000000000002\""));
+    binding_package_present = true;
+    s_reply_mqtt = true;
+    handle_line("product-status-1", strlen("product-status-1"), NULL);
+    s_reply_mqtt = false;
+    assert(strstr(latest_reply, "\"package_sha256\":\"7b7b") &&
+           atomic_load(&owner.active_token) == 0U);
+    binding_result = ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+    s_reply_mqtt = true;
+    handle_line("product-status-1", strlen("product-status-1"), NULL);
+    s_reply_mqtt = false;
+    expect_reply("unknown", "storage_uncertain");
+    assert(s_config_uncertain && atomic_load(&owner.active_token) != 0U);
     s_reply_mqtt = true;
     reply("11111111-1111-4111-8111-111111111111", "succeeded", NULL, NULL);
     s_reply_mqtt = false;
@@ -793,6 +815,18 @@ bool esp_base_container_product_pristine_baseline(
     assert(esp_base_storage_claim_active(claim));
     ++pristine_product_calls;
     return pristine_product_baseline;
+}
+
+esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *out)
+{
+    assert(esp_base_storage_claim_active(claim) && out != NULL);
+    ++binding_snapshot_calls;
+    *out = (esp_base_container_binding_snapshot_t){.container_sequence = 6U,
+                                                   .package_present = binding_package_present};
+    if (binding_package_present) memset(out->package_sha256, 0x7b, 32);
+    return binding_result;
 }
 
 bool ebase_config_encode(const esp_base_remote_config_t *config,

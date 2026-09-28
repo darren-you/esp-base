@@ -1542,6 +1542,74 @@ static int binding_index(const econtainer_slots_state_t *state,
     return -1;
 }
 
+static econtainer_slots_result_t read_binding_snapshot(
+    const econtainer_slot_firmware_set_t *firmware_set, void *context)
+{
+    econtainer_slots_state_t state = {0};
+    const econtainer_slots_result_t loaded = econtainer_slots_load(
+        &s_product.provider.io, &s_product.provider.geometry, &state);
+    if (loaded != ECONTAINER_SLOTS_OK) return loaded;
+    if (state.sequence == 0U ||
+        (state.phase != ECONTAINER_SLOT_IDLE &&
+         state.phase != ECONTAINER_SLOT_CONFIRMED &&
+         state.phase != ECONTAINER_SLOT_ABORTED) ||
+        (state.operation.firmware_transition &&
+         (state.phase == ECONTAINER_SLOT_ABORTED ||
+          (state.phase == ECONTAINER_SLOT_CONFIRMED &&
+           memcmp(state.operation.target_firmware_sha256,
+                  firmware_set->running_firmware_sha256, 32) != 0)))) {
+        return ECONTAINER_SLOTS_CONFLICT;
+    }
+
+    /* A valid blob may still refer to a different physical firmware set.
+     * Every present binding must match one actual bootable digest exactly. */
+    unsigned matched = 0U;
+    for (unsigned index = 0; index < ECONTAINER_SLOT_BINDING_COUNT; ++index) {
+        const econtainer_slot_binding_t *binding = &state.bindings[index];
+        if (!binding->present) continue;
+        bool found = false;
+        for (unsigned firmware = 0; firmware < firmware_set->bootable_count; ++firmware) {
+            if (memcmp(binding->firmware_sha256,
+                       firmware_set->bootable_firmware_sha256[firmware], 32) == 0) {
+                if (found ||
+                    (matched & (1U << firmware)) != 0U) return ECONTAINER_SLOTS_CONFLICT;
+                matched |= 1U << firmware;
+                found = true;
+            }
+        }
+        if (!found) return ECONTAINER_SLOTS_CONFLICT;
+    }
+    if (matched != (1U << firmware_set->bootable_count) - 1U)
+        return ECONTAINER_SLOTS_CONFLICT;
+    const int index = binding_index(&state, firmware_set->running_firmware_sha256);
+    if (index < 0) return ECONTAINER_SLOTS_CONFLICT;
+    const econtainer_slot_binding_t *running = &state.bindings[index];
+    esp_base_container_binding_snapshot_t *out = context;
+    out->container_sequence = state.sequence;
+    out->package_present = running->package_present;
+    if (running->package_present)
+        memcpy(out->package_sha256, running->package_sha256, sizeof out->package_sha256);
+    return ECONTAINER_SLOTS_OK;
+}
+
+esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *out)
+{
+    if (out == NULL) return ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+    *out = (esp_base_container_binding_snapshot_t){0};
+    if (!policy_present()) return ESP_BASE_CONTAINER_BINDING_NOT_CONFIGURED;
+    if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_BINDING_BUSY;
+    if (!s_product.provider_bound || s_product.uninstall_uncertain)
+        return ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+    const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
+        claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, read_binding_snapshot, out);
+    if (result == ECONTAINER_SLOTS_OK) return ESP_BASE_CONTAINER_BINDING_OK;
+    *out = (esp_base_container_binding_snapshot_t){0};
+    return result == ECONTAINER_SLOTS_BUSY ? ESP_BASE_CONTAINER_BINDING_BUSY :
+           ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+}
+
 static bool same_binding(const econtainer_slot_binding_t *left,
                          const econtainer_slot_binding_t *right)
 {

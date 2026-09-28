@@ -55,6 +55,26 @@ bool esp_base_container_product_stop_confirmed(
 bool esp_base_container_product_pristine_baseline(
     const esp_base_storage_claim_t *claim);
 
+typedef struct {
+    uint32_t container_sequence;
+    bool package_present;
+    uint8_t package_sha256[32];
+} esp_base_container_binding_snapshot_t;
+
+typedef enum {
+    ESP_BASE_CONTAINER_BINDING_OK = 0,
+    ESP_BASE_CONTAINER_BINDING_NOT_CONFIGURED,
+    ESP_BASE_CONTAINER_BINDING_BUSY,
+    ESP_BASE_CONTAINER_BINDING_UNCERTAIN,
+} esp_base_container_binding_result_t;
+
+/* Under Base's app/otadata claim, read the durable ECS2 metadata against two
+ * observations of the selected signed firmware. This exposes the exact
+ * uninstall precondition; it does not validate package bytes or guest health. */
+esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *out);
+
 typedef enum {
     ESP_BASE_CONTAINER_EVENT_ACCEPTED = 0,
     ESP_BASE_CONTAINER_EVENT_UNAVAILABLE,

@@ -70,7 +70,7 @@ python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
 
 `product.result` 仅按原 operation ID 查询最近固定条数的设备持久账本，不触发产品写入或重放。旧记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。当前尚无公开 `product.install`／`product.upgrade`／`product.uninstall` 写命令，因此本查询入口只能用于后续正式生命周期的结果合同验证，不能独立交付安装能力。
 
-`product.status` 读取持久高水位、下一操作序号和未决操作 ID；缺失账本返回 `unknown/product_ledger_uninitialized`，不会自动初始化。查询到的下一序号只是快照，正式写入仍须由设备持久账本原子裁决。
+`product.status` 在同一个 Base 存储占用期读取持久高水位、下一操作序号、未决操作 ID 和当前签名固件对应的 ECS2 `container_sequence`／`package_sha256`。无包时摘要为 `null`；它是持久绑定元数据，不证明包字节或 guest 健康。缺失账本返回 `unknown/product_ledger_uninitialized`，不会自动初始化；绑定或签名固件观察不确定时返回 `unknown/storage_uncertain` 并阻断本次启动的后续写入。查询到的序号只是快照，正式写入仍须由设备持久账本与 Container 原子裁决。
 
 配置使用当前用户拥有、权限 0600 的本机 JSON 文件，不把密码放在命令行或输出中：
 

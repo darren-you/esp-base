@@ -184,9 +184,10 @@ class ProductStatusTests(unittest.TestCase):
         pending = "44444444-4444-4444-8444-444444444444"
 
         class Device:
-            def __init__(self, watermark=None, pending_id=None):
+            def __init__(self, watermark=None, pending_id=None, digest=None):
                 self.watermark = watermark
                 self.pending_id = pending_id
+                self.digest = digest
                 self.response = bytearray()
 
             def write(self, payload):
@@ -196,7 +197,9 @@ class ProductStatusTests(unittest.TestCase):
                 result = None if self.watermark is None else {
                     "operation_sequence_high_watermark": self.watermark,
                     "next_operation_sequence": self.watermark + 1 if self.watermark < 4294967295 else None,
-                    "pending_operation_id": self.pending_id}
+                    "pending_operation_id": self.pending_id,
+                    "container_sequence": 6,
+                    "package_sha256": self.digest}
                 response = {"protocol_version": 1, "device_id": device,
                             "boot_id": boot, "request_id": request["request_id"],
                             "state": "unknown" if result is None else "succeeded",
@@ -218,6 +221,12 @@ class ProductStatusTests(unittest.TestCase):
         result = control.product_status(Device(7, pending), current)["result"]
         self.assertEqual(result["next_operation_sequence"], 8)
         self.assertEqual(result["pending_operation_id"], pending)
+        self.assertEqual(result["container_sequence"], 6)
+        self.assertIsNone(result["package_sha256"])
+        self.assertEqual(control.product_status(Device(7, digest="ab" * 32), current)
+                         ["result"]["package_sha256"], "ab" * 32)
+        with self.assertRaises(ValueError):
+            control.product_status(Device(7, digest="0" * 64), current)
         self.assertIsNone(control.product_status(Device(4294967295), current)
                           ["result"]["next_operation_sequence"])
 

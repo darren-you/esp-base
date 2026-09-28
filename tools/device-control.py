@@ -223,16 +223,23 @@ def product_status(port, current):
                 raise ValueError("设备产品状态的 unknown 证据无效")
             return value
         if value["state"] != "succeeded" or not isinstance(result, dict) or set(result) != {
-                "operation_sequence_high_watermark", "next_operation_sequence", "pending_operation_id"}:
+                "operation_sequence_high_watermark", "next_operation_sequence", "pending_operation_id",
+                "container_sequence", "package_sha256"}:
             raise ValueError("设备产品状态字段无效；状态为 unknown")
         watermark = result["operation_sequence_high_watermark"]
         next_sequence = result["next_operation_sequence"]
         pending = result["pending_operation_id"]
+        container_sequence = result["container_sequence"]
+        digest = result["package_sha256"]
         if (type(watermark) is not int or not 0 <= watermark <= 4294967295 or
                 (watermark < 4294967295 and
                  (type(next_sequence) is not int or next_sequence != watermark + 1)) or
                 (watermark == 4294967295 and next_sequence is not None) or
-                (pending is not None and (watermark == 0 or canonical_id(pending) != pending))):
+                (pending is not None and (watermark == 0 or canonical_id(pending) != pending)) or
+                type(container_sequence) is not int or not 1 <= container_sequence <= 4294967295 or
+                (digest is not None and
+                 (not isinstance(digest, str) or len(digest) != 64 or
+                  set(digest) - set("0123456789abcdef") or digest == "0" * 64))):
             raise ValueError("设备产品操作序号无效；状态为 unknown")
         return value
 
@@ -428,6 +435,8 @@ def main():
                     print("  序号  " + str(current["result"]["operation_sequence"]))
             if args.command == "product.status" and current["result"] is not None:
                 print("  高水位  " + str(current["result"]["operation_sequence_high_watermark"]))
+                print("  Container 序号  " + str(current["result"]["container_sequence"]))
+                print("  当前包 SHA-256  " + str(current["result"]["package_sha256"]))
                 print("  下一序号  " + str(current["result"]["next_operation_sequence"]))
                 if current["result"]["pending_operation_id"] is not None:
                     print("  未决操作  " + current["result"]["pending_operation_id"])
