@@ -24,7 +24,7 @@ def canonical_uuid(value: str) -> str:
 
 
 def private_key(path: pathlib.Path) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         mode = os.fstat(descriptor).st_mode
         if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o600:

@@ -10,7 +10,9 @@ flowchart LR
     cli -->|"独占串口 / JSON Lines"| firmware["ESP Base device_protocol"]
     firmware -->|"状态、结果、启动 ID"| cli
     user --> event_frame["product_event.py：生成已签名业务事件帧"]
-    event_frame -->|"精确 MQTT event Topic / QoS 1 / 非 retained"| firmware
+    event_frame --> event_publish["product_event_publish.py：TLS 发布与 reported 回读"]
+    event_publish <-->|"精确 event / reported Topic"| device_broker["设备级 Broker：正式账户待联调"]
+    device_broker <-->|"MQTT QoS 1"| firmware
     user --> checker["mqtt_lab_check.py：明确测试目标与私有输入"]
     checker <-->|"严格 TLS / 新消息往返"| broker["本机隔离 Broker"]
     broker <-->|"in / extra / out / status"| lab["MQTT 集成实验应用"]
@@ -94,15 +96,23 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 
 `product_event.py` 读取权限精确为 0600、内容为 64 个小写十六进制字符的**现有设备管理密钥文件**，使用当前设备 UUID、当前 boot UUID、已核对的签名包 SHA-256、下一个连续事件序号和原始 guest 事件文件，生成新的 0600 二进制帧文件；不在命令行或终端输出密钥。它只生成 wire 帧，不替代 Broker 账户、TLS、正式发布、guest 执行结果或试运行健康裁决。调用方须向脚本显示的精确 `esp-base/<device_id>/event` Topic 以 QoS 1、非 retained 方式发布该帧，并从新鲜非 retained `reported.last_accepted_event_sequence` 判断入队。Broker PUBACK 不能证明入队；`reported.last_completed_event_sequence`、`last_completed_package_sha256`、`last_event_outcome` 与 `last_guest_result` 是最近启动的产品实例中的最近一次 guest 调用的只读观察，仍不能单独确认产品健康。旧 boot、错包、满队列或离线时序号不推进。重试须重新核对高水位及当前 boot，原序号使用原帧，不改内容。
 
+`product_event_publish.py` 消费上面的原始签名帧和本轮明确指定的 Broker/CA/控制账户。账户 JSON 只有 `username` 与 `password`，文件须由当前用户独占、权限精确为 0600。先等待精确 `reported` 订阅的 SUBACK 和本次 boot 的非 retained 消息，确认入队序号恰为本帧序号减一；只有此前置条件成立才发布一次 QoS 1、非 retained 事件。发布后继续等待同 boot、同序号和同包摘要的入队及 guest 完成结果，输出 `event_outcome`；超时、断线或读回不符均标记 unknown，不自动重发。返回码 0 仅表示本次 guest 报告非负结果，2 表示已发布但执行失败或结果不确定，1 表示发布前拒绝；这些都不是产品安装、升级或试运行健康的最终结果。依赖与现有 MQTT 宿主检查器相同，安装 `tools/mqtt-lab-requirements.txt` 中固定的 Paho 版本即可。
+
 ```bash
 python3 tools/product_event.py --management-key-file <私有0600密钥文件> \
   --device-id <本轮设备UUID> --boot-id <本轮启动UUID> \
   --package-sha256 <当前包摘要> --event-sequence <下一连续序号> \
   --event-file <原始业务字节文件> --output <新0600帧文件>
+python3 tools/product_event_publish.py --host <本轮Broker域名> --port <TLS端口> \
+  --ca-file <本轮CA证书> --credentials-file <私有0600控制账户JSON> \
+  --management-key-file <私有0600密钥文件> --frame-file <上述帧文件> \
+  --device-id <本轮设备UUID> --boot-id <本轮启动UUID> \
+  --package-sha256 <当前包摘要> --event-sequence <下一连续序号>
 python3 tools/test_product_event.py
+python3 tools/test_product_event_publish.py
 ```
 
-当前生产 Broker 还没有 Base 账户和 Topic，真实控制账户发布与两板 guest 业务结果均未验收；此工具用于冻结设备端可验证的公开帧格式。
+Broker 的精确设备 Topic ACL 已有源码与隔离验收，但当前生产 Profile 还没有 Base 账户；真实控制账户发布与两板 guest 业务结果均未验收。上述发布器的宿主假客户端测试验证前置拒绝、一次发布和本次启动回读；它不代替真实 Broker/TLS 或设备验证。
 
 ## v1/v2→v3 离线配置预检
 
