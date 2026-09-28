@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-29 P6-04 业务事件客户端断线语义：公开发布器原来使用 Paho 2.1.0 的默认自动重连；该库在干净会话重连时可能再次发布尚未确认的 QoS 1 消息（[Paho 官方说明](https://github.com/eclipse-paho/paho.mqtt.python#known-limitations)；[固定 2.1.0 源码](https://github.com/eclipse-paho/paho.mqtt.python/blob/v2.1.0/src/paho/mqtt/client.py)），与本客户端“只发布一次、状态不明按原事件核对”的合同冲突。现在显式关闭自动重连，发布后断线仍只返回 unknown，不创建新序号或重发。发布器伪 MQTT 回归新增断线后仅一次 `publish` 和禁用自动重连参数断言，6/6 通过；原帧生成测试 1/1、Python 编译与 `git diff --check` 通过；临时安装固定 Paho 2.1.0 并实例化真实客户端，确认默认 `reconnect_on_failure=True`、本客户端传入后为 `False`。本轮没有真实 Broker、设备或试运行确认结果，P6-04/P7 不据此验收。
+
 2026-09-28 P6-03/P6-04 C3 对照：保留正式 USB 控制台与三 `0x82000` 包槽的同源码测试键 RSA v2 签名 app `0x121000` B，官方尺寸门拒绝双 `0x120000` app 槽，各超 `0x1000` B。仓外仅为 QEMU 改用 UART、双 `0x130000` app 与三 `0x74000` 诊断包槽后，正式 JSON `product.uninstall`、同片冷启动持久结果及同 ID 不重执行均通过，C3 6 KiB 控制栈未溢出；官方 NVS CRC、账本/ECS2 CRC 与 Flash 分区不变性读回通过。关部分曲线、错误名查表和 NIST 优化的组合可暂时降到 `0x111000` B，但内容距下次签名台阶仅 56 B，且未验证真实 TLS/时延，不作为产品配置或完整布局验收。无实板写入；[精确输入与容量阻断](product_uninstall_c3_protocol_qemu_checkpoint.md)。
 
 2026-09-28 P6-04 串口产品卸载签名 QEMU：原 ESP32 控制任务 4,096 B 在 `product.status`、6,144 B 在 `product.uninstall` 触发真实 FreeRTOS 栈溢出；目标独立调整为 ESP32 8,192 B、C3 仍 6,144 B。最终源码重新签名并按新 app 摘要制造 ECS2 sequence 6、空 EPRD 及 4 MiB Flash，正式串口命令完成卸载，冷启动后原操作结果和相同 ID 的重复请求均保持 sequence 7／账本高水位 1；官方 NVS CRC、账本/ECS2 CRC 与逐区 Flash 读回通过。C3／ESP32 普通构建与 host ASan/UBSan 均通过。无 Broker、HTTPS、FRPS 并发或实体板，P6-03/P6-04/P7 不勾验收；[精确输入与日志](product_uninstall_protocol_qemu_checkpoint.md)。

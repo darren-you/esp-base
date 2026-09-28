@@ -98,6 +98,8 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 
 `product_event_publish.py` 消费上面的原始签名帧和本轮明确指定的 Broker/CA/控制账户。账户 JSON 只有 `username` 与 `password`，文件须由当前用户独占、权限精确为 0600。先等待精确 `reported` 订阅的 SUBACK 和本次 boot 的非 retained 消息，确认入队序号恰为本帧序号减一；只有此前置条件成立才发布一次 QoS 1、非 retained 事件。发布后继续等待同 boot、同序号、同包摘要和事件字节 SHA-256 的入队及 guest 完成结果，输出 `event_outcome`；超时、断线或读回不符均标记 unknown，不自动重发。返回码 0 仅表示本次 guest 报告非负结果，2 表示已发布但执行失败或结果不确定，1 表示发布前拒绝；这些都不是产品安装、升级或试运行健康的最终结果。依赖与现有 MQTT 宿主检查器相同，安装 `tools/mqtt-lab-requirements.txt` 中固定的 Paho 版本即可。
 
+客户端关闭 Paho 的自动重连；QoS 1 发布后若失去连接，客户端不在新连接中重发该帧，本次结果记为 unknown。后续人工核对须沿用原 boot、序号及摘要，Broker 曾接收但 PUBACK 丢失也不能据此宣称未执行。
+
 ```bash
 python3 tools/product_event.py --management-key-file <私有0600密钥文件> \
   --device-id <本轮设备UUID> --boot-id <本轮启动UUID> \

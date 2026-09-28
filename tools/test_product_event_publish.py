@@ -44,8 +44,11 @@ class FakeClient:
     published = []
     before = reported(0)
     after = reported(1, 1, "succeeded")
+    disconnect_after_publish = False
 
     def __init__(self, *args, **kwargs):
+        if kwargs.get("reconnect_on_failure") is not False:
+            raise AssertionError("业务事件客户端不得自动重连并重发未确认的 QoS 1 消息")
         self.on_connect = self.on_subscribe = self.on_disconnect = self.on_message = None
 
     def username_pw_set(self, *args):
@@ -71,9 +74,12 @@ class FakeClient:
 
     def publish(self, topic, payload, qos, retain):
         self.published.append((topic, payload, qos, retain))
-        self.message(topic.removesuffix("/event") + "/reported", self.after)
+        if self.disconnect_after_publish:
+            self.on_disconnect(self, None, None, None, None)
+        else:
+            self.message(topic.removesuffix("/event") + "/reported", self.after)
         return types.SimpleNamespace(rc=0, wait_for_publish=lambda timeout: None,
-                                     is_published=lambda: True)
+                                     is_published=lambda: not self.disconnect_after_publish)
 
     def disconnect(self):
         pass
@@ -97,6 +103,7 @@ class ProductEventPublishTest(unittest.TestCase):
         FakeClient.published = []
         FakeClient.before = reported(0)
         FakeClient.after = reported(1, 1, "succeeded")
+        FakeClient.disconnect_after_publish = False
         client_module = types.ModuleType("paho.mqtt.client")
         client_module.Client = FakeClient
         client_module.MQTTv311 = 4
@@ -159,6 +166,13 @@ class ProductEventPublishTest(unittest.TestCase):
         code, output, error = self.invoke()
         self.assertEqual((code, output), (2, ""))
         self.assertIn("结果与本帧不一致", error)
+        self.assertEqual(len(FakeClient.published), 1)
+
+    def test_disconnect_after_publish_is_unknown_without_reconnect_or_resend(self):
+        FakeClient.disconnect_after_publish = True
+        code, output, error = self.invoke()
+        self.assertEqual((code, output), (2, ""))
+        self.assertIn("已发布", error)
         self.assertEqual(len(FakeClient.published), 1)
 
     def test_wrong_frame_or_reported_boot_is_not_accepted(self):

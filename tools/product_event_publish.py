@@ -154,7 +154,8 @@ def main() -> int:
     try:
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                              client_id="base-event-" + secrets.token_hex(8),
-                             protocol=mqtt.MQTTv311)
+                             protocol=mqtt.MQTTv311,
+                             reconnect_on_failure=False)
         client.username_pw_set(account["username"], account["password"])
         client.tls_set(ca_certs=str(args.ca_file))
     except (OSError, ValueError) as error:
