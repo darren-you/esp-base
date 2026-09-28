@@ -286,8 +286,8 @@ static econtainer_slots_result_t stage_firmware(
         }
     }
     if (running == NULL) return ECONTAINER_SLOTS_CONFLICT;
-    /* The Base product has no authorized business event source yet. A signed
-     * reusable package cannot be made healthy merely by opening it. */
+    /* The Base product has no agreed trial-health predicate yet. An authorized
+     * event source exists, but opening a signed reusable package is not proof. */
     if (running->package_present) return ECONTAINER_SLOTS_UNTRUSTED;
 
     const stage_context_t *stage = context;

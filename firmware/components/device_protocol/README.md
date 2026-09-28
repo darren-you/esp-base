@@ -1,10 +1,10 @@
 # device_protocol
 
-产品命令的持久幂等底座已加入 `product_ledger.c`：按维护者裁决采用最近固定条数，当前软件合同为 8 条，`base_store/base_product/operations` 为单个带版本和 CRC 的 NVS blob，另存持久 `high_watermark`。新操作只接受连续递增的 `operation_sequence`；旧记录被覆盖后按原 ID 查询为 `unknown`，旧序号仍被拒绝。产品策略生效时，主应用先持启动存储 claim 读取既有账本；未决安装／升级在 guest 装载前按原 ID、摘要、ECS2 序号与签名固件集合对账：未确认候选安全放弃后记失败；旧 boot 精确 `CONFIRMED` 且新绑定与包字节有效时记成功；无法证明则阻断 READY。未决卸载仍走原有启动后只读裁决。Container 启动为空或运行已确认包时再准备账本；若 NVS 键缺失，只有独立读回的 ECS2 仍为序号 1、无包且从无操作，并与双次观察的签名固件集合精确相符，才显式初始化空账本。既有账本直接沿用；损坏、读取不确定或已有历史序号而账本缺失时保留 claim 并阻断 READY。此检查不能替代整片 Flash 丢失后的外部恢复事实。写入意图及终态均在 NVS commit 后逐字节读回，未决 `PREPARED` 不自动重放。NVS 读写只在持有共享短时 Flash I/O owner 时进行。只读 `product.status`／`product.result` 已接此账本；`product.status` 另在同一长存储 claim 下读取当前签名固件的 ECS2 持久绑定序号与可选包摘要。两次固件观察不一致时保留 claim 并返回不确定；查询本身不验证包字节或 guest 健康。公开 `product.uninstall` 已接同一长存储 claim：精确核对当前绑定后写入并读回 PREPARED，再调用内部停止／卸载、同 boot 空绑定读回，并持久写入终态；同 ID 不重执行。复位后只按 ECS2 原 operation ID／序号裁决已提交或未提交，不重放卸载；不可证明时保留未决并阻断 READY。公开安装／升级 worker 与业务试运行健康判据仍未接入，不能计 P6-04 完成。八条账本在 C3 六／八页和 ESP32 六页的固定 SDK／QEMU 正常写入容量测试通过，实际写入频率与 Flash 磨损仍待设备验收；ESP32 正式串口卸载在[签名 QEMU](../../../docs/operations/product_uninstall_protocol_qemu_checkpoint.md)通过 8 KiB 控制栈，设备掉电与实体板控制栈仍待验证。
+产品命令的持久幂等底座已加入 `product_ledger.c`：按维护者裁决采用最近固定条数，当前软件合同为 8 条，`base_store/base_product/operations` 为单个带版本和 CRC 的 NVS blob，另存持久 `high_watermark`。新操作只接受连续递增的 `operation_sequence`；旧记录被覆盖后按原 ID 查询为 `unknown`，旧序号仍被拒绝。产品策略生效时，主应用先持启动存储 claim 读取既有账本；未决安装／升级在 guest 装载前按原 ID、摘要、ECS2 序号与签名固件集合对账：未确认候选安全放弃后记失败；旧 boot 精确 `CONFIRMED` 且新绑定与包字节有效时记成功；无法证明则阻断 READY。未决卸载仍走原有启动后只读裁决。Container 启动为空或运行已确认包时再准备账本；若 NVS 键缺失，只有独立读回的 ECS2 仍为序号 1、无包且从无操作，并与双次观察的签名固件集合精确相符，才显式初始化空账本。既有账本直接沿用；损坏、读取不确定或已有历史序号而账本缺失时保留 claim 并阻断 READY。此检查不能替代整片 Flash 丢失后的外部恢复事实。写入意图及终态均在 NVS commit 后逐字节读回，未决 `PREPARED` 不自动重放。NVS 读写只在持有共享短时 Flash I/O owner 时进行。只读 `product.status`／`product.result` 已接此账本；`product.status` 另在同一长存储 claim 下读取当前签名固件的 ECS2 持久绑定序号与可选包摘要。两次固件观察不一致时保留 claim 并返回不确定；查询本身不验证包字节或 guest 健康。公开 `product.uninstall` 已接同一长存储 claim：精确核对当前绑定后写入并读回 PREPARED，再调用内部停止／卸载、同 boot 空绑定读回，并持久写入终态；同 ID 不重执行。复位后只按 ECS2 原 operation ID／序号裁决已提交或未提交，不重放卸载；不可证明时保留未决并阻断 READY。公开安装／升级 worker 已接入持久意图、HTTPS 验包、候选试运行和确定性失败收尾；业务试运行健康判据与成功终态仍未接入，不能计 P6-04 完成。八条账本在 C3 六／八页和 ESP32 六页的固定 SDK／QEMU 正常写入容量测试通过，实际写入频率与 Flash 磨损仍待设备验收；ESP32 正式串口卸载在[签名 QEMU](../../../docs/operations/product_uninstall_protocol_qemu_checkpoint.md)通过 8 KiB 控制栈，设备掉电与实体板控制栈仍待验证。
 
-单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart、config.set、只读 product.status／product.result、公开 product.uninstall 与受控签名构建中的 ota.start/ota.result；product.install／product.upgrade 仅有严格解码、完整请求指纹和安全拒绝，返回 `failed/product_install_unavailable`，不占用账本序号或候选槽。Wi-Fi 由单一控制任务调度，SNTP 同步结果每秒非阻塞轮询。每轮完成后记录原子进展时刻和轮次，供 pending OTA 启动门核对；pending 和下载期间拒绝配置写入。
+单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart、config.set、只读 product.status／product.result、公开 product.uninstall 与受控签名构建中的 ota.start/ota.result；product.install／product.upgrade 已接严格解码、完整请求指纹、持久意图、异步 HTTPS 包来源与同 boot 候选试运行；试运行未决时按原 operation ID 查询仍为 unknown，不自动确认成功。Wi-Fi 由单一控制任务调度，SNTP 同步结果每秒非阻塞轮询。每轮完成后记录原子进展时刻和轮次，供 pending OTA 启动门核对；pending 和下载期间拒绝配置写入。
 
-产品包 HTTPS 来源已有独立的顺序读取原语：要求可信时间和精确已授权长度、证书 bundle TLS、HTTP 200、非 chunked、禁止重定向，按 Container 候选槽连续 offset 供字节；正文末尾必须由 SDK 判为完整，单次读、无进展和总期限均有单调时钟检查。它尚未由公开安装／升级命令调用，生产镜像未链接此路径，见[来源检查点](../../../docs/operations/product_package_https_source_checkpoint.md)。
+产品包 HTTPS 来源已有独立的顺序读取原语：要求可信时间和精确已授权长度、证书 bundle TLS、HTTP 200、非 chunked、禁止重定向，按 Container 候选槽连续 offset 供字节；正文末尾必须由 SDK 判为完整，单次读、无进展和总期限均有单调时钟检查。公开安装／升级 worker 已调用此来源；传输完成后释放 HTTP/TLS 客户端，再启动候选试运行。真实 HTTPS 设备下载仍待验证；原语的早期边界见[来源检查点](../../../docs/operations/product_package_https_source_checkpoint.md)。
 
 ## 架构拓扑
 
@@ -26,10 +26,11 @@ flowchart LR
     app -->|"EMPTY + 启动 claim + 精确 ECS2 初始绑定"| product_ledger
     product_ledger --> product_nvs["base_store：base_product/operations"]
     parser --> guard["command_guard：目标 / deadline / 去重"]
-    guard --> action["状态读取 / restart / RAM 配置候选 / ota.start"]
+    guard --> action["状态读取 / restart / RAM 配置候选 / ota.start / product 操作"]
     action --> wifi["wifi_runtime：20 秒候选连接证明"]
     owner --> time["time_runtime：SNTP 轮询 / time_ready 心跳"]
     action -->|"签名构建 + Wi-Fi + 时间门 / 持久收据"| receipt["ota_operation：产品约束 / 结果查询"]
+    action -->|"持久意图 / HTTPS 验包 / 同 boot 试运行"| product_ledger
     receipt -->|"预检 / 准备 / 选槽"| ota["esp-ota：独立 HTTPS OTA 机制"]
     ota -->|"原子进度 / 最终结果"| owner
     wifi --> store["remote_config：单 blob 条件提交"]

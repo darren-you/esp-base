@@ -1,5 +1,7 @@
 # ESP Base
 
+当前产品命令候选已接公开安装／升级、HTTPS 验包、持久操作账本和同 boot 候选试运行；`product.status` 在试运行期间只报告仍已确认的旧绑定。业务健康成功判据、生产 Broker／设备联调、正式分区迁移与实板验收仍未闭合，不能作为产品发布结果。
+
 2026-09-28 C3 三份 `0x77000` 包槽候选的仓外 QEMU 无包启动发现默认 3,584 B `app_main` 栈在后续签名校验时溢出；将正式 C3 产品主任务栈设为 6,144 B 并加构建下限后，同布局 UART 诊断首启／同片冷启动均到 `container=empty`，首次主栈最低余 2,440 B，公开 `product.status`、身份／序号持久读回与二启前后整片 Flash 一致。正式 USB 控制台副本重签后仍为 `0x121000` B，签名与双 app 容量门通过；[输入与边界](docs/operations/c3_slot_77000_capacity_probe.md)。
 
 2026-09-28 C3 仓外三份 `0x77000` 包槽候选经正式 TLS 配置完整签名构建、RSA 验签和官方分区／app 容量门通过：双 `0x130000` app 槽各余 `0xf000` B；这会缩小通用签名包可接受范围，尚待维护者决定包槽上限，且未覆盖公开安装代码、同机网络负载或实板。[容量探针与边界](docs/operations/c3_slot_77000_capacity_probe.md)。
@@ -10,9 +12,9 @@
 
 2026-09-28 产品执行线程现将每条授权 MQTT 事件的 boot 内序号随队列副本送入 guest，保留当前产品实例最近一次 `on_event` 的包摘要、执行结果和 guest 原始返回值，并通过非 retained `reported` 区分入队、执行和业务失败。该观察在换包启动时清空，不能单独证明试运行健康或持久产品操作成功；真实 Broker、设备消息和产品写命令仍待闭合。
 
-2026-09-28 产品执行线程新增有界事件 FIFO：容量取自 Container 对所选签名包本次重新验签的 `event_queue_limit`，每条事件还须匹配本次包 SHA-256；入队只表示接收，`on_event` 只在唯一 guest pthread 执行。独立 MQTT `event` Topic 现已接入设备端 HMAC、boot/包摘要、连续序号验证及入队后高水位报告；公开宿主工具可生成相同签名帧。C3／ESP32 的真实签名 counter 包宿主回归覆盖同 boot 换包、错误摘要、停止后拒绝及百次回收；Broker 源码 ACL 已另在 `mqtt-service` 加入，生产账户／发布、真实消息、guest 业务结果与试运行健康判定仍未验收，因此带包试运行与产品写命令仍关闭。
+2026-09-28 产品执行线程新增有界事件 FIFO：容量取自 Container 对所选签名包本次重新验签的 `event_queue_limit`，每条事件还须匹配本次包 SHA-256；入队只表示接收，`on_event` 只在唯一 guest pthread 执行。独立 MQTT `event` Topic 现已接入设备端 HMAC、boot/包摘要、连续序号验证及入队后高水位报告；公开宿主工具可生成相同签名帧。C3／ESP32 的真实签名 counter 包宿主回归覆盖同 boot 换包、错误摘要、停止后拒绝及百次回收；Broker 源码 ACL 已另在 `mqtt-service` 加入。该轮未接公开产品写命令，生产账户／发布、真实消息、guest 业务结果与试运行健康判定也未验收。
 
-2026-09-28 按维护者裁决增加产品操作持久幂等账本的软件候选：单个 910 字节 NVS blob 暂存最近 8 条及单调序号，写意图和终态提交后逐字节读回；只读 `product.status`／`product.result` 与公开串口客户端已接入查询。宿主故障测试及 NVS 短时 I/O 适配测试通过；固定 SDK／QEMU 的 C3 六／八页、ESP32 六页均完成 100 代四记录容量与重启读回，见[C3](docs/operations/c3-eight-page-nvs-capacity.md)和[ESP32](docs/operations/esp32-six-page-nvs-capacity.md)记录。设备产品写命令、授权安装、实际生命周期、真实 Flash 磨损与两板掉电验收仍未接入，不能把账本视为 P6-04 完成。
+2026-09-28 按维护者裁决增加产品操作持久幂等账本的软件候选：单个 910 字节 NVS blob 暂存最近 8 条及单调序号，写意图和终态提交后逐字节读回；只读 `product.status`／`product.result` 与公开串口客户端已接入查询。宿主故障测试及 NVS 短时 I/O 适配测试通过；固定 SDK／QEMU 的 C3 六／八页、ESP32 六页均完成 100 代四记录容量与重启读回，见[C3](docs/operations/c3-eight-page-nvs-capacity.md)和[ESP32](docs/operations/esp32-six-page-nvs-capacity.md)记录。该轮尚未接设备产品写命令；真实 Flash 磨损与两板掉电验收未完成，不能把账本视为 P6-04 完成。
 
 基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载、按 operation ID 查询 `ota.result` 的 V2 持久收据、只读签名固件集合观察，以及与 Container 产品绑定的无包固件 OTA 和启动恢复软件链。FRP 已接入公开组件和单 owner；受控 loopback 管理端点已有只读 `status` 软件候选，能在绑定成功后开放 FRP 启动门，但尚无同板资源及真实 FRPS 闭环；实体 C3 仍保留旧 Base、ESP32 仍保留旧 ESP-AT，五能力完整验收尚未完成。
 
