@@ -4,6 +4,8 @@
 
 2026-09-28 ESP32 产品源码现已采用此前签名 QEMU 使用过的完整 4 MiB 分区几何：双应用槽、三包槽、独立 FRP scratch、六页 Base NVS 与旧 AT 原字节区。scratch 的编译配置必须与该表精确一致；固定 SDK 测试键签名 app／分区表官方验签、容量门及 ESP32 host 回归通过。[源码几何检查点](docs/operations/p6-03-esp32-product-partition-source-checkpoint.md)记录完整输入。迁移恢复、正式 `ota.start` 全链、C3 正式几何及两块实板验收仍未闭合。
 
+随后用该正式签名 app 的完整摘要重建真实签名 ABI 2 包、ECS2 sequence 6 与六页 NVS，原样产品镜像在 4 MiB 仓外 QEMU 两次冷启都达到 Container `RUNNING`／Base `READY`；第二次整片 Flash 与第一次完全相同。首次启动只改系统 NVS／otadata 并把非空 FRP scratch 擦成全 `0xff`，两个 app 槽、三包区、旧 AT 区与 Base NVS 字节未变。此次没有联网负载或正式固件 OTA，不替代实体板及 P6-03 资源验收；详见同一[检查点](docs/operations/p6-03-esp32-product-partition-source-checkpoint.md)。
+
 2026-09-28 Base 串口行、配置候选、命令解析和 MQTT 装配区改为按存活期持有；MQTT 新修订缺少装配内存时先撤销旧连接及管理密钥。当前锁的 C3 签名 guest、严格 TLS／官方 FRPS 与 300001 B 双向工作流在仓外 QEMU 诊断切片的普通内部 8BIT 堆历史低水达到 **57,020 B**，高于 49,152 B 门 7,868 B。该诊断镜像的包槽小于既定三份 `0x82000` 目标；另有完整三包槽、独立 scratch 与 18 页 NVS 的[4 MiB 对齐软件候选](docs/operations/p6-03-c3-aligned-layout-software-probe.md)通过官方验签、装槽及无网络签名 guest 启动。两条证据不能拼作同一联网镜像，正式 MQTT／OTA 同机、旧数据迁移和实板 Wi-Fi 未验收；[逐轮容量检查点](docs/operations/p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#base-控制工作区存活期收敛)给出输入与限制。
 
 2026-09-28 当前主固件精确消费 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`，ESP32 目标配置启用单核及 8BIT IRAM，FRP 的 client、TLS、会话与工作流私有对象按目标条件分配；C3 保持普通分配。官方 Component Manager 已重新生成两目标锁，签名容量与独立严格 TLS/FRPS 工作流的边界见[工作流 IRAM 精确锁检查点](docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。现有两块 4 MiB 板和 48 KiB 堆门不变，正式 Base owner 的联网组合仍待验证。
