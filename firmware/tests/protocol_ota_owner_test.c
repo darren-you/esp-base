@@ -30,6 +30,7 @@ static bool package_source_open_ok, package_source_complete_ok;
 static unsigned package_source_opens, package_source_closes;
 static esp_base_container_prepare_result_t package_prepare_result;
 static bool package_prepare_rejected_after_write;
+static bool package_prepare_busy_snapshot_uncertain;
 static uint32_t binding_sequence;
 static bool network_ready, trusted_time_ready;
 static esp_base_container_boot_result_t package_trial_result;
@@ -91,6 +92,7 @@ static void reset_case(void)
     package_source_opens = package_source_closes = 0U;
     package_prepare_result = ESP_BASE_CONTAINER_PREPARED;
     package_prepare_rejected_after_write = false;
+    package_prepare_busy_snapshot_uncertain = false;
     binding_sequence = 6U;
     network_ready = trusted_time_ready = true;
     package_trial_result = ESP_BASE_CONTAINER_RUNNING;
@@ -393,6 +395,35 @@ static void check_product_package_guard(void)
     product_package(44U); /* Ledger lookup precedes new-transfer admission. */
     expect_reply("failed", "product_operation_failed");
     assert(package_source_opens == 1U && task_calls == 1U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    package_prepare_result = ESP_BASE_CONTAINER_PREPARE_BUSY;
+    product_package(40U);
+    expect_reply("running", NULL);
+    poll_product();
+    expect_reply("failed", "product_operation_failed");
+    assert(package_prepare_calls == 1U && binding_snapshot_calls == 2U &&
+           atomic_load(&owner.active_token) == 0U && !s_product_active);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 6U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    package_prepare_result = ESP_BASE_CONTAINER_PREPARE_BUSY;
+    package_prepare_busy_snapshot_uncertain = true;
+    product_package(40U);
+    expect_reply("running", NULL);
+    poll_product();
+    expect_reply("unknown", "storage_uncertain");
+    assert(package_prepare_calls == 1U && binding_snapshot_calls == 2U &&
+           atomic_load(&owner.active_token) != 0U && s_product_active &&
+           s_config_uncertain);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_PREPARED);
 
     reset_case();
     product_configured = true;
@@ -1254,6 +1285,11 @@ esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
            prepared_sequence != NULL && request->expected_sequence == 6U &&
            request->package_sha256[0] == 0x7b);
     ++package_prepare_calls;
+    if (package_prepare_result == ESP_BASE_CONTAINER_PREPARE_BUSY) {
+        if (package_prepare_busy_snapshot_uncertain)
+            binding_result = ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+        return package_prepare_result;
+    }
     uint8_t byte = 0U;
     assert(source_fn(source_context, 0U, &byte, 1U) && byte == 0x7b);
     if (package_prepare_result == ESP_BASE_CONTAINER_PREPARED)

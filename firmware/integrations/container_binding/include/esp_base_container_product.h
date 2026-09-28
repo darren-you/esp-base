@@ -96,12 +96,14 @@ typedef enum {
     ESP_BASE_CONTAINER_PREPARE_UNCERTAIN,
 } esp_base_container_prepare_result_t;
 
-/* Internal preparation step for a later public install/upgrade worker. The
+/* Internal preparation step used by the public install/upgrade worker. The
  * caller has durably claimed its operation and holds Base's app/otadata claim.
  * A bounded source supplies exact package bytes; no guest is stopped or
  * started here. Success returns the independently read-back PREPARED sequence.
  * Rejection after reservation returns the read-back ABORTED sequence in the
- * same output; rejection before reservation leaves it zero. Uncertainty
+ * same output; rejection before reservation leaves it zero. BUSY also occurs
+ * before reservation and leaves it zero; the caller must verify the old
+ * binding and sequence before recording a terminal failure. Uncertainty
  * requires retaining the claim and resolving ECS2 on a new boot. */
 esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
     const esp_base_storage_claim_t *claim,

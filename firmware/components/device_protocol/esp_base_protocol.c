@@ -899,7 +899,11 @@ static void product_task(void *argument)
     const bool transfer_complete = esp_base_product_package_source_complete(source);
     esp_base_product_package_source_close(source);
     if (prepared != ESP_BASE_CONTAINER_PREPARED) {
-        if (prepared == ESP_BASE_CONTAINER_PREPARE_REJECTED) {
+        /* BUSY is returned before Container reserves a candidate. As for a
+         * deterministic rejection, fail only after proving the old binding
+         * and sequence are still intact. */
+        if (prepared == ESP_BASE_CONTAINER_PREPARE_REJECTED ||
+            prepared == ESP_BASE_CONTAINER_PREPARE_BUSY) {
             esp_base_container_binding_snapshot_t binding = {0};
             if (esp_base_container_product_binding_snapshot(
                     &s_product_storage_claim, &binding) ==
