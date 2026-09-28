@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-04 guest 事件结果观察软件续进：Base 将已授权 MQTT 事件的本 boot 序号随有界队列副本交给唯一产品线程，线程在真实 `on_event` 返回后记录最近一次包 SHA-256、完成序号、runtime 是否成功和原始 guest 整数结果；负数被报告为业务失败，runtime 异常不伪造 guest 返回值。每 5 秒的非 retained `reported` 同时给出入队高水位与最近完成观察，签名包换包启动清空旧观察；这些易失字段仍非持久产品操作结果，也不能单独证明试运行健康。C3／ESP32 全套 host ASan/UBSan、固定 SDK 普通完整构建通过，app 分别 `0xe3060`／`0xd4ff0` B；两目标以公开 Container `d370899b`／WAMR `c10736f` 跑真实签名 guest 的生命周期、同 boot 换包和各 100 次卸载重装，C3／ESP32 均通过。宿主假 Flash/NVS、无生产 Broker 与实板业务事件，P6-04/P7 验收状态不变；没有写设备。
+
 2026-09-28 P6-04 独立 MQTT 业务事件软件接线：普通 Base 在同一严格 TLS 会话订阅精确 `command`、`event`，两个 SUBACK 均批准后才 ready。`event` 的域隔离 HMAC 将当前 boot、设备 UUID、完整包摘要、连续 64 位序号和 guest 原始字节绑定；只有正式产品有界 FIFO 接收后才推进同 boot 高水位，并在非 retained `reported` 报告。QoS 1 PUBACK、已入队及 guest 业务成功是三个不同事实。公开 `tools/product_event.py` 的宿主生成帧与固件固定向量一致；C3／ESP32 全套 host ASan/UBSan、两目标固定 SDK 普通完整构建和 Python 向量测试通过，app 尺寸分别 `0xe2df0`／`0xd4d30` B。`mqtt-service` 源码渲染器已为登记设备增加精确 `event` ACL，但当前生产 Profile 没有 Base 账户，Broker 镜像/真实 ACL、设备消息、guest 产品结果和试运行确认均未验收；没有刷写设备，P6-04/P7 状态不变。
 
 2026-09-28 P6-04 业务事件执行端切片：Base 与独立 NVS 探针的 C3／ESP32 四份锁均从新清单解析至公开 `esp-container@d370899b88883d8c23c60884dda9e2dae8bc295d`。Container 在成功验签并打开选定包后返回签名 `event_queue_limit` 和包 SHA-256；Base 只在 `init` 后按该上限分配 FIFO，入队校验事件长度、当前运行态与完整包摘要，唯一产品 pthread 串行调用 `on_event`，停止时释放未交付副本。同 boot P1→P2 更换签名包后旧摘要拒绝，C3／ESP32 两种宿主目标的 ASan/UBSan 真实 guest 生命周期与各 100 次回收、macOS 第 10／50／100 次已用内存稳定检查通过；Base C3／ESP32 固定 SDK 普通完整构建、C3 全套 host 通过。当前事件仅由宿主用例投递，设备 MQTT 独立业务 Topic、Broker ACL、消息授权、guest 结果与试运行确认仍未实现；`ACCEPTED` 和 runtime 完成计数均不得视作业务健康，P6-04/P7 状态不变。没有写入设备。

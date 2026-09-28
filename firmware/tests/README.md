@@ -16,6 +16,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `mqtt_owner_test` 编译普通 Base 的真实 owner、Topic 与公开 emqtt 配置校验源码，注入客户端事件；覆盖无凭据不建客户端、UUID ClientID、严格 TLS、离线 LWT、双订阅 SUBACK 前不受理消息、命令 retained/错 Topic/HMAC 拒绝、业务事件签名/boot/连续序号与入队后推进、队列拒绝后原序号重试、同 boot 重配保留高水位、结果和 reported 的 QoS/retain、断连重新订阅门、QoS 1 outbox 过期后的停止与重新取得 SUBACK、发布或订阅失败的停止重试，以及配置更换时 stop 失败不释放旧 handle、清除旧 key 且不再派发。`network_auth_test` 的固定 HMAC 向量与 `tools/test_product_event.py` 的主机生成结果一致。Fake 不模拟实际 Broker、TLS 握手或设备任务调度。
 
+`protocol_ota_owner_test` 使用真实 reported 格式器验证已入队序号与最近完成事件的包摘要、非负 guest 结果、负数业务失败、runtime 失败时 null 结果及超限状态不发布；它的 Container 观察是假件。签名 guest 的真实结果与同 boot 换包清空由 `run_container_lifecycle_test.sh` 验证，仍没有真实 Broker 投递。
+
 `frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
 
 `ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
@@ -63,7 +65,7 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 同一入口另用临时 RSA 测试键签发真实 ABI 2 guest：`init` 成功写入一条日志、登记一次性定时器后进入纯 Wasm 无限循环。签名包沿真实槽的安装、验签、授权、WAMR 装载和 `econtainer_product_init` 执行；在测试策略的 100,000,000 条指令额度与 20 ms 期限下必须先返回 `ENTRY_EXPIRED`，本次日志不可取、计时器不可投递、失败实例不可 `stop`，`close` 释放原生实例。正式 Base `product_boot` 对同一包须返回 `BLOCKED`，worker 已 join、native 已回收，同 boot 重试仍阻断且槽/包不被失败入口改写。随后在同一测试进程的新启动替身中，普通签名 counter 包仍可 `product_boot → stop_confirmed`。这两个数值不代表当前默认关闭的产品授权。测试使用宿主假 Flash/NVS 与固件摘要；新启动替身会重置其假存储，不证明同一物理 boot 解阻、NVS 持久恢复、设备调度上界或同步原生导入可抢占。
 
-同一测试进程还重复 100 次真实签名包安装、正式 Base `product_boot`、产品卸载、同 boot `EMPTY`，每轮保持唯一 storage claim，读取正式 ECS2 状态并核对每次安装 5 次、卸载 1 次提交。guest 实际执行 `init` 与 `stop`；循环不调用 `on_event`。另在同 boot 的 P1/P2 换包用例中，测试通过 Base 有界 FIFO 投递事件、等待唯一 guest 线程完成，并验证错误摘要、空事件、停止后旧事件均被拒绝。该测试没有真实 MQTT 授权入口。运行中卸载必须证明 `stop/close/join`、native 已回收，并确认卸载不擦写包 Flash。macOS 另编译非 sanitizer 二进制，先校准 64 KiB 堆与 VM 映射能被采样，再比较第 10／50／100 次后的默认 malloc zone 已用字节、`TASK_VM_INFO` 虚拟字节与 region 数；ASan/UBSan 二进制也执行同一循环。这是宿主分配和线程回收检查，不代表 ESP 堆、Flash 耐久、公开安装或实板 100 次运行。
+同一测试进程还重复 100 次真实签名包安装、正式 Base `product_boot`、产品卸载、同 boot `EMPTY`，每轮保持唯一 storage claim，读取正式 ECS2 状态并核对每次安装 5 次、卸载 1 次提交。guest 实际执行 `init` 与 `stop`；循环不调用 `on_event`。另在同 boot 的 P1/P2 换包用例中，测试通过 Base 有界 FIFO 投递事件、等待唯一 guest 线程完成，核对完成序号、当前包摘要与真实 guest 返回值，并验证换包后观察清空、错误摘要、空事件、停止后旧事件均被拒绝。该测试没有真实 MQTT 授权入口。运行中卸载必须证明 `stop/close/join`、native 已回收，并确认卸载不擦写包 Flash。macOS 另编译非 sanitizer 二进制，先校准 64 KiB 堆与 VM 映射能被采样，再比较第 10／50／100 次后的默认 malloc zone 已用字节、`TASK_VM_INFO` 虚拟字节与 region 数；ASan/UBSan 二进制也执行同一循环。这是宿主分配和线程回收检查，不代表 ESP 堆、Flash 耐久、公开安装或实板 100 次运行。
 
 仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
 

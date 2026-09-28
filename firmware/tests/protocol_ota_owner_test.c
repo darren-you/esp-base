@@ -31,6 +31,9 @@ static unsigned reported_calls;
 static unsigned wifi_apply_calls, config_commit_calls;
 static const char *fake_frp_state = "stopped";
 static uint32_t fake_free_heap = 1000;
+static esp_base_container_event_observation_result_t fake_event_observation_state;
+static int32_t fake_event_guest_result;
+static bool fake_event_runtime_ok;
 #if defined(CONFIG_IDF_TARGET_ESP32)
 static unsigned iram_work_allocations;
 #endif
@@ -79,6 +82,9 @@ static void reset_case(void)
     reported_calls = 0;
     fake_frp_state = "stopped";
     fake_free_heap = 1000;
+    fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION;
+    fake_event_guest_result = 3;
+    fake_event_runtime_ok = true;
 #if defined(CONFIG_IDF_TARGET_ESP32)
     iram_work_allocations = 0;
 #endif
@@ -227,9 +233,14 @@ int main(void)
     s_reply_mqtt = false;
     char copied_result[sizeof latest_reply];
     strcpy(copied_result, latest_reply);
+    fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_OBSERVED;
     reported();
     assert(reported_calls == 1 && strstr(latest_reported, "\"frp_state\":\"stopped\"") &&
            strstr(latest_reported, "\"last_accepted_event_sequence\":3") &&
+           strstr(latest_reported, "\"last_completed_event_sequence\":2") &&
+           strstr(latest_reported, "\"last_completed_package_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"") &&
+           strstr(latest_reported, "\"last_event_outcome\":\"succeeded\"") &&
+           strstr(latest_reported, "\"last_guest_result\":3") &&
            !strcmp(latest_reply, copied_result));
     char copied_reported[sizeof latest_reported];
     strcpy(copied_reported, latest_reported);
@@ -237,12 +248,23 @@ int main(void)
     reply("11111111-1111-4111-8111-111111111112", "failed", "invalid_request", NULL);
     s_reply_mqtt = false;
     assert(!strcmp(latest_reported, copied_reported));
+    fake_event_guest_result = -7;
+    reported();
+    assert(reported_calls == 2 &&
+           strstr(latest_reported, "\"last_event_outcome\":\"business_failed\"") &&
+           strstr(latest_reported, "\"last_guest_result\":-7"));
+    fake_event_runtime_ok = false;
+    reported();
+    assert(reported_calls == 3 &&
+           strstr(latest_reported, "\"last_event_outcome\":\"runtime_failed\"") &&
+           strstr(latest_reported, "\"last_guest_result\":null"));
+    strcpy(copied_reported, latest_reported);
     char oversized_state[512];
     memset(oversized_state, 'x', sizeof oversized_state - 1);
     oversized_state[sizeof oversized_state - 1] = '\0';
     fake_frp_state = oversized_state;
     reported();
-    assert(reported_calls == 1 && !strcmp(latest_reported, copied_reported));
+    assert(reported_calls == 3 && !strcmp(latest_reported, copied_reported));
 
     reset_case();
     s_context.config.revision = 7U;
@@ -605,6 +627,19 @@ void *heap_caps_malloc(size_t size, unsigned caps)
 #endif
 int64_t esp_timer_get_time(void) { return 1000000; }
 uint64_t esp_base_mqtt_owner_event_sequence(void) { return 3; }
+esp_base_container_event_observation_result_t
+esp_base_container_product_event_observation(
+    esp_base_container_event_observation_t *out)
+{
+    *out = (esp_base_container_event_observation_t){0};
+    if (fake_event_observation_state == ESP_BASE_CONTAINER_EVENT_OBSERVED) {
+        memset(out->package_sha256, 0x11, 32);
+        out->event_sequence = 2U;
+        out->guest_result = fake_event_guest_result;
+        out->runtime_ok = fake_event_runtime_ok;
+    }
+    return fake_event_observation_state;
+}
 bool esp_base_mqtt_owner_result(const char *json, size_t length)
 {
     assert(length < sizeof latest_reply);

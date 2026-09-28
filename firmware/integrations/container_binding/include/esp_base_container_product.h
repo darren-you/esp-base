@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_base_storage_owner.h"
 #include "esp_base_ota_policy.h"
@@ -67,11 +69,32 @@ typedef enum {
  * code. The exact package digest prevents delivery across a same-boot switch.
  * ACCEPTED means queued, not processed or successful. */
 esp_base_container_event_result_t esp_base_container_product_offer_event(
-    const uint8_t package_sha256[32], const uint8_t *event, size_t size_bytes);
+    const uint8_t package_sha256[32], uint64_t event_sequence,
+    const uint8_t *event, size_t size_bytes);
 bool esp_base_container_product_event_accepting(void);
 /* Counts completed guest calls with runtime OK. The caller must still check
  * the product-specific result; this counter alone is not a trial health proof. */
 uint32_t esp_base_container_product_event_progress_count(void);
+
+typedef struct {
+    uint8_t package_sha256[32];
+    uint64_t event_sequence;
+    int32_t guest_result;
+    bool runtime_ok;
+} esp_base_container_event_observation_t;
+
+typedef enum {
+    ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION = 0,
+    ESP_BASE_CONTAINER_EVENT_OBSERVED,
+    ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY,
+} esp_base_container_event_observation_result_t;
+
+/* Latest completed guest call in this product instance. A negative guest
+ * result is a business failure; runtime_ok=false means no guest result was
+ * delivered. This volatile observation never confirms product health. */
+esp_base_container_event_observation_result_t
+esp_base_container_product_event_observation(
+    esp_base_container_event_observation_t *out);
 
 typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,

@@ -34,6 +34,7 @@ enum {
 
 typedef struct {
     size_t size_bytes;
+    uint64_t event_sequence;
     uint8_t bytes[];
 } product_event_t;
 
@@ -68,6 +69,7 @@ typedef struct {
     size_t event_head;
     size_t event_count;
     uint8_t event_package_sha256[32];
+    esp_base_container_event_observation_t last_event_observation;
     bool stop_succeeded;
     /* Native runtime was absent or stop/close completed before worker join.
      * A failed guest can still be safely unbound after this proof. */
@@ -477,10 +479,26 @@ uint32_t esp_base_container_product_event_progress_count(void)
                                           memory_order_acquire);
 }
 
-esp_base_container_event_result_t esp_base_container_product_offer_event(
-    const uint8_t package_sha256[32], const uint8_t *event, size_t size_bytes)
+esp_base_container_event_observation_result_t
+esp_base_container_product_event_observation(
+    esp_base_container_event_observation_t *out)
 {
-    if (package_sha256 == NULL || event == NULL || size_bytes == 0U ||
+    if (out == NULL) return ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION;
+    *out = (esp_base_container_event_observation_t){0};
+    if (s_product.event_lock == NULL) return ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION;
+    if (xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE)
+        return ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY;
+    *out = s_product.last_event_observation;
+    xSemaphoreGive(s_product.event_lock);
+    return out->event_sequence == 0U ? ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION :
+        ESP_BASE_CONTAINER_EVENT_OBSERVED;
+}
+
+esp_base_container_event_result_t esp_base_container_product_offer_event(
+    const uint8_t package_sha256[32], uint64_t event_sequence,
+    const uint8_t *event, size_t size_bytes)
+{
+    if (package_sha256 == NULL || event_sequence == 0U || event == NULL || size_bytes == 0U ||
         size_bytes > s_product.limits.max_event_bytes) {
         return ESP_BASE_CONTAINER_EVENT_INVALID;
     }
@@ -489,6 +507,7 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
     product_event_t *copy = malloc(sizeof(*copy) + size_bytes);
     if (copy == NULL) return ESP_BASE_CONTAINER_EVENT_NO_MEMORY;
     copy->size_bytes = size_bytes;
+    copy->event_sequence = event_sequence;
     memcpy(copy->bytes, event, size_bytes);
     if (xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) {
         memset(copy->bytes, 0, size_bytes);
@@ -667,10 +686,23 @@ static void *product_thread(void *unused)
         product_event_t *event = take_event();
         if (event != NULL) {
             int32_t guest_result = 0;
+            const uint64_t event_sequence = event->event_sequence;
             const econtainer_runtime_result_t delivered = econtainer_product_on_event(
                 open.runtime, event->bytes, event->size_bytes, &guest_result);
             memset(event->bytes, 0, event->size_bytes);
             free(event);
+            if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) {
+                ESP_LOGE(TAG, "ESP_BASE_CONTAINER_EVENT_FAILED observation lock");
+                break;
+            }
+            memcpy(s_product.last_event_observation.package_sha256,
+                   s_product.event_package_sha256, 32);
+            s_product.last_event_observation.event_sequence = event_sequence;
+            s_product.last_event_observation.runtime_ok =
+                delivered == ECONTAINER_RUNTIME_OK;
+            s_product.last_event_observation.guest_result =
+                delivered == ECONTAINER_RUNTIME_OK ? guest_result : 0;
+            xSemaphoreGive(s_product.event_lock);
             if (delivered != ECONTAINER_RUNTIME_OK) {
                 ESP_LOGE(TAG, "ESP_BASE_CONTAINER_EVENT_FAILED result=%d", (int)delivered);
                 break;
@@ -1296,6 +1328,10 @@ static esp_base_container_boot_result_t start_product(
     if (s_product.stopped == NULL) return ESP_BASE_CONTAINER_BLOCKED;
     if (s_product.event_lock == NULL) s_product.event_lock = xSemaphoreCreateMutex();
     if (s_product.event_lock == NULL) return ESP_BASE_CONTAINER_BLOCKED;
+    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE)
+        return ESP_BASE_CONTAINER_BLOCKED;
+    s_product.last_event_observation = (esp_base_container_event_observation_t){0};
+    xSemaphoreGive(s_product.event_lock);
     pthread_attr_t attributes;
     if (pthread_attr_init(&attributes) != 0) return ESP_BASE_CONTAINER_BLOCKED;
     const bool valid_thread =

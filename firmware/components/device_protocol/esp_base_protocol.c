@@ -122,6 +122,18 @@ static bool fingerprint_config_bytes(const uint8_t *bytes, size_t length, void *
 
 static uint64_t uptime_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
 
+static void package_digest_hex(char output[67], const uint8_t digest[32])
+{
+    static const char digits[] = "0123456789abcdef";
+    output[0] = '"';
+    for (size_t index = 0; index < 32U; ++index) {
+        output[1U + index * 2U] = digits[digest[index] >> 4];
+        output[2U + index * 2U] = digits[digest[index] & 15U];
+    }
+    output[65] = '"';
+    output[66] = '\0';
+}
+
 static void reported(void)
 {
     const uint64_t now = uptime_ms();
@@ -141,14 +153,35 @@ static void reported(void)
         frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request.image_size_bytes : 0);
+    esp_base_container_event_observation_t event = {0};
+    const esp_base_container_event_observation_result_t observed =
+        esp_base_container_product_event_observation(&event);
+    const char *event_outcome = observed == ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY ? "busy" :
+        observed != ESP_BASE_CONTAINER_EVENT_OBSERVED ? "none" :
+        !event.runtime_ok ? "runtime_failed" :
+        event.guest_result < 0 ? "business_failed" : "succeeded";
+    char completed_sequence[24] = "null";
+    char guest_result[16] = "null";
+    char event_package[67] = "null";
+    if (observed == ESP_BASE_CONTAINER_EVENT_OBSERVED) {
+        (void)snprintf(completed_sequence, sizeof completed_sequence,
+                       "%" PRIu64, event.event_sequence);
+        package_digest_hex(event_package, event.package_sha256);
+        if (event.runtime_ok)
+            (void)snprintf(guest_result, sizeof guest_result,
+                           "%" PRId32, event.guest_result);
+    }
     const int size = snprintf(s_response_json, MQTT_REPORTED_JSON_BYTES,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
         "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\","
-        "\"last_accepted_event_sequence\":%" PRIu64 "}",
+        "\"last_accepted_event_sequence\":%" PRIu64 ","
+        "\"last_completed_event_sequence\":%s,\"last_completed_package_sha256\":%s,"
+        "\"last_event_outcome\":\"%s\",\"last_guest_result\":%s}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
         esp_base_wifi_state(), time_ready ? "true" : "false", frp.state,
-        esp_base_mqtt_owner_event_sequence());
+        esp_base_mqtt_owner_event_sequence(), completed_sequence, event_package,
+        event_outcome, guest_result);
     if (size > 0 && (size_t)size < MQTT_REPORTED_JSON_BYTES)
         (void)esp_base_mqtt_owner_reported(s_response_json, (size_t)size);
 }
@@ -864,7 +897,8 @@ static bool handle_mqtt_event(const ebase_mqtt_event_view_t *event, void *contex
     (void)context;
     return event != NULL &&
         esp_base_container_product_offer_event(event->package_sha256,
-            event->event, event->event_size_bytes) == ESP_BASE_CONTAINER_EVENT_ACCEPTED;
+            event->event_sequence, event->event,
+            event->event_size_bytes) == ESP_BASE_CONTAINER_EVENT_ACCEPTED;
 }
 
 static void feed_serial(const unsigned char *bytes, size_t count)

@@ -84,7 +84,7 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 
 ## 产品 MQTT 业务事件帧
 
-`product_event.py` 读取权限精确为 0600、内容为 64 个小写十六进制字符的**现有设备管理密钥文件**，使用当前设备 UUID、当前 boot UUID、已核对的签名包 SHA-256、下一个连续事件序号和原始 guest 事件文件，生成新的 0600 二进制帧文件；不在命令行或终端输出密钥。它只生成 wire 帧，不替代 Broker 账户、TLS、正式发布、guest 执行结果或试运行健康裁决。调用方须向脚本显示的精确 `esp-base/<device_id>/event` Topic 以 QoS 1、非 retained 方式发布该帧，并从新鲜非 retained `reported.last_accepted_event_sequence` 判断入队。Broker PUBACK 不能证明入队；旧 boot、错包、满队列或离线时序号不推进。重试须重新核对高水位及当前 boot，原序号使用原帧，不改内容。
+`product_event.py` 读取权限精确为 0600、内容为 64 个小写十六进制字符的**现有设备管理密钥文件**，使用当前设备 UUID、当前 boot UUID、已核对的签名包 SHA-256、下一个连续事件序号和原始 guest 事件文件，生成新的 0600 二进制帧文件；不在命令行或终端输出密钥。它只生成 wire 帧，不替代 Broker 账户、TLS、正式发布、guest 执行结果或试运行健康裁决。调用方须向脚本显示的精确 `esp-base/<device_id>/event` Topic 以 QoS 1、非 retained 方式发布该帧，并从新鲜非 retained `reported.last_accepted_event_sequence` 判断入队。Broker PUBACK 不能证明入队；`reported.last_completed_event_sequence`、`last_completed_package_sha256`、`last_event_outcome` 与 `last_guest_result` 是最近启动的产品实例中的最近一次 guest 调用的只读观察，仍不能单独确认产品健康。旧 boot、错包、满队列或离线时序号不推进。重试须重新核对高水位及当前 boot，原序号使用原帧，不改内容。
 
 ```bash
 python3 tools/product_event.py --management-key-file <私有0600密钥文件> \

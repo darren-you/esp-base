@@ -27,7 +27,22 @@ typedef enum {
     ESP_BASE_CONTAINER_EVENT_BUSY,
 } esp_base_container_event_result_t;
 esp_base_container_event_result_t esp_base_container_product_offer_event(
-    const uint8_t package_sha256[32], const uint8_t *event, size_t size_bytes);
+    const uint8_t package_sha256[32], uint64_t event_sequence,
+    const uint8_t *event, size_t size_bytes);
+typedef struct {
+    uint8_t package_sha256[32];
+    uint64_t event_sequence;
+    int32_t guest_result;
+    bool runtime_ok;
+} esp_base_container_event_observation_t;
+typedef enum {
+    ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION = 0,
+    ESP_BASE_CONTAINER_EVENT_OBSERVED,
+    ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY,
+} esp_base_container_event_observation_result_t;
+esp_base_container_event_observation_result_t
+esp_base_container_product_event_observation(
+    esp_base_container_event_observation_t *out);
 bool esp_base_container_product_snapshot_for_ota(
     const esp_base_storage_claim_t *claim,
     esp_base_ota_receipt_snapshot_t *snapshot);

@@ -876,24 +876,43 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     assert(first_index >= 0 && esp_base_container_product_event_accepting());
     const uint8_t event[] = {1, 2, 3};
     uint8_t wrong_sha256[32];
+    esp_base_container_event_observation_t observed_event = {0};
+    assert(esp_base_container_product_event_observation(&observed_event) ==
+           ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION);
     memcpy(wrong_sha256, first_state.bindings[first_index].package_sha256, 32);
     wrong_sha256[0] ^= 0xff;
-    assert(esp_base_container_product_offer_event(wrong_sha256, event, sizeof event) ==
+    assert(esp_base_container_product_offer_event(wrong_sha256, 1U, event, sizeof event) ==
            ESP_BASE_CONTAINER_EVENT_INVALID);
     assert(esp_base_container_product_offer_event(
-        first_state.bindings[first_index].package_sha256, event, 0U) ==
+        first_state.bindings[first_index].package_sha256, 0U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_INVALID);
     assert(esp_base_container_product_offer_event(
-        first_state.bindings[first_index].package_sha256, event, sizeof event) ==
+        first_state.bindings[first_index].package_sha256, 1U, event, 0U) ==
+        ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(
+        first_state.bindings[first_index].package_sha256, 1U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
          attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
          ++attempt) vTaskDelay(1U);
     assert(esp_base_container_product_event_progress_count() == 1U);
+    esp_base_container_event_observation_result_t observed_state =
+        ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY;
+    for (unsigned attempt = 0;
+         attempt < 200U && observed_state == ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY;
+         ++attempt) {
+        observed_state = esp_base_container_product_event_observation(&observed_event);
+        if (observed_state == ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY) vTaskDelay(1U);
+    }
+    assert(observed_state == ESP_BASE_CONTAINER_EVENT_OBSERVED &&
+           observed_event.event_sequence == 1U &&
+           observed_event.runtime_ok && observed_event.guest_result == 3 &&
+           !memcmp(observed_event.package_sha256,
+                   first_state.bindings[first_index].package_sha256, 32));
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(!esp_base_container_product_event_accepting());
     assert(esp_base_container_product_offer_event(
-        first_state.bindings[first_index].package_sha256, event, sizeof event) ==
+        first_state.bindings[first_index].package_sha256, 2U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
     int32_t expected = 3;
     assert(esp_base_container_with_firmware_set(&claim,
@@ -915,16 +934,30 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     assert(memcmp(&physical, &original_firmware, sizeof physical) == 0);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
     assert(esp_base_container_product_event_progress_count() == 0U);
+    assert(esp_base_container_product_event_observation(&observed_event) ==
+           ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION);
     assert(esp_base_container_product_offer_event(
-        first_state.bindings[first_index].package_sha256, event, sizeof event) ==
+        first_state.bindings[first_index].package_sha256, 2U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_INVALID);
     assert(esp_base_container_product_offer_event(
-        second_state.bindings[second_index].package_sha256, event, sizeof event) ==
+        second_state.bindings[second_index].package_sha256, 2U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
          attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
          ++attempt) vTaskDelay(1U);
     assert(esp_base_container_product_event_progress_count() == 1U);
+    observed_state = ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY;
+    for (unsigned attempt = 0;
+         attempt < 200U && observed_state == ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY;
+         ++attempt) {
+        observed_state = esp_base_container_product_event_observation(&observed_event);
+        if (observed_state == ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY) vTaskDelay(1U);
+    }
+    assert(observed_state == ESP_BASE_CONTAINER_EVENT_OBSERVED &&
+           observed_event.event_sequence == 2U &&
+           observed_event.runtime_ok && observed_event.guest_result == 6 &&
+           !memcmp(observed_event.package_sha256,
+                   second_state.bindings[second_index].package_sha256, 32));
     assert(esp_base_container_product_stop_confirmed(&claim));
     expected = 6;
     assert(esp_base_container_with_firmware_set(&claim,
