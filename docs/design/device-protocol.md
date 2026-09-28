@@ -1,6 +1,6 @@
 # 设备控制协议 v1
 
-本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、只读 `product.status`／`product.result`、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执；产品写命令仍待实现。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与实板证据见开发检查点。
+本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、只读 `product.status`／`product.result`、公开 `product.uninstall`、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执；公开安装／升级仍待实现。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与测试边界见开发检查点。
 
 ## 帧与身份
 
@@ -10,9 +10,9 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 只读 `ota.result` 请求精确包含 `protocol_version:1`、`request_id`、`command:"ota.result"`、`parameters:{"operation_id":"<UUID v4>"}`；它不携带写入期限或目标 boot，允许在新启动后按原 operation ID 读取结果。响应 `request_id` 对应本次查询，`result` 含 `operation_id`、完整 signed bin `sha256`、`image_size_bytes`、固定 `target` 和 `target_slot`。设备身份仍以响应的 `device_id` 由调用方核对。
 
-只读 `product.result` 使用相同的四个顶层字段，`command` 为 `product.result`，`parameters` 只含原 `operation_id`。它从 `base_store/base_product/operations` 的持久账本读取最近固定条数；已记录结果包含 `operation_id`、`operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与数值 `result_code`。已完成记录返回 `succeeded`／`failed`，未决意图返回 `unknown/product_operation_unresolved`，窗口外旧 ID 或尚未初始化的账本返回 `unknown/product_operation_not_found`，存储不确定返回 `unknown/storage_uncertain`。缺失 NVS 键不能自行重置操作序号并受理写入；首次初始化须由未来控制器从持久 Container 基线另行证明。查询不会触发安装、下载、试运行或重放。当前设备尚无 `product.*` 写入口，因此此只读查询只形成软件合同，不代表业务安装能力已交付；最近 8 条虽已通过固定 SDK／QEMU 的 C3 六／八页和 ESP32 六页容量复测，仍需真实磨损与设备链路验收。
+只读 `product.result` 使用相同的四个顶层字段，`command` 为 `product.result`，`parameters` 只含原 `operation_id`。它从 `base_store/base_product/operations` 的持久账本读取最近固定 8 条；已记录结果包含 `operation_id`、`operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与数值 `result_code`。已完成记录返回 `succeeded`／`failed`，未决意图返回 `unknown/product_operation_unresolved`，窗口外旧 ID 或尚未初始化的账本返回 `unknown/product_operation_not_found`，存储不确定返回 `unknown/storage_uncertain`。缺失 NVS 键不能自行重置操作序号并受理写入；启动时仅在签名固件与 ECS2 均证明无历史操作的初始空绑定后建账，历史状态或不确定读回阻断 READY。查询不会触发安装、下载、试运行或重放。持久连续序号阻止窗口外旧请求用原序号重执行；公开卸载仍需设备级验收，公开安装／升级尚未实现。
 
-只读 `product.status` 精确包含 `protocol_version:1`、`request_id`、`command:"product.status"`，没有 `parameters`。已初始化账本返回 `operation_sequence_high_watermark`、`next_operation_sequence` 与 `pending_operation_id`；高水位耗尽时下一序号为 null，末条为未决 PREPARED 时返回其原 ID，否则未决 ID 为 null。键缺失返回 `unknown/product_ledger_uninitialized` 且 result 为 null，忙或存储不确定同样不输出序号。查询不初始化账本，也不保证后来写入时序号仍未被另一请求占用；正式写命令必须在持久账本上原子核对连续序号。
+只读 `product.status` 精确包含 `protocol_version:1`、`request_id`、`command:"product.status"`，没有 `parameters`。在同一 Base 存储占用期内核对签名固件对应的 ECS2 绑定并读取账本，返回 `operation_sequence_high_watermark`、`next_operation_sequence`、`pending_operation_id`、`container_sequence` 与可为 null 的 `package_sha256`；高水位耗尽时下一序号为 null，末条为未决 PREPARED 时返回其原 ID，否则未决 ID 为 null。键缺失返回 `unknown/product_ledger_uninitialized` 且 result 为 null，忙或绑定／存储不确定同样不输出序号。查询不初始化账本，不验证包字节或 guest 健康，也不保证后来写入时序号仍未被另一请求占用；写命令在持久账本上核对连续序号。
 
 写命令必须且仅包含 `protocol_version`、`device_id`、`target_boot_id`、`request_id`、`command`、`expires_at_uptime_ms`、`parameters`。request_id 为规范 UUID v4；target_boot_id 必须精确等于当前启动值，受理期限为当前设备 uptime 后不超过 30000 ms；在出队执行前再次验证。过期拒绝，不跨启动重放。
 
@@ -22,7 +22,8 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 - `restart`：parameters 为空对象；发送成功不表示重启成功，必须回读相同 device_id 的新 boot_id。
 - `ota.start`：parameters 精确包含 `operation_id`（UUID v4）、`image_url`（最多 512 字节 HTTPS URL）、`sha256`（完整 signed bin 的小写 64 字符十六进制）、`image_size_bytes`（完整镜像字节数）、`target`（C3 固定 `esp32c3/esp_base`，ESP32 固定 `esp32/esp_base`）、`signature`（C3 精确 `{"scheme":"esp_secure_boot_v2_rsa3072"}`，ESP32 精确 `{"scheme":"esp_secure_boot_v1_ecdsa_p256"}`）。签名构建要求当前运行槽 VALID、boot 与 running 一致、另一 OTA 槽可写、Wi-Fi IP 和本次启动时间同步。目标 otadata 只允许历史 VALID/INVALID/ABORTED/UNDEFINED 或尚无记录；NEW/PENDING/读取异常拒绝写入。启动下载任务前先把设备 ID、operation ID、摘要、长度与旧/目标槽写入 `base_store/base_ota/operation` 并逐字节读回；写入不确定时拒绝下载。下载期间不重复执行同一操作；切槽后先报告 running 并重启，成功须待新槽本地自检完成、otadata 为 VALID 且运行镜像完整摘要匹配。
 - `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃或目标槽 pending 时为 `running`；目标槽运行且 VALID、完整镜像摘要匹配时为 `succeeded`；已持久记录的下载失败或目标槽 ABORTED/INVALID 且旧槽有效时为 `failed`；收据缺失/损坏、槽关系不明或仅见旧槽而无失败证据时为 `unknown`。普通未签名构建拒绝查询。
-- `business.*`：仅派发业务注册的命令与参数 schema，未知命令拒绝，不提供任意 shell、脚本或 Topic。
+- `product.uninstall`：parameters 精确包含 `operation_id`（UUID v4）、`operation_sequence`（下一连续持久序号）、`expected_container_sequence`（当前 ECS2 序号）和 `package_sha256`（当前包总摘要的小写非零 64 字符十六进制）。公共写命令身份、boot 与期限核对后，Base 独占 OTA／产品长存储操作权；设备用同一签名固件下的 ECS2 快照核对序号与包绑定，先持久提交并读回账本 `PREPARED`，再由正式 Container 停止并回收 guest、清除当前固件的已确认绑定，读回空绑定并持久写入终态。重复 operation ID 只查询原指纹与账本结果，不重新卸载；复位后在网络入口开放前只读核对原 UUID、ECS2 序号和绑定，证明已提交或未提交时分别写回成功或失败，否则阻断 READY。未知结果按原 ID 查询，不自动重发或换 ID；包字节和产品数据不随绑定清除而擦除。
+- 独立业务事件只从已认证的 MQTT `event` Topic 入队给 guest；当前设备协议没有 `business.*` 命令。未知命令拒绝，不提供任意 shell、脚本或 Topic。
 
 配置 `schema_version` 固定 3，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 为 null 或精确 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}`；business 必须为 null。FRP Token 为 1–256 字节非空可打印 ASCII，CA PEM 最多 2048 字节，proxy_name 为 1–128 字节受限 ASCII，三个端口均为 1–65535；本地目标固定为 `127.0.0.1`，独立管理 key 与 MQTT key 不互用。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT/FRP 能力按实际 owner 状态报告。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。
 
@@ -33,6 +34,8 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 同 boot 下缓存有界 request_id 与规范内容 SHA-256；同 ID 不同内容返回 request_conflict。缓存满时拒绝新操作，不驱逐尚可被重复投递的有效条目后再次执行。重启后的未终态只能报告 unknown 或基于持久裁决对账，不宣称物理 exactly-once。
 
 OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下载：摘要/长度相同返回 `ota_operation_exists`，不同返回 `ota_operation_conflict`。前次结果未能裁决时，新 ID 返回 `ota_previous_unresolved`，不能覆盖唯一持久证据；可能需要外部恢复后才能继续 OTA。一个新操作仅在前次有成功或失败证据时覆盖收据。新镜像摘要等于已复核的运行镜像摘要时，`ota.start` 返回 `failed/ota_same_image`，不写新收据、不退役旧备用槽、不创建下载任务；查询这个未登记的 operation 返回 `unknown/ota_operation_not_found`。目标状态不安全、selector 不一致、当前槽非 VALID 或目标状态读回异常分别拒绝并返回 `ota_target_not_safe`、`ota_selector_mismatch`、`ota_source_not_valid` 或 `ota_target_state_unknown`。`ota.result` 不重放写动作；查询旧 ID 在收据被新操作替换后返回 `unknown/ota_operation_not_found`。回滚若进入尚未实现 `ota.result` 的旧镜像，该镜像无法读取新收据，工具必须报告 unknown，不能推断失败或成功。
+
+产品账本保留最近 8 条操作与不回退的 `operation_sequence` 高水位。`product.uninstall` 对同一 operation ID 的相同规范指纹只读取原结果，指纹、操作类型或包摘要冲突返回 `product_operation_conflict`；窗口外 ID 返回查询 unknown，旧请求的持久序号不能再通过写入门。若卸载意图已持久提交但结果未能证明，设备保留存储占用并返回 unknown；下一次启动仅凭真实 ECS2 恢复裁决，不重放卸载。该账本记录操作结果，不复制或替代 ECS2 的包绑定事实。
 
 ## 网络授权与首配
 
