@@ -10,6 +10,7 @@ import select
 import termios
 import time
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location("device_control", Path(__file__).with_name("device-control.py"))
 control = importlib.util.module_from_spec(spec)
@@ -271,7 +272,7 @@ class ProductUninstallTests(unittest.TestCase):
                 elif command == "product.result":
                     assert request["parameters"] == {"operation_id": operation}
                     result = {"operation_id": operation, "operation_sequence": 1,
-                              "container_sequence": 7 if self.write_state == "succeeded" else 6,
+                              "container_sequence": 7 if self.write_state in {"succeeded", "timeout"} else 6,
                               "result_code": 0, "kind": "uninstall",
                               "package_sha256": digest}
                     if self.write_state == "unknown":
@@ -308,6 +309,20 @@ class ProductUninstallTests(unittest.TestCase):
         self.assertEqual((result["state"], result["error_code"]),
                          ("unknown", "product_operation_unresolved"))
         self.assertEqual(port.commands.count("product.uninstall"), 1)
+        port = Device("timeout")
+        real_read_result = control.read_result
+
+        def timeout_uninstall_result(port_arg, request_id, deadline):
+            if port_arg.commands[-1] == "product.uninstall":
+                raise TimeoutError("卸载回执超时")
+            yield from real_read_result(port_arg, request_id, deadline)
+
+        with mock.patch.object(control, "read_result", timeout_uninstall_result):
+            result = control.product_uninstall(port, current, operation, 1, 6, digest)
+        self.assertEqual((result["state"], result["result"]["container_sequence"]),
+                         ("succeeded", 7))
+        self.assertEqual(port.commands,
+                         ["product.status", "status", "product.uninstall", "product.result"])
 
 
 if __name__ == "__main__":

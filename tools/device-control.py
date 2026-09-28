@@ -277,26 +277,34 @@ def product_uninstall(port, current, operation_id, operation_sequence,
                                "operation_sequence": operation_sequence,
                                "expected_container_sequence": expected_container_sequence,
                                "package_sha256": expected_package_sha256}})
-    for receipt in read_result(port, request_id, time.monotonic() + 30):
-        if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
-            raise ValueError("产品卸载回执来自另一设备或启动；按原操作 ID 查询")
-        if receipt["result"] is not None:
-            raise ValueError("产品卸载回执字段无效；按原操作 ID 查询")
-        if receipt["state"] in {"succeeded", "unknown"}:
-            result = product_result(port, current, operation_id)
-            evidence = result["result"]
-            if result["state"] == "succeeded":
-                if (not isinstance(evidence, dict) or evidence["kind"] != "uninstall" or
-                        evidence["operation_sequence"] != operation_sequence or
-                        evidence["container_sequence"] != expected_container_sequence + 1 or
-                        evidence["package_sha256"] != expected_package_sha256):
-                    raise ValueError("产品卸载终态与预期不符；状态为 unknown")
-                return result
-            if receipt["state"] == "succeeded":
-                raise ValueError("设备报告卸载成功但持久结果未确认；按原操作 ID 查询")
-            return result
-        if receipt["state"] in {"failed", "expired"}:
-            return receipt
+    receipt_succeeded = False
+    try:
+        for receipt in read_result(port, request_id, time.monotonic() + 30):
+            if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
+                raise ValueError("产品卸载回执来自另一设备或启动；按原操作 ID 查询")
+            if receipt["result"] is not None:
+                raise ValueError("产品卸载回执字段无效；按原操作 ID 查询")
+            if receipt["state"] in {"succeeded", "unknown"}:
+                receipt_succeeded = receipt["state"] == "succeeded"
+                break
+            if receipt["state"] in {"failed", "expired"}:
+                return receipt
+    except TimeoutError:
+        pass
+    # A timeout is unknown, so query the durable ledger by the original ID.
+    # Never resend the product write, even if the read-only query also times out.
+    result = product_result(port, current, operation_id)
+    evidence = result["result"]
+    if result["state"] == "succeeded":
+        if (not isinstance(evidence, dict) or evidence["kind"] != "uninstall" or
+                evidence["operation_sequence"] != operation_sequence or
+                evidence["container_sequence"] != expected_container_sequence + 1 or
+                evidence["package_sha256"] != expected_package_sha256):
+            raise ValueError("产品卸载终态与预期不符；状态为 unknown")
+        return result
+    if receipt_succeeded:
+        raise ValueError("设备报告卸载成功但持久结果未确认；按原操作 ID 查询")
+    return result
 
 
 def validate_configuration(config):
