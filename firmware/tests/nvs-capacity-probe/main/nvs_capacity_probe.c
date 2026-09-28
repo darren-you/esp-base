@@ -49,9 +49,9 @@ static bool acquire_flash_io(void *context)
     return xSemaphoreTake((SemaphoreHandle_t)context, 0) == pdTRUE;
 }
 
-static void release_flash_io(void *context)
+static bool release_flash_io(void *context)
 {
-    (void)xSemaphoreGive((SemaphoreHandle_t)context);
+    return xSemaphoreGive((SemaphoreHandle_t)context) == pdTRUE;
 }
 
 static void put_u32(uint8_t *bytes, uint32_t value)

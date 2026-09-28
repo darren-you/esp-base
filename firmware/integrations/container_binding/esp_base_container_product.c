@@ -99,12 +99,15 @@ static bool acquire_flash_io(void *context)
         esp_base_storage_claim(product->flash_io_owner, &product->flash_io_claim);
 }
 
-static void release_flash_io(void *context)
+static bool release_flash_io(void *context)
 {
     product_context_t *product = context;
-    if (product == NULL || !esp_base_storage_release(&product->flash_io_claim)) {
+    const bool released = product != NULL &&
+        esp_base_storage_release(&product->flash_io_claim);
+    if (!released) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED short Flash I/O lease release failed");
     }
+    return released;
 }
 
 /* Every field is an independently approved build input. An entirely empty

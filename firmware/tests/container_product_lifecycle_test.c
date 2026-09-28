@@ -217,12 +217,13 @@ static bool map_flash(void *context, uint32_t offset, size_t size,
     return true;
 }
 
-static void unmap_flash(void *context, uintptr_t handle)
+static bool unmap_flash(void *context, uintptr_t handle)
 {
     store_t *device = context;
     assert(device->locked && handle == 0 && device->mapping != NULL);
     free(device->mapping);
     device->mapping = NULL;
+    return true;
 }
 
 static const econtainer_slots_io_t io = {
