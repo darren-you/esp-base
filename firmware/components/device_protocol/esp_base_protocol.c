@@ -543,15 +543,21 @@ bool esp_base_protocol_recover_product_package(
         return false;
     }
     uint32_t resolved_sequence = 0U;
-    if (!esp_base_container_product_recover_pending_package(
+    const esp_base_container_package_recovery_t recovered =
+        esp_base_container_product_recover_pending_package(
             claim, s_boot_id, pending.operation_id, pending.container_sequence,
-            pending.package_sha256, &resolved_sequence)) {
+            pending.package_sha256, &resolved_sequence);
+    if (recovered == ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN ||
+        resolved_sequence == 0U) {
         free(ledger);
         return false;
     }
     const ebase_product_ledger_result_t finished = ebase_product_ledger_finish(
         ledger, &io, pending.sequence, pending.operation_id, pending.fingerprint,
-        EBASE_PRODUCT_FAILED, 1U, resolved_sequence);
+        recovered == ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED ?
+            EBASE_PRODUCT_SUCCEEDED : EBASE_PRODUCT_FAILED,
+        recovered == ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED ? 0U : 1U,
+        resolved_sequence);
     free(ledger);
     return finished == EBASE_LEDGER_OK;
 }

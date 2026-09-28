@@ -1291,6 +1291,58 @@ static void run_package_trial_confirmation_uncertain(
            persisted.sequence == prepared_sequence +
                (expected_phase == ECONTAINER_SLOT_CONFIRMED ? 3U : 2U));
     assert(esp_base_container_product_stop_trial(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    configure_product(key); /* New boot retains the durable ECS2 and package bytes. */
+    assert(esp_base_storage_claim(&owner, &claim));
+    const char new_boot_id[] = "77777777-7777-4777-8777-777777777779";
+    uint32_t resolved_sequence = 123U;
+    const unsigned writes_before = store.blob_writes;
+    assert(esp_base_container_product_recover_pending_package(&claim,
+        new_boot_id, "99999999-9999-4999-8999-999999999991",
+        request.expected_sequence, request.package_sha256, &resolved_sequence) ==
+        ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN);
+    assert(resolved_sequence == 0U && store.blob_writes == writes_before);
+    if (expected_phase == ECONTAINER_SLOT_CONFIRMED) {
+        uint8_t wrong_sha256[32];
+        memcpy(wrong_sha256, request.package_sha256, sizeof wrong_sha256);
+        wrong_sha256[0] ^= 1U;
+        assert(esp_base_container_product_recover_pending_package(&claim,
+            new_boot_id, request.operation_id, request.expected_sequence,
+            wrong_sha256, &resolved_sequence) ==
+            ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN);
+        assert(esp_base_container_product_recover_pending_package(&claim,
+            boot_id, request.operation_id, request.expected_sequence,
+            request.package_sha256, &resolved_sequence) ==
+            ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN);
+        assert(resolved_sequence == 0U && store.blob_writes == writes_before);
+        const uint32_t offset = geometry.slots[persisted.operation.slot].offset_bytes -
+            FLASH_BASE;
+        store.flash[offset] ^= 1U;
+        assert(esp_base_container_product_recover_pending_package(&claim,
+            new_boot_id, request.operation_id, request.expected_sequence,
+            request.package_sha256, &resolved_sequence) ==
+            ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN);
+        assert(resolved_sequence == 0U && store.blob_writes == writes_before);
+        store.flash[offset] ^= 1U;
+    }
+    const esp_base_container_package_recovery_t outcome =
+        esp_base_container_product_recover_pending_package(&claim,
+            new_boot_id, request.operation_id, request.expected_sequence,
+            request.package_sha256, &resolved_sequence);
+    assert(outcome == (expected_phase == ECONTAINER_SLOT_CONFIRMED ?
+           ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED :
+           ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED));
+    assert(resolved_sequence == persisted.sequence +
+           (expected_phase == ECONTAINER_SLOT_CONFIRMED ? 0U : 1U));
+    assert(store.blob_writes == writes_before +
+           (expected_phase == ECONTAINER_SLOT_CONFIRMED ? 0U : 1U));
+    assert(esp_base_container_product_boot(&claim, new_boot_id) ==
+           (expected_phase == ECONTAINER_SLOT_CONFIRMED ?
+            ESP_BASE_CONTAINER_RUNNING : ESP_BASE_CONTAINER_EMPTY));
+    if (expected_phase == ECONTAINER_SLOT_CONFIRMED)
+        assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
     dispose_product();
     assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
@@ -1360,16 +1412,19 @@ static void run_package_trial_cold_recovery(const file_t *key,
     assert(esp_base_storage_claim(&owner, &claim));
     uint32_t resolved_sequence = 123U;
     const unsigned writes_before = store.blob_writes;
-    assert(!esp_base_container_product_recover_pending_package(&claim,
+    assert(esp_base_container_product_recover_pending_package(&claim,
         new_boot_id, "99999999-9999-4999-8999-999999999996",
-        original.sequence, request.package_sha256, &resolved_sequence));
-    assert(!esp_base_container_product_recover_pending_package(&claim,
+        original.sequence, request.package_sha256, &resolved_sequence) ==
+        ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN);
+    assert(esp_base_container_product_recover_pending_package(&claim,
         old_boot_id, request.operation_id, original.sequence,
-        request.package_sha256, &resolved_sequence));
+        request.package_sha256, &resolved_sequence) ==
+        ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN);
     assert(store.blob_writes == writes_before && resolved_sequence == 0U);
     assert(esp_base_container_product_recover_pending_package(&claim,
         new_boot_id, request.operation_id, original.sequence,
-        request.package_sha256, &resolved_sequence));
+        request.package_sha256, &resolved_sequence) ==
+        ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED);
     assert(resolved_sequence == trial.sequence + 1U);
     econtainer_slots_state_t abandoned = {0};
     assert(econtainer_slots_load(&io, &geometry, &abandoned) == ECONTAINER_SLOTS_OK &&
@@ -1379,7 +1434,8 @@ static void run_package_trial_cold_recovery(const file_t *key,
     const unsigned writes_after_recovery = store.blob_writes;
     assert(esp_base_container_product_recover_pending_package(&claim,
         new_boot_id, request.operation_id, original.sequence,
-        request.package_sha256, &resolved_sequence));
+        request.package_sha256, &resolved_sequence) ==
+        ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED);
     assert(resolved_sequence == abandoned.sequence &&
            store.blob_writes == writes_after_recovery);
     assert(esp_base_container_product_boot(&claim, new_boot_id) ==
@@ -1422,7 +1478,7 @@ static void run_package_intent_without_reservation(const file_t *key,
     uint32_t resolved_sequence = 0U;
     assert(esp_base_container_product_recover_pending_package(&claim,
         new_boot_id, operation_id, before.sequence, candidate_sha256,
-        &resolved_sequence));
+        &resolved_sequence) == ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED);
     assert(resolved_sequence == before.sequence &&
            store.blob_writes == writes_before);
     assert(esp_base_container_product_boot(&claim, new_boot_id) ==

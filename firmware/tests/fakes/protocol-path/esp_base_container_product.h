@@ -30,7 +30,12 @@ typedef enum {
 esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uninstall(
     const esp_base_storage_claim_t *claim, const char operation_id[37],
     uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);
-bool esp_base_container_product_recover_pending_package(
+typedef enum {
+    ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN = 0,
+    ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED,
+    ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED,
+} esp_base_container_package_recovery_t;
+esp_base_container_package_recovery_t esp_base_container_product_recover_pending_package(
     const esp_base_storage_claim_t *claim, const char boot_id[37],
     const char operation_id[37], uint32_t expected_sequence,
     const uint8_t package_sha256[32], uint32_t *resolved_sequence);

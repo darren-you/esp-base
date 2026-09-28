@@ -122,12 +122,18 @@ bool esp_base_container_product_abandon_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES]);
 
+typedef enum {
+    ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN = 0,
+    ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED,
+    ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED,
+} esp_base_container_package_recovery_t;
+
 /* Before ordinary product_boot on a fresh boot, reconcile one durable
  * PREPARED install/upgrade ledger record. A never-started operation or an
- * exact old-boot WRITING/PREPARED/TRIAL_STARTED/HEALTH_VERIFIED candidate is
- * proved failed; the latter is durably abandoned and independently read back.
- * A confirmed result or any uncertain fact remains unresolved. */
-bool esp_base_container_product_recover_pending_package(
+ * exact old-boot candidate is proved failed; the latter is durably abandoned.
+ * An exact old-boot CONFIRMED package binding is proved succeeded without
+ * replaying the operation. Any uncertain fact leaves the ledger pending. */
+esp_base_container_package_recovery_t esp_base_container_product_recover_pending_package(
     const esp_base_storage_claim_t *claim, const char boot_id[37],
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint32_t expected_sequence, const uint8_t package_sha256[32],

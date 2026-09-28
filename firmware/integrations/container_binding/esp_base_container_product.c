@@ -2266,6 +2266,7 @@ static bool same_binding(const econtainer_slot_binding_t *left,
 typedef struct {
     uint32_t expected_sequence;
     uint32_t resolved_sequence;
+    esp_base_container_package_recovery_t outcome;
     uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
     uint8_t package_sha256[32];
     uint8_t boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
@@ -2295,6 +2296,7 @@ static econtainer_slots_result_t recover_pending_package(
             decision != ECONTAINER_SLOT_BOOT_CONFIRMED ||
             checked.sequence != before.sequence) return ECONTAINER_SLOTS_CONFLICT;
         recovery->resolved_sequence = before.sequence;
+        recovery->outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED;
         return ECONTAINER_SLOTS_OK;
     }
     if (!same_operation || before.operation.firmware_transition ||
@@ -2307,6 +2309,34 @@ static econtainer_slots_result_t recover_pending_package(
         return ECONTAINER_SLOTS_CONFLICT;
     }
     const uint32_t steps = before.sequence - recovery->expected_sequence;
+    if (before.phase == ECONTAINER_SLOT_CONFIRMED) {
+        const int index = binding_index(&before,
+            firmware_set->running_firmware_sha256);
+        if (steps != 5U || index < 0 ||
+            memcmp(before.operation.trial_boot_id, recovery->boot_id,
+                   sizeof recovery->boot_id) == 0 ||
+            !before.bindings[index].package_present ||
+            memcmp(before.bindings[index].package_sha256,
+                   recovery->package_sha256, 32) != 0)
+            return ECONTAINER_SLOTS_CONFLICT;
+        econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
+        econtainer_slots_state_t checked = {0};
+        result = econtainer_slots_reconcile(&s_product.provider.io,
+            &s_product.provider.geometry, firmware_set, &checked, &decision);
+        if (result != ECONTAINER_SLOTS_OK ||
+            decision != ECONTAINER_SLOT_BOOT_CONFIRMED ||
+            checked.phase != ECONTAINER_SLOT_CONFIRMED ||
+            checked.sequence != before.sequence ||
+            memcmp(checked.operation.operation_id, recovery->operation_id,
+                   sizeof recovery->operation_id) != 0 ||
+            !same_binding(&checked.bindings[index], &before.bindings[index]) ||
+            !same_binding(&checked.bindings[1 - index],
+                          &before.bindings[1 - index]))
+            return ECONTAINER_SLOTS_CONFLICT;
+        recovery->resolved_sequence = checked.sequence;
+        recovery->outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED;
+        return ECONTAINER_SLOTS_OK;
+    }
     if (before.phase == ECONTAINER_SLOT_ABORTED) {
         if (steps < 2U) return ECONTAINER_SLOTS_CONFLICT;
         econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
@@ -2317,6 +2347,7 @@ static econtainer_slots_result_t recover_pending_package(
             decision != ECONTAINER_SLOT_BOOT_CONFIRMED ||
             checked.sequence != before.sequence) return ECONTAINER_SLOTS_CONFLICT;
         recovery->resolved_sequence = before.sequence;
+        recovery->outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED;
         return ECONTAINER_SLOTS_OK;
     }
     if (!((before.phase == ECONTAINER_SLOT_WRITING && steps == 1U) ||
@@ -2351,10 +2382,11 @@ static econtainer_slots_result_t recover_pending_package(
             return ECONTAINER_SLOTS_UNCERTAIN;
     }
     recovery->resolved_sequence = readback.sequence;
+    recovery->outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED;
     return ECONTAINER_SLOTS_OK;
 }
 
-bool esp_base_container_product_recover_pending_package(
+esp_base_container_package_recovery_t esp_base_container_product_recover_pending_package(
     const esp_base_storage_claim_t *claim, const char boot_id[37],
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint32_t expected_sequence, const uint8_t package_sha256[32],
@@ -2365,17 +2397,20 @@ bool esp_base_container_product_recover_pending_package(
         s_product.start_attempted || s_product.thread_joinable ||
         expected_sequence == 0U || expected_sequence > UINT32_MAX - 5U ||
         package_sha256 == NULL || resolved_sequence == NULL ||
-        !ensure_provider(claim)) return false;
+        !ensure_provider(claim))
+        return ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN;
     package_recovery_context_t recovery = {.expected_sequence = expected_sequence};
     if (!decode_uuid(boot_id, recovery.boot_id) ||
-        !decode_uuid(operation_id, recovery.operation_id)) return false;
+        !decode_uuid(operation_id, recovery.operation_id))
+        return ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN;
     memcpy(recovery.package_sha256, package_sha256, 32);
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
         recover_pending_package, &recovery);
-    if (result != ECONTAINER_SLOTS_OK) return false;
+    if (result != ECONTAINER_SLOTS_OK)
+        return ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN;
     *resolved_sequence = recovery.resolved_sequence;
-    return true;
+    return recovery.outcome;
 }
 
 static econtainer_slots_result_t uninstall_preflight(

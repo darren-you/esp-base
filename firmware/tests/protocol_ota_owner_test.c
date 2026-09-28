@@ -21,7 +21,7 @@ static esp_base_container_boot_result_t product_boot_result;
 static unsigned product_uninstall_calls, product_boot_calls;
 static esp_base_container_uninstall_recovery_t product_recovery_result;
 static unsigned product_recovery_calls;
-static bool package_recovery_ok;
+static esp_base_container_package_recovery_t package_recovery_outcome;
 static uint32_t package_recovery_sequence;
 static unsigned package_recovery_calls;
 static efrp_aead_flash_store_t frp_store;
@@ -70,7 +70,7 @@ static void reset_case(void)
     product_uninstall_calls = product_boot_calls = 0;
     product_recovery_result = ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN;
     product_recovery_calls = 0;
-    package_recovery_ok = false;
+    package_recovery_outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN;
     package_recovery_sequence = 0U;
     package_recovery_calls = 0U;
     memset(product_bytes, 0, sizeof product_bytes);
@@ -325,13 +325,30 @@ static void check_product_package_preboot_recovery(void)
     assert(package_recovery_calls == 1U && esp_base_storage_claim_active(&claim));
     assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
            ledger.records[0].state == EBASE_PRODUCT_PREPARED);
-    package_recovery_ok = true;
+    package_recovery_outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_FAILED;
     package_recovery_sequence = 9U;
     assert(esp_base_protocol_recover_product_package(&claim));
     assert(package_recovery_calls == 2U &&
            ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
            ledger.records[0].state == EBASE_PRODUCT_FAILED &&
            ledger.records[0].container_sequence == 9U);
+    assert(esp_base_storage_release(&claim));
+
+    reset_case();
+    initialize_empty_product_ledger();
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK);
+    assert(ebase_product_ledger_begin(&ledger, &io, &intent) == EBASE_LEDGER_OK);
+    assert(esp_base_storage_claim(&owner, &claim));
+    package_recovery_outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_SUCCEEDED;
+    package_recovery_sequence = 11U;
+    assert(esp_base_protocol_recover_product_package(&claim));
+    assert(package_recovery_calls == 1U &&
+           ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_SUCCEEDED &&
+           ledger.records[0].result_code == 0U &&
+           ledger.records[0].container_sequence == 11U);
+    assert(esp_base_protocol_recover_product_package(&claim) &&
+           package_recovery_calls == 1U);
     assert(esp_base_storage_release(&claim));
 }
 
@@ -1083,7 +1100,7 @@ esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uni
     return product_recovery_result;
 }
 
-bool esp_base_container_product_recover_pending_package(
+esp_base_container_package_recovery_t esp_base_container_product_recover_pending_package(
     const esp_base_storage_claim_t *claim, const char boot_id[37],
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint32_t expected_sequence, const uint8_t package_sha256[32],
@@ -1094,8 +1111,9 @@ bool esp_base_container_product_recover_pending_package(
            expected_sequence == 6U && package_sha256[0] == 0xab &&
            resolved_sequence != NULL);
     ++package_recovery_calls;
-    if (package_recovery_ok) *resolved_sequence = package_recovery_sequence;
-    return package_recovery_ok;
+    if (package_recovery_outcome != ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN)
+        *resolved_sequence = package_recovery_sequence;
+    return package_recovery_outcome;
 }
 
 bool ebase_config_encode(const esp_base_remote_config_t *config,
