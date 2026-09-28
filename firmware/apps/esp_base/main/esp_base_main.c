@@ -379,9 +379,18 @@ void app_main(void)
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED startup claim retained");
         return;
     }
-    if (product == ESP_BASE_CONTAINER_EMPTY &&
-        !esp_base_protocol_prepare_product_ledger(&s_boot_storage_claim)) {
-        ESP_LOGE(TAG, "ESP_BASE_PRODUCT_LEDGER_BLOCKED pristine binding or ledger uncertain");
+    if (!pending_boot && container_configured &&
+        product != ESP_BASE_CONTAINER_EMPTY &&
+        product != ESP_BASE_CONTAINER_RUNNING) {
+        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED configured product has no admitted binding");
+        return;
+    }
+    if (!pending_boot && container_configured &&
+        !esp_base_protocol_prepare_product_ledger(
+            &s_boot_storage_claim, product == ESP_BASE_CONTAINER_EMPTY)) {
+        if (product == ESP_BASE_CONTAINER_RUNNING)
+            (void)esp_base_container_product_stop_confirmed(&s_boot_storage_claim);
+        ESP_LOGE(TAG, "ESP_BASE_PRODUCT_LEDGER_BLOCKED binding or ledger uncertain");
         return;
     }
     if (needs_success_receipt &&

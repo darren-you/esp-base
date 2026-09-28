@@ -123,8 +123,9 @@ typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN,
 } esp_base_container_uninstall_result_t;
 
-/* Internal product operation boundary; no device command is exposed. The
- * caller holds the same Base claim used by OTA, supplies the exact persisted
+/* Product operation boundary used by the public uninstall command. The
+ * caller first persists its intent, holds the same Base claim used by OTA,
+ * and supplies the exact persisted
  * sequence and current package digest, and has resolved the selected firmware
  * OTA receipt. A RUNNING confirmed guest is stopped, closed and joined;
  * STOPPED or BLOCKED guests need a joined worker and proven native cleanup.
@@ -133,6 +134,21 @@ typedef enum {
  * EMPTY. Any stop, commit, readback or firmware-observation uncertainty keeps
  * same-boot reopening blocked and requires durable-state recovery. */
 esp_base_container_uninstall_result_t esp_base_container_product_uninstall(
+    const esp_base_storage_claim_t *claim,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);
+
+typedef enum {
+    ESP_BASE_CONTAINER_UNINSTALL_RECOVERED = 0,
+    ESP_BASE_CONTAINER_UNINSTALL_NOT_COMMITTED,
+    ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN,
+} esp_base_container_uninstall_recovery_t;
+
+/* Fresh-boot read-only resolution of a PREPARED uninstall receipt. The
+ * selected signed firmware and complete ECS2 identity set must agree. Exact
+ * operation/sequence/empty binding proves completion; the unchanged original
+ * sequence/package proves no Container commit. Neither case replays a write. */
+esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uninstall(
     const esp_base_storage_claim_t *claim,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);

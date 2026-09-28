@@ -16,6 +16,11 @@ static unsigned pristine_product_calls;
 static esp_base_container_binding_result_t binding_result;
 static bool binding_package_present;
 static unsigned binding_snapshot_calls;
+static esp_base_container_uninstall_result_t product_uninstall_result;
+static esp_base_container_boot_result_t product_boot_result;
+static unsigned product_uninstall_calls, product_boot_calls;
+static esp_base_container_uninstall_recovery_t product_recovery_result;
+static unsigned product_recovery_calls;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -57,6 +62,11 @@ static void reset_case(void)
     binding_result = ESP_BASE_CONTAINER_BINDING_OK;
     binding_package_present = false;
     binding_snapshot_calls = 0;
+    product_uninstall_result = ESP_BASE_CONTAINER_UNINSTALL_COMPLETE;
+    product_boot_result = ESP_BASE_CONTAINER_EMPTY;
+    product_uninstall_calls = product_boot_calls = 0;
+    product_recovery_result = ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN;
+    product_recovery_calls = 0;
     memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
@@ -117,6 +127,16 @@ static void ota_result(unsigned operation_number)
     s_reply_mqtt = false;
 }
 
+static void product_uninstall(unsigned request_number)
+{
+    char line[32];
+    const int length = snprintf(line, sizeof line, "uninstall-%u", request_number);
+    assert(length > 0 && (size_t)length < sizeof line);
+    s_reply_mqtt = true;
+    handle_line(line, (size_t)length, NULL);
+    s_reply_mqtt = false;
+}
+
 static void config_set(unsigned request_number, bool via_mqtt, char *usb_reply,
                        size_t usb_reply_capacity)
 {
@@ -156,6 +176,82 @@ static void expect_reply(const char *state, const char *error)
     }
 }
 
+static void initialize_empty_product_ledger(void)
+{
+    ebase_product_ledger_t ledger = {0};
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_UNINITIALIZED);
+    assert(ebase_product_ledger_initialize_empty(&ledger, &io) == EBASE_LEDGER_OK);
+}
+
+static void check_product_uninstall_path(void)
+{
+    reset_case();
+    product_configured = true;
+    binding_package_present = true;
+    initialize_empty_product_ledger();
+    product_uninstall(31U);
+    expect_reply("succeeded", NULL);
+    assert(product_uninstall_calls == 1U && product_boot_calls == 1U &&
+           atomic_load(&owner.active_token) == 0U);
+    ebase_product_ledger_t ledger = {0};
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.count == 1U && ledger.records[0].kind == EBASE_PRODUCT_UNINSTALL &&
+           ledger.records[0].state == EBASE_PRODUCT_SUCCEEDED &&
+           ledger.records[0].container_sequence == 7U);
+    product_uninstall(32U); /* A new request ID cannot re-execute the same operation ID. */
+    expect_reply("succeeded", NULL);
+    assert(product_uninstall_calls == 1U && product_boot_calls == 1U);
+    product_uninstall(34U); /* Same operation ID, different persisted fingerprint. */
+    expect_reply("failed", "product_operation_conflict");
+    assert(product_uninstall_calls == 1U && atomic_load(&owner.active_token) == 0U);
+
+    reset_case();
+    product_configured = true;
+    binding_package_present = true;
+    initialize_empty_product_ledger();
+    product_uninstall_result = ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN;
+    product_uninstall(33U);
+    expect_reply("unknown", "storage_uncertain");
+    assert(product_uninstall_calls == 1U && s_config_uncertain &&
+           atomic_load(&owner.active_token) != 0U);
+    uint8_t persisted[EBASE_PRODUCT_LEDGER_BYTES];
+    memcpy(persisted, product_bytes, sizeof persisted);
+    reset_case(); /* Fresh boot: retain NVS, discard the old in-memory claim. */
+    memcpy(product_bytes, persisted, sizeof persisted);
+    product_present = true;
+    product_configured = true;
+    product_recovery_result = ESP_BASE_CONTAINER_UNINSTALL_RECOVERED;
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_protocol_prepare_product_ledger(&claim, true));
+    assert(product_recovery_calls == 1U && esp_base_storage_release(&claim));
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_SUCCEEDED &&
+           ledger.records[0].container_sequence == 7U);
+
+    reset_case();
+    product_configured = true;
+    binding_package_present = true;
+    initialize_empty_product_ledger();
+    product_uninstall_result = ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN;
+    product_uninstall(33U);
+    memcpy(persisted, product_bytes, sizeof persisted);
+    reset_case();
+    memcpy(product_bytes, persisted, sizeof persisted);
+    product_present = true;
+    product_configured = true;
+    product_recovery_result = ESP_BASE_CONTAINER_UNINSTALL_NOT_COMMITTED;
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_protocol_prepare_product_ledger(&claim, false));
+    assert(product_recovery_calls == 1U && esp_base_storage_release(&claim));
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].result_code == 1U &&
+           ledger.records[0].container_sequence == 6U);
+}
+
 static void check_frp_status(const char *request, int expected_http,
                              const char *expected_error)
 {
@@ -189,13 +285,13 @@ int main(void)
     esp_base_storage_owner_init(&product_owner);
     esp_base_storage_claim_t product_claim = {0};
     assert(esp_base_storage_claim(&product_owner, &product_claim));
-    assert(!esp_base_protocol_prepare_product_ledger(&product_claim));
+    assert(!esp_base_protocol_prepare_product_ledger(&product_claim, true));
     assert(!product_present && pristine_product_calls == 1U);
     pristine_product_baseline = true;
-    assert(esp_base_protocol_prepare_product_ledger(&product_claim));
+    assert(esp_base_protocol_prepare_product_ledger(&product_claim, true));
     assert(product_present && pristine_product_calls == 2U);
     pristine_product_baseline = false;
-    assert(esp_base_protocol_prepare_product_ledger(&product_claim));
+    assert(esp_base_protocol_prepare_product_ledger(&product_claim, true));
     assert(pristine_product_calls == 2U);
     assert(esp_base_storage_release(&product_claim));
     const ebase_product_ledger_io_t product_io = ebase_product_ledger_nvs_io(&owner);
@@ -524,7 +620,8 @@ int main(void)
     poll_ota();
     expect_reply("unknown", "storage_uncertain");
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
-    puts("  protocol_ota_owner passed (OTA owner faults; product result query; USB FRP storage gate; MQTT write rejection)");
+    check_product_uninstall_path();
+    puts("  protocol_ota_owner passed (OTA owner faults; product ledger/uninstall/recovery; USB FRP storage gate; MQTT write rejection)");
 }
 
 const char *ebase_parse_command(const char *line, size_t length, ebase_command_t *out)
@@ -538,13 +635,17 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
     const bool product_query = length > 8U && sscanf(line, "product-%u", &number) == 1;
     const bool product_status_query = length > 15U && sscanf(line, "product-status-%u", &number) == 1;
+    const bool product_uninstall_command =
+        length > 10U && sscanf(line, "uninstall-%u", &number) == 1;
     assert(configure || query || product_query || product_status_query ||
+           product_uninstall_command ||
            (length > 6U && sscanf(line, "start-%u", &number) == 1));
     memset(out, 0, sizeof *out);
     out->kind = configure ? EBASE_CONFIG_SET :
                 query ? EBASE_OTA_RESULT :
                 product_query ? EBASE_PRODUCT_RESULT :
-                product_status_query ? EBASE_PRODUCT_STATUS : EBASE_OTA_START;
+                product_status_query ? EBASE_PRODUCT_STATUS :
+                product_uninstall_command ? EBASE_PRODUCT_UNINSTALL_COMMAND : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u", number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
@@ -559,6 +660,14 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     if (query || product_query) {
         snprintf(out->operation_id, sizeof out->operation_id,
                  "44444444-4444-4444-8444-%012u", number);
+        return NULL;
+    }
+    if (product_uninstall_command) {
+        strcpy(out->product_uninstall.operation_id,
+               "44444444-4444-4444-8444-000000000001");
+        out->product_uninstall.operation_sequence = number == 34U ? 2U : 1U;
+        out->product_uninstall.expected_container_sequence = 6U;
+        memset(out->product_uninstall.package_sha256, 0x7b, 32);
         return NULL;
     }
     snprintf(out->ota.operation_id, sizeof out->ota.operation_id,
@@ -621,6 +730,9 @@ psa_status_t psa_hash_compute(int algorithm, const uint8_t *bytes, size_t length
 {
     assert(algorithm == PSA_ALG_SHA_256 && bytes && length && out_size >= 32);
     memset(out, 0xa5, 32);
+    for (size_t index = 0; index < length; ++index)
+        out[index % 32U] = (uint8_t)((out[index % 32U] * 33U) ^
+                                      bytes[index] ^ (uint8_t)index);
     *actual = 32;
     return PSA_SUCCESS;
 }
@@ -827,6 +939,40 @@ esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
                                                    .package_present = binding_package_present};
     if (binding_package_present) memset(out->package_sha256, 0x7b, 32);
     return binding_result;
+}
+
+esp_base_container_uninstall_result_t esp_base_container_product_uninstall(
+    const esp_base_storage_claim_t *claim, const char operation_id[37],
+    uint32_t expected_sequence, const uint8_t expected_package_sha256[32])
+{
+    assert(esp_base_storage_claim_active(claim) && expected_sequence == 6U &&
+           expected_package_sha256[0] == 0x7b &&
+           !strcmp(operation_id, "44444444-4444-4444-8444-000000000001"));
+    ebase_product_ledger_t ledger = {0};
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.count == 1U &&
+           ledger.records[0].state == EBASE_PRODUCT_PREPARED);
+    ++product_uninstall_calls;
+    return product_uninstall_result;
+}
+
+esp_base_container_boot_result_t esp_base_container_product_boot(
+    const esp_base_storage_claim_t *claim, const char boot_id[37])
+{
+    assert(esp_base_storage_claim_active(claim) && !strcmp(boot_id, s_boot_id));
+    ++product_boot_calls;
+    return product_boot_result;
+}
+
+esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uninstall(
+    const esp_base_storage_claim_t *claim, const char operation_id[37],
+    uint32_t expected_sequence, const uint8_t expected_package_sha256[32])
+{
+    assert(esp_base_storage_claim_active(claim) && operation_id != NULL &&
+           expected_sequence == 6U && expected_package_sha256[0] == 0x7b);
+    ++product_recovery_calls;
+    return product_recovery_result;
 }
 
 bool ebase_config_encode(const esp_base_remote_config_t *config,

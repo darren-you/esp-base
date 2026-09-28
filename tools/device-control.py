@@ -244,6 +244,61 @@ def product_status(port, current):
         return value
 
 
+def product_uninstall(port, current, operation_id, operation_sequence,
+                      expected_container_sequence, expected_package_sha256):
+    canonical_id(operation_id)
+    if (type(operation_sequence) is not int or not 1 <= operation_sequence <= 4294967295 or
+            type(expected_container_sequence) is not int or
+            not 1 <= expected_container_sequence < 4294967295 or
+            not isinstance(expected_package_sha256, str) or
+            len(expected_package_sha256) != 64 or
+            set(expected_package_sha256) - set("0123456789abcdef") or
+            expected_package_sha256 == "0" * 64):
+        raise ValueError("产品卸载前置参数无效；未发送命令")
+    snapshot = product_status(port, current)
+    if snapshot["state"] != "succeeded":
+        raise ValueError("产品绑定不可确认；未发送命令：" + str(snapshot["error_code"]))
+    binding = snapshot["result"]
+    if (binding["next_operation_sequence"] != operation_sequence or
+            binding["container_sequence"] != expected_container_sequence or
+            binding["package_sha256"] != expected_package_sha256 or
+            binding["pending_operation_id"] is not None):
+        raise ValueError("产品持久序号或包绑定与预期不符；未发送命令")
+    fresh = status(port)
+    if (fresh["device_id"] != current["device_id"] or
+            fresh["boot_id"] != current["boot_id"]):
+        raise ValueError("产品状态查询后设备已重启；未发送命令")
+    request_id = str(uuid.uuid4())
+    send(port, {"protocol_version": 1, "request_id": request_id,
+                "command": "product.uninstall", "device_id": current["device_id"],
+                "target_boot_id": current["boot_id"],
+                "expires_at_uptime_ms": fresh["result"]["uptime_ms"] + 10000,
+                "parameters": {"operation_id": operation_id,
+                               "operation_sequence": operation_sequence,
+                               "expected_container_sequence": expected_container_sequence,
+                               "package_sha256": expected_package_sha256}})
+    for receipt in read_result(port, request_id, time.monotonic() + 30):
+        if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
+            raise ValueError("产品卸载回执来自另一设备或启动；按原操作 ID 查询")
+        if receipt["result"] is not None:
+            raise ValueError("产品卸载回执字段无效；按原操作 ID 查询")
+        if receipt["state"] in {"succeeded", "unknown"}:
+            result = product_result(port, current, operation_id)
+            evidence = result["result"]
+            if result["state"] == "succeeded":
+                if (not isinstance(evidence, dict) or evidence["kind"] != "uninstall" or
+                        evidence["operation_sequence"] != operation_sequence or
+                        evidence["container_sequence"] != expected_container_sequence + 1 or
+                        evidence["package_sha256"] != expected_package_sha256):
+                    raise ValueError("产品卸载终态与预期不符；状态为 unknown")
+                return result
+            if receipt["state"] == "succeeded":
+                raise ValueError("设备报告卸载成功但持久结果未确认；按原操作 ID 查询")
+            return result
+        if receipt["state"] in {"failed", "expired"}:
+            return receipt
+
+
 def validate_configuration(config):
     if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "frp", "business"}:
         raise ValueError("配置字段不完整")
@@ -379,16 +434,28 @@ def main():
     parser.add_argument("--port", required=True, help="本轮枚举的 C3 USB Serial/JTAG 或 ESP32 UART 端点")
     parser.add_argument("--device-id", help="预期持久 UUID；写命令必填")
     parser.add_argument("--config-file", help="本机 0600 JSON 完整配置文件；仅用于 config.set")
-    parser.add_argument("--operation-id", help="查询 product.result 的原始操作 UUID")
+    parser.add_argument("--operation-id", help="product.result 查询或 product.uninstall 写入的原始操作 UUID")
+    parser.add_argument("--operation-sequence", type=int, help="product.uninstall 的持久操作序号")
+    parser.add_argument("--expected-container-sequence", type=int,
+                        help="product.uninstall 的当前 ECS2 序号")
+    parser.add_argument("--expected-package-sha256", help="product.uninstall 的当前包 SHA-256")
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
-    parser.add_argument("command", choices=["status", "restart", "config.set", "product.status", "product.result"])
+    parser.add_argument("command", choices=["status", "restart", "config.set", "product.status",
+                                            "product.result", "product.uninstall"])
     args = parser.parse_args()
-    if args.command in {"restart", "config.set"} and not args.device_id:
+    if args.command in {"restart", "config.set", "product.uninstall"} and not args.device_id:
         parser.error("写命令必须指定已核对的 --device-id")
     if (args.command == "config.set") != bool(args.config_file):
         parser.error("config.set 必须且只能配合 --config-file")
-    if (args.command == "product.result") != bool(args.operation_id):
-        parser.error("product.result 必须且只能配合 --operation-id")
+    if (args.command in {"product.result", "product.uninstall"}) != bool(args.operation_id):
+        parser.error("product.result／product.uninstall 必须且只能配合 --operation-id")
+    uninstall_options = (args.operation_sequence, args.expected_container_sequence,
+                         args.expected_package_sha256)
+    if args.command == "product.uninstall":
+        if any(value is None for value in uninstall_options):
+            parser.error("product.uninstall 必须提供操作序号、Container 序号和包摘要")
+    elif any(value is not None for value in uninstall_options):
+        parser.error("卸载前置参数只能用于 product.uninstall")
     if args.operation_id:
         canonical_id(args.operation_id)
     config = load_private_config(args.config_file) if args.config_file else None
@@ -423,13 +490,17 @@ def main():
             current = product_result(port, current, args.operation_id)
         if args.command == "product.status":
             current = product_status(port, current)
+        if args.command == "product.uninstall":
+            current = product_uninstall(port, current, args.operation_id,
+                                        args.operation_sequence, args.expected_container_sequence,
+                                        args.expected_package_sha256)
         if args.json:
             print(json.dumps(current, ensure_ascii=False))
         else:
             print("ESP Base 串口操作\n  状态  " + current["state"] + "\n  设备  " + current["device_id"] + "\n  启动  " + current["boot_id"])
             if current["error_code"]:
                 print("  原因  " + current["error_code"])
-            if args.command == "product.result":
+            if args.command in {"product.result", "product.uninstall"}:
                 print("  操作  " + args.operation_id)
                 if current["result"] is not None:
                     print("  序号  " + str(current["result"]["operation_sequence"]))

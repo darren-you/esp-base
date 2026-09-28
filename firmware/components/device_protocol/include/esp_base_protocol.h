@@ -22,10 +22,11 @@ typedef struct {
 /* Load directly into the protocol's long-lived config before the control task starts. */
 esp_err_t esp_base_protocol_load_config(uint32_t *revision);
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context);
-/* Under the boot's long storage claim, create an absent product ledger only
- * after Container proves its exact pristine durable no-package baseline. */
+/* Under the boot's long storage claim, create an absent ledger only for a
+ * pristine empty binding. Reconcile a PREPARED uninstall from durable ECS2
+ * evidence after Container boot, without replaying its physical operation. */
 bool esp_base_protocol_prepare_product_ledger(
-    const esp_base_storage_claim_t *claim);
+    const esp_base_storage_claim_t *claim, bool product_empty);
 /* True only after the control loop has completed a pass recently. */
 bool esp_base_protocol_control_healthy(void);
 uint32_t esp_base_protocol_control_progress_count(void);

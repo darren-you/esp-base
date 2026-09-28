@@ -5,7 +5,13 @@
 #include "esp_base_ota_policy.h"
 
 #define EBASE_LINE_LIMIT 9216
-typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT, EBASE_PRODUCT_STATUS, EBASE_PRODUCT_RESULT } ebase_command_kind_t;
+typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT, EBASE_PRODUCT_STATUS, EBASE_PRODUCT_RESULT, EBASE_PRODUCT_UNINSTALL_COMMAND } ebase_command_kind_t;
+typedef struct {
+    char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+    uint32_t operation_sequence;
+    uint32_t expected_container_sequence;
+    uint8_t package_sha256[32];
+} ebase_product_uninstall_request_t;
 typedef struct {
     ebase_command_kind_t kind;
     ebase_request_t request;
@@ -16,12 +22,13 @@ typedef struct {
         esp_base_remote_config_t config;
         esp_base_ota_request_t ota;
         char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+        ebase_product_uninstall_request_t product_uninstall;
     };
 } ebase_command_t;
 
 /* The parser never mutates hardware or storage. request_id is empty unless a
- * valid unique UUID was decoded. For CONFIG_SET and OTA_START the transport
- * owner must hash canonical values before admission. The caller owns storage. */
+ * valid unique UUID was decoded. For CONFIG_SET, OTA_START and product writes,
+ * the transport owner must hash canonical values before admission. */
 const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out);
 
 /* Authenticated FRP status uses the write-command identity and uptime window

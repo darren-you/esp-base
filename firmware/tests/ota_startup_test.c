@@ -52,6 +52,7 @@ static bool container_selected_ok;
 static esp_base_container_boot_result_t container_boot_result;
 static unsigned container_boot_calls, container_trial_calls, container_health_calls;
 static unsigned container_confirm_calls, container_stop_calls;
+static unsigned confirmed_stop_calls;
 static esp_base_storage_owner_t *storage_owner;
 static esp_base_storage_owner_t *container_flash_io_owner;
 static unsigned ota_gate_clears;
@@ -94,6 +95,7 @@ static void reset_case(void)
     container_boot_result = ESP_BASE_CONTAINER_NOT_CONFIGURED;
     container_boot_calls = container_trial_calls = container_health_calls = 0;
     container_confirm_calls = container_stop_calls = 0;
+    confirmed_stop_calls = 0;
     control_exits_late = control_pauses_cross_window = false;
     ota_gate_clears = 0;
     storage_owner = NULL;
@@ -374,9 +376,11 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     return protocol_result;
 }
 
-bool esp_base_protocol_prepare_product_ledger(const esp_base_storage_claim_t *claim)
+bool esp_base_protocol_prepare_product_ledger(const esp_base_storage_claim_t *claim,
+                                              bool product_empty)
 {
-    assert(esp_base_storage_claim_active(claim));
+    assert(esp_base_storage_claim_active(claim) &&
+           product_empty == (container_boot_result == ESP_BASE_CONTAINER_EMPTY));
     assert(ota_gate_pending);
     ++product_ledger_prepare_calls;
     return product_ledger_ready;
@@ -505,6 +509,13 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
 {
     assert(esp_base_storage_claim_active(claim));
     ++container_stop_calls;
+    return container_stop_ok;
+}
+
+bool esp_base_container_product_stop_confirmed(const esp_base_storage_claim_t *claim)
+{
+    assert(esp_base_storage_claim_active(claim));
+    ++confirmed_stop_calls;
     return container_stop_ok;
 }
 
@@ -703,14 +714,27 @@ int main(void)
 
     reset_case();
     image_state = EOTA_STATE_VALID;
+    container_configured = true;
     container_boot_result = ESP_BASE_CONTAINER_RUNNING;
-    assert(!rebooted() && container_boot_calls == 1 && ready_logs == 1);
+    assert(!rebooted() && container_boot_calls == 1 &&
+           product_ledger_prepare_calls == 1 && ready_logs == 1);
     esp_base_storage_claim_t running_competitor = {0};
     assert(esp_base_storage_claim(storage_owner, &running_competitor));
     assert(esp_base_storage_release(&running_competitor));
 
     reset_case();
     image_state = EOTA_STATE_VALID;
+    container_configured = true;
+    container_boot_result = ESP_BASE_CONTAINER_RUNNING;
+    product_ledger_ready = false;
+    assert(!rebooted() && product_ledger_prepare_calls == 1U &&
+           confirmed_stop_calls == 1U && ready_logs == 0U && ota_gate_pending);
+    esp_base_storage_claim_t running_ledger_competitor = {0};
+    assert(!esp_base_storage_claim(storage_owner, &running_ledger_competitor));
+
+    reset_case();
+    image_state = EOTA_STATE_VALID;
+    container_configured = true;
     container_boot_result = ESP_BASE_CONTAINER_EMPTY;
     assert(!rebooted() && container_boot_calls == 1 &&
            product_ledger_prepare_calls == 1 && ready_logs == 1);
@@ -720,6 +744,7 @@ int main(void)
 
     reset_case();
     image_state = EOTA_STATE_VALID;
+    container_configured = true;
     container_boot_result = ESP_BASE_CONTAINER_EMPTY;
     product_ledger_ready = false;
     assert(!rebooted() && container_boot_calls == 1 &&

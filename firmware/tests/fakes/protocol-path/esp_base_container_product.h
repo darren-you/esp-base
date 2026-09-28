@@ -5,6 +5,33 @@
 #include "eota.h"
 
 typedef enum {
+    ESP_BASE_CONTAINER_NOT_CONFIGURED = 0,
+    ESP_BASE_CONTAINER_BLOCKED,
+    ESP_BASE_CONTAINER_EMPTY,
+    ESP_BASE_CONTAINER_RUNNING,
+    ESP_BASE_CONTAINER_STOPPED,
+} esp_base_container_boot_result_t;
+esp_base_container_boot_result_t esp_base_container_product_boot(
+    const esp_base_storage_claim_t *claim, const char boot_id[37]);
+typedef enum {
+    ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,
+    ESP_BASE_CONTAINER_UNINSTALL_NOT_CONFIGURED,
+    ESP_BASE_CONTAINER_UNINSTALL_REJECTED,
+    ESP_BASE_CONTAINER_UNINSTALL_UNCERTAIN,
+} esp_base_container_uninstall_result_t;
+esp_base_container_uninstall_result_t esp_base_container_product_uninstall(
+    const esp_base_storage_claim_t *claim, const char operation_id[37],
+    uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);
+typedef enum {
+    ESP_BASE_CONTAINER_UNINSTALL_RECOVERED = 0,
+    ESP_BASE_CONTAINER_UNINSTALL_NOT_COMMITTED,
+    ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN,
+} esp_base_container_uninstall_recovery_t;
+esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uninstall(
+    const esp_base_storage_claim_t *claim, const char operation_id[37],
+    uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);
+
+typedef enum {
     ESP_BASE_CONTAINER_STAGE_NOT_CONFIGURED = 0,
     ESP_BASE_CONTAINER_STAGE_PREPARED,
     ESP_BASE_CONTAINER_STAGE_REJECTED,

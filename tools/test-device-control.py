@@ -231,5 +231,84 @@ class ProductStatusTests(unittest.TestCase):
                           ["result"]["next_operation_sequence"])
 
 
+class ProductUninstallTests(unittest.TestCase):
+    def testExactBindingWriteAndOriginalIdResult(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        operation = "44444444-4444-4444-8444-444444444444"
+        digest = "ab" * 32
+
+        class Device:
+            def __init__(self, write_state="succeeded"):
+                self.write_state = write_state
+                self.commands = []
+                self.response = bytearray()
+
+            def write(self, payload):
+                request = json.loads(payload.strip())
+                command = request["command"]
+                self.commands.append(command)
+                result = None
+                state = "succeeded"
+                error = None
+                if command == "status":
+                    result = {"uptime_ms": 1000}
+                elif command == "product.status":
+                    result = {"operation_sequence_high_watermark": 0,
+                              "next_operation_sequence": 1,
+                              "pending_operation_id": None,
+                              "container_sequence": 6,
+                              "package_sha256": digest}
+                elif command == "product.uninstall":
+                    assert request["device_id"] == device
+                    assert request["target_boot_id"] == boot
+                    assert request["expires_at_uptime_ms"] == 11000
+                    assert request["parameters"] == {
+                        "operation_id": operation, "operation_sequence": 1,
+                        "expected_container_sequence": 6, "package_sha256": digest}
+                    state = self.write_state
+                    error = "storage_uncertain" if state == "unknown" else None
+                elif command == "product.result":
+                    assert request["parameters"] == {"operation_id": operation}
+                    result = {"operation_id": operation, "operation_sequence": 1,
+                              "container_sequence": 7 if self.write_state == "succeeded" else 6,
+                              "result_code": 0, "kind": "uninstall",
+                              "package_sha256": digest}
+                    if self.write_state == "unknown":
+                        state = "unknown"
+                        error = "product_operation_unresolved"
+                else:
+                    raise AssertionError(command)
+                response = {"protocol_version": 1, "device_id": device,
+                            "boot_id": boot, "request_id": request["request_id"],
+                            "state": state, "error_code": error, "result": result}
+                self.response = bytearray(b"\n" + json.dumps(response).encode() + b"\n")
+                return len(payload)
+
+            def read(self, size=1):
+                if not self.response:
+                    return b""
+                value = bytes(self.response[:size])
+                del self.response[:size]
+                return value
+
+        current = {"device_id": device, "boot_id": boot}
+        port = Device()
+        result = control.product_uninstall(port, current, operation, 1, 6, digest)
+        self.assertEqual((result["state"], result["result"]["kind"]),
+                         ("succeeded", "uninstall"))
+        self.assertEqual(port.commands,
+                         ["product.status", "status", "product.uninstall", "product.result"])
+        port = Device()
+        with self.assertRaisesRegex(ValueError, "未发送命令"):
+            control.product_uninstall(port, current, operation, 1, 6, "cd" * 32)
+        self.assertEqual(port.commands, ["product.status"])
+        port = Device("unknown")
+        result = control.product_uninstall(port, current, operation, 1, 6, digest)
+        self.assertEqual((result["state"], result["error_code"]),
+                         ("unknown", "product_operation_unresolved"))
+        self.assertEqual(port.commands.count("product.uninstall"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

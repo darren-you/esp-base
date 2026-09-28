@@ -612,6 +612,9 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
     const unsigned erases_before = store.flash_erases;
     const unsigned flash_writes_before = store.flash_writes;
     const char uninstall_id[] = "33333333-3333-4333-8333-333333333333";
+    assert(esp_base_container_product_reconcile_uninstall(&claim, uninstall_id,
+        before.sequence, before.bindings[running_index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_NOT_COMMITTED);
     uint8_t wrong_digest[32] = {1};
     assert(esp_base_container_product_uninstall(&claim, uninstall_id,
         before.sequence - 1U, before.bindings[running_index].package_sha256) ==
@@ -629,6 +632,12 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
     assert(after.sequence == before.sequence + 1U &&
            !after.bindings[running_index].package_present &&
            same_binding(&before.bindings[fallback_index], &after.bindings[fallback_index]));
+    assert(esp_base_container_product_reconcile_uninstall(&claim, uninstall_id,
+        before.sequence, before.bindings[running_index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_RECOVERED);
+    assert(esp_base_container_product_reconcile_uninstall(&claim, uninstall_id,
+        before.sequence - 1U, before.bindings[running_index].package_sha256) ==
+        ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN);
     assert(esp_base_container_product_binding_snapshot(&claim, &binding) ==
            ESP_BASE_CONTAINER_BINDING_OK &&
            binding.container_sequence == after.sequence &&

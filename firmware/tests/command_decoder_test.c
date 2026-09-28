@@ -125,6 +125,37 @@ static void product_status_tests(void)
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.status\",\"parameters\":{}}");
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.status\",\"extra\":1}");
 }
+static void product_uninstall_tests(void)
+{
+    const char *format =
+        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\","
+        "\"command\":\"product.uninstall\",\"device_id\":\"" DEVICE "\","
+        "\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,"
+        "\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
+        "\"operation_sequence\":%s,\"expected_container_sequence\":%s,"
+        "\"package_sha256\":\"%s\"}}";
+    char json[600];
+    char digest[65];
+    memset(digest, 'a', 64);
+    digest[64] = '\0';
+    assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
+    ebase_command_t out;
+    assert(!ebase_parse_command(json, strlen(json), &out) &&
+           out.kind == EBASE_PRODUCT_UNINSTALL_COMMAND &&
+           out.product_uninstall.operation_sequence == 1U &&
+           out.product_uninstall.expected_container_sequence == 6U &&
+           out.product_uninstall.package_sha256[0] == 0xaaU);
+    assert(snprintf(json, sizeof json, format, "0", "6", digest) > 0);
+    reject(json);
+    assert(snprintf(json, sizeof json, format, "1", "4294967295", digest) > 0);
+    reject(json);
+    memset(digest, '0', 64);
+    assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
+    reject(json);
+    digest[0] = 'A';
+    assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
+    reject(json);
+}
 static void frp_status_tests(void)
 {
     static const char valid[] =
@@ -155,6 +186,7 @@ int main(void)
     ota_result_tests();
     product_result_tests();
     product_status_tests();
+    product_uninstall_tests();
     frp_status_tests();
     ebase_command_t out;
     assert(!ebase_parse_command(status, strlen(status), &out) && out.kind == EBASE_STATUS);

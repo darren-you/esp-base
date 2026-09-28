@@ -21,6 +21,7 @@ esp_base_container_boot_result_t esp_base_container_product_start_trial(
 bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim);
+bool esp_base_container_product_stop_confirmed(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_configured(void);
 bool esp_base_container_product_without_ota_receipt(
     const esp_base_storage_claim_t *claim);

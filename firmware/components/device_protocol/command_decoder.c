@@ -7,7 +7,8 @@
 /* Error cleanup wipes the largest union member without erasing request_id,
  * which the caller may still use in its failure response. */
 _Static_assert(sizeof(esp_base_remote_config_t) >= sizeof(esp_base_ota_request_t) &&
-               sizeof(esp_base_remote_config_t) >= ESP_BASE_OTA_OPERATION_ID_BYTES,
+               sizeof(esp_base_remote_config_t) >= ESP_BASE_OTA_OPERATION_ID_BYTES &&
+               sizeof(esp_base_remote_config_t) >= sizeof(ebase_product_uninstall_request_t),
                "config wipe must cover every command payload");
 
 /* cJSON supplies the JSON tree. Before allocation, bound nesting and enforce
@@ -125,6 +126,41 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     if (!cJSON_IsNumber(deadline) || !isfinite(deadline->valuedouble) || deadline->valuedouble < 0 ||
         deadline->valuedouble > 9007199254740991.0 || floor(deadline->valuedouble) != deadline->valuedouble) goto done;
     out->request.expires_at_ms = (uint64_t)deadline->valuedouble;
+    if (!strcmp(command->valuestring, "product.uninstall")) {
+        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
+        const char *const keys[] = {"operation_id", "operation_sequence",
+                                    "expected_container_sequence", "package_sha256"};
+        if (!exact_keys(parameters, keys, 4) ||
+            !copy_id(parameters, "operation_id", out->product_uninstall.operation_id)) goto done;
+        const cJSON *sequence = cJSON_GetObjectItemCaseSensitive(parameters,
+                                                                  "operation_sequence");
+        const cJSON *container_sequence = cJSON_GetObjectItemCaseSensitive(parameters,
+                                                                            "expected_container_sequence");
+        const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256");
+        if (!cJSON_IsNumber(sequence) || !isfinite(sequence->valuedouble) ||
+            sequence->valuedouble < 1 || sequence->valuedouble > UINT32_MAX ||
+            floor(sequence->valuedouble) != sequence->valuedouble ||
+            !cJSON_IsNumber(container_sequence) || !isfinite(container_sequence->valuedouble) ||
+            container_sequence->valuedouble < 1 || container_sequence->valuedouble >= UINT32_MAX ||
+            floor(container_sequence->valuedouble) != container_sequence->valuedouble ||
+            !cJSON_IsString(digest) || strlen(digest->valuestring) != 64) goto done;
+        uint8_t nonzero = 0U;
+        for (size_t index = 0; index < 32U; ++index) {
+            const int upper = hex_digit(digest->valuestring[index * 2U]);
+            const int lower = hex_digit(digest->valuestring[index * 2U + 1U]);
+            if (upper < 0 || lower < 0) goto done;
+            out->product_uninstall.package_sha256[index] =
+                (uint8_t)((upper << 4) | lower);
+            nonzero |= out->product_uninstall.package_sha256[index];
+        }
+        if (nonzero == 0U) goto done;
+        out->product_uninstall.operation_sequence = (uint32_t)sequence->valuedouble;
+        out->product_uninstall.expected_container_sequence =
+            (uint32_t)container_sequence->valuedouble;
+        out->kind = EBASE_PRODUCT_UNINSTALL_COMMAND;
+        error = NULL;
+        goto done;
+    }
     if (!strcmp(command->valuestring, "ota.start")) {
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const keys[] = {"operation_id", "image_url", "sha256", "image_size_bytes", "target", "signature"};
