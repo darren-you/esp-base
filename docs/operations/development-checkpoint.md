@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-03/P6-04 C3 对照：保留正式 USB 控制台与三 `0x82000` 包槽的同源码测试键 RSA v2 签名 app `0x121000` B，官方尺寸门拒绝双 `0x120000` app 槽，各超 `0x1000` B。仓外仅为 QEMU 改用 UART、双 `0x130000` app 与三 `0x74000` 诊断包槽后，正式 JSON `product.uninstall`、同片冷启动持久结果及同 ID 不重执行均通过，C3 6 KiB 控制栈未溢出；官方 NVS CRC、账本/ECS2 CRC 与 Flash 分区不变性读回通过。关部分曲线、错误名查表和 NIST 优化的组合可暂时降到 `0x111000` B，但内容距下次签名台阶仅 56 B，且未验证真实 TLS/时延，不作为产品配置或完整布局验收。无实板写入；[精确输入与容量阻断](product_uninstall_c3_protocol_qemu_checkpoint.md)。
+
 2026-09-28 P6-04 串口产品卸载签名 QEMU：原 ESP32 控制任务 4,096 B 在 `product.status`、6,144 B 在 `product.uninstall` 触发真实 FreeRTOS 栈溢出；目标独立调整为 ESP32 8,192 B、C3 仍 6,144 B。最终源码重新签名并按新 app 摘要制造 ECS2 sequence 6、空 EPRD 及 4 MiB Flash，正式串口命令完成卸载，冷启动后原操作结果和相同 ID 的重复请求均保持 sequence 7／账本高水位 1；官方 NVS CRC、账本/ECS2 CRC 与逐区 Flash 读回通过。C3／ESP32 普通构建与 host ASan/UBSan 均通过。无 Broker、HTTPS、FRPS 并发或实体板，P6-03/P6-04/P7 不勾验收；[精确输入与日志](product_uninstall_protocol_qemu_checkpoint.md)。
 
 2026-09-28 P6-04 公开卸载写入口：`a99c02c` 将 `product.uninstall` 接入设备命令、持久 EPRD 意图／终态和正式 Container 停止／卸载；复位后只读核对 ECS2 原 UUID、序号及包绑定，能证明提交或未提交才写回终态，无法证明时阻断 READY。`9da7aba` 将串口设备回执超时接回原 operation ID 的只读结果查询，写命令不重发。C3／ESP32 宿主 ASan/UBSan、8 项伪串口测试、固定 SDK 两目标普通完整构建及真实签名 guest 的卸载恢复生命周期通过；本地 app 分别为 `0xe3eb0`／`0xd5c10` B。没有写实板，真实掉电、Broker 设备联调、公开安装／升级、包来源及试运行健康确认尚未验收，P6-04/P7 总状态不变。
