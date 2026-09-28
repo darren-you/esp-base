@@ -49,7 +49,7 @@ flowchart LR
 
 从仓库根执行 `idf.py -C firmware build`，默认工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。`sdkconfig.defaults` 只包含共同选项，C3 的原生 USB、现行分区表、纯 STA 与 TLS 客户端配置在 `sdkconfig.defaults.esp32c3`；FRP status 是本机明文 HTTP，不需要 TLS server。ESP32 的 UART0、独立分区、STA/TLS client 和 ECDSA v1 bootloader 所需的日志/分区 MD5 约束在 `sdkconfig.defaults.esp32`。现行 C3 保留两个 `0x1e0000` 应用槽；ESP32 使用两个 `0x120000` 应用槽和 `0x16000` 的 `base_store`。NVS 不自动擦除。两目标使用独立 build/sdkconfig 与 `dependencies.lock`／`dependencies.lock.esp32`，组件提交一致，target 精确分离；现存 ESP-AT 分区及 C3 分区均不能作为 ESP32 新布局。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
 
-两目标默认启用 IDF 的 TLS 动态收发缓冲，仍接受完整 16 KiB 入站和 4 KiB 出站记录；C3 另关闭两项 Wi-Fi IRAM 优化，并将静态 Wi-Fi RX 缓冲从 10 个减为与 BA 窗口相等的 6 个。CMake 检查这些容量选项，旧生成 `sdkconfig` 若保留冲突值须重新生成。Base 串口行、候选配置、命令解析和 MQTT 装配工作区现按实际存活期持有；当前锁的 C3 签名 guest 与官方 FRPS 严格 TLS 工作流完成 300001 B 双向回显，诊断切片的普通内部堆历史低水为 **57,020 B**，高于 48 KiB 门 7,868 B。此镜像使用缩小包槽的仓外诊断几何；完整三包槽和 scratch 的[对齐软件候选](../docs/operations/p6-03-c3-aligned-layout-software-probe.md)已另做签名装槽、guest 启动验证。两者不是同一联网镜像，正式 MQTT／OTA 同存、目标分区迁移和实板无线仍未验收。[容量检查点](../docs/operations/p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#base-控制工作区存活期收敛)保留逐次输入与边界。
+两目标默认启用 IDF 的 TLS 动态收发缓冲，仍接受完整 16 KiB 入站和 4 KiB 出站记录；两目标静态 Wi-Fi RX 缓冲均与 BA 窗口 6 对齐，C3 另关闭两项 Wi-Fi IRAM 优化。CMake 检查这些容量选项，旧生成 `sdkconfig` 若保留冲突值须重新生成。Base 串口行、候选配置、命令解析和 MQTT 装配工作区现按实际存活期持有；当前锁的 C3 签名 guest 与官方 FRPS 严格 TLS 工作流完成 300001 B 双向回显，诊断切片的普通内部堆历史低水为 **57,020 B**，高于 48 KiB 门 7,868 B。此镜像使用缩小包槽的仓外诊断几何；完整三包槽和 scratch 的[对齐软件候选](../docs/operations/p6-03-c3-aligned-layout-software-probe.md)已另做签名装槽、guest 启动验证。两者不是同一联网镜像，正式 MQTT／OTA 同存、目标分区迁移和实板无线仍未验收。[容量检查点](../docs/operations/p6-03-c3-current-lock-frps-work-qemu-checkpoint.md#base-控制工作区存活期收敛)保留逐次输入与边界。
 
 ESP32 产品目标由可设置的 `CONFIG_FREERTOS_UNICORE=y` 选出 SDK 派生的 `CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y`，再启用 `CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y`；构建同时核对三项。FRP 会话对象使用该目标能力放置到内部 IRAM 8BIT；C3 不启用此路径。单核调度、IRAM 字节访问代价及五能力联网低水仍须在现有两块 4 MiB 板上测量；[精确锁检查点](../docs/operations/p6-03-frp-session-iram-precise-lock-checkpoint.md)区分签名容量与正式运行验收。
 
@@ -62,6 +62,8 @@ ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`�
 ESP32 控制任务栈与命令／配置临时工作区已按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；双流、三条 MQTT 消息与一次真实配置提交的仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
 
 后续[HTTPS OTA 并发检查点](../docs/operations/p6-03-ota-https-combination-checkpoint.md)在同片签名 ESP32 QEMU 中经严格 HTTPS 将 **1,114,100 B** 独立签名 app 完整准备到备用槽，同时完成双 FRP 工作流与三条 MQTT 消息；普通堆历史最低 **26,416 B**，比不变的容量门低 **22,736 B**。探针未执行正式 Base `ota.start` 收据、Container stage、选槽及实板流程，P6-03/P7-01/P7-02 仍开放。
+
+ESP32 静态 Wi-Fi RX 缓冲后续与 BA 窗口一同收敛为 6；[六缓冲 OTA 同片续验](../docs/operations/p6-03-esp32-rx6-ota-capacity-checkpoint.md)的签名 QEMU 完成相同完整下载、双 FRP 与三 MQTT 工作流，普通堆历史最低 **30,052 B**，仍比容量门低 **19,100 B**。正式 ESP32 产品分区签名构建和容量门通过，实体 Wi-Fi 与完整产品 OTA 调用链尚未验收。
 
 本轮 FRP 会话阶段复用仅改变公开组件的私有 `src/session.c`；两目标主固件锁由官方 Component Manager 重新生成，固定 SDK 普通构建、host ASan/UBSan 与仓外 scratch 候选布局的测试键签名容量通过。正式 ESP32 CSV 没有 `frp_scratch`，本轮签名 ESP32 镜像使用仓外候选 CSV；[精确锁检查点](../docs/operations/frp-session-phase-union-base-dependency-checkpoint.md)记录静态输入。从该提交另行重建双目标签名 app、ECS2 和 Flash 的[无网络 QEMU 检查点](../docs/operations/p6-03-frp-phase-union-current-lock-qemu-checkpoint.md)均到产品 `RUNNING` 与 Base `READY`，不代表 FRPS、Broker、HTTPS 同存或实体板验收。
 
