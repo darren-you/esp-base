@@ -98,13 +98,22 @@ typedef enum {
  * caller has durably claimed its operation and holds Base's app/otadata claim.
  * A bounded source supplies exact package bytes; no guest is stopped or
  * started here. Success returns the independently read-back PREPARED sequence.
- * Rejection after reservation durably abandons WRITING/PREPARED before return;
- * uncertainty requires retaining the claim and resolving ECS2 on a new boot. */
+ * Rejection after reservation returns the read-back ABORTED sequence in the
+ * same output; rejection before reservation leaves it zero. Uncertainty
+ * requires retaining the claim and resolving ECS2 on a new boot. */
 esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
     const esp_base_storage_claim_t *claim,
     const esp_base_container_package_request_t *request,
     econtainer_slot_source_fn source_fn, void *source_context,
     uint32_t *prepared_sequence);
+
+/* Cancel only the exact PREPARED package operation before trial begins.
+ * The confirmed binding and running old guest are unchanged. The caller
+ * retains its claim until ABORTED and both bindings are read back. */
+bool esp_base_container_product_abandon_prepared_package(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    const uint8_t package_sha256[32], uint32_t *aborted_sequence);
 
 /* Internal same-boot product-only trial. The caller still owns its durable
  * operation and Base claim, and has proven the old instance stopped. Only the

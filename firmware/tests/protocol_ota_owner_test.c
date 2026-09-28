@@ -8,6 +8,8 @@
 /* Exercise the real command branch and its asynchronous completion branch. */
 #include "../components/device_protocol/esp_base_protocol.c"
 
+struct esp_base_product_package_source { unsigned marker; };
+
 static esp_base_storage_owner_t owner;
 static uint8_t product_bytes[EBASE_PRODUCT_LEDGER_BYTES];
 static bool product_present;
@@ -24,6 +26,16 @@ static unsigned product_recovery_calls;
 static esp_base_container_package_recovery_t package_recovery_outcome;
 static uint32_t package_recovery_sequence;
 static unsigned package_recovery_calls;
+static bool package_source_open_ok, package_source_complete_ok;
+static unsigned package_source_opens, package_source_closes;
+static esp_base_container_prepare_result_t package_prepare_result;
+static bool package_prepare_rejected_after_write;
+static uint32_t binding_sequence;
+static bool network_ready, trusted_time_ready;
+static esp_base_container_boot_result_t package_trial_result;
+static bool package_stop_ok, package_abandon_prepared_ok;
+static unsigned package_prepare_calls, package_trial_calls,
+    package_stop_calls, package_abandon_prepared_calls;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -73,12 +85,32 @@ static void reset_case(void)
     package_recovery_outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN;
     package_recovery_sequence = 0U;
     package_recovery_calls = 0U;
+    package_source_open_ok = package_source_complete_ok = true;
+    package_source_opens = package_source_closes = 0U;
+    package_prepare_result = ESP_BASE_CONTAINER_PREPARED;
+    package_prepare_rejected_after_write = false;
+    binding_sequence = 6U;
+    network_ready = trusted_time_ready = true;
+    package_trial_result = ESP_BASE_CONTAINER_RUNNING;
+    package_stop_ok = package_abandon_prepared_ok = true;
+    package_prepare_calls = package_trial_calls = package_stop_calls =
+        package_abandon_prepared_calls = 0U;
     memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
     memset(s_outcomes, 0, sizeof s_outcomes);
     memset(s_frp_status_seen, 0, sizeof s_frp_status_seen);
     memset(&s_ota_storage_claim, 0, sizeof s_ota_storage_claim);
+    free(s_product_request);
+    s_product_request = NULL;
+    memset(&s_product_storage_claim, 0, sizeof s_product_storage_claim);
+    memset(s_product_operation_id, 0, sizeof s_product_operation_id);
+    memset(s_product_fingerprint, 0, sizeof s_product_fingerprint);
+    s_product_operation_sequence = s_product_trial_sequence = 0U;
+    s_product_active = s_product_trial_running = false;
+    atomic_store(&s_product_done, false);
+    atomic_store(&s_product_result, PRODUCT_WORK_UNCERTAIN);
+    atomic_store(&s_product_resolved_sequence, 0U);
     memset(&s_ota_request, 0, sizeof s_ota_request);
     s_config_uncertain = s_ota_boot_uncertain = s_ota_active = s_trial_active = false;
     atomic_store(&s_ota_done, false);
@@ -185,9 +217,13 @@ static void expect_reply(const char *state, const char *error)
 {
     char field[100];
     (void)snprintf(field, sizeof field, "\"state\":\"%s\"", state);
+    if (!strstr(latest_reply, field))
+        fprintf(stderr, "expected %s in %s\n", field, latest_reply);
     assert(strstr(latest_reply, field));
     if (error) {
         (void)snprintf(field, sizeof field, "\"error_code\":\"%s\"", error);
+        if (!strstr(latest_reply, field))
+            fprintf(stderr, "expected %s in %s\n", field, latest_reply);
         assert(strstr(latest_reply, field));
     }
 }
@@ -272,7 +308,7 @@ static void check_product_package_guard(void)
 {
     reset_case();
     product_package(40U);
-    expect_reply("failed", "product_install_unavailable");
+    expect_reply("failed", "product_not_configured");
     assert(restart_calls == 0U && task_calls == 0U &&
            atomic_load(&owner.active_token) == 0U);
     product_package(41U); /* Same request ID, different signed package URL. */
@@ -280,7 +316,7 @@ static void check_product_package_guard(void)
     assert(restart_calls == 0U && task_calls == 0U &&
            atomic_load(&owner.active_token) == 0U);
     product_package(50U);
-    expect_reply("failed", "product_install_unavailable");
+    expect_reply("failed", "product_not_configured");
     assert(restart_calls == 0U && task_calls == 0U &&
            atomic_load(&owner.active_token) == 0U);
     product_package(42U); /* URL preflight runs before request admission. */
@@ -290,6 +326,93 @@ static void check_product_package_guard(void)
     assert(!product_present && !binding_snapshot_calls && !product_uninstall_calls);
     const uint8_t empty[EBASE_PRODUCT_LEDGER_BYTES] = {0};
     assert(memcmp(product_bytes, empty, sizeof empty) == 0);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    product_package(40U);
+    expect_reply("running", NULL);
+    assert(task_calls == 1U && package_source_opens == 1U &&
+           package_source_closes == 1U && package_prepare_calls == 1U &&
+           package_trial_calls == 1U && package_stop_calls == 0U);
+    poll_product();
+    expect_reply("running", NULL);
+    assert(s_product_active && s_product_trial_running &&
+           s_product_trial_sequence == 9U &&
+           atomic_load(&owner.active_token) == 0U);
+    ebase_product_ledger_t ledger = {0};
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.count == 1U &&
+           ledger.records[0].state == EBASE_PRODUCT_PREPARED &&
+           ledger.records[0].kind == EBASE_PRODUCT_INSTALL);
+    product_package(40U);
+    expect_reply("running", NULL);
+    product_package(41U);
+    expect_reply("failed", "request_conflict");
+    product_package(50U);
+    expect_reply("failed", "product_operation_conflict");
+    product_package(43U); /* Same operation, new request ID, changed URL. */
+    expect_reply("failed", "product_operation_conflict");
+    assert(package_prepare_calls == 1U && task_calls == 1U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    package_source_open_ok = false;
+    product_package(40U);
+    expect_reply("running", NULL);
+    poll_product();
+    expect_reply("failed", "product_operation_failed");
+    assert(package_prepare_calls == 0U &&
+           atomic_load(&owner.active_token) == 0U && !s_product_active);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 6U);
+    network_ready = trusted_time_ready = false;
+    product_package(44U); /* Ledger lookup precedes new-transfer admission. */
+    expect_reply("failed", "product_operation_failed");
+    assert(package_source_opens == 1U && task_calls == 1U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    package_prepare_result = ESP_BASE_CONTAINER_PREPARE_REJECTED;
+    package_prepare_rejected_after_write = true;
+    product_package(40U);
+    expect_reply("running", NULL);
+    poll_product();
+    expect_reply("failed", "product_operation_failed");
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 9U &&
+           atomic_load(&owner.active_token) == 0U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    package_source_complete_ok = false;
+    product_package(40U);
+    expect_reply("running", NULL);
+    poll_product();
+    expect_reply("failed", "product_operation_failed");
+    assert(package_abandon_prepared_calls == 1U &&
+           atomic_load(&owner.active_token) == 0U);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 9U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    worker_created = false;
+    product_package(40U);
+    expect_reply("failed", "resource_failure");
+    assert(task_calls == 1U && package_source_opens == 0U &&
+           atomic_load(&owner.active_token) == 0U);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 6U);
 }
 
 bool esp_base_product_package_source_request_valid(
@@ -298,6 +421,39 @@ bool esp_base_product_package_source_request_valid(
     return url != NULL && expected_size_bytes != 0U &&
         (strcmp(url, "https://packages.example.test/a.pkg") == 0 ||
          strcmp(url, "https://packages.example.test/b.pkg") == 0);
+}
+
+esp_base_product_package_source_t *esp_base_product_package_source_open(
+    const char *url, uint32_t expected_size_bytes, bool trusted_time)
+{
+    assert(trusted_time && esp_base_product_package_source_request_valid(
+        url, expected_size_bytes));
+    ++package_source_opens;
+    static esp_base_product_package_source_t source;
+    return package_source_open_ok ? &source : NULL;
+}
+
+bool esp_base_product_package_source_read(void *context, size_t offset_bytes,
+    uint8_t *destination, size_t size_bytes)
+{
+    assert(context != NULL && offset_bytes == 0U && destination != NULL &&
+           size_bytes == 1U);
+    *destination = 0x7b;
+    return true;
+}
+
+bool esp_base_product_package_source_complete(
+    const esp_base_product_package_source_t *source)
+{
+    assert(source != NULL);
+    return package_source_complete_ok;
+}
+
+void esp_base_product_package_source_close(
+    esp_base_product_package_source_t *source)
+{
+    assert(source != NULL);
+    ++package_source_closes;
 }
 
 static void check_product_package_preboot_recovery(void)
@@ -791,7 +947,8 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
         memset(package->package_sha256, 0x7b, 32);
         strcpy(package->package_url, number == 42U ?
             "https://user@packages.example.test/a.pkg" :
-            number == 41U ? "https://packages.example.test/b.pkg" :
+             number == 41U || number == 43U ?
+                "https://packages.example.test/b.pkg" :
             "https://packages.example.test/a.pkg");
         return NULL;
     }
@@ -869,8 +1026,8 @@ eota_result_t eota_validate_image_request(const eota_image_t *image)
     ++validate_calls;
     return validate_result;
 }
-bool esp_base_wifi_ready(void) { return true; }
-bool esp_base_time_ready(void) { return true; }
+bool esp_base_wifi_ready(void) { return network_ready; }
+bool esp_base_time_ready(void) { return trusted_time_ready; }
 const char *esp_base_wifi_state(void) { return "ready"; }
 const char *esp_base_mqtt_owner_state(void) { return "ready"; }
 esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = fake_frp_state}; }
@@ -1060,10 +1217,73 @@ esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
 {
     assert(esp_base_storage_claim_active(claim) && out != NULL);
     ++binding_snapshot_calls;
-    *out = (esp_base_container_binding_snapshot_t){.container_sequence = 6U,
+    *out = (esp_base_container_binding_snapshot_t){.container_sequence = binding_sequence,
                                                    .package_present = binding_package_present};
     if (binding_package_present) memset(out->package_sha256, 0x7b, 32);
     return binding_result;
+}
+
+esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_container_package_request_t *request,
+    econtainer_slot_source_fn source_fn, void *source_context,
+    uint32_t *prepared_sequence)
+{
+    assert(esp_base_storage_claim_active(claim) && request != NULL &&
+           source_fn != NULL && source_context != NULL &&
+           prepared_sequence != NULL && request->expected_sequence == 6U &&
+           request->package_sha256[0] == 0x7b);
+    ++package_prepare_calls;
+    uint8_t byte = 0U;
+    assert(source_fn(source_context, 0U, &byte, 1U) && byte == 0x7b);
+    if (package_prepare_result == ESP_BASE_CONTAINER_PREPARED)
+        *prepared_sequence = 8U;
+    if (package_prepare_result == ESP_BASE_CONTAINER_PREPARE_REJECTED &&
+        package_prepare_rejected_after_write) {
+        *prepared_sequence = 9U;
+        binding_sequence = 9U;
+    }
+    return package_prepare_result;
+}
+
+bool esp_base_container_product_abandon_prepared_package(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[37], const uint8_t package_sha256[32],
+    uint32_t *aborted_sequence)
+{
+    assert(esp_base_storage_claim_active(claim) && prepared_sequence == 8U &&
+           operation_id != NULL && package_sha256[0] == 0x7b &&
+           aborted_sequence != NULL);
+    ++package_abandon_prepared_calls;
+    if (package_abandon_prepared_ok) *aborted_sequence = 9U;
+    return package_abandon_prepared_ok;
+}
+
+bool esp_base_container_product_stop_confirmed(
+    const esp_base_storage_claim_t *claim)
+{
+    assert(esp_base_storage_claim_active(claim));
+    ++package_stop_calls;
+    return package_stop_ok;
+}
+
+esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[37], const char boot_id[37])
+{
+    assert(esp_base_storage_claim_active(claim) && prepared_sequence == 8U &&
+           operation_id != NULL && !strcmp(boot_id, s_boot_id));
+    ++package_trial_calls;
+    return package_trial_result;
+}
+
+bool esp_base_container_product_abandon_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
+    const char operation_id[37])
+{
+    assert(esp_base_storage_claim_active(claim) && trial_sequence == 9U &&
+           operation_id != NULL);
+    return false; /* This fake fails before trial mutation; PREPARED is canceled. */
 }
 
 esp_base_container_uninstall_result_t esp_base_container_product_uninstall(

@@ -149,9 +149,9 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 
 启动与 `ota.start` 使用同一本次 boot 的串行 owner；[Container 产品装配](firmware/integrations/container_binding/README.md)使用启动已持有的 claim，将签名固件集合逐字段送入 Container 并复读。无包初始化、写入 C 前的旧 B 退役、准备后 stage、pending trial、确认及 A 仍运行时的中断恢复已接线；guest 线程存活不长期占有 claim。VALID C 与 ECS2 `HEALTH_VERIFIED` 的重启确认必须凭原 V2 收据完成；收据缺失、已失败或 OTA 不可用时，残留固件迁移会阻断产品启动，普通启动不改写 ECS2。启动控制任务在恢复完成前关闭配置写入和 MQTT/FRP owner。带包联合 OTA、真实板卡掉电恢复及五能力并发仍未闭合。
 
-2026-09-29 产品包未决安装／升级恢复已前移至普通 guest 装载之前：按原持久账本和签名固件集合核对 ECS2，可在候选包损坏时安全放弃未确认 trial，独立读回 `ABORTED` 与旧绑定并记失败后再启动旧包；无法证明或已确认候选保持阻断。[冷启动恢复检查点](docs/operations/product_package_cold_recovery_checkpoint.md)记录双目标签名 guest、双目标宿主和 C3 签名 QEMU 结果。公开安装／升级、持久确认及实体设备掉电仍待完成。
+2026-09-29 产品包未决安装／升级恢复已前移至普通 guest 装载之前：按原持久账本和签名固件集合核对 ECS2，可在候选包损坏时安全放弃未确认 trial，独立读回 `ABORTED` 与旧绑定并记失败后再启动旧包；无法证明或已确认候选保持阻断。[冷启动恢复检查点](docs/operations/product_package_cold_recovery_checkpoint.md)记录双目标签名 guest、双目标宿主和 C3 签名 QEMU 结果。持久确认及实体设备掉电仍待完成。
 
-产品包的[HTTPS 顺序来源](docs/operations/product_package_https_source_checkpoint.md)已加入 Base 并经双目标 host 故障测试及固定 SDK 构建；它限定 URL、TLS、响应长度和传输进展，供后续候选槽下载使用。当前公开安装／升级 worker 尚未接线，来源代码未进入生产 app 的链接路径，容量和真实网络仍待验证。
+产品包的[HTTPS 顺序来源](docs/operations/product_package_https_source_checkpoint.md)已加入 Base；公开 `product.install`／`product.upgrade` 现按原操作意图启动异步下载、验包和同 boot 候选试运行，拒绝后的 `ABORTED` 状态及旧绑定可读回后记失败。完整传输一结束即释放 TLS/HTTP 客户端，再由 Container 验签。双目标 host 与真实签名 guest 回归、隔离固定 SDK 完整链接通过；C3 测试键签名 app 为 `0x121000` B，候选 `0x130000` app 槽余 `0xf000` B，ESP32 显式离线镜像为 `0xedc60` B。这些隔离构建尚非冻结五仓正式制品；试运行业务健康判据、最终成功收据、真实 HTTPS／Broker／实板和容量总门仍未闭合。
 
 - [固件入口](firmware/README.md)
 - [C3 签名产品包 QEMU 检查点](docs/operations/c3-signed-product-qemu-checkpoint.md)

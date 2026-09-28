@@ -13,6 +13,7 @@
 #include "esp_base_ota_receipt.h"
 #include "esp_base_container_product.h"
 #include "esp_base_product_ledger_nvs.h"
+#include "esp_base_product_package_source.h"
 #include "esp_attr.h"
 #include "esp_partition.h"
 #include "psa/crypto.h"
@@ -61,6 +62,21 @@ static bool s_started, s_config_loaded, s_config_uncertain, s_trial_active;
 static bool s_ota_active, s_ota_boot_uncertain;
 static esp_base_storage_claim_t s_ota_storage_claim;
 static esp_base_storage_claim_t s_product_storage_claim;
+typedef enum {
+    PRODUCT_WORK_UNCERTAIN = 0,
+    PRODUCT_WORK_FAILED,
+    PRODUCT_WORK_TRIAL_RUNNING,
+} product_work_result_t;
+static bool s_product_active, s_product_trial_running;
+static size_t s_product_slot;
+static ebase_product_package_request_t *s_product_request;
+static char s_product_operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+static uint32_t s_product_operation_sequence;
+static uint8_t s_product_fingerprint[32];
+static atomic_bool s_product_done;
+static atomic_int s_product_result;
+static atomic_uint_fast32_t s_product_resolved_sequence;
+static uint32_t s_product_trial_sequence;
 static size_t s_ota_slot;
 static esp_base_ota_request_t s_ota_request;
 static atomic_bool s_ota_done;
@@ -810,9 +826,184 @@ static void poll_ota(void)
     memset(&s_ota_request, 0, sizeof s_ota_request);
 }
 
-static void finish_product_uninstall(size_t slot, ebase_product_ledger_t *ledger,
-                                     bool uncertain, const char *state,
-                                     const char *error)
+static bool product_binding_unchanged(
+    const ebase_product_package_request_t *request,
+    const esp_base_container_binding_snapshot_t *binding,
+    uint32_t expected_sequence)
+{
+    return binding->container_sequence == expected_sequence &&
+        binding->package_present == request->previous_package_present &&
+        (!binding->package_present ||
+         memcmp(binding->package_sha256, request->previous_package_sha256, 32) == 0);
+}
+
+static void product_task(void *argument)
+{
+    (void)argument;
+    const ebase_product_package_request_t *request = s_product_request;
+    product_work_result_t outcome = PRODUCT_WORK_UNCERTAIN;
+    uint32_t resolved_sequence = 0U;
+    if (!esp_base_storage_claim_active(&s_product_storage_claim) ||
+        request == NULL) goto done;
+    ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+    if (ledger == NULL) goto done;
+    const ebase_product_ledger_io_t io =
+        ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+    const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+    const ebase_product_record_t *pending = ledger->count ?
+        &ledger->records[ledger->count - 1U] : NULL;
+    const bool intent_valid = opened == EBASE_LEDGER_OK && pending != NULL &&
+        pending->state == EBASE_PRODUCT_PREPARED &&
+        pending->kind == (request->previous_package_present ?
+            EBASE_PRODUCT_UPGRADE : EBASE_PRODUCT_INSTALL) &&
+        pending->sequence == request->operation_sequence &&
+        pending->container_sequence == request->expected_container_sequence &&
+        strcmp(pending->operation_id, request->operation_id) == 0 &&
+        memcmp(pending->fingerprint, s_product_fingerprint, 32) == 0 &&
+        memcmp(pending->package_sha256, request->package_sha256, 32) == 0;
+    free(ledger);
+    if (!intent_valid) goto done;
+    if (!esp_base_time_ready()) {
+        outcome = PRODUCT_WORK_FAILED;
+        resolved_sequence = request->expected_container_sequence;
+        goto done;
+    }
+    esp_base_product_package_source_t *source =
+        esp_base_product_package_source_open(request->package_url,
+            request->package_size_bytes, true);
+    if (source == NULL) {
+        outcome = PRODUCT_WORK_FAILED;
+        resolved_sequence = request->expected_container_sequence;
+        goto done;
+    }
+    esp_base_container_package_request_t candidate = {
+        .expected_sequence = request->expected_container_sequence,
+        .previous_package_present = request->previous_package_present,
+        .package_size_bytes = request->package_size_bytes,
+        .guest_abi_version = request->guest_abi_version,
+        .data_schema_version = request->data_schema_version,
+    };
+    memcpy(candidate.operation_id, request->operation_id,
+           sizeof candidate.operation_id);
+    memcpy(candidate.previous_package_sha256, request->previous_package_sha256,
+           sizeof candidate.previous_package_sha256);
+    memcpy(candidate.package_sha256, request->package_sha256,
+           sizeof candidate.package_sha256);
+    /* A rejected write returns the read-back ABORTED sequence here; zero
+     * means reservation never happened. */
+    uint32_t prepared_sequence = 0U;
+    const esp_base_container_prepare_result_t prepared =
+        esp_base_container_product_prepare_package(&s_product_storage_claim,
+            &candidate, esp_base_product_package_source_read, source,
+            &prepared_sequence);
+    const bool transfer_complete = esp_base_product_package_source_complete(source);
+    esp_base_product_package_source_close(source);
+    if (prepared != ESP_BASE_CONTAINER_PREPARED) {
+        if (prepared == ESP_BASE_CONTAINER_PREPARE_REJECTED) {
+            esp_base_container_binding_snapshot_t binding = {0};
+            if (esp_base_container_product_binding_snapshot(
+                    &s_product_storage_claim, &binding) ==
+                    ESP_BASE_CONTAINER_BINDING_OK &&
+                product_binding_unchanged(request, &binding,
+                    prepared_sequence ? prepared_sequence :
+                    request->expected_container_sequence)) {
+                outcome = PRODUCT_WORK_FAILED;
+                resolved_sequence = binding.container_sequence;
+            }
+        }
+        goto done;
+    }
+    if (!transfer_complete) {
+        if (esp_base_container_product_abandon_prepared_package(
+                &s_product_storage_claim, prepared_sequence,
+                request->operation_id, request->package_sha256,
+                &resolved_sequence))
+            outcome = PRODUCT_WORK_FAILED;
+        goto done;
+    }
+    if (request->previous_package_present &&
+        !esp_base_container_product_stop_confirmed(&s_product_storage_claim))
+        goto done;
+    const esp_base_container_boot_result_t trial =
+        esp_base_container_product_start_package_trial(
+            &s_product_storage_claim, prepared_sequence,
+            request->operation_id, s_boot_id);
+    if (trial == ESP_BASE_CONTAINER_RUNNING) {
+        resolved_sequence = prepared_sequence + 1U;
+        outcome = PRODUCT_WORK_TRIAL_RUNNING;
+        goto done;
+    }
+    if (esp_base_container_product_abandon_package_trial(
+            &s_product_storage_claim, prepared_sequence + 1U,
+            request->operation_id)) {
+        resolved_sequence = prepared_sequence + 2U;
+    } else if (!esp_base_container_product_abandon_prepared_package(
+            &s_product_storage_claim, prepared_sequence,
+            request->operation_id, request->package_sha256,
+            &resolved_sequence)) {
+        goto done;
+    }
+    if (esp_base_container_product_boot(&s_product_storage_claim, s_boot_id) ==
+        (request->previous_package_present ?
+            ESP_BASE_CONTAINER_RUNNING : ESP_BASE_CONTAINER_EMPTY))
+        outcome = PRODUCT_WORK_FAILED;
+done:
+    atomic_store_explicit(&s_product_resolved_sequence, resolved_sequence,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_product_result, outcome, memory_order_relaxed);
+    atomic_store_explicit(&s_product_done, true, memory_order_release);
+    vTaskDelete(NULL);
+}
+
+static void poll_product(void)
+{
+    if (!s_product_active ||
+        !atomic_load_explicit(&s_product_done, memory_order_acquire)) return;
+    atomic_store_explicit(&s_product_done, false, memory_order_relaxed);
+    const product_work_result_t outcome =
+        (product_work_result_t)atomic_load_explicit(&s_product_result,
+                                                    memory_order_relaxed);
+    const uint32_t resolved_sequence = (uint32_t)atomic_load_explicit(
+        &s_product_resolved_sequence, memory_order_relaxed);
+    free(s_product_request);
+    s_product_request = NULL;
+    if (outcome == PRODUCT_WORK_FAILED && resolved_sequence != 0U) {
+        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+        if (ledger != NULL) {
+            const ebase_product_ledger_io_t io =
+                ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+            const ebase_product_ledger_result_t opened =
+                ebase_product_ledger_open(ledger, &io);
+            const ebase_product_ledger_result_t finished =
+                opened == EBASE_LEDGER_OK ? ebase_product_ledger_finish(
+                    ledger, &io, s_product_operation_sequence,
+                    s_product_operation_id, s_product_fingerprint,
+                    EBASE_PRODUCT_FAILED, 1U, resolved_sequence) : opened;
+            free(ledger);
+            if (finished == EBASE_LEDGER_OK &&
+                esp_base_storage_release(&s_product_storage_claim)) {
+                s_product_active = false;
+                save_outcome(s_product_slot, "failed", "product_operation_failed", false);
+                return;
+            }
+        }
+    } else if (outcome == PRODUCT_WORK_TRIAL_RUNNING &&
+               resolved_sequence != 0U &&
+               esp_base_storage_release(&s_product_storage_claim)) {
+        s_product_trial_running = true;
+        s_product_trial_sequence = resolved_sequence;
+        save_outcome(s_product_slot, "running", NULL, false);
+        return;
+    }
+    /* The ledger or candidate state is not provable. Retain the claim until
+     * next-boot reconciliation; no other write may reinterpret this result. */
+    s_config_uncertain = true;
+    save_outcome(s_product_slot, "unknown", "storage_uncertain", false);
+}
+
+static void finish_product_without_worker(size_t slot, ebase_product_ledger_t *ledger,
+                                          bool uncertain, const char *state,
+                                          const char *error)
 {
     if (uncertain) {
         s_config_uncertain = true;
@@ -827,13 +1018,174 @@ static void finish_product_uninstall(size_t slot, ebase_product_ledger_t *ledger
     save_outcome(slot, state, error, false);
 }
 
+static void handle_product_package(size_t slot, const ebase_command_t *command)
+{
+    const ebase_product_package_request_t *request = &command->product_package;
+    const ebase_product_kind_t kind = command->kind == EBASE_PRODUCT_INSTALL_COMMAND ?
+        EBASE_PRODUCT_INSTALL : EBASE_PRODUCT_UPGRADE;
+    if (s_product_active) {
+        if (!strcmp(s_product_operation_id, request->operation_id)) {
+            if (memcmp(s_product_fingerprint, command->request.fingerprint, 32) == 0)
+                save_outcome(slot, s_config_uncertain ? "unknown" : "running",
+                             s_config_uncertain ? "storage_uncertain" : NULL, false);
+            else save_outcome(slot, "failed", "product_operation_conflict", false);
+        } else save_outcome(slot, "failed", "operation_busy", false);
+        return;
+    }
+    if (esp_base_control_state_ota_pending(&s_control_state)) {
+        save_outcome(slot, "failed", "ota_verification_pending", false); return;
+    }
+    if (s_ota_active || s_trial_active || s_product_active) {
+        save_outcome(slot, "failed", "operation_busy", false); return;
+    }
+    if (s_config_uncertain || s_ota_boot_uncertain) {
+        save_outcome(slot, "unknown", "storage_uncertain", false); return;
+    }
+    if (!esp_base_container_product_configured()) {
+        save_outcome(slot, "failed", "product_not_configured", false); return;
+    }
+    s_product_storage_claim = (esp_base_storage_claim_t){0};
+    if (!esp_base_storage_claim(s_context.storage_owner,
+                                &s_product_storage_claim)) {
+        save_outcome(slot, "failed", "operation_busy", false); return;
+    }
+    ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+    if (ledger == NULL) {
+        finish_product_without_worker(slot, NULL, false,
+                                      "failed", "resource_failure");
+        return;
+    }
+    const ebase_product_ledger_io_t io =
+        ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+    const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+    if (opened != EBASE_LEDGER_OK) {
+        finish_product_without_worker(slot, ledger,
+            opened == EBASE_LEDGER_UNCERTAIN,
+            opened == EBASE_LEDGER_UNINITIALIZED || opened == EBASE_LEDGER_BUSY ?
+                "unknown" : "failed",
+            opened == EBASE_LEDGER_UNINITIALIZED ? "product_ledger_uninitialized" :
+            opened == EBASE_LEDGER_BUSY ? "operation_busy" : "storage_uncertain");
+        return;
+    }
+    ebase_product_record_t prior = {0};
+    const ebase_product_ledger_result_t found = ebase_product_ledger_query(
+        ledger, request->operation_id, &prior);
+    if (found == EBASE_LEDGER_OK) {
+        finish_product_without_worker(slot, ledger, false,
+            prior.kind != kind ||
+            memcmp(prior.fingerprint, command->request.fingerprint, 32) != 0 ?
+                "failed" : prior.state == EBASE_PRODUCT_SUCCEEDED ?
+                "succeeded" : prior.state == EBASE_PRODUCT_FAILED ?
+                "failed" : "unknown",
+            prior.kind != kind ||
+            memcmp(prior.fingerprint, command->request.fingerprint, 32) != 0 ?
+                "product_operation_conflict" :
+                prior.state == EBASE_PRODUCT_PREPARED ?
+                "product_operation_unresolved" :
+                prior.state == EBASE_PRODUCT_FAILED ?
+                "product_operation_failed" : NULL);
+        return;
+    }
+    if (found != EBASE_LEDGER_UNKNOWN) {
+        finish_product_without_worker(slot, ledger, true,
+                                      "unknown", "storage_uncertain");
+        return;
+    }
+    /* Existing IDs remain read-only when network or trusted time disappears. */
+    if (!esp_base_wifi_ready() || !esp_base_time_ready()) {
+        finish_product_without_worker(slot, ledger, false, "failed",
+            !esp_base_wifi_ready() ? "network_unavailable" : "time_unavailable");
+        return;
+    }
+    if (request->expected_container_sequence > UINT32_MAX - 5U) {
+        finish_product_without_worker(slot, ledger, false,
+            "failed", "product_sequence_conflict");
+        return;
+    }
+    esp_base_container_binding_snapshot_t binding = {0};
+    const esp_base_container_binding_result_t bound =
+        esp_base_container_product_binding_snapshot(&s_product_storage_claim,
+                                                    &binding);
+    if (bound != ESP_BASE_CONTAINER_BINDING_OK) {
+        finish_product_without_worker(slot, ledger,
+            bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN,
+            bound == ESP_BASE_CONTAINER_BINDING_BUSY ? "failed" : "unknown",
+            bound == ESP_BASE_CONTAINER_BINDING_BUSY ? "operation_busy" :
+            "storage_uncertain");
+        return;
+    }
+    if (binding.container_sequence != request->expected_container_sequence ||
+        binding.package_present != request->previous_package_present ||
+        (binding.package_present &&
+         memcmp(binding.package_sha256,
+                request->previous_package_sha256, 32) != 0)) {
+        finish_product_without_worker(slot, ledger, false,
+            "failed", "product_precondition_conflict");
+        return;
+    }
+    ebase_product_package_request_t *work = protocol_work_alloc(sizeof *work);
+    if (work == NULL) {
+        finish_product_without_worker(slot, ledger, false,
+                                      "failed", "resource_failure");
+        return;
+    }
+    ebase_product_record_t intent = {
+        .sequence = request->operation_sequence,
+        .container_sequence = request->expected_container_sequence,
+        .kind = kind,
+        .state = EBASE_PRODUCT_PREPARED,
+    };
+    memcpy(intent.operation_id, request->operation_id, sizeof intent.operation_id);
+    memcpy(intent.fingerprint, command->request.fingerprint, 32);
+    memcpy(intent.package_sha256, request->package_sha256, 32);
+    const ebase_product_ledger_result_t begun = ebase_product_ledger_begin(
+        ledger, &io, &intent);
+    if (begun != EBASE_LEDGER_OK) {
+        free(work);
+        finish_product_without_worker(slot, ledger,
+            begun == EBASE_LEDGER_UNCERTAIN, "failed",
+            begun == EBASE_LEDGER_PENDING ? "product_previous_unresolved" :
+            begun == EBASE_LEDGER_STALE_SEQUENCE ||
+            begun == EBASE_LEDGER_SEQUENCE_GAP ||
+            begun == EBASE_LEDGER_EXHAUSTED ? "product_sequence_conflict" :
+            begun == EBASE_LEDGER_BUSY ? "operation_busy" :
+            "product_operation_conflict");
+        return;
+    }
+    *work = *request;
+    s_product_request = work;
+    s_product_operation_sequence = request->operation_sequence;
+    memcpy(s_product_operation_id, request->operation_id,
+           sizeof s_product_operation_id);
+    memcpy(s_product_fingerprint, command->request.fingerprint, 32);
+    s_product_slot = slot;
+    s_product_active = true;
+    s_product_trial_running = false;
+    atomic_store_explicit(&s_product_done, false, memory_order_relaxed);
+    if (xTaskCreate(product_task, "base_product", 12288, NULL, 4, NULL) != pdPASS) {
+        s_product_active = false;
+        s_product_request = NULL;
+        free(work);
+        const ebase_product_ledger_result_t finished = ebase_product_ledger_finish(
+            ledger, &io, intent.sequence, intent.operation_id,
+            intent.fingerprint, EBASE_PRODUCT_FAILED, 1U,
+            intent.container_sequence);
+        finish_product_without_worker(slot, ledger,
+            finished != EBASE_LEDGER_OK,
+            "failed", "resource_failure");
+        return;
+    }
+    free(ledger);
+    save_outcome(slot, "running", NULL, false);
+}
+
 static void handle_product_uninstall(size_t slot, const ebase_command_t *command)
 {
     const ebase_product_uninstall_request_t *request = &command->product_uninstall;
     if (esp_base_control_state_ota_pending(&s_control_state)) {
         save_outcome(slot, "failed", "ota_verification_pending", false); return;
     }
-    if (s_ota_active || s_trial_active) {
+    if (s_ota_active || s_trial_active || s_product_active) {
         save_outcome(slot, "failed", "operation_busy", false); return;
     }
     if (s_config_uncertain || s_ota_boot_uncertain) {
@@ -848,14 +1200,14 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
     }
     ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
     if (ledger == NULL) {
-        finish_product_uninstall(slot, NULL, false, "failed", "resource_failure");
+        finish_product_without_worker(slot, NULL, false, "failed", "resource_failure");
         return;
     }
     const ebase_product_ledger_io_t io =
         ebase_product_ledger_nvs_io(s_context.flash_io_owner);
     const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
     if (opened != EBASE_LEDGER_OK) {
-        finish_product_uninstall(slot, ledger, false,
+        finish_product_without_worker(slot, ledger, false,
             opened == EBASE_LEDGER_UNINITIALIZED || opened == EBASE_LEDGER_UNCERTAIN ?
                 "unknown" : "failed",
             opened == EBASE_LEDGER_UNINITIALIZED ? "product_ledger_uninitialized" :
@@ -870,10 +1222,10 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
         if (prior.kind != EBASE_PRODUCT_UNINSTALL ||
             memcmp(prior.fingerprint, command->request.fingerprint, 32) != 0 ||
             memcmp(prior.package_sha256, request->package_sha256, 32) != 0) {
-            finish_product_uninstall(slot, ledger, false, "failed",
+            finish_product_without_worker(slot, ledger, false, "failed",
                                      "product_operation_conflict");
         } else {
-            finish_product_uninstall(slot, ledger, false,
+            finish_product_without_worker(slot, ledger, false,
                 prior.state == EBASE_PRODUCT_SUCCEEDED ? "succeeded" :
                 prior.state == EBASE_PRODUCT_FAILED ? "failed" : "unknown",
                 prior.state == EBASE_PRODUCT_FAILED ? "product_operation_failed" :
@@ -882,14 +1234,14 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
         return;
     }
     if (found != EBASE_LEDGER_UNKNOWN) {
-        finish_product_uninstall(slot, ledger, false, "unknown", "storage_uncertain");
+        finish_product_without_worker(slot, ledger, false, "unknown", "storage_uncertain");
         return;
     }
     esp_base_container_binding_snapshot_t binding = {0};
     const esp_base_container_binding_result_t bound =
         esp_base_container_product_binding_snapshot(&s_product_storage_claim, &binding);
     if (bound != ESP_BASE_CONTAINER_BINDING_OK) {
-        finish_product_uninstall(slot, ledger,
+        finish_product_without_worker(slot, ledger,
             bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN,
             bound == ESP_BASE_CONTAINER_BINDING_BUSY ? "failed" : "unknown",
             bound == ESP_BASE_CONTAINER_BINDING_BUSY ? "operation_busy" :
@@ -898,12 +1250,12 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
         return;
     }
     if (!binding.package_present) {
-        finish_product_uninstall(slot, ledger, false, "failed", "product_not_installed");
+        finish_product_without_worker(slot, ledger, false, "failed", "product_not_installed");
         return;
     }
     if (binding.container_sequence != request->expected_container_sequence ||
         memcmp(binding.package_sha256, request->package_sha256, 32) != 0) {
-        finish_product_uninstall(slot, ledger, false, "failed",
+        finish_product_without_worker(slot, ledger, false, "failed",
                                  "product_precondition_conflict");
         return;
     }
@@ -919,7 +1271,7 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
     const ebase_product_ledger_result_t begun = ebase_product_ledger_begin(
         ledger, &io, &intent);
     if (begun != EBASE_LEDGER_OK) {
-        finish_product_uninstall(slot, ledger, begun == EBASE_LEDGER_UNCERTAIN,
+        finish_product_without_worker(slot, ledger, begun == EBASE_LEDGER_UNCERTAIN,
             begun == EBASE_LEDGER_BUSY ? "unknown" : "failed",
             begun == EBASE_LEDGER_PENDING ? "product_previous_unresolved" :
             begun == EBASE_LEDGER_STALE_SEQUENCE || begun == EBASE_LEDGER_SEQUENCE_GAP ||
@@ -934,14 +1286,14 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
     if (uninstalled == ESP_BASE_CONTAINER_UNINSTALL_COMPLETE) {
         if (esp_base_container_product_boot(&s_product_storage_claim, s_boot_id) !=
             ESP_BASE_CONTAINER_EMPTY) {
-            finish_product_uninstall(slot, ledger, true, "unknown", "storage_uncertain");
+            finish_product_without_worker(slot, ledger, true, "unknown", "storage_uncertain");
             return;
         }
         const ebase_product_ledger_result_t finished = ebase_product_ledger_finish(
             ledger, &io, request->operation_sequence, request->operation_id,
             command->request.fingerprint, EBASE_PRODUCT_SUCCEEDED, 0U,
             request->expected_container_sequence + 1U);
-        finish_product_uninstall(slot, ledger, finished != EBASE_LEDGER_OK,
+        finish_product_without_worker(slot, ledger, finished != EBASE_LEDGER_OK,
                                  "succeeded", NULL);
         return;
     }
@@ -950,11 +1302,11 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
             ledger, &io, request->operation_sequence, request->operation_id,
             command->request.fingerprint, EBASE_PRODUCT_FAILED, 1U,
             request->expected_container_sequence);
-        finish_product_uninstall(slot, ledger, finished != EBASE_LEDGER_OK,
+        finish_product_without_worker(slot, ledger, finished != EBASE_LEDGER_OK,
                                  "failed", "product_precondition_conflict");
         return;
     }
-    finish_product_uninstall(slot, ledger, true, "unknown", "storage_uncertain");
+    finish_product_without_worker(slot, ledger, true, "unknown", "storage_uncertain");
 }
 
 static void handle_command_line(const char *line, size_t length, ebase_command_t *command)
@@ -1088,7 +1440,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
     if (command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
         command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) {
-        save_outcome(slot, "failed", "product_install_unavailable", false);
+        handle_product_package(slot, command);
         return;
     }
     if (command->kind == EBASE_PRODUCT_UNINSTALL_COMMAND) {
@@ -1115,6 +1467,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         }
         if (esp_base_control_state_ota_pending(&s_control_state)) { save_outcome(slot, "failed", "ota_verification_pending", false); return; }
         if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
+        if (s_product_active) { save_outcome(slot, "failed", "operation_busy", false); return; }
         if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
         if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
         if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
@@ -1181,6 +1534,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
+    if (s_product_active) { save_outcome(slot, "failed", "operation_busy", false); return; }
     if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
     if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
     if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
@@ -1284,6 +1638,7 @@ static void control_task(void *argument)
         esp_base_wifi_poll(now);
         poll_configuration(now);
         poll_ota();
+        poll_product();
         if (now >= next_time_poll) {
             esp_base_time_poll();
             next_time_poll = now + 1000;

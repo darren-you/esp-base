@@ -24,6 +24,7 @@ struct esp_base_product_package_source {
     uint32_t received_bytes;
     int64_t started_us;
     int64_t progress_us;
+    bool complete;
     bool failed;
 };
 
@@ -171,10 +172,16 @@ bool esp_base_product_package_source_read(void *context,
         return false;
     }
     source->received_bytes += (uint32_t)size_bytes;
-    if (source->received_bytes == source->expected_size_bytes &&
-        !esp_http_client_is_complete_data_received(source->client)) {
-        source->failed = true;
-        return false;
+    if (source->received_bytes == source->expected_size_bytes) {
+        if (!esp_http_client_is_complete_data_received(source->client) ||
+            esp_http_client_cleanup(source->client) != ESP_OK) {
+            source->failed = true;
+            return false;
+        }
+        /* The candidate validator may allocate the guest runtime. Release
+         * the TLS/HTTP buffers before it reads the signed package from Flash. */
+        source->client = NULL;
+        source->complete = true;
     }
     return true;
 }
@@ -182,8 +189,6 @@ bool esp_base_product_package_source_read(void *context,
 bool esp_base_product_package_source_complete(
     const esp_base_product_package_source_t *source)
 {
-    return source != NULL && !source->failed &&
-        source->received_bytes == source->expected_size_bytes &&
-        deadline_valid(source) &&
-        esp_http_client_is_complete_data_received(source->client);
+    return source != NULL && !source->failed && source->complete &&
+        source->received_bytes == source->expected_size_bytes;
 }

@@ -1976,6 +1976,7 @@ typedef struct {
     uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
     esp_base_container_prepare_result_t outcome;
     uint32_t prepared_sequence;
+    uint32_t aborted_sequence;
 } package_prepare_context_t;
 
 static bool package_prepare_guest_ready(bool previous_package_present)
@@ -2020,7 +2021,8 @@ static bool package_prepare_operation_matches(
 }
 
 static bool package_prepare_abandon(
-    const package_prepare_context_t *prepare, uint32_t reserved_sequence)
+    package_prepare_context_t *prepare, uint32_t reserved_sequence,
+    const econtainer_slot_firmware_set_t *firmware_set)
 {
     econtainer_slots_state_t current = {0};
     if (econtainer_slots_load(&s_product.provider.io,
@@ -2028,6 +2030,7 @@ static bool package_prepare_abandon(
         current.sequence < reserved_sequence ||
         (current.phase != ECONTAINER_SLOT_WRITING &&
          current.phase != ECONTAINER_SLOT_PREPARED) ||
+        !bindings_match_firmware_set(&current, firmware_set) ||
         !package_prepare_operation_matches(&current, prepare)) return false;
     const uint32_t sequence = current.sequence;
     econtainer_slots_state_t abandoned = {0};
@@ -2035,11 +2038,20 @@ static bool package_prepare_abandon(
             &s_product.provider.geometry, sequence, s_product.boot_id,
             NULL, NULL, &abandoned) != ECONTAINER_SLOTS_OK) return false;
     econtainer_slots_state_t readback = {0};
-    return econtainer_slots_load(&s_product.provider.io,
+    if (econtainer_slots_load(&s_product.provider.io,
                &s_product.provider.geometry, &readback) == ECONTAINER_SLOTS_OK &&
         readback.sequence == sequence + 1U &&
         readback.phase == ECONTAINER_SLOT_ABORTED &&
-        package_prepare_operation_matches(&readback, prepare);
+        package_prepare_operation_matches(&readback, prepare) &&
+        bindings_match_firmware_set(&readback, firmware_set)) {
+        for (unsigned index = 0; index < ECONTAINER_SLOT_BINDING_COUNT; ++index) {
+            if (!same_binding(&current.bindings[index], &readback.bindings[index]))
+                return false;
+        }
+        prepare->aborted_sequence = readback.sequence;
+        return true;
+    }
+    return false;
 }
 
 static econtainer_slots_result_t package_prepare_with_firmware(
@@ -2101,7 +2113,7 @@ static econtainer_slots_result_t package_prepare_with_firmware(
     }
     /* A prepared candidate is still inactive. Its old binding remains intact,
      * so an exact WRITING/PREPARED record can be abandoned without stopping it. */
-    if (!package_prepare_abandon(prepare, reserved_sequence)) {
+    if (!package_prepare_abandon(prepare, reserved_sequence, firmware_set)) {
         prepare->outcome = ESP_BASE_CONTAINER_PREPARE_UNCERTAIN;
         return ECONTAINER_SLOTS_UNCERTAIN;
     }
@@ -2163,7 +2175,82 @@ esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
         *prepared_sequence = prepare.prepared_sequence;
         return ESP_BASE_CONTAINER_PREPARED;
     }
+    if (prepare.outcome == ESP_BASE_CONTAINER_PREPARE_REJECTED)
+        *prepared_sequence = prepare.aborted_sequence;
     return prepare.outcome;
+}
+
+typedef struct {
+    uint32_t prepared_sequence;
+    uint32_t aborted_sequence;
+    uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
+    uint8_t package_sha256[32];
+} prepared_abandon_context_t;
+
+static econtainer_slots_result_t abandon_prepared_package(
+    const econtainer_slot_firmware_set_t *firmware_set, void *context)
+{
+    prepared_abandon_context_t *abandon = context;
+    econtainer_slots_state_t before = {0};
+    econtainer_slots_result_t result = econtainer_slots_load(
+        &s_product.provider.io, &s_product.provider.geometry, &before);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    if (before.sequence != abandon->prepared_sequence ||
+        before.phase != ECONTAINER_SLOT_PREPARED ||
+        !bindings_match_firmware_set(&before, firmware_set) ||
+        before.operation.kind != ECONTAINER_SLOT_PACKAGE_WRITE ||
+        before.operation.firmware_transition ||
+        memcmp(before.operation.operation_id, abandon->operation_id,
+               sizeof abandon->operation_id) != 0 ||
+        memcmp(before.operation.package_sha256, abandon->package_sha256,
+               sizeof abandon->package_sha256) != 0 ||
+        memcmp(before.operation.target_firmware_sha256,
+               firmware_set->running_firmware_sha256, 32) != 0)
+        return ECONTAINER_SLOTS_CONFLICT;
+    econtainer_slots_state_t abandoned = {0};
+    result = econtainer_slots_abandon(&s_product.provider.io,
+        &s_product.provider.geometry, before.sequence, s_product.boot_id,
+        NULL, NULL, &abandoned);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    econtainer_slots_state_t readback = {0};
+    result = econtainer_slots_load(&s_product.provider.io,
+                                   &s_product.provider.geometry, &readback);
+    if (result != ECONTAINER_SLOTS_OK ||
+        readback.sequence != before.sequence + 1U ||
+        readback.phase != ECONTAINER_SLOT_ABORTED ||
+        memcmp(readback.operation.operation_id, abandon->operation_id,
+               sizeof abandon->operation_id) != 0 ||
+        memcmp(readback.operation.package_sha256, abandon->package_sha256,
+               sizeof abandon->package_sha256) != 0)
+        return ECONTAINER_SLOTS_UNCERTAIN;
+    for (unsigned index = 0; index < ECONTAINER_SLOT_BINDING_COUNT; ++index) {
+        if (!same_binding(&before.bindings[index], &readback.bindings[index]))
+            return ECONTAINER_SLOTS_UNCERTAIN;
+    }
+    abandon->aborted_sequence = readback.sequence;
+    return ECONTAINER_SLOTS_OK;
+}
+
+bool esp_base_container_product_abandon_prepared_package(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    const uint8_t package_sha256[32], uint32_t *aborted_sequence)
+{
+    if (aborted_sequence != NULL) *aborted_sequence = 0U;
+    prepared_abandon_context_t abandon = {.prepared_sequence = prepared_sequence};
+    if (!esp_base_storage_claim_active(claim) || !policy_present() ||
+        !s_product.provider_bound || !s_product.start_attempted ||
+        s_product.trial_mode || s_product.uninstall_uncertain ||
+        prepared_sequence == 0U || prepared_sequence == UINT32_MAX ||
+        package_sha256 == NULL || aborted_sequence == NULL ||
+        !decode_uuid(operation_id, abandon.operation_id)) return false;
+    memcpy(abandon.package_sha256, package_sha256, 32);
+    if (esp_base_container_with_firmware_set(claim,
+            ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
+            abandon_prepared_package, &abandon) != ECONTAINER_SLOTS_OK)
+        return false;
+    *aborted_sequence = abandon.aborted_sequence;
+    return true;
 }
 
 typedef struct {

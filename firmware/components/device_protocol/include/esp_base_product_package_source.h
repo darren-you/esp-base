@@ -24,7 +24,9 @@ esp_base_product_package_source_t *esp_base_product_package_source_open(
 bool esp_base_product_package_source_read(void *context,
     size_t relative_offset_bytes, uint8_t *destination, size_t size_bytes);
 
-/* After the final chunk, require the SDK to have consumed exactly one body. */
+/* The final read requires one complete SDK body and releases the HTTP/TLS
+ * client before package validation. This reports that latched result; later
+ * validation time does not retroactively invalidate the transfer. */
 bool esp_base_product_package_source_complete(
     const esp_base_product_package_source_t *source);
 void esp_base_product_package_source_close(

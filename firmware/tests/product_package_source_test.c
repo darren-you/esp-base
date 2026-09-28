@@ -111,6 +111,7 @@ static void valid_stream(void)
     assert(esp_base_product_package_source_read(source, 0, bytes, 3U));
     assert(esp_base_product_package_source_read(source, 3U, bytes + 3U, 3U));
     assert(!memcmp(bytes, body, sizeof body));
+    clock_us += 300000000; /* Offline Flash validation follows the final read. */
     assert(esp_base_product_package_source_complete(source));
     assert(delay_calls == 2U);
     esp_base_product_package_source_close(source);

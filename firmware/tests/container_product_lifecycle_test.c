@@ -1049,7 +1049,7 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     assert(esp_base_container_product_prepare_package(&claim, &request,
         read_corrupt_source, (void *)candidate_package,
         &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_REJECTED);
-    assert(prepared_sequence == 0U);
+    assert(prepared_sequence == original.sequence + 2U);
     econtainer_slots_state_t rejected = {0};
     assert(econtainer_slots_load(&io, &geometry, &rejected) == ECONTAINER_SLOTS_OK);
     assert(rejected.phase == ECONTAINER_SLOT_ABORTED &&
@@ -1237,6 +1237,68 @@ static void run_package_trial_confirmation(const file_t *key,
     assert(esp_base_container_product_boot(&claim, boot_id) ==
            ESP_BASE_CONTAINER_RUNNING);
     assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
+static void run_prepared_package_abandon(const file_t *key,
+                                         const file_t *candidate_package,
+                                         const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) ==
+           ESP_BASE_CONTAINER_EMPTY);
+    econtainer_slots_state_t initial = {0};
+    assert(econtainer_slots_load(&io, &geometry, &initial) == ECONTAINER_SLOTS_OK);
+    esp_base_container_package_request_t request = {
+        .operation_id = "99999999-9999-4999-8999-999999999989",
+        .expected_sequence = initial.sequence,
+        .package_size_bytes = (uint32_t)candidate_package->size,
+        .guest_abi_version = 2U, .data_schema_version = 1U,
+    };
+    assert(SHA256(candidate_package->bytes, candidate_package->size,
+                  request.package_sha256) != NULL);
+    uint32_t prepared_sequence = 0U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, (void *)candidate_package, &prepared_sequence) ==
+        ESP_BASE_CONTAINER_PREPARED);
+    uint32_t aborted_sequence = 123U;
+    const unsigned writes_before = store.blob_writes;
+    assert(!esp_base_container_product_abandon_prepared_package(&claim,
+        prepared_sequence - 1U, request.operation_id, request.package_sha256,
+        &aborted_sequence));
+    assert(!esp_base_container_product_abandon_prepared_package(&claim,
+        prepared_sequence, "99999999-9999-4999-8999-999999999988",
+        request.package_sha256, &aborted_sequence));
+    uint8_t wrong_sha256[32];
+    memcpy(wrong_sha256, request.package_sha256, sizeof wrong_sha256);
+    wrong_sha256[0] ^= 1U;
+    assert(!esp_base_container_product_abandon_prepared_package(&claim,
+        prepared_sequence, request.operation_id, wrong_sha256,
+        &aborted_sequence));
+    assert(aborted_sequence == 0U && store.blob_writes == writes_before);
+    assert(esp_base_container_product_abandon_prepared_package(&claim,
+        prepared_sequence, request.operation_id, request.package_sha256,
+        &aborted_sequence));
+    econtainer_slots_state_t aborted = {0};
+    assert(econtainer_slots_load(&io, &geometry, &aborted) == ECONTAINER_SLOTS_OK &&
+           aborted.sequence == prepared_sequence + 1U &&
+           aborted.sequence == aborted_sequence &&
+           aborted.phase == ECONTAINER_SLOT_ABORTED &&
+           store.blob_writes == writes_before + 1U);
+    for (unsigned index = 0; index < ECONTAINER_SLOT_BINDING_COUNT; ++index)
+        assert(same_binding(&initial.bindings[index], &aborted.bindings[index]));
+    assert(!esp_base_container_product_abandon_prepared_package(&claim,
+        prepared_sequence, request.operation_id, request.package_sha256,
+        &aborted_sequence));
+    assert(aborted_sequence == 0U && store.blob_writes == writes_before + 1U);
+    assert(esp_base_container_product_boot(&claim, boot_id) ==
+           ESP_BASE_CONTAINER_EMPTY);
     assert(esp_base_storage_release(&claim));
     dispose_product();
     assert(pthread_mutex_destroy(&store.mutex) == 0);
@@ -1672,6 +1734,7 @@ int main(int argc, char **argv)
     run_uninstall_stop_timeout(&key, &package, boot_id);
     run_signed_reinstall_cycles(&key, &package, boot_id);
     run_prepare_preserves_confirmed(&key, &package, &package_v1, boot_id);
+    run_prepared_package_abandon(&key, &package_v1, boot_id);
     run_package_trial_confirmation(&key, &package_v1, boot_id);
     run_package_trial_confirmation_uncertain(&key, &package_v1, boot_id,
         1U, ECONTAINER_SLOT_HEALTH_VERIFIED);

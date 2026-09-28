@@ -3,6 +3,7 @@
 #include "esp_base_storage_owner.h"
 #include "esp_base_ota_receipt.h"
 #include "eota.h"
+#include <stddef.h>
 
 typedef enum {
     ESP_BASE_CONTAINER_NOT_CONFIGURED = 0,
@@ -68,6 +69,41 @@ typedef enum {
 esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
     esp_base_container_binding_snapshot_t *out);
+typedef bool (*econtainer_slot_source_fn)(void *context, size_t offset_bytes,
+    uint8_t *destination, size_t size_bytes);
+typedef struct {
+    char operation_id[37];
+    uint32_t expected_sequence;
+    bool previous_package_present;
+    uint8_t previous_package_sha256[32];
+    uint8_t package_sha256[32];
+    uint32_t package_size_bytes;
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
+} esp_base_container_package_request_t;
+typedef enum {
+    ESP_BASE_CONTAINER_PREPARED = 0,
+    ESP_BASE_CONTAINER_PREPARE_REJECTED,
+    ESP_BASE_CONTAINER_PREPARE_BUSY,
+    ESP_BASE_CONTAINER_PREPARE_UNCERTAIN,
+} esp_base_container_prepare_result_t;
+esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_container_package_request_t *request,
+    econtainer_slot_source_fn source_fn, void *source_context,
+    uint32_t *prepared_sequence);
+bool esp_base_container_product_abandon_prepared_package(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[37], const uint8_t package_sha256[32],
+    uint32_t *aborted_sequence);
+bool esp_base_container_product_stop_confirmed(
+    const esp_base_storage_claim_t *claim);
+esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[37], const char boot_id[37]);
+bool esp_base_container_product_abandon_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
+    const char operation_id[37]);
 typedef enum {
     ESP_BASE_CONTAINER_EVENT_ACCEPTED = 0,
     ESP_BASE_CONTAINER_EVENT_UNAVAILABLE,
