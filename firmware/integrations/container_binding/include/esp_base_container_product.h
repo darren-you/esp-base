@@ -174,6 +174,19 @@ esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
     esp_base_container_event_observation_t *out);
 
+/* Internal product-only commit after the Base product policy has independently
+ * accepted the exact authorized representative event and its verification
+ * window. This checks that the current candidate actually completed that
+ * event without a runtime or business failure; it does not define product
+ * health. Close event admission only after the queue and current guest call
+ * are drained. Under the original storage claim, persist HEALTH_VERIFIED and then
+ * CONFIRMED, independently read back both states and the new binding. A false
+ * result leaves the caller holding the claim for durable recovery. */
+bool esp_base_container_product_confirm_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    uint64_t verified_event_sequence, uint32_t *confirmed_sequence);
+
 typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,
     ESP_BASE_CONTAINER_UNINSTALL_NOT_CONFIGURED,
