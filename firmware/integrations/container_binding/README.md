@@ -10,6 +10,8 @@ flowchart LR
     binding --> provider["真实分区 / 独立存储锁"]
     provider --> slots["无包初始化或既有绑定对账"]
     slots --> guest["confirmed 包验签、授权和唯一 pthread"]
+    ingress["待接线：认证 MQTT 业务事件"] --> queue["Base：签名上限 FIFO / 包摘要核对"]
+    queue --> guest
     slots --> release["完成启动存储操作后释放 claim"]
     release --> uninstall["产品专属卸载：确认停止 / 清当前绑定 / 独立读回"]
     uninstall --> slots
@@ -31,6 +33,8 @@ flowchart LR
 
 在真实表中 `esp_container_slots_idf_bind` 校验包分区 `data/undefined`、NVS 分区、精确地址/大小、槽几何与可写属性。若指定 NVS key **确实不存在**，启动 claim 下的 `CONFIRMED` 双重观察先验证实际一个或两个签名 Base 固件，再通过公开 `econtainer_slots_initialize` 持久写入对应无包绑定；损坏、读失败或部分授权配置均不会被当成首装。既有绑定经 `reconcile` 对账。若启动结果为 `EMPTY`，Base 在释放 claim 前另行双重观察签名固件并独立读取 ECS2：只有序号 1、IDLE、无操作、无包且全部固件绑定精确匹配时，才允许缺失的产品账本首次创建；任一观察不确定则阻断启动。confirmed 包随后在唯一 `pthread` 中通过公开 `econtainer_product_open` 回读、映射、验签、验产品和授权，释放映射后执行 `init`；线程轮询已授权 timer 并排出 log。对账与装载结束后释放高层 claim，guest 存活不会长期占用 OTA owner；出错时保持阻断。
 
+Container 成功 open 返回本次重新验签包的 SHA-256 与签名 `event_queue_limit`；Base 在 `init` 后据此分配有界 FIFO。只有已经完成设备端授权的入口才能调用 `esp_base_container_product_offer_event`，它复制事件并在同一包摘要、长度、队列空位和运行状态均满足时入队。唯一产品 pthread 依次取出并调用 `on_event`，退出时清除未交付事件；停止请求后与同 boot 换包后旧摘要都不能投递。`ACCEPTED` 不是 guest 成功结果；当前完成计数只代表 runtime 返回 OK，不构成业务试运行健康证明。独立 MQTT 业务 Topic、Broker ACL、消息授权与最终 guest 结果消费仍待接线。
+
 验包与 Wasm 校验的 5,504 B 工作区在 `open_selected` 的产品 pthread 栈中，仅供同步 `econtainer_product_open` 借用；Container 自己生成本次 `verified_info`。配置了产品策略时，owner pthread 栈至少为 16,384 B；无产品策略仍为 0。双目标签名 QEMU 的启动路径已量到约 5 KiB 最低未用栈，但 ESP32 内部堆最低仍未过 48 KiB 门，event／timer／stop 与完整网络并发的栈深尚未验收，见[工作区移栈检查点](../../../docs/operations/product-workspace-stack-checkpoint.md)。
 
 同一 boot 内需要改动已确认产品绑定时，调用方先取得 Base storage claim，再调用 `esp_base_container_product_stop_confirmed`。仅在 guest 主动停止、Container `stop/close` 成功、唯一 pthread 已 join 且无实例引用后才允许再次调用 `product_boot`；失败保留 claim 并阻断重开。首次启动得到 `EMPTY` 时，已退出的线程 join 后也允许在有效 claim 下重试；重试仍由真实固件集合观察、ECS2 reconcile 和签名包 open 决定结果。`BLOCKED`、trial 和未完成停止都不开放重试；一旦卸载观察或提交进入 `UNCERTAIN`，即便后续单独停止 guest 也不开放本 boot 重试。此处只提供运行时收敛入口，尚未接入 `product.*` 命令、包来源和产品操作收据。
@@ -49,7 +53,7 @@ flowchart LR
 
 带包产品在 OTA 写 inactive app **之前**拒绝：Base 尚无真实业务事件来源与代表性事件授权，不能以 `init`、平台管理命令或可选 timer 冒充 guest 事件进展。Container 已提供 REUSE 与 WRITE 状态合同，但 Base 目前也没有新包来源；两条路径仍未接线。已确认包的正常启动入口继续可用。退役、下载、签名、stage 或选 boot 中事实不确定时，worker 留住本 boot 的 claim 并报告 `unknown/storage_uncertain`，不会当作普通失败释放；claim 本身不跨重启，跨重启恢复仅由原 V2 收据授权。上述是软件恢复合同，host 假件不能模拟实板掉电时的 Flash/NVS 原子性、bootloader 后备扫描、双槽迁移或 guest 与 FRP/MQTT 并发。
 
-当前清单精确锁定 `esp-container@f82e4b8f57eb6ae75309d5cfb7472feef2380912` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
+当前清单精确锁定 `esp-container@d370899b88883d8c23c60884dda9e2dae8bc295d` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
 
 历史 Base `3df1c33` 与当时的精确锁曾以仓外测试产品策略完成两目标深链接核验，两个 ELF 都确实包含 `econtainer_product_open` 与 WAMR load/instantiate/call。ESP32 测试键 ECDSA v1 签名镜像为 `0x10fff4`，官方验签通过，双 `0x120000` app 各余 `0x1000c`。C3 仅在隔离副本使用三 `0x82000` 包槽与双 `0x118000` app 的候选表，测试键 RSA v2 签名中间镜像为 `0x121000`，官方容量门判每槽溢出 `0x9000`，所以该布局没有可用构建。证据与隔离改动见[开发检查点](../../../docs/operations/development-checkpoint.md)；没有把测试策略、候选 C3 表或密钥写入本仓。
 

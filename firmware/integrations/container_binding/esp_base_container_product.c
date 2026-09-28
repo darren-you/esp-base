@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sdkconfig.h"
@@ -32,6 +33,11 @@ enum {
 };
 
 typedef struct {
+    size_t size_bytes;
+    uint8_t bytes[];
+} product_event_t;
+
+typedef struct {
     econtainer_slots_idf_provider_t provider;
     econtainer_package_slot_validation_t validation;
     econtainer_runtime_limits_t limits;
@@ -40,6 +46,7 @@ typedef struct {
     SemaphoreHandle_t ready;
     SemaphoreHandle_t stopped;
     SemaphoreHandle_t storage_lock;
+    SemaphoreHandle_t event_lock;
     esp_base_storage_owner_t *flash_io_owner;
     esp_base_storage_claim_t flash_io_claim;
     const esp_base_storage_claim_t *claim;
@@ -54,6 +61,13 @@ typedef struct {
     atomic_bool stop_requested;
     atomic_bool instance_active;
     atomic_bool boot_admitted;
+    atomic_bool event_accepting;
+    atomic_uint_fast32_t event_progress_count;
+    product_event_t **event_queue;
+    size_t event_capacity;
+    size_t event_head;
+    size_t event_count;
+    uint8_t event_package_sha256[32];
     bool stop_succeeded;
     /* Native runtime was absent or stop/close completed before worker join.
      * A failed guest can still be safely unbound after this proof. */
@@ -314,6 +328,8 @@ typedef struct {
     uint8_t boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
     econtainer_runtime_t *runtime;
     econtainer_runtime_result_t runtime_result;
+    uint32_t event_queue_limit;
+    uint8_t package_sha256[32];
 } open_context_t;
 
 static econtainer_slots_result_t open_selected(
@@ -341,6 +357,12 @@ static econtainer_slots_result_t open_selected(
         &s_product.provider.io, &s_product.provider.geometry, &request,
         &validation, &s_product.limits, &open->runtime);
     open->runtime_result = result.runtime;
+    if (result.slots == ECONTAINER_SLOTS_OK &&
+        result.runtime == ECONTAINER_RUNTIME_OK && open->runtime != NULL) {
+        open->event_queue_limit = result.event_queue_limit;
+        memcpy(open->package_sha256, result.package_sha256,
+               sizeof open->package_sha256);
+    }
     return result.slots;
 }
 
@@ -398,6 +420,101 @@ static bool drain_log(econtainer_runtime_t *runtime)
     ESP_LOGI(TAG, "ESP_BASE_CONTAINER_LOG_HEX bytes=%u data=%s",
              (unsigned)size_bytes, hex);
     return true;
+}
+
+static void release_event_queue(void)
+{
+    product_event_t **queue = NULL;
+    size_t capacity = 0;
+    if (s_product.event_lock != NULL &&
+        xSemaphoreTake(s_product.event_lock, portMAX_DELAY) == pdTRUE) {
+        atomic_store_explicit(&s_product.event_accepting, false,
+                              memory_order_release);
+        queue = s_product.event_queue;
+        capacity = s_product.event_capacity;
+        s_product.event_queue = NULL;
+        s_product.event_capacity = 0;
+        s_product.event_head = 0;
+        s_product.event_count = 0;
+        memset(s_product.event_package_sha256, 0,
+               sizeof s_product.event_package_sha256);
+        xSemaphoreGive(s_product.event_lock);
+    }
+    for (size_t index = 0; index < capacity; ++index) {
+        if (queue[index] != NULL) {
+            memset(queue[index]->bytes, 0, queue[index]->size_bytes);
+            free(queue[index]);
+        }
+    }
+    free(queue);
+}
+
+static product_event_t *take_event(void)
+{
+    product_event_t *event = NULL;
+    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) return NULL;
+    if (s_product.event_count != 0U) {
+        event = s_product.event_queue[s_product.event_head];
+        s_product.event_queue[s_product.event_head] = NULL;
+        s_product.event_head = (s_product.event_head + 1U) % s_product.event_capacity;
+        --s_product.event_count;
+    }
+    xSemaphoreGive(s_product.event_lock);
+    return event;
+}
+
+bool esp_base_container_product_event_accepting(void)
+{
+    return atomic_load_explicit(&s_product.event_accepting, memory_order_acquire) &&
+        !atomic_load_explicit(&s_product.stop_requested, memory_order_acquire) &&
+        atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+            ESP_BASE_CONTAINER_RUNNING;
+}
+
+uint32_t esp_base_container_product_event_progress_count(void)
+{
+    return (uint32_t)atomic_load_explicit(&s_product.event_progress_count,
+                                          memory_order_acquire);
+}
+
+esp_base_container_event_result_t esp_base_container_product_offer_event(
+    const uint8_t package_sha256[32], const uint8_t *event, size_t size_bytes)
+{
+    if (package_sha256 == NULL || event == NULL || size_bytes == 0U ||
+        size_bytes > s_product.limits.max_event_bytes) {
+        return ESP_BASE_CONTAINER_EVENT_INVALID;
+    }
+    if (!esp_base_container_product_event_accepting() ||
+        s_product.event_lock == NULL) return ESP_BASE_CONTAINER_EVENT_UNAVAILABLE;
+    product_event_t *copy = malloc(sizeof(*copy) + size_bytes);
+    if (copy == NULL) return ESP_BASE_CONTAINER_EVENT_NO_MEMORY;
+    copy->size_bytes = size_bytes;
+    memcpy(copy->bytes, event, size_bytes);
+    if (xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) {
+        memset(copy->bytes, 0, size_bytes);
+        free(copy);
+        return ESP_BASE_CONTAINER_EVENT_BUSY;
+    }
+    esp_base_container_event_result_t result = ESP_BASE_CONTAINER_EVENT_ACCEPTED;
+    if (!esp_base_container_product_event_accepting() ||
+        s_product.event_queue == NULL) {
+        result = ESP_BASE_CONTAINER_EVENT_UNAVAILABLE;
+    } else if (memcmp(package_sha256, s_product.event_package_sha256, 32) != 0) {
+        result = ESP_BASE_CONTAINER_EVENT_INVALID;
+    } else if (s_product.event_count == s_product.event_capacity) {
+        result = ESP_BASE_CONTAINER_EVENT_FULL;
+    } else {
+        const size_t tail = (s_product.event_head + s_product.event_count) %
+                            s_product.event_capacity;
+        s_product.event_queue[tail] = copy;
+        ++s_product.event_count;
+    }
+    xSemaphoreGive(s_product.event_lock);
+    if (result != ESP_BASE_CONTAINER_EVENT_ACCEPTED) {
+        memset(copy->bytes, 0, size_bytes);
+        free(copy);
+    }
+    return result;
 }
 
 static void *product_thread(void *unused)
@@ -503,10 +620,42 @@ static void *product_thread(void *unused)
         report_result(ESP_BASE_CONTAINER_BLOCKED);
         return NULL;
     }
+    if (open.event_queue_limit == 0U ||
+        open.event_queue_limit > s_product.validation.max_event_queue_limit ||
+        s_product.event_lock == NULL) {
+        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED invalid signed event queue");
+        const econtainer_runtime_result_t stopped = econtainer_product_stop(open.runtime);
+        const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
+        s_product.native_reclaimed = stopped == ECONTAINER_RUNTIME_OK &&
+                                     closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
+        s_product.stop_succeeded = s_product.native_reclaimed;
+        xSemaphoreGive(s_product.stopped);
+        report_result(ESP_BASE_CONTAINER_BLOCKED);
+        return NULL;
+    }
+    s_product.event_queue = calloc(open.event_queue_limit,
+                                   sizeof(*s_product.event_queue));
+    if (s_product.event_queue == NULL) {
+        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED event queue allocation");
+        const econtainer_runtime_result_t stopped = econtainer_product_stop(open.runtime);
+        const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
+        s_product.native_reclaimed = stopped == ECONTAINER_RUNTIME_OK &&
+                                     closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
+        s_product.stop_succeeded = s_product.native_reclaimed;
+        xSemaphoreGive(s_product.stopped);
+        report_result(ESP_BASE_CONTAINER_BLOCKED);
+        return NULL;
+    }
+    s_product.event_capacity = open.event_queue_limit;
+    s_product.event_head = 0;
+    s_product.event_count = 0;
+    memcpy(s_product.event_package_sha256, open.package_sha256,
+           sizeof s_product.event_package_sha256);
     ESP_LOGI(TAG, "ESP_BASE_CONTAINER_RUNNING sequence=%u trial=%d",
              (unsigned)open.sequence, s_product.trial_mode);
     atomic_store_explicit(&s_product.boot_admitted, true, memory_order_release);
     atomic_store_explicit(&s_product.instance_active, true, memory_order_release);
+    atomic_store_explicit(&s_product.event_accepting, true, memory_order_release);
     report_result(ESP_BASE_CONTAINER_RUNNING);
 
     bool requested_stop = false;
@@ -514,6 +663,24 @@ static void *product_thread(void *unused)
         if (atomic_load_explicit(&s_product.stop_requested, memory_order_acquire)) {
             requested_stop = true;
             break;
+        }
+        product_event_t *event = take_event();
+        if (event != NULL) {
+            int32_t guest_result = 0;
+            const econtainer_runtime_result_t delivered = econtainer_product_on_event(
+                open.runtime, event->bytes, event->size_bytes, &guest_result);
+            memset(event->bytes, 0, event->size_bytes);
+            free(event);
+            if (delivered != ECONTAINER_RUNTIME_OK) {
+                ESP_LOGE(TAG, "ESP_BASE_CONTAINER_EVENT_FAILED result=%d", (int)delivered);
+                break;
+            }
+            const uint32_t progress = esp_base_container_product_event_progress_count();
+            if (progress != UINT32_MAX) {
+                atomic_store_explicit(&s_product.event_progress_count, progress + 1U,
+                                      memory_order_release);
+            }
+            continue;
         }
         if (!drain_log(open.runtime)) break;
         uint64_t deadline_ms = 0;
@@ -540,6 +707,7 @@ static void *product_thread(void *unused)
             break;
         }
     }
+    release_event_queue();
     const econtainer_runtime_result_t stopped = econtainer_product_stop(open.runtime);
     const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
     s_product.native_reclaimed = stopped == ECONTAINER_RUNTIME_OK &&
@@ -1113,6 +1281,8 @@ static esp_base_container_boot_result_t start_product(
     if (!ensure_provider(claim)) return ESP_BASE_CONTAINER_BLOCKED;
     s_product.trial_mode = trial_mode;
     atomic_store_explicit(&s_product.stop_requested, false, memory_order_relaxed);
+    atomic_store_explicit(&s_product.event_accepting, false, memory_order_relaxed);
+    atomic_store_explicit(&s_product.event_progress_count, 0, memory_order_relaxed);
     atomic_store_explicit(&s_product.instance_active, false, memory_order_relaxed);
     atomic_store_explicit(&s_product.boot_admitted, false, memory_order_relaxed);
     atomic_store_explicit(&s_product.result, ESP_BASE_CONTAINER_BLOCKED,
@@ -1124,6 +1294,8 @@ static esp_base_container_boot_result_t start_product(
     if (s_product.ready == NULL) return ESP_BASE_CONTAINER_BLOCKED;
     if (s_product.stopped == NULL) s_product.stopped = xSemaphoreCreateBinary();
     if (s_product.stopped == NULL) return ESP_BASE_CONTAINER_BLOCKED;
+    if (s_product.event_lock == NULL) s_product.event_lock = xSemaphoreCreateMutex();
+    if (s_product.event_lock == NULL) return ESP_BASE_CONTAINER_BLOCKED;
     pthread_attr_t attributes;
     if (pthread_attr_init(&attributes) != 0) return ESP_BASE_CONTAINER_BLOCKED;
     const bool valid_thread =

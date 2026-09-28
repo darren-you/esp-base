@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-04 业务事件执行端切片：Base 与独立 NVS 探针的 C3／ESP32 四份锁均从新清单解析至公开 `esp-container@d370899b88883d8c23c60884dda9e2dae8bc295d`。Container 在成功验签并打开选定包后返回签名 `event_queue_limit` 和包 SHA-256；Base 只在 `init` 后按该上限分配 FIFO，入队校验事件长度、当前运行态与完整包摘要，唯一产品 pthread 串行调用 `on_event`，停止时释放未交付副本。同 boot P1→P2 更换签名包后旧摘要拒绝，C3／ESP32 两种宿主目标的 ASan/UBSan 真实 guest 生命周期与各 100 次回收、macOS 第 10／50／100 次已用内存稳定检查通过；Base C3／ESP32 固定 SDK 普通完整构建、C3 全套 host 通过。当前事件仅由宿主用例投递，设备 MQTT 独立业务 Topic、Broker ACL、消息授权、guest 结果与试运行确认仍未实现；`ACCEPTED` 和 runtime 完成计数均不得视作业务健康，P6-04/P7 状态不变。没有写入设备。
+
 2026-09-28 P6-04 只读序号查询切片：正式 USB／已认证 MQTT 协议增加 `product.status`，返回持久账本高水位、下一序号和未决原操作 ID；NVS 键缺失返回 `unknown/product_ledger_uninitialized`，不在查询中建账，下一序号仍须在未来写入时由账本原子核对。公开串口客户端检查响应设备／boot、字段和序号关系。C3／ESP32 host ASan/UBSan 套件、串口伪设备 7 项及固定 SDK 双目标普通／显式离线全量构建通过；C3 app `0xe25b0` B，ESP32 app `0xd45e0` B。没有公开产品写命令、真实业务事件或设备刷写，本切片不改变 P6-04/P7 验收状态。
 
 2026-09-28 P6-04 产品操作持久结果软件切片：按维护者“最近固定条数”裁决，Base 新增 EPRD v1 单 blob 账本候选，暂存最近 8 条及不回退的 `operation_sequence`；缺失 NVS 键为未初始化，不自行重置序号。读写经过共享短时 Flash I/O owner，意图与终态各自 commit 后逐字节读回；未决意图跨 boot 阻止下一操作。只读 `product.result` 和公开串口客户端已按原 ID 查询，产品写入口保持未开放。Base 主固件与独立 NVS 探针的 C3／ESP32 四份 Component Manager 锁均从空重新解析并精确消费已公开的 `esp-container@f82e4b8f57eb6ae75309d5cfb7472feef2380912`，其 IDF 包槽/NVS provider 也使用同一短时 I/O owner。Container host CTest **6/6**、Base 双目标完整 ASan/UBSan host 套件、公开设备客户端六项测试、固定 SDK 普通 C3 和显式未签名离线 ESP32 主固件构建通过；新镜像都不是实板刷写候选。

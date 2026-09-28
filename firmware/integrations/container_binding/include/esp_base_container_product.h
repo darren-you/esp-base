@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_base_storage_owner.h"
 #include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
@@ -50,6 +52,26 @@ bool esp_base_container_product_stop_confirmed(
  * changed firmware identity or unreadable state forbids first ledger creation. */
 bool esp_base_container_product_pristine_baseline(
     const esp_base_storage_claim_t *claim);
+
+typedef enum {
+    ESP_BASE_CONTAINER_EVENT_ACCEPTED = 0,
+    ESP_BASE_CONTAINER_EVENT_UNAVAILABLE,
+    ESP_BASE_CONTAINER_EVENT_INVALID,
+    ESP_BASE_CONTAINER_EVENT_FULL,
+    ESP_BASE_CONTAINER_EVENT_NO_MEMORY,
+    ESP_BASE_CONTAINER_EVENT_BUSY,
+} esp_base_container_event_result_t;
+
+/* Only an authenticated Base ingress may call this. Copy one event into the
+ * signed package's bounded FIFO; the MQTT/control task never executes guest
+ * code. The exact package digest prevents delivery across a same-boot switch.
+ * ACCEPTED means queued, not processed or successful. */
+esp_base_container_event_result_t esp_base_container_product_offer_event(
+    const uint8_t package_sha256[32], const uint8_t *event, size_t size_bytes);
+bool esp_base_container_product_event_accepting(void);
+/* Counts completed guest calls with runtime OK. The caller must still check
+ * the product-specific result; this counter alone is not a trial health proof. */
+uint32_t esp_base_container_product_event_progress_count(void);
 
 typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,

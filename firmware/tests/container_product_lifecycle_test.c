@@ -41,6 +41,7 @@ typedef struct {
 typedef struct { uint8_t *bytes; size_t size; } file_t;
 
 static store_t store;
+static esp_base_storage_owner_t flash_io_owner;
 static econtainer_package_workspace_t test_package_workspace;
 static econtainer_wasm_workspace_t test_wasm_workspace;
 static econtainer_package_info_t test_verified_info;
@@ -348,6 +349,8 @@ int64_t esp_timer_get_time(void)
 static void configure_product(const file_t *public_key)
 {
     memset(&s_product, 0, sizeof s_product);
+    esp_base_storage_owner_init(&flash_io_owner);
+    s_product.flash_io_owner = &flash_io_owner;
     s_product.provider.io = io;
     s_product.provider.geometry = geometry;
     s_product.provider_bound = true;
@@ -376,7 +379,9 @@ static void dispose_product(void)
 {
     binary_sem_t *ready = s_product.ready;
     binary_sem_t *stopped = s_product.stopped;
+    binary_sem_t *event_lock = s_product.event_lock;
     assert(!s_product.thread_joinable);
+    assert(s_product.event_queue == NULL && s_product.event_count == 0U);
     if (ready != NULL) {
         assert(pthread_cond_destroy(&ready->condition) == 0);
         assert(pthread_mutex_destroy(&ready->mutex) == 0);
@@ -386,6 +391,11 @@ static void dispose_product(void)
         assert(pthread_cond_destroy(&stopped->condition) == 0);
         assert(pthread_mutex_destroy(&stopped->mutex) == 0);
         free(stopped);
+    }
+    if (event_lock != NULL) {
+        assert(pthread_cond_destroy(&event_lock->condition) == 0);
+        assert(pthread_mutex_destroy(&event_lock->mutex) == 0);
+        free(event_lock);
     }
     memset(&s_product, 0, sizeof s_product);
 }
@@ -861,7 +871,30 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     econtainer_slots_state_t first_state = {0};
     assert(econtainer_slots_load(&io, &geometry, &first_state) == ECONTAINER_SLOTS_OK);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    const int first_index = binding_index(&first_state,
+        physical.running_firmware_sha256);
+    assert(first_index >= 0 && esp_base_container_product_event_accepting());
+    const uint8_t event[] = {1, 2, 3};
+    uint8_t wrong_sha256[32];
+    memcpy(wrong_sha256, first_state.bindings[first_index].package_sha256, 32);
+    wrong_sha256[0] ^= 0xff;
+    assert(esp_base_container_product_offer_event(wrong_sha256, event, sizeof event) ==
+           ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(
+        first_state.bindings[first_index].package_sha256, event, 0U) ==
+        ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(
+        first_state.bindings[first_index].package_sha256, event, sizeof event) ==
+        ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0;
+         attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
+         ++attempt) vTaskDelay(1U);
+    assert(esp_base_container_product_event_progress_count() == 1U);
     assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(!esp_base_container_product_event_accepting());
+    assert(esp_base_container_product_offer_event(
+        first_state.bindings[first_index].package_sha256, event, sizeof event) ==
+        ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
     int32_t expected = 3;
     assert(esp_base_container_with_firmware_set(&claim,
         ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, open_after_stop, &expected) ==
@@ -874,8 +907,6 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     econtainer_slots_state_t second_state = {0};
     assert(econtainer_slots_load(&io, &geometry, &second_state) == ECONTAINER_SLOTS_OK);
     assert(second_state.sequence == first_state.sequence + 5U);
-    const int first_index = binding_index(&first_state,
-        physical.running_firmware_sha256);
     const int second_index = binding_index(&second_state,
         physical.running_firmware_sha256);
     assert(first_index >= 0 && second_index >= 0);
@@ -883,6 +914,17 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
                   second_state.bindings[second_index].package_sha256, 32) != 0);
     assert(memcmp(&physical, &original_firmware, sizeof physical) == 0);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_container_product_event_progress_count() == 0U);
+    assert(esp_base_container_product_offer_event(
+        first_state.bindings[first_index].package_sha256, event, sizeof event) ==
+        ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(
+        second_state.bindings[second_index].package_sha256, event, sizeof event) ==
+        ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0;
+         attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
+         ++attempt) vTaskDelay(1U);
+    assert(esp_base_container_product_event_progress_count() == 1U);
     assert(esp_base_container_product_stop_confirmed(&claim));
     expected = 6;
     assert(esp_base_container_with_firmware_set(&claim,
