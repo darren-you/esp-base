@@ -16,7 +16,7 @@ import paho.mqtt.client as mqtt
 
 
 def load_credentials(path):
-    spec = importlib.util.spec_from_file_location("device_control", Path(__file__).with_name("device-control.py"))
+    spec = importlib.util.spec_from_file_location("device_control", Path(__file__).with_name("device_control.py"))
     control = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(control)
     value = control.load_private_config(path)
