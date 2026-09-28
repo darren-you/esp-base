@@ -1157,6 +1157,144 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
 
+static void run_package_trial_cold_recovery(const file_t *key,
+                                            const file_t *confirmed_package,
+                                            const file_t *candidate_package,
+                                            const char old_boot_id[37])
+{
+    const char new_boot_id[] = "77777777-7777-4777-8777-777777777777";
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, old_boot_id) ==
+           ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = confirmed_package,
+                                 .operation_marker = 0x95};
+    assert(esp_base_container_with_firmware_set(&claim,
+        ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
+        ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, old_boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t original = {0};
+    assert(econtainer_slots_load(&io, &geometry, &original) == ECONTAINER_SLOTS_OK);
+    const int index = binding_index(&original, physical.running_firmware_sha256);
+    assert(index >= 0 && original.bindings[index].package_present);
+    esp_base_container_package_request_t request = {
+        .operation_id = "99999999-9999-4999-8999-999999999995",
+        .expected_sequence = original.sequence,
+        .previous_package_present = true,
+        .package_size_bytes = (uint32_t)candidate_package->size,
+        .guest_abi_version = 2U, .data_schema_version = 1U,
+    };
+    memcpy(request.previous_package_sha256,
+        original.bindings[index].package_sha256, 32);
+    assert(SHA256(candidate_package->bytes, candidate_package->size,
+                  request.package_sha256) != NULL);
+    uint32_t prepared_sequence = 0U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, (void *)candidate_package, &prepared_sequence) ==
+        ESP_BASE_CONTAINER_PREPARED);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence, request.operation_id, old_boot_id) ==
+        ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t trial = {0};
+    assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
+           trial.phase == ECONTAINER_SLOT_TRIAL_STARTED);
+    assert(esp_base_container_product_stop_trial(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product(); /* Simulate a new boot; retain the same Flash and NVS. */
+    configure_product(key);
+    store.flash[geometry.slots[trial.operation.slot].offset_bytes - FLASH_BASE] ^= 1U;
+    econtainer_slot_firmware_set_t firmware_set = {.bootable_count = 2};
+    memcpy(firmware_set.running_firmware_sha256,
+           physical.running_firmware_sha256, 32);
+    memcpy(firmware_set.bootable_firmware_sha256,
+           physical.bootable_firmware_sha256,
+           sizeof firmware_set.bootable_firmware_sha256);
+    econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
+    econtainer_slots_state_t inspected = {0};
+    assert(econtainer_slots_reconcile(&io, &geometry, &firmware_set,
+        &inspected, &decision) == ECONTAINER_SLOTS_UNTRUSTED &&
+        decision == ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED_CANDIDATE_INVALID);
+    assert(esp_base_storage_claim(&owner, &claim));
+    uint32_t resolved_sequence = 123U;
+    const unsigned writes_before = store.blob_writes;
+    assert(!esp_base_container_product_recover_pending_package(&claim,
+        new_boot_id, "99999999-9999-4999-8999-999999999996",
+        original.sequence, request.package_sha256, &resolved_sequence));
+    assert(!esp_base_container_product_recover_pending_package(&claim,
+        old_boot_id, request.operation_id, original.sequence,
+        request.package_sha256, &resolved_sequence));
+    assert(store.blob_writes == writes_before && resolved_sequence == 0U);
+    assert(esp_base_container_product_recover_pending_package(&claim,
+        new_boot_id, request.operation_id, original.sequence,
+        request.package_sha256, &resolved_sequence));
+    assert(resolved_sequence == trial.sequence + 1U);
+    econtainer_slots_state_t abandoned = {0};
+    assert(econtainer_slots_load(&io, &geometry, &abandoned) == ECONTAINER_SLOTS_OK &&
+           abandoned.phase == ECONTAINER_SLOT_ABORTED &&
+           abandoned.sequence == resolved_sequence &&
+           same_binding(&abandoned.bindings[index], &original.bindings[index]));
+    const unsigned writes_after_recovery = store.blob_writes;
+    assert(esp_base_container_product_recover_pending_package(&claim,
+        new_boot_id, request.operation_id, original.sequence,
+        request.package_sha256, &resolved_sequence));
+    assert(resolved_sequence == abandoned.sequence &&
+           store.blob_writes == writes_after_recovery);
+    assert(esp_base_container_product_boot(&claim, new_boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
+static void run_package_intent_without_reservation(const file_t *key,
+                                                   const file_t *confirmed_package,
+                                                   const char old_boot_id[37])
+{
+    const char new_boot_id[] = "77777777-7777-4777-8777-777777777778";
+    const char operation_id[] = "99999999-9999-4999-8999-999999999997";
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, old_boot_id) ==
+           ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = confirmed_package,
+                                 .operation_marker = 0x96};
+    assert(esp_base_container_with_firmware_set(&claim,
+        ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
+        ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, old_boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t before = {0};
+    assert(econtainer_slots_load(&io, &geometry, &before) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    configure_product(key);
+    assert(esp_base_storage_claim(&owner, &claim));
+    const unsigned writes_before = store.blob_writes;
+    const uint8_t candidate_sha256[32] = {0xab};
+    uint32_t resolved_sequence = 0U;
+    assert(esp_base_container_product_recover_pending_package(&claim,
+        new_boot_id, operation_id, before.sequence, candidate_sha256,
+        &resolved_sequence));
+    assert(resolved_sequence == before.sequence &&
+           store.blob_writes == writes_before);
+    assert(esp_base_container_product_boot(&claim, new_boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
 static void run_success_receipt_replay(const file_t *key, const file_t *package,
                                        const char boot_id[37])
 {
@@ -1340,6 +1478,8 @@ int main(int argc, char **argv)
     run_uninstall_stop_timeout(&key, &package, boot_id);
     run_signed_reinstall_cycles(&key, &package, boot_id);
     run_prepare_preserves_confirmed(&key, &package, &package_v1, boot_id);
+    run_package_trial_cold_recovery(&key, &package, &package_v1, boot_id);
+    run_package_intent_without_reservation(&key, &package, boot_id);
     run_source_change_same_boot(&key, &package_v1, &package_v2, boot_id);
     run_success_receipt_replay(&key, &package, boot_id);
     free(package_v1.bytes);

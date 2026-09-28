@@ -476,6 +476,50 @@ static void *protocol_work_alloc(size_t size)
 #endif
 }
 
+bool esp_base_protocol_recover_product_package(
+    const esp_base_storage_claim_t *claim)
+{
+    if (!esp_base_storage_claim_active(claim) || s_context.flash_io_owner == NULL)
+        return false;
+    ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+    if (ledger == NULL) return false;
+    const ebase_product_ledger_io_t io =
+        ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+    const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+    if (opened == EBASE_LEDGER_UNINITIALIZED) {
+        free(ledger);
+        return true;
+    }
+    if (opened != EBASE_LEDGER_OK) {
+        free(ledger);
+        return false;
+    }
+    if (ledger->count == 0U ||
+        ledger->records[ledger->count - 1U].state != EBASE_PRODUCT_PREPARED ||
+        ledger->records[ledger->count - 1U].kind == EBASE_PRODUCT_UNINSTALL) {
+        free(ledger);
+        return true;
+    }
+    const ebase_product_record_t pending = ledger->records[ledger->count - 1U];
+    if (pending.kind != EBASE_PRODUCT_INSTALL &&
+        pending.kind != EBASE_PRODUCT_UPGRADE) {
+        free(ledger);
+        return false;
+    }
+    uint32_t resolved_sequence = 0U;
+    if (!esp_base_container_product_recover_pending_package(
+            claim, s_boot_id, pending.operation_id, pending.container_sequence,
+            pending.package_sha256, &resolved_sequence)) {
+        free(ledger);
+        return false;
+    }
+    const ebase_product_ledger_result_t finished = ebase_product_ledger_finish(
+        ledger, &io, pending.sequence, pending.operation_id, pending.fingerprint,
+        EBASE_PRODUCT_FAILED, 1U, resolved_sequence);
+    free(ledger);
+    return finished == EBASE_LEDGER_OK;
+}
+
 bool esp_base_protocol_prepare_product_ledger(
     const esp_base_storage_claim_t *claim, bool product_empty)
 {

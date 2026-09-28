@@ -73,6 +73,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 同一真实签名 guest 用例还验证内部产品试运行：旧实例未停止时拒绝，停止后错误 PREPARED 序号或 operation ID 不写存储，正确参数持久进入 `TRIAL_STARTED` 并运行候选；旧包事件被拒绝，候选事件返回 3 后仍未自动确认。固件 OTA 的确认入口不能确认产品 trial；放弃后独立读回 `ABORTED` 和未变的旧绑定，允许同 boot 重开旧 guest。此测试没有公开安装／升级、真实 Broker、产品健康谓词或实体掉电，见[检查点](../../docs/operations/product_package_trial_checkpoint.md)。
 
+产品包冷启动恢复用例保留宿主假 Flash/NVS，签名 guest 的候选 trial 后模拟新 boot 并损坏候选字节。普通 Container reconcile 先证明会拒绝损坏候选；新入口在 guest 装载前按原 operation ID、摘要、旧序号及新 boot 身份放弃，独立读回后旧确认 guest 可重新打开。错误 ID、旧 boot 与已放弃的重复恢复不改写 ECS2；另验证账本意图已提交但 Container 从未预留候选的只读裁决。协议假件验证账本 `PREPARED→FAILED` 终态与结果序号，启动假件验证失败保留 claim 且不打开 guest；仓外 C3 签名 QEMU 另验证无未决操作的正常冷启动，见[恢复检查点](../../docs/operations/product_package_cold_recovery_checkpoint.md)。
+
 仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
 
 ## NVS 仓外仿真

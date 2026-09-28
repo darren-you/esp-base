@@ -373,6 +373,11 @@ void app_main(void)
             }
         }
     }
+    if (!pending_boot && container_configured &&
+        !esp_base_protocol_recover_product_package(&s_boot_storage_claim)) {
+        ESP_LOGE(TAG, "ESP_BASE_PRODUCT_RECOVERY_BLOCKED original operation unresolved");
+        return;
+    }
     if (!pending_boot) product = esp_base_container_product_boot(
         &s_boot_storage_claim, esp_base_protocol_boot_id());
     if (product == ESP_BASE_CONTAINER_BLOCKED) {

@@ -21,6 +21,9 @@ static esp_base_container_boot_result_t product_boot_result;
 static unsigned product_uninstall_calls, product_boot_calls;
 static esp_base_container_uninstall_recovery_t product_recovery_result;
 static unsigned product_recovery_calls;
+static bool package_recovery_ok;
+static uint32_t package_recovery_sequence;
+static unsigned package_recovery_calls;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -67,6 +70,9 @@ static void reset_case(void)
     product_uninstall_calls = product_boot_calls = 0;
     product_recovery_result = ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN;
     product_recovery_calls = 0;
+    package_recovery_ok = false;
+    package_recovery_sequence = 0U;
+    package_recovery_calls = 0U;
     memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
@@ -250,6 +256,41 @@ static void check_product_uninstall_path(void)
            ledger.records[0].state == EBASE_PRODUCT_FAILED &&
            ledger.records[0].result_code == 1U &&
            ledger.records[0].container_sequence == 6U);
+}
+
+static void check_product_package_preboot_recovery(void)
+{
+    reset_case();
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_protocol_recover_product_package(&claim));
+    assert(package_recovery_calls == 0U && !product_present);
+    assert(esp_base_storage_release(&claim));
+
+    reset_case();
+    initialize_empty_product_ledger();
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    ebase_product_ledger_t ledger = {0};
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK);
+    ebase_product_record_t intent = {.sequence = 1U, .container_sequence = 6U,
+        .kind = EBASE_PRODUCT_UPGRADE, .state = EBASE_PRODUCT_PREPARED};
+    strcpy(intent.operation_id, "44444444-4444-4444-8444-000000000010");
+    memset(intent.fingerprint, 0x5a, sizeof intent.fingerprint);
+    memset(intent.package_sha256, 0xab, sizeof intent.package_sha256);
+    assert(ebase_product_ledger_begin(&ledger, &io, &intent) == EBASE_LEDGER_OK);
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(!esp_base_protocol_recover_product_package(&claim));
+    assert(package_recovery_calls == 1U && esp_base_storage_claim_active(&claim));
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_PREPARED);
+    package_recovery_ok = true;
+    package_recovery_sequence = 9U;
+    assert(esp_base_protocol_recover_product_package(&claim));
+    assert(package_recovery_calls == 2U &&
+           ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 9U);
+    assert(esp_base_storage_release(&claim));
 }
 
 static void check_frp_status(const char *request, int expected_http,
@@ -621,6 +662,7 @@ int main(void)
     expect_reply("unknown", "storage_uncertain");
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
     check_product_uninstall_path();
+    check_product_package_preboot_recovery();
     puts("  protocol_ota_owner passed (OTA owner faults; product ledger/uninstall/recovery; USB FRP storage gate; MQTT write rejection)");
 }
 
@@ -973,6 +1015,21 @@ esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uni
            expected_sequence == 6U && expected_package_sha256[0] == 0x7b);
     ++product_recovery_calls;
     return product_recovery_result;
+}
+
+bool esp_base_container_product_recover_pending_package(
+    const esp_base_storage_claim_t *claim, const char boot_id[37],
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    uint32_t expected_sequence, const uint8_t package_sha256[32],
+    uint32_t *resolved_sequence)
+{
+    assert(esp_base_storage_claim_active(claim) && !strcmp(boot_id, s_boot_id) &&
+           !strcmp(operation_id, "44444444-4444-4444-8444-000000000010") &&
+           expected_sequence == 6U && package_sha256[0] == 0xab &&
+           resolved_sequence != NULL);
+    ++package_recovery_calls;
+    if (package_recovery_ok) *resolved_sequence = package_recovery_sequence;
+    return package_recovery_ok;
 }
 
 bool ebase_config_encode(const esp_base_remote_config_t *config,

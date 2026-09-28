@@ -33,6 +33,8 @@ static unsigned nvs_calls, config_load_calls, protocol_calls, mark_calls, rollba
 static bool protocol_started, control_never_ready, control_stalls;
 static bool product_ledger_ready;
 static unsigned product_ledger_prepare_calls;
+static bool product_recovery_ready;
+static unsigned product_recovery_calls;
 static bool control_exits_late, control_pauses_cross_window;
 static bool ota_gate_pending;
 static bool ota_available, without_receipt_ok;
@@ -76,6 +78,8 @@ static void reset_case(void)
     protocol_started = control_never_ready = control_stalls = ota_gate_pending = false;
     product_ledger_ready = true;
     product_ledger_prepare_calls = 0;
+    product_recovery_ready = true;
+    product_recovery_calls = 0;
     ota_available = without_receipt_ok = true;
     container_configured = false;
     receipt_load_result = ESP_BASE_OTA_RECEIPT_NOT_FOUND;
@@ -384,6 +388,14 @@ bool esp_base_protocol_prepare_product_ledger(const esp_base_storage_claim_t *cl
     assert(ota_gate_pending);
     ++product_ledger_prepare_calls;
     return product_ledger_ready;
+}
+
+bool esp_base_protocol_recover_product_package(const esp_base_storage_claim_t *claim)
+{
+    assert(esp_base_storage_claim_active(claim) && container_boot_calls == 0U &&
+           ota_gate_pending);
+    ++product_recovery_calls;
+    return product_recovery_ready;
 }
 
 esp_err_t esp_base_time_start(const char *server)
@@ -717,7 +729,8 @@ int main(void)
     container_configured = true;
     container_boot_result = ESP_BASE_CONTAINER_RUNNING;
     assert(!rebooted() && container_boot_calls == 1 &&
-           product_ledger_prepare_calls == 1 && ready_logs == 1);
+           product_recovery_calls == 1 && product_ledger_prepare_calls == 1 &&
+           ready_logs == 1);
     esp_base_storage_claim_t running_competitor = {0};
     assert(esp_base_storage_claim(storage_owner, &running_competitor));
     assert(esp_base_storage_release(&running_competitor));
@@ -731,6 +744,15 @@ int main(void)
            confirmed_stop_calls == 1U && ready_logs == 0U && ota_gate_pending);
     esp_base_storage_claim_t running_ledger_competitor = {0};
     assert(!esp_base_storage_claim(storage_owner, &running_ledger_competitor));
+
+    reset_case();
+    image_state = EOTA_STATE_VALID;
+    container_configured = true;
+    container_boot_result = ESP_BASE_CONTAINER_RUNNING;
+    product_recovery_ready = false;
+    assert(!rebooted() && product_recovery_calls == 1U &&
+           container_boot_calls == 0U && product_ledger_prepare_calls == 0U &&
+           ready_logs == 0U && ota_gate_pending);
 
     reset_case();
     image_state = EOTA_STATE_VALID;
