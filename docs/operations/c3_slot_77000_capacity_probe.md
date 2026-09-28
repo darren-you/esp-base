@@ -22,7 +22,9 @@ Container 通用打包器允许 512 KiB Wasm，现有最大规范签名样包实
 
 首次保留 C3 默认主任务栈 **3,584 B** 的完整签名镜像，设备已校验 app、识别 `ota_1` 空槽，并持久建立 `firmware_count=1` 的无包 Container；之后在 `app_main` 再次校验签名镜像时报告 `***ERROR*** A stack overflow in task main`，未到 READY。原始失败保留在 `first-overflow-uart.log`。这是一条真实软件运行阻断，不能把此前静态尺寸通过视为启动通过。
 
-仓外把主任务栈升到 **6,144 B** 后，同布局 UART 诊断签名 app 仍为 `0x121000` B，SHA-256 `2b1076f592f4f2edbf8e0771a3e040b2424272e6efe91cf4dcddee04c5220c04`。QEMU 到达 `ESP_BASE_READY ... container=empty`，公开串口 `status` 返回成功，`product.status` 返回操作高水位 0、下一序号 1、Container sequence 1、空包摘要；`app_main` 栈最低剩余 **2,440 B**。首启后相对种子只修改系统 NVS 101 B、otadata 12 B、Base NVS 1,385 B；双 app、三包槽和 FRP scratch 均逐字节不变。`boot-receipt.json` 和 `uart.log` 保存应答与原始输出；此处未验证第二次冷启动。
+仓外把主任务栈升到 **6,144 B** 后，同布局 UART 诊断签名 app 仍为 `0x121000` B，SHA-256 `2b1076f592f4f2edbf8e0771a3e040b2424272e6efe91cf4dcddee04c5220c04`。QEMU 到达 `ESP_BASE_READY ... container=empty`，公开串口 `status` 返回成功，`product.status` 返回操作高水位 0、下一序号 1、Container sequence 1、空包摘要；`app_main` 栈最低剩余 **2,440 B**。首启后相对种子只修改系统 NVS 101 B、otadata 12 B、Base NVS 1,385 B；双 app、三包槽和 FRP scratch 均逐字节不变。`first-boot-receipt.json` 和 `first-uart.log` 保存首启应答与原始输出。
+
+随后以首启留下的**同片 4 MiB Flash**启动新 QEMU 进程，仍到 `container=empty`，设备 ID 不变、boot ID 更新，`product.status` 的高水位 0／下一序号 1／Container sequence 1／空包摘要不变；主任务栈最低剩余 **4,644 B**。二启前后 Flash SHA-256 同为 `64ec831c85d724158df6646b988ad255f43564c97c04dbe231e1bbedd6cd68c4`，逐字节相等。`boot-receipt.json`、`uart.log`、`first-flash.bin` 和 `flash.bin` 保留二启及对照输入；这只证明 QEMU 软件冷启动，不证明真实掉电。
 
 根据该失败，正式 C3 `sdkconfig.defaults.esp32c3` 将主任务栈设为 6,144 B，CMake 对低于此值的产品配置拒绝构建。在正式 USB Serial/JTAG 候选副本重生成配置并完整构建后，6,144 B 配置的 RSA v2 签名 app 仍为 `0x121000` B、SHA-256 `264d6a93bc37d136997e003b8c12ea9ec728aa13a773151c124ba476a251a94a`；官方签名验证成功，双 `0x130000` app 槽各余 `0xf000` B。`build-main-stack.log` 保留正式控制台容量门；仓外 QEMU 的 UART 诊断镜像与该正式镜像分别记账。
 
