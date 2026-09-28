@@ -17,4 +17,6 @@
 
 `eota_prepare` 后读回 inactive app `0x140000` 起 **1,114,100 B** 与候选签名 app 逐字节相同；运行 app_0、产品包区 `0x260000/0x186000`、`base_store@0x3fa000/0x6000` 均逐字节不变。独立 scratch `0x3ea000/0x10000` 从预置图案恢复全 `0xff`。系统 NVS 的设备启动身份和 otadata 有预期变化。运行 UART SHA-256 `1b09e96604fdc09e7c1439346d51259755207e896204cc6bc1760a98d2c5196e`，HTTPS 服务日志 SHA-256 `4738eba0972863b977df24e0a34c25356465de9227c412129b2f9509dcc3d26b`，工作流结果 SHA-256 `a77590928e84eb25e6b49bfa789b9a30943e514735366cd27f489078c09cee57`，最终 Flash SHA-256 `17563ef393e7ffe0954c390d8bed2ab415d7b74055551b1b4e5d6fafff71c8d0`。原始构建、脚本、源码、串口、服务端和 Flash 均留在上述仓外目录。
 
+固定 SDK 的诊断 `sdkconfig` 已启用 `CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y`，16 KiB TLS 入站与 4 KiB 出站缓冲优先申请 IRAM，不能再把它们当作未处理的普通堆开销。带调试符号的已签名 ELF 经固定 Xtensa GDB 求得 OTA HTTP 传输对象 **424 B**（其中 Mbed TLS context 264 B、config 120 B）；仅迁移这个对象不足以跨过容量门。同轮 FRP ready 时普通堆 free **67,280 B**，OTA 任务刚开始时 **54,888 B**，净差 **12,392 B**，与新建的 12,288 B 普通堆任务栈量级一致；并发任务与 TLS 分配使这不是逐对象精确归因。即使直接收窄该栈，仍须证明 Base 完整收据／退役／stage／选槽路径的栈高水，且无法单凭该处追回 **22,736 B**。
+
 **容量门未通过。** 此切片含额外 4096 B `qemu_frps` 栈、OpenETH 与测试时钟；未走正式 Wi-Fi／SNTP／HMAC 网络 owner，也未覆盖 Base `ota.start` 收据和选择、第四条 MQTT 在途、FRP 预备流与最大认证记录、真实设备时延和掉电恢复。不能用探针与正式产品的容量差额做无证据扣减，也不能凭该次成功下载宣称 P6-03、P7-01 或 P7-02 验收。两块现有 4 MiB 板及容量门保持不变，下一步必须从真实分配路径收敛至少 **22,736 B**，随后复验完整产品调用链。
