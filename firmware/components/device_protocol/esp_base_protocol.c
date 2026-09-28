@@ -1293,8 +1293,11 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     if (error != ESP_OK) {
         ESP_LOGW("base_wifi", "ESP_BASE_WIFI_UNAVAILABLE error=%s", esp_err_to_name(error));
     }
+    /* ESP32 product queries and mutations verify the signed firmware set on
+     * this task, including the SDK image verifier. The signed QEMU uninstall
+     * path overflows at 6144 bytes and completes at 8192 bytes. */
 #if defined(CONFIG_IDF_TARGET_ESP32)
-    const uint32_t control_stack_bytes = 4096;
+    const uint32_t control_stack_bytes = 8192;
 #else
     const uint32_t control_stack_bytes = 6144;
 #endif

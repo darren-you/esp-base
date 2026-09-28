@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-28 ESP32 正式串口 `product.uninstall` 的双目标签名 QEMU 复测发现控制任务 4 KiB／6 KiB 栈分别在状态查询／卸载时溢出；ESP32 提至 8 KiB、C3 保持 6 KiB 后，最终源码重签镜像完成卸载、同片冷启动查询原操作及重复 ID 不重执行。官方 NVS parser 和逐区 Flash 读回通过；[完整输入与边界](docs/operations/product_uninstall_protocol_qemu_checkpoint.md)。这仍不是实板或 P6-04 完整验收。
+
 2026-09-28 产品执行线程现将每条授权 MQTT 事件的 boot 内序号随队列副本送入 guest，保留当前产品实例最近一次 `on_event` 的包摘要、执行结果和 guest 原始返回值，并通过非 retained `reported` 区分入队、执行和业务失败。该观察在换包启动时清空，不能单独证明试运行健康或持久产品操作成功；真实 Broker、设备消息和产品写命令仍待闭合。
 
 2026-09-28 产品执行线程新增有界事件 FIFO：容量取自 Container 对所选签名包本次重新验签的 `event_queue_limit`，每条事件还须匹配本次包 SHA-256；入队只表示接收，`on_event` 只在唯一 guest pthread 执行。独立 MQTT `event` Topic 现已接入设备端 HMAC、boot/包摘要、连续序号验证及入队后高水位报告；公开宿主工具可生成相同签名帧。C3／ESP32 的真实签名 counter 包宿主回归覆盖同 boot 换包、错误摘要、停止后拒绝及百次回收；Broker 源码 ACL 已另在 `mqtt-service` 加入，生产账户／发布、真实消息、guest 业务结果与试运行健康判定仍未验收，因此带包试运行与产品写命令仍关闭。

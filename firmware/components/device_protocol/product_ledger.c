@@ -9,7 +9,7 @@
 #define RECORD_BYTES 112U
 #define CRC_OFFSET (HEADER_BYTES + EBASE_PRODUCT_LEDGER_SLOTS * RECORD_BYTES)
 _Static_assert(CRC_OFFSET + 4U == EBASE_PRODUCT_LEDGER_BYTES, "ledger size");
-/* Keep the two 910-byte NVS images off the ESP32 control task's 4 KiB stack.
+/* Keep the two 910-byte NVS images off the control task stack.
  * Product access is single-owner; this guard makes accidental overlap fail
  * before any write rather than racing over shared codec scratch. */
 static atomic_flag s_scratch_busy = ATOMIC_FLAG_INIT;

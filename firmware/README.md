@@ -65,7 +65,7 @@ ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`�
 
 当前 FRP 精确锁将 ESP32 的工作流及 TLS 私有对象条件分配至 8BIT IRAM；双目标签名容量、Base host 回归和 ESP32 一条真实 FRPS 工作流的仓外 QEMU 检查见[工作流 IRAM 精确锁检查点](../docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。正式 Base owner、MQTT／OTA／Container 并发与实体板容量尚未验收。
 
-ESP32 控制任务栈与命令／配置临时工作区已按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；双流、三条 MQTT 消息与一次真实配置提交的仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
+ESP32 命令／配置临时工作区此前按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；后续正式串口产品卸载暴露 4／6 KiB 控制栈溢出，现将 ESP32 控制任务栈设为 8 KiB，C3 保持 6 KiB，见[签名 QEMU 复测](../docs/operations/product_uninstall_protocol_qemu_checkpoint.md)。双流、三条 MQTT 消息与一次真实配置提交的旧仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
 
 后续[HTTPS OTA 并发检查点](../docs/operations/p6-03-ota-https-combination-checkpoint.md)在同片签名 ESP32 QEMU 中经严格 HTTPS 将 **1,114,100 B** 独立签名 app 完整准备到备用槽，同时完成双 FRP 工作流与三条 MQTT 消息；普通堆历史最低 **26,416 B**，比不变的容量门低 **22,736 B**。探针未执行正式 Base `ota.start` 收据、Container stage、选槽及实板流程，P6-03/P7-01/P7-02 仍开放。
 

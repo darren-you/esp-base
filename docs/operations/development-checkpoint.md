@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-28 P6-04 串口产品卸载签名 QEMU：原 ESP32 控制任务 4,096 B 在 `product.status`、6,144 B 在 `product.uninstall` 触发真实 FreeRTOS 栈溢出；目标独立调整为 ESP32 8,192 B、C3 仍 6,144 B。最终源码重新签名并按新 app 摘要制造 ECS2 sequence 6、空 EPRD 及 4 MiB Flash，正式串口命令完成卸载，冷启动后原操作结果和相同 ID 的重复请求均保持 sequence 7／账本高水位 1；官方 NVS CRC、账本/ECS2 CRC 与逐区 Flash 读回通过。C3／ESP32 普通构建与 host ASan/UBSan 均通过。无 Broker、HTTPS、FRPS 并发或实体板，P6-03/P6-04/P7 不勾验收；[精确输入与日志](product_uninstall_protocol_qemu_checkpoint.md)。
+
 2026-09-28 P6-04 公开卸载写入口：`a99c02c` 将 `product.uninstall` 接入设备命令、持久 EPRD 意图／终态和正式 Container 停止／卸载；复位后只读核对 ECS2 原 UUID、序号及包绑定，能证明提交或未提交才写回终态，无法证明时阻断 READY。`9da7aba` 将串口设备回执超时接回原 operation ID 的只读结果查询，写命令不重发。C3／ESP32 宿主 ASan/UBSan、8 项伪串口测试、固定 SDK 两目标普通完整构建及真实签名 guest 的卸载恢复生命周期通过；本地 app 分别为 `0xe3eb0`／`0xd5c10` B。没有写实板，真实掉电、Broker 设备联调、公开安装／升级、包来源及试运行健康确认尚未验收，P6-04/P7 总状态不变。
 
 2026-09-28 P6-04 guest 事件结果观察软件续进：Base 将已授权 MQTT 事件的本 boot 序号随有界队列副本交给唯一产品线程，线程在真实 `on_event` 返回后记录最近一次包 SHA-256、完成序号、runtime 是否成功和原始 guest 整数结果；负数被报告为业务失败，runtime 异常不伪造 guest 返回值。每 5 秒的非 retained `reported` 同时给出入队高水位与最近完成观察，签名包换包启动清空旧观察；这些易失字段仍非持久产品操作结果，也不能单独证明试运行健康。C3／ESP32 全套 host ASan/UBSan、固定 SDK 普通完整构建通过，app 分别 `0xe3060`／`0xd4ff0` B；两目标以公开 Container `d370899b`／WAMR `c10736f` 跑真实签名 guest 的生命周期、同 boot 换包和各 100 次卸载重装，C3／ESP32 均通过。宿主假 Flash/NVS、无生产 Broker 与实板业务事件，P6-04/P7 验收状态不变；没有写设备。
