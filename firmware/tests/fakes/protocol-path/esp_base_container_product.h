@@ -16,6 +16,8 @@ esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
     const char operation_id[37]);
 bool esp_base_container_product_ota_ready(void);
 bool esp_base_container_product_configured(void);
+bool esp_base_container_product_pristine_baseline(
+    const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_snapshot_for_ota(
     const esp_base_storage_claim_t *claim,
     esp_base_ota_receipt_snapshot_t *snapshot);

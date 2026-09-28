@@ -31,6 +31,8 @@ static uint64_t last_control_progress_ms;
 static uint32_t control_progress_count;
 static unsigned nvs_calls, config_load_calls, protocol_calls, mark_calls, rollback_calls, time_calls, ready_logs, recovery_logs;
 static bool protocol_started, control_never_ready, control_stalls;
+static bool product_ledger_ready;
+static unsigned product_ledger_prepare_calls;
 static bool control_exits_late, control_pauses_cross_window;
 static bool ota_gate_pending;
 static bool ota_available, without_receipt_ok;
@@ -71,6 +73,8 @@ static void reset_case(void)
     control_progress_count = 0;
     nvs_calls = config_load_calls = protocol_calls = mark_calls = rollback_calls = time_calls = ready_logs = recovery_logs = 0;
     protocol_started = control_never_ready = control_stalls = ota_gate_pending = false;
+    product_ledger_ready = true;
+    product_ledger_prepare_calls = 0;
     ota_available = without_receipt_ok = true;
     container_configured = false;
     receipt_load_result = ESP_BASE_OTA_RECEIPT_NOT_FOUND;
@@ -368,6 +372,14 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     protocol_started = protocol_result == ESP_OK;
     maybe_control_progress();
     return protocol_result;
+}
+
+bool esp_base_protocol_prepare_product_ledger(const esp_base_storage_claim_t *claim)
+{
+    assert(esp_base_storage_claim_active(claim));
+    assert(ota_gate_pending);
+    ++product_ledger_prepare_calls;
+    return product_ledger_ready;
 }
 
 esp_err_t esp_base_time_start(const char *server)
@@ -700,10 +712,21 @@ int main(void)
     reset_case();
     image_state = EOTA_STATE_VALID;
     container_boot_result = ESP_BASE_CONTAINER_EMPTY;
-    assert(!rebooted() && container_boot_calls == 1 && ready_logs == 1);
+    assert(!rebooted() && container_boot_calls == 1 &&
+           product_ledger_prepare_calls == 1 && ready_logs == 1);
     esp_base_storage_claim_t empty_competitor = {0};
     assert(esp_base_storage_claim(storage_owner, &empty_competitor));
     assert(esp_base_storage_release(&empty_competitor));
+
+    reset_case();
+    image_state = EOTA_STATE_VALID;
+    container_boot_result = ESP_BASE_CONTAINER_EMPTY;
+    product_ledger_ready = false;
+    assert(!rebooted() && container_boot_calls == 1 &&
+           product_ledger_prepare_calls == 1 && ready_logs == 0 &&
+           ota_gate_pending);
+    esp_base_storage_claim_t ledger_competitor = {0};
+    assert(!esp_base_storage_claim(storage_owner, &ledger_competitor));
 
     reset_case();
     image_state = EOTA_STATE_VALID;

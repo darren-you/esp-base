@@ -29,7 +29,7 @@ flowchart LR
 
 产品策略通过 `Kconfig` 的显式构建输入提供：产品 ID、RSA-3072 PKCS#1 公钥 DER 十六进制与 key ID、包分区和 NVS 分区的真实 label/offset/size、三个绝对槽区域，以及独立的 Wasm 大小、栈、事件队列、指令、宿主调用、capability、timer/log 与入口期限上限。公钥必须来自仓外受控产品信任源；签名包中的请求不能扩大这些授权。固定 ABI 2 只接受一页 Wasm 线性内存，持久包记录使用指定 NVS 分区的 `base_pkg/slots`。受控测试输入只供仓外容量原型，不能冒充生产信任源。
 
-在真实表中 `esp_container_slots_idf_bind` 校验包分区 `data/undefined`、NVS 分区、精确地址/大小、槽几何与可写属性。若指定 NVS key **确实不存在**，启动 claim 下的 `CONFIRMED` 双重观察先验证实际一个或两个签名 Base 固件，再通过公开 `econtainer_slots_initialize` 持久写入对应无包绑定；损坏、读失败或部分授权配置均不会被当成首装。既有绑定经 `reconcile` 对账。confirmed 包随后在唯一 `pthread` 中通过公开 `econtainer_product_open` 回读、映射、验签、验产品和授权，释放映射后执行 `init`；线程轮询已授权 timer 并排出 log。对账与装载结束后释放高层 claim，guest 存活不会长期占用 OTA owner；出错时保持阻断。
+在真实表中 `esp_container_slots_idf_bind` 校验包分区 `data/undefined`、NVS 分区、精确地址/大小、槽几何与可写属性。若指定 NVS key **确实不存在**，启动 claim 下的 `CONFIRMED` 双重观察先验证实际一个或两个签名 Base 固件，再通过公开 `econtainer_slots_initialize` 持久写入对应无包绑定；损坏、读失败或部分授权配置均不会被当成首装。既有绑定经 `reconcile` 对账。若启动结果为 `EMPTY`，Base 在释放 claim 前另行双重观察签名固件并独立读取 ECS2：只有序号 1、IDLE、无操作、无包且全部固件绑定精确匹配时，才允许缺失的产品账本首次创建；任一观察不确定则阻断启动。confirmed 包随后在唯一 `pthread` 中通过公开 `econtainer_product_open` 回读、映射、验签、验产品和授权，释放映射后执行 `init`；线程轮询已授权 timer 并排出 log。对账与装载结束后释放高层 claim，guest 存活不会长期占用 OTA owner；出错时保持阻断。
 
 验包与 Wasm 校验的 5,504 B 工作区在 `open_selected` 的产品 pthread 栈中，仅供同步 `econtainer_product_open` 借用；Container 自己生成本次 `verified_info`。配置了产品策略时，owner pthread 栈至少为 16,384 B；无产品策略仍为 0。双目标签名 QEMU 的启动路径已量到约 5 KiB 最低未用栈，但 ESP32 内部堆最低仍未过 48 KiB 门，event／timer／stop 与完整网络并发的栈深尚未验收，见[工作区移栈检查点](../../../docs/operations/product-workspace-stack-checkpoint.md)。
 

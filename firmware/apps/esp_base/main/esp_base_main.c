@@ -379,6 +379,11 @@ void app_main(void)
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED startup claim retained");
         return;
     }
+    if (product == ESP_BASE_CONTAINER_EMPTY &&
+        !esp_base_protocol_prepare_product_ledger(&s_boot_storage_claim)) {
+        ESP_LOGE(TAG, "ESP_BASE_PRODUCT_LEDGER_BLOCKED pristine binding or ledger uncertain");
+        return;
+    }
     if (needs_success_receipt &&
         esp_base_ota_receipt_record_success(identity.device_id) !=
             ESP_BASE_OTA_RECEIPT_OK) {

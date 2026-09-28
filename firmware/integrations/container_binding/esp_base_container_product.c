@@ -1169,6 +1169,30 @@ esp_base_container_boot_result_t esp_base_container_product_boot(
     return start_product(claim, false, boot_id);
 }
 
+static econtainer_slots_result_t pristine_baseline(
+    const econtainer_slot_firmware_set_t *firmware_set, void *context)
+{
+    (void)context;
+    return esp_base_container_pristine_no_package(
+        &s_product.provider.io, &s_product.provider.geometry, firmware_set);
+}
+
+bool esp_base_container_product_pristine_baseline(
+    const esp_base_storage_claim_t *claim)
+{
+    if (!policy_present() || !esp_base_storage_claim_active(claim) ||
+        !s_product.provider_bound || !s_product.start_attempted ||
+        s_product.thread_joinable || s_product.trial_mode ||
+        !atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire) ||
+        atomic_load_explicit(&s_product.result, memory_order_acquire) !=
+            ESP_BASE_CONTAINER_EMPTY || s_product.uninstall_uncertain) {
+        return false;
+    }
+    return esp_base_container_with_firmware_set(
+        claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
+        pristine_baseline, NULL) == ECONTAINER_SLOTS_OK;
+}
+
 esp_base_container_boot_result_t esp_base_container_product_start_trial(
     const esp_base_storage_claim_t *claim, const char boot_id[37])
 {

@@ -410,6 +410,31 @@ static void *protocol_work_alloc(size_t size)
 #endif
 }
 
+bool esp_base_protocol_prepare_product_ledger(
+    const esp_base_storage_claim_t *claim)
+{
+    if (!esp_base_storage_claim_active(claim) || s_context.flash_io_owner == NULL)
+        return false;
+    ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+    if (ledger == NULL) return false;
+    const ebase_product_ledger_io_t io =
+        ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+    const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+    if (opened == EBASE_LEDGER_OK) {
+        free(ledger);
+        return true;
+    }
+    if (opened != EBASE_LEDGER_UNINITIALIZED ||
+        !esp_base_container_product_pristine_baseline(claim)) {
+        free(ledger);
+        return false;
+    }
+    const ebase_product_ledger_result_t initialized =
+        ebase_product_ledger_initialize_empty(ledger, &io);
+    free(ledger);
+    return initialized == EBASE_LEDGER_OK;
+}
+
 static void clear_candidate(void)
 {
     if (s_candidate == NULL) return;

@@ -30,6 +30,7 @@ flowchart LR
     io_owner["Flash I/O 短 claim"] --> frp_scratch["FRP scratch：公开 IDF provider / boot recover"]
     io_owner --> binding
     io_owner --> product_ledger["product_ledger：原 ID 只读 / 持久高水位"]
+    main -->|"EMPTY + 启动 claim + 精确初始绑定"| product_ledger
     protocol -->|"product.result"| product_ledger
     product_ledger --> product_nvs["base_store NVS：base_product/operations"]
     frp_scratch --> frp

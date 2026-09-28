@@ -11,6 +11,8 @@
 static esp_base_storage_owner_t owner;
 static uint8_t product_bytes[EBASE_PRODUCT_LEDGER_BYTES];
 static bool product_present;
+static bool pristine_product_baseline;
+static unsigned pristine_product_calls;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -44,6 +46,8 @@ static void reset_case(void)
     s_context.storage_owner = &owner;
     s_context.flash_io_owner = &owner;
     product_present = false;
+    pristine_product_baseline = false;
+    pristine_product_calls = 0;
     memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
@@ -168,10 +172,23 @@ int main(void)
     handle_line("product-1", 9, NULL);
     s_reply_mqtt = false;
     expect_reply("unknown", "product_operation_not_found");
+    esp_base_storage_owner_t product_owner = {0};
+    esp_base_storage_owner_init(&product_owner);
+    esp_base_storage_claim_t product_claim = {0};
+    assert(esp_base_storage_claim(&product_owner, &product_claim));
+    assert(!esp_base_protocol_prepare_product_ledger(&product_claim));
+    assert(!product_present && pristine_product_calls == 1U);
+    pristine_product_baseline = true;
+    assert(esp_base_protocol_prepare_product_ledger(&product_claim));
+    assert(product_present && pristine_product_calls == 2U);
+    pristine_product_baseline = false;
+    assert(esp_base_protocol_prepare_product_ledger(&product_claim));
+    assert(pristine_product_calls == 2U);
+    assert(esp_base_storage_release(&product_claim));
     const ebase_product_ledger_io_t product_io = ebase_product_ledger_nvs_io(&owner);
     ebase_product_ledger_t product_ledger;
-    assert(ebase_product_ledger_open(&product_ledger, &product_io) == EBASE_LEDGER_UNINITIALIZED);
-    assert(ebase_product_ledger_initialize_empty(&product_ledger, &product_io) == EBASE_LEDGER_OK);
+    assert(ebase_product_ledger_open(&product_ledger, &product_io) == EBASE_LEDGER_OK);
+    assert(product_ledger.high_watermark == 0U);
     ebase_product_record_t product_intent = {.sequence = 1U,
         .container_sequence = 6U, .kind = EBASE_PRODUCT_INSTALL,
         .state = EBASE_PRODUCT_PREPARED};
@@ -731,6 +748,14 @@ bool esp_base_container_product_ota_ready(void)
 bool esp_base_container_product_configured(void)
 {
     return product_configured;
+}
+
+bool esp_base_container_product_pristine_baseline(
+    const esp_base_storage_claim_t *claim)
+{
+    assert(esp_base_storage_claim_active(claim));
+    ++pristine_product_calls;
+    return pristine_product_baseline;
 }
 
 bool ebase_config_encode(const esp_base_remote_config_t *config,

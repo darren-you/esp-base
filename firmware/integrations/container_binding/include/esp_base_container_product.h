@@ -45,6 +45,12 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
 bool esp_base_container_product_stop_confirmed(
     const esp_base_storage_claim_t *claim);
 
+/* After an EMPTY boot, prove the durable ECS2 record is exactly its initial
+ * no-package binding for the currently signed firmware set. A later history,
+ * changed firmware identity or unreadable state forbids first ledger creation. */
+bool esp_base_container_product_pristine_baseline(
+    const esp_base_storage_claim_t *claim);
+
 typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,
     ESP_BASE_CONTAINER_UNINSTALL_NOT_CONFIGURED,

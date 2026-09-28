@@ -1,6 +1,6 @@
 # device_protocol
 
-产品命令的持久幂等底座已加入 `product_ledger.c`：软件候选暂取最近 8 条，`base_store/base_product/operations` 为单个带版本和 CRC 的 NVS blob，另存持久 `high_watermark`。新操作只接受连续递增的 `operation_sequence`；旧记录被覆盖后按原 ID 查询为 `unknown`，旧序号仍被拒绝。NVS 键缺失返回未初始化，不能直接开始写操作；未来产品控制器须先从精确持久绑定证明全新无产品操作基线，再显式初始化空账本，键意外丢失时不能把序号重置。写入意图及终态均在 NVS commit 后逐字节读回，未决 `PREPARED` 在重启后阻止后续写入，不能自动重放。NVS 读写只在持有共享短时 Flash I/O owner 时进行。只读 `product.status`／`product.result` 已接此账本；产品写入及设备生命周期尚未接入，不能计 P6-04 完成。八条候选在 C3 六／八页和 ESP32 六页的固定 SDK／QEMU 正常写入容量测试通过，具体条数还须结合真实 Flash 磨损冻结；设备掉电与控制任务栈也需在正式入口中验证。
+产品命令的持久幂等底座已加入 `product_ledger.c`：软件候选暂取最近 8 条，`base_store/base_product/operations` 为单个带版本和 CRC 的 NVS blob，另存持久 `high_watermark`。新操作只接受连续递增的 `operation_sequence`；旧记录被覆盖后按原 ID 查询为 `unknown`，旧序号仍被拒绝。产品策略生效且 Container 启动为空时，主应用持启动存储 claim 读取账本；若 NVS 键缺失，只有独立读回的 ECS2 仍为序号 1、无包且从无操作，并与双次观察的签名固件集合精确相符，才显式初始化空账本。既有账本直接沿用；损坏、读取不确定或已有历史序号而账本缺失时保留 claim 并阻断 READY。此检查不能替代整片 Flash 丢失后的外部恢复事实。写入意图及终态均在 NVS commit 后逐字节读回，未决 `PREPARED` 在重启后阻止后续写入，不能自动重放。NVS 读写只在持有共享短时 Flash I/O owner 时进行。只读 `product.status`／`product.result` 已接此账本；产品写入及设备生命周期尚未接入，不能计 P6-04 完成。八条候选在 C3 六／八页和 ESP32 六页的固定 SDK／QEMU 正常写入容量测试通过，具体条数还须结合真实 Flash 磨损冻结；设备掉电与控制任务栈也需在正式入口中验证。
 
 单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart、config.set、只读 product.status／product.result 与受控签名构建中的 ota.start/ota.result；Wi-Fi 由单一控制任务调度，SNTP 同步结果每秒非阻塞轮询。每轮完成后记录原子进展时刻和轮次，供 pending OTA 启动门核对；pending 和下载期间拒绝配置写入。
 
@@ -21,6 +21,7 @@ flowchart LR
     owner --> parser["command_decoder：严格 JSON / 分片 / 超限排空"]
     parser --> product_query["product.status：持久序号 / product.result：原 ID 查询"]
     product_query --> product_ledger["product_ledger：最近八条 / 持久高水位"]
+    app -->|"EMPTY + 启动 claim + 精确 ECS2 初始绑定"| product_ledger
     product_ledger --> product_nvs["base_store：base_product/operations"]
     parser --> guard["command_guard：目标 / deadline / 去重"]
     guard --> action["状态读取 / restart / RAM 配置候选 / ota.start"]

@@ -7,6 +7,7 @@
 
 static econtainer_slots_result_t loaded_result;
 static econtainer_slots_result_t initialized_result;
+static econtainer_slots_state_t loaded_state;
 static unsigned load_calls;
 static unsigned initialize_calls;
 
@@ -16,7 +17,7 @@ econtainer_slots_result_t econtainer_slots_load(
 {
     assert(io != NULL && geometry != NULL && state != NULL);
     ++load_calls;
-    *state = (econtainer_slots_state_t){0};
+    *state = loaded_state;
     return loaded_result;
 }
 
@@ -84,6 +85,44 @@ int main(void)
     assert(esp_base_container_initialize_no_package(&io, &geometry, &set, &created) ==
            ECONTAINER_SLOTS_INVALID);
     assert(!created && load_calls == 6U && initialize_calls == 3U);
-    puts("  container_no_package passed (absent key initialization; existing, damaged and unreadable keys block)");
+
+    set.bootable_count = 2;
+    loaded_result = ECONTAINER_SLOTS_OK;
+    loaded_state = (econtainer_slots_state_t){.sequence = 1U,
+        .phase = ECONTAINER_SLOT_IDLE};
+    for (size_t index = 0; index < set.bootable_count; ++index) {
+        loaded_state.bindings[index].present = true;
+        memcpy(loaded_state.bindings[index].firmware_sha256,
+               set.bootable_firmware_sha256[index], 32);
+    }
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_OK);
+    loaded_state.sequence = 2U;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_CONFLICT);
+    loaded_state.sequence = 1U;
+    loaded_state.bindings[0].package_present = true;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_CONFLICT);
+    loaded_state.bindings[0].package_present = false;
+    loaded_state.bindings[1].firmware_sha256[0] ^= 1U;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_CONFLICT);
+    loaded_state.bindings[1].firmware_sha256[0] ^= 1U;
+    loaded_state.operation.operation_id[0] = 1U;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_CONFLICT);
+    loaded_state.operation.operation_id[0] = 0U;
+    set.running_firmware_sha256[0] ^= 1U;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_CONFLICT);
+    set.running_firmware_sha256[0] ^= 1U;
+    loaded_result = ECONTAINER_SLOTS_EMPTY;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_EMPTY);
+    loaded_result = ECONTAINER_SLOTS_IO_FAILED;
+    assert(esp_base_container_pristine_no_package(&io, &geometry, &set) ==
+           ECONTAINER_SLOTS_IO_FAILED);
+    puts("  container_no_package passed (missing key, pristine history proof and uncertain reads)");
     return 0;
 }
