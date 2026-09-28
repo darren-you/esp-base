@@ -229,6 +229,7 @@ int main(void)
     strcpy(copied_result, latest_reply);
     reported();
     assert(reported_calls == 1 && strstr(latest_reported, "\"frp_state\":\"stopped\"") &&
+           strstr(latest_reported, "\"last_accepted_event_sequence\":3") &&
            !strcmp(latest_reply, copied_result));
     char copied_reported[sizeof latest_reported];
     strcpy(copied_reported, latest_reported);
@@ -603,6 +604,7 @@ void *heap_caps_malloc(size_t size, unsigned caps)
 }
 #endif
 int64_t esp_timer_get_time(void) { return 1000000; }
+uint64_t esp_base_mqtt_owner_event_sequence(void) { return 3; }
 bool esp_base_mqtt_owner_result(const char *json, size_t length)
 {
     assert(length < sizeof latest_reply);

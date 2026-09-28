@@ -10,11 +10,27 @@ static const char device_id[] = "22222222-2222-4222-8222-222222222222";
 static const char boot_id[] = "33333333-3333-4333-8333-333333333333";
 static const char request[] = "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"command\":\"status\"}";
 static const char hex_tag[] = "57d8e98b33e69b075cd138712813411c036f615a240e04a54e8c54f2fa3f38ca";
+static const char event_hex_1[] = "825d3ce7ac4f69135bd409f47516840047e0f6470cd49279ec1a2e65475aaedd";
+static const char event_hex_2[] = "6a86796cb13a216bcca68da890c5b267aae612bd0ca7968eefa5261d8f35358c";
+static const uint8_t event_tag_1[32] = {
+    0x82, 0x5d, 0x3c, 0xe7, 0xac, 0x4f, 0x69, 0x13,
+    0x5b, 0xd4, 0x09, 0xf4, 0x75, 0x16, 0x84, 0x00,
+    0x47, 0xe0, 0xf6, 0x47, 0x0c, 0xd4, 0x92, 0x79,
+    0xec, 0x1a, 0x2e, 0x65, 0x47, 0x5a, 0xae, 0xdd
+};
+static const uint8_t event_tag_2[32] = {
+    0x6a, 0x86, 0x79, 0x6c, 0xb1, 0x3a, 0x21, 0x6b,
+    0xcc, 0xa6, 0x8d, 0xa8, 0x90, 0xc5, 0xb2, 0x67,
+    0xaa, 0xe6, 0x12, 0xbd, 0x0c, 0xa7, 0x96, 0x8e,
+    0xef, 0xa5, 0x26, 0x1d, 0x8f, 0x35, 0x35, 0x8c
+};
+static uint8_t signed_event[141];
 static struct emqtt_runtime { int marker; } runtime;
 static emqtt_config_t captured;
 static emqtt_config_t scratch;
-static emqtt_event_t events[24];
-static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands;
+static emqtt_event_t events[40];
+static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands, business_events;
+static bool accept_event = true;
 static emqtt_state_t state = EMQTT_STOPPED;
 static bool fail_stop, fail_publish;
 static char last_topic[EMQTT_TOPIC_MAX + 1], last_payload[EMQTT_PAYLOAD_MAX + 1];
@@ -33,8 +49,15 @@ bool ebase_management_authenticate(const uint8_t key[EBASE_MANAGEMENT_KEY_BYTES]
     uint8_t expected_key[32];
     for (size_t i = 0; i < sizeof expected_key; ++i) expected_key[i] = (uint8_t)i;
     return !memcmp(key, expected_key, sizeof expected_key) &&
-        !memcmp(tag, expected_tag, sizeof expected_tag) &&
-        length == sizeof request - 1 && !memcmp(json, request, length);
+        ((length == sizeof request - 1 &&
+          !memcmp(tag, expected_tag, sizeof expected_tag) &&
+          !memcmp(json, request, length)) ||
+         (length == sizeof signed_event &&
+          !memcmp(json, signed_event, length) &&
+          ((!memcmp(tag, event_tag_1, sizeof event_tag_1) &&
+            signed_event[sizeof signed_event - 4U] == 1U) ||
+           (!memcmp(tag, event_tag_2, sizeof event_tag_2) &&
+            signed_event[sizeof signed_event - 4U] == 2U))));
 }
 
 esp_err_t emqtt_create(const emqtt_config_t *config, emqtt_runtime_t **out)
@@ -118,11 +141,55 @@ static void push_command(const char *topic, bool retained, bool bad_tag)
     event->message.qos = 1;
     event->message.retain = retained;
 }
+static void push_business_event(uint8_t sequence, bool retained, bool bad_tag)
+{
+    assert(sequence == 1U || sequence == 2U);
+    assert(event_tail < sizeof events / sizeof events[0]);
+    emqtt_event_t *event = &events[event_tail++];
+    *event = (emqtt_event_t){.kind = EMQTT_EVENT_MESSAGE};
+    strcpy(event->message.topic,
+           "esp-base/22222222-2222-4222-8222-222222222222/event");
+    const char *hex = sequence == 1U ? event_hex_1 : event_hex_2;
+    memcpy(event->message.payload, hex, 64);
+    if (bad_tag) event->message.payload[0] ^= 1U;
+    event->message.payload[64] = '\n';
+    size_t offset = 0;
+    static const char domain[] = "esp-base-product-event-v1\n";
+    memcpy(signed_event + offset, domain, sizeof domain - 1);
+    offset += sizeof domain - 1;
+    memcpy(signed_event + offset, device_id, 36);
+    offset += 36;
+    memcpy(signed_event + offset, boot_id, 36);
+    offset += 36;
+    memset(signed_event + offset, 0x11, 32);
+    offset += 32;
+    memset(signed_event + offset, 0, 8);
+    signed_event[offset + 7] = sequence;
+    offset += 8;
+    memcpy(signed_event + offset, "\x01\x02\x03", 3);
+    offset += 3;
+    assert(offset == sizeof signed_event);
+    memcpy(event->message.payload + 65, signed_event, sizeof signed_event);
+    event->message.length = 65 + sizeof signed_event;
+    event->message.qos = 1;
+    event->message.retain = retained;
+}
 static void received(const uint8_t *json, size_t length, void *context)
 {
     assert(context == &runtime);
     assert(length == sizeof request - 1 && !memcmp(json, request, length));
     ++commands;
+}
+static bool received_event(const ebase_mqtt_event_view_t *event, void *context)
+{
+    assert(context == &runtime && event != NULL);
+    assert(event->event_sequence == business_events + 1U &&
+           event->event_size_bytes == 3U &&
+           !memcmp(event->event, "\x01\x02\x03", 3));
+    for (unsigned index = 0; index < 32U; ++index)
+        assert(event->package_sha256[index] == 0x11U);
+    if (accept_event) ++business_events;
+    return accept_event;
 }
 static ebase_mqtt_config_t config(void)
 {
@@ -148,7 +215,7 @@ int main(void)
 {
     ebase_mqtt_config_t absent = {0};
     assert(configure(&absent) == ESP_OK);
-    esp_base_mqtt_owner_poll(0, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(0, true, true, received, received_event, &runtime);
     assert(!creates && !starts && !esp_base_mqtt_owner_ready());
     assert(!strcmp(esp_base_mqtt_owner_state(), "unconfigured"));
 
@@ -158,35 +225,54 @@ int main(void)
     assert(captured.tls && captured.port == 8883 && !strcmp(captured.hostname, mqtt.hostname));
     assert(!strcmp(captured.username, mqtt.username) && !strcmp(captured.password, mqtt.password));
     assert(!strcmp(captured.ca_pem, mqtt.ca_pem));
-    assert(captured.subscription_count == 1 && captured.subscriptions[0].qos == 1);
+    assert(captured.subscription_count == 2 && captured.subscriptions[0].qos == 1 &&
+           captured.subscriptions[1].qos == 1);
     assert(!strcmp(captured.subscriptions[0].topic, "esp-base/22222222-2222-4222-8222-222222222222/command"));
+    assert(!strcmp(captured.subscriptions[1].topic, "esp-base/22222222-2222-4222-8222-222222222222/event"));
     assert(!strcmp(captured.will_topic, "esp-base/22222222-2222-4222-8222-222222222222/status"));
     assert(captured.will_qos == 1 && captured.will_retain);
     assert(!strcmp((const char *)captured.will_payload,
         "{\"protocol_version\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"boot_id\":\"33333333-3333-4333-8333-333333333333\",\"state\":\"offline\"}"));
     assert(captured.will_length == strlen((const char *)captured.will_payload));
-    esp_base_mqtt_owner_poll(0, true, false, received, &runtime);
-    esp_base_mqtt_owner_poll(0, false, true, received, &runtime);
+    esp_base_mqtt_owner_poll(0, true, false, received, received_event, &runtime);
+    esp_base_mqtt_owner_poll(0, false, true, received, received_event, &runtime);
     assert(starts == 0 && !esp_base_mqtt_owner_ready());
-    esp_base_mqtt_owner_poll(0, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(0, true, true, received, received_event, &runtime);
     assert(starts == 1 && !esp_base_mqtt_owner_ready());
     assert(!esp_base_mqtt_owner_result("{}", 2));
     push_command(captured.subscriptions[0].topic, false, false);
     push(EMQTT_EVENT_PUBACK);
-    esp_base_mqtt_owner_poll(0, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(0, true, true, received, received_event, &runtime);
     assert(commands == 0 && !esp_base_mqtt_owner_ready());
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(1, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready() && sends == 1 && last_qos == 1 && last_retain);
     assert(!strcmp(last_topic, captured.will_topic));
     assert(!strcmp(last_payload,
         "{\"protocol_version\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"boot_id\":\"33333333-3333-4333-8333-333333333333\",\"state\":\"online\"}"));
 
+    push_business_event(1U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 1U && esp_base_mqtt_owner_event_sequence() == 1U);
+    push_business_event(1U, false, false);
+    push_business_event(1U, true, false);
+    push_business_event(1U, false, true);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 1U && esp_base_mqtt_owner_event_sequence() == 1U);
+    accept_event = false;
+    push_business_event(2U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 1U && esp_base_mqtt_owner_event_sequence() == 1U);
+    accept_event = true;
+    push_business_event(2U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 2U && esp_base_mqtt_owner_event_sequence() == 2U);
+
     push_command(captured.subscriptions[0].topic, false, false);
     push_command(captured.subscriptions[0].topic, true, false);
     push_command(captured.subscriptions[0].topic, false, true);
     push_command("esp-base/22222222-2222-4222-8222-222222222222/result", false, false);
-    esp_base_mqtt_owner_poll(2, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(2, true, true, received, received_event, &runtime);
     assert(commands == 1);
     assert(esp_base_mqtt_owner_result("{\"state\":\"succeeded\"}", strlen("{\"state\":\"succeeded\"}")));
     assert(!strcmp(last_topic, "esp-base/22222222-2222-4222-8222-222222222222/result"));
@@ -199,67 +285,68 @@ int main(void)
     fail_publish = false;
 
     push(EMQTT_EVENT_DISCONNECTED);
-    esp_base_mqtt_owner_poll(3, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(3, true, true, received, received_event, &runtime);
     assert(!esp_base_mqtt_owner_ready());
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(4, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(4, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready());
-    esp_base_mqtt_owner_poll(5, false, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5, false, true, received, received_event, &runtime);
     assert(stops == 1 && !esp_base_mqtt_owner_ready());
-    esp_base_mqtt_owner_poll(6, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(6, true, true, received, received_event, &runtime);
     assert(starts == 2 && !esp_base_mqtt_owner_ready());
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(7, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(7, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready());
 
     push(EMQTT_EVENT_ERROR);
     events[event_tail - 1].error = EMQTT_ERROR_SUBSCRIPTION;
-    esp_base_mqtt_owner_poll(8, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(8, true, true, received, received_event, &runtime);
     assert(stops == 2 && !esp_base_mqtt_owner_ready());
-    esp_base_mqtt_owner_poll(5007, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5007, true, true, received, received_event, &runtime);
     assert(starts == 2);
-    esp_base_mqtt_owner_poll(5008, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5008, true, true, received, received_event, &runtime);
     assert(starts == 3);
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5009, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready());
 
     /* A complete MESSAGE is consumed before the next revision configures
      * its copied client connection. */
     push_command(captured.subscriptions[0].topic, false, false);
-    esp_base_mqtt_owner_poll(5009, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5009, true, true, received, received_event, &runtime);
     assert(commands == 2);
     assert(configure(&absent) == ESP_OK);
     assert(destroys == 1 && !esp_base_mqtt_owner_ready() && !strcmp(esp_base_mqtt_owner_state(), "unconfigured"));
     assert(configure(&mqtt) == ESP_OK);
+    assert(esp_base_mqtt_owner_event_sequence() == 2U);
     assert(!strcmp(captured.ca_pem, mqtt.ca_pem));
-    esp_base_mqtt_owner_poll(5010, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5010, true, true, received, received_event, &runtime);
     fail_publish = true;
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(5011, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(5011, true, true, received, received_event, &runtime);
     assert(stops == 4 && !esp_base_mqtt_owner_ready());
     fail_publish = false;
-    esp_base_mqtt_owner_poll(10010, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(10010, true, true, received, received_event, &runtime);
     assert(starts == 4);
-    esp_base_mqtt_owner_poll(10011, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(10011, true, true, received, received_event, &runtime);
     assert(starts == 5);
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(10012, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(10012, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready());
     assert(esp_base_mqtt_owner_result("{\"state\":\"succeeded\"}", strlen("{\"state\":\"succeeded\"}")));
     const int expired_result_id = (int)sends;
     push(EMQTT_EVENT_DELETED);
     events[event_tail - 1].message_id = expired_result_id;
     push_command(captured.subscriptions[0].topic, false, false);
-    esp_base_mqtt_owner_poll(10013, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(10013, true, true, received, received_event, &runtime);
     assert(stops == 5 && commands == 2 && !esp_base_mqtt_owner_ready());
     assert(!esp_base_mqtt_owner_result("{}", 2));
-    esp_base_mqtt_owner_poll(15012, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(15012, true, true, received, received_event, &runtime);
     assert(starts == 5);
-    esp_base_mqtt_owner_poll(15013, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(15013, true, true, received, received_event, &runtime);
     assert(starts == 6 && !esp_base_mqtt_owner_ready());
     push(EMQTT_EVENT_READY);
-    esp_base_mqtt_owner_poll(15014, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(15014, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready());
 
     fail_stop = true;
@@ -268,7 +355,7 @@ int main(void)
     assert(configure(&changed) == ESP_FAIL);
     assert(destroy_attempts == 2 && destroys == 1 && creates == 2);
     push_command(captured.subscriptions[0].topic, false, false);
-    esp_base_mqtt_owner_poll(15015, true, true, received, &runtime);
+    esp_base_mqtt_owner_poll(15015, true, true, received, received_event, &runtime);
     assert(commands == 2 && !esp_base_mqtt_owner_result("{}", 2));
     assert(!strcmp(esp_base_mqtt_owner_state(), "failed") && !esp_base_mqtt_owner_ready());
     fail_stop = false;

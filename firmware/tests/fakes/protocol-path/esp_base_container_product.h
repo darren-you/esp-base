@@ -18,6 +18,16 @@ bool esp_base_container_product_ota_ready(void);
 bool esp_base_container_product_configured(void);
 bool esp_base_container_product_pristine_baseline(
     const esp_base_storage_claim_t *claim);
+typedef enum {
+    ESP_BASE_CONTAINER_EVENT_ACCEPTED = 0,
+    ESP_BASE_CONTAINER_EVENT_UNAVAILABLE,
+    ESP_BASE_CONTAINER_EVENT_INVALID,
+    ESP_BASE_CONTAINER_EVENT_FULL,
+    ESP_BASE_CONTAINER_EVENT_NO_MEMORY,
+    ESP_BASE_CONTAINER_EVENT_BUSY,
+} esp_base_container_event_result_t;
+esp_base_container_event_result_t esp_base_container_product_offer_event(
+    const uint8_t package_sha256[32], const uint8_t *event, size_t size_bytes);
 bool esp_base_container_product_snapshot_for_ota(
     const esp_base_storage_claim_t *claim,
     esp_base_ota_receipt_snapshot_t *snapshot);

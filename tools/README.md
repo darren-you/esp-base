@@ -9,6 +9,8 @@ flowchart LR
     user["开发者：本轮端点与设备 UUID"] --> cli["device-control.py"]
     cli -->|"独占串口 / JSON Lines"| firmware["ESP Base device_protocol"]
     firmware -->|"状态、结果、启动 ID"| cli
+    user --> event_frame["product_event.py：生成已签名业务事件帧"]
+    event_frame -->|"精确 MQTT event Topic / QoS 1 / 非 retained"| firmware
     user --> checker["mqtt_lab_check.py：明确测试目标与私有输入"]
     checker <-->|"严格 TLS / 新消息往返"| broker["本机隔离 Broker"]
     broker <-->|"in / extra / out / status"| lab["MQTT 集成实验应用"]
@@ -79,6 +81,20 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 文件包含完整 `schema_version`、`wifi`、`mqtt`、`frp`、`business` 字段。当前 `schema_version` 为 3；`wifi` 为 `{ssid,password}` 或 null；`mqtt` 为 `{hostname,port,username,password,ca_pem,management_key_hex}` 或 null；`frp` 可为 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}` 或 null，`business` 必须为 null。MQTT 主机为 1–253 字节 ASCII DNS 名，端口 1–65535；用户名最多 128 UTF-8 字节、密码最多 256 UTF-8 字节，均非空；CA PEM 最多 4096 ASCII 字节并含证书标记；独立管理密钥为非全零 64 个小写十六进制字符。工具不会生成凭据，整个配置仅经本轮独占物理串口端点发送，整行请求上限 9216 字节。工具读取新鲜 revision 后构造 CAS 请求，最多等待 30 秒；仅确认新 revision 后报告成功。文件不存在、权限不合格、重复字段或内容无效会拒绝，不回显配置。固件 MQTT/FRP 状态由实际 owner 报告；设备级 Broker ACL 与网络控制端仍需联调。
 
 `python3 tools/test-device-control.py` 使用本机伪终端验证字节不变、禁用关闭挂断和写入背压期限；伪终端不证明物理 USB 复位行为，后者以同板重复打开后的 boot_id 与断电验收为准。
+
+## 产品 MQTT 业务事件帧
+
+`product_event.py` 读取权限精确为 0600、内容为 64 个小写十六进制字符的**现有设备管理密钥文件**，使用当前设备 UUID、当前 boot UUID、已核对的签名包 SHA-256、下一个连续事件序号和原始 guest 事件文件，生成新的 0600 二进制帧文件；不在命令行或终端输出密钥。它只生成 wire 帧，不替代 Broker 账户、TLS、正式发布、guest 执行结果或试运行健康裁决。调用方须向脚本显示的精确 `esp-base/<device_id>/event` Topic 以 QoS 1、非 retained 方式发布该帧，并从新鲜非 retained `reported.last_accepted_event_sequence` 判断入队。Broker PUBACK 不能证明入队；旧 boot、错包、满队列或离线时序号不推进。重试须重新核对高水位及当前 boot，原序号使用原帧，不改内容。
+
+```bash
+python3 tools/product_event.py --management-key-file <私有0600密钥文件> \
+  --device-id <本轮设备UUID> --boot-id <本轮启动UUID> \
+  --package-sha256 <当前包摘要> --event-sequence <下一连续序号> \
+  --event-file <原始业务字节文件> --output <新0600帧文件>
+python3 tools/test_product_event.py
+```
+
+当前生产 Broker 还没有 Base 账户和 Topic，真实控制账户发布与两板 guest 业务结果均未验收；此工具用于冻结设备端可验证的公开帧格式。
 
 ## v1/v2→v3 离线配置预检
 

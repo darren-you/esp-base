@@ -14,7 +14,8 @@ typedef enum {
     EBASE_MQTT_COMMAND,
     EBASE_MQTT_RESULT,
     EBASE_MQTT_REPORTED,
-    EBASE_MQTT_STATUS
+    EBASE_MQTT_STATUS,
+    EBASE_MQTT_EVENT
 } ebase_mqtt_channel_t;
 
 typedef struct {
@@ -23,7 +24,7 @@ typedef struct {
     size_t request_length;
 } ebase_mqtt_request_view_t;
 
-/* All four topics derive only from the durable device UUID. */
+/* All five topics derive only from the durable device UUID. */
 bool ebase_mqtt_topic(char out[EBASE_MQTT_TOPIC_BYTES], const char *device_id,
                       ebase_mqtt_channel_t channel);
 

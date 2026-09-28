@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *const channel_names[] = {"command", "result", "reported", "status"};
+static const char *const channel_names[] = {"command", "result", "reported", "status", "event"};
 
 bool ebase_mqtt_topic(char out[EBASE_MQTT_TOPIC_BYTES], const char *device_id,
                       ebase_mqtt_channel_t channel)

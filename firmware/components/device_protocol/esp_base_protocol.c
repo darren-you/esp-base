@@ -144,9 +144,11 @@ static void reported(void)
     const int size = snprintf(s_response_json, MQTT_REPORTED_JSON_BYTES,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
-        "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\"}",
+        "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\","
+        "\"last_accepted_event_sequence\":%" PRIu64 "}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
-        esp_base_wifi_state(), time_ready ? "true" : "false", frp.state);
+        esp_base_wifi_state(), time_ready ? "true" : "false", frp.state,
+        esp_base_mqtt_owner_event_sequence());
     if (size > 0 && (size_t)size < MQTT_REPORTED_JSON_BYTES)
         (void)esp_base_mqtt_owner_reported(s_response_json, (size_t)size);
 }
@@ -857,6 +859,14 @@ static void handle_mqtt_command(const uint8_t *json, size_t length, void *contex
     s_reply_mqtt = false;
 }
 
+static bool handle_mqtt_event(const ebase_mqtt_event_view_t *event, void *context)
+{
+    (void)context;
+    return event != NULL &&
+        esp_base_container_product_offer_event(event->package_sha256,
+            event->event, event->event_size_bytes) == ESP_BASE_CONTAINER_EVENT_ACCEPTED;
+}
+
 static void feed_serial(const unsigned char *bytes, size_t count)
 {
     for (size_t i = 0; i < count; ++i) {
@@ -922,7 +932,7 @@ static void control_task(void *argument)
             }
             if (mqtt_can_poll)
                 esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
-                                         handle_mqtt_command, NULL);
+                                         handle_mqtt_command, handle_mqtt_event, NULL);
             if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
                 /* Revoke the old endpoint before waiting for the old FRP worker
                  * to finish; no stale management key remains reachable. */

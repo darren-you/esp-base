@@ -1,6 +1,6 @@
 # ESP Base
 
-2026-09-28 产品执行线程新增有界事件 FIFO：容量取自 Container 对所选签名包本次重新验签的 `event_queue_limit`，每条事件还须匹配本次包 SHA-256；入队只表示接收，`on_event` 只在唯一 guest pthread 执行。C3／ESP32 的真实签名 counter 包宿主回归覆盖同 boot 换包、错误摘要、停止后拒绝及百次回收；MQTT 独立业务 Topic、Broker ACL、消息授权和试运行健康判定仍未接入，因此带包试运行与产品写命令仍关闭。
+2026-09-28 产品执行线程新增有界事件 FIFO：容量取自 Container 对所选签名包本次重新验签的 `event_queue_limit`，每条事件还须匹配本次包 SHA-256；入队只表示接收，`on_event` 只在唯一 guest pthread 执行。独立 MQTT `event` Topic 现已接入设备端 HMAC、boot/包摘要、连续序号验证及入队后高水位报告；公开宿主工具可生成相同签名帧。C3／ESP32 的真实签名 counter 包宿主回归覆盖同 boot 换包、错误摘要、停止后拒绝及百次回收；Broker 源码 ACL 已另在 `mqtt-service` 加入，生产账户／发布、真实消息、guest 业务结果与试运行健康判定仍未验收，因此带包试运行与产品写命令仍关闭。
 
 2026-09-28 按维护者裁决增加产品操作持久幂等账本的软件候选：单个 910 字节 NVS blob 暂存最近 8 条及单调序号，写意图和终态提交后逐字节读回；只读 `product.status`／`product.result` 与公开串口客户端已接入查询。宿主故障测试及 NVS 短时 I/O 适配测试通过；固定 SDK／QEMU 的 C3 六／八页、ESP32 六页均完成 100 代四记录容量与重启读回，见[C3](docs/operations/c3-eight-page-nvs-capacity.md)和[ESP32](docs/operations/esp32-six-page-nvs-capacity.md)记录。设备产品写命令、授权安装、实际生命周期、真实 Flash 磨损与两板掉电验收仍未接入，不能把账本视为 P6-04 完成。
 

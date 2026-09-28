@@ -29,6 +29,7 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   -I "$ROOT/tests/fakes/network_auth" -I "$ROOT/components/device_protocol/include" \
   "$ROOT/components/device_protocol/network_auth.c" \
   "$ROOT/components/device_protocol/mqtt_command.c" \
+  "$ROOT/components/device_protocol/mqtt_event.c" \
   "$ROOT/components/device_protocol/command_guard.c" \
   "$ROOT/tests/network_auth_test.c" \
   -o "$BUILD_DIR/network_auth_test"
@@ -44,6 +45,7 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   -I "$ROOT/managed_components/mqtt/runtime/include" \
   "$ROOT/components/device_protocol/mqtt_owner.c" \
   "$ROOT/components/device_protocol/mqtt_command.c" \
+  "$ROOT/components/device_protocol/mqtt_event.c" \
   "$ROOT/components/device_protocol/command_guard.c" \
   "$ROOT/managed_components/mqtt/runtime/emqtt_contract.c" \
   "$ROOT/tests/mqtt_owner_test.c" -o "$BUILD_DIR/mqtt_owner_test"

@@ -9,12 +9,14 @@
 static emqtt_runtime_t *s_runtime;
 /* Incoming MESSAGE remains live while its handler parses a command. */
 static emqtt_event_t s_event IRAM_BSS_ATTR;
-static char s_topics[4][EBASE_MQTT_TOPIC_BYTES];
+static char s_topics[5][EBASE_MQTT_TOPIC_BYTES];
 static char s_device_id[37];
+static char s_boot_id[37];
 static char s_online[192];
 static uint8_t s_management_key[EBASE_MQTT_KEY_BYTES];
 static bool s_configured, s_started, s_ready, s_failed, s_network_ready;
 static uint64_t s_retry_after_ms;
+static uint64_t s_event_sequence;
 
 static void wipe(void *memory, size_t length)
 {
@@ -53,7 +55,7 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     const esp_err_t revoked = esp_base_mqtt_owner_revoke();
     if (revoked != ESP_OK) return revoked;
     if (!config->configured) return ESP_OK;
-    for (unsigned channel = 0; channel < 4; ++channel) {
+    for (unsigned channel = 0; channel < 5; ++channel) {
         if (!ebase_mqtt_topic(s_topics[channel], device_id, (ebase_mqtt_channel_t)channel)) {
             s_failed = true; return ESP_ERR_INVALID_ARG;
         }
@@ -83,12 +85,17 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     scratch->will_length = (size_t)offline_size;
     scratch->will_qos = 1;
     scratch->will_retain = true;
-    scratch->subscription_count = 1;
+    scratch->subscription_count = 2;
     memcpy(scratch->subscriptions[0].topic, s_topics[EBASE_MQTT_COMMAND],
            strlen(s_topics[EBASE_MQTT_COMMAND]) + 1);
     scratch->subscriptions[0].qos = 1;
+    memcpy(scratch->subscriptions[1].topic, s_topics[EBASE_MQTT_EVENT],
+           strlen(s_topics[EBASE_MQTT_EVENT]) + 1);
+    scratch->subscriptions[1].qos = 1;
     memcpy(s_management_key, config->management_key, sizeof s_management_key);
     memcpy(s_device_id, device_id, strlen(device_id) + 1);
+    if (strcmp(s_boot_id, boot_id) != 0) s_event_sequence = 0;
+    memcpy(s_boot_id, boot_id, strlen(boot_id) + 1);
     const esp_err_t result = emqtt_create(scratch, &s_runtime);
     wipe(scratch, sizeof *scratch);
     if (result != ESP_OK) {
@@ -101,7 +108,8 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
 }
 
 void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_time_ready,
-                              ebase_mqtt_command_handler_t handler, void *context)
+                              ebase_mqtt_command_handler_t command_handler,
+                              ebase_mqtt_event_handler_t event_handler, void *context)
 {
     if (!s_configured || !s_runtime || s_failed) return;
     s_network_ready = network_ready && trusted_time_ready;
@@ -153,18 +161,34 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             }
             break;
         case EMQTT_EVENT_MESSAGE:
-            if (s_ready && handler) {
+            if (s_ready && command_handler) {
                 ebase_mqtt_request_view_t verified;
                 if (ebase_mqtt_verified_request(s_management_key, s_device_id,
                         s_event.message.topic, s_event.message.qos, s_event.message.retain,
                         s_event.message.payload, s_event.message.length, &verified))
-                    handler(verified.request, verified.request_length, context);
+                    command_handler(verified.request, verified.request_length, context);
+            }
+            if (s_ready && event_handler && s_event_sequence != UINT64_MAX) {
+                ebase_mqtt_event_view_t verified;
+                if (ebase_mqtt_verified_event(s_management_key, s_device_id,
+                        s_boot_id, s_event.message.topic, s_event.message.qos,
+                        s_event.message.retain, s_event.message.payload,
+                        s_event.message.length, &verified) &&
+                    verified.event_sequence == s_event_sequence + 1U &&
+                    event_handler(&verified, context)) {
+                    s_event_sequence = verified.event_sequence;
+                }
             }
             break;
         default:
             break;
         }
     }
+}
+
+uint64_t esp_base_mqtt_owner_event_sequence(void)
+{
+    return s_event_sequence;
 }
 
 const char *esp_base_mqtt_owner_state(void)

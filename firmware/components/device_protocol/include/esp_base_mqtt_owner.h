@@ -6,8 +6,13 @@
 #include "esp_base_config.h"
 #include "esp_err.h"
 #include "emqtt_contract.h"
+#include "esp_base_mqtt_event.h"
 
 typedef void (*ebase_mqtt_command_handler_t)(const uint8_t *json, size_t length, void *context);
+/* Return true only after the exact authenticated event was copied into the
+ * currently selected guest's bounded queue. No guest code runs here. */
+typedef bool (*ebase_mqtt_event_handler_t)(const ebase_mqtt_event_view_t *event,
+                                            void *context);
 
 /* Called only by the Base control task. scratch is distinct from config, is
  * borrowed only until return, and is wiped on every valid call. emqtt_create
@@ -18,7 +23,11 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
 /* Revoke the current endpoint and management key before a revision retry. */
 esp_err_t esp_base_mqtt_owner_revoke(void);
 void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_time_ready,
-                              ebase_mqtt_command_handler_t handler, void *context);
+                              ebase_mqtt_command_handler_t command_handler,
+                              ebase_mqtt_event_handler_t event_handler, void *context);
+/* Boot-scoped, volatile high watermark of events accepted into the guest
+ * queue. A broker PUBACK or guest result never advances this number. */
+uint64_t esp_base_mqtt_owner_event_sequence(void);
 const char *esp_base_mqtt_owner_state(void);
 bool esp_base_mqtt_owner_ready(void);
 /* Enqueue is transport delivery only; PUBACK cannot make an operation succeed. */
