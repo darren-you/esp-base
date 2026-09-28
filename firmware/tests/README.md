@@ -69,6 +69,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 同一测试进程还重复 100 次真实签名包安装、正式 Base `product_boot`、产品卸载、同 boot `EMPTY`，每轮保持唯一 storage claim，读取正式 ECS2 状态并核对每次安装 5 次、卸载 1 次提交。guest 实际执行 `init` 与 `stop`；循环不调用 `on_event`。另在同 boot 的 P1/P2 换包用例中，测试通过 Base 有界 FIFO 投递事件、等待唯一 guest 线程完成，核对完成序号、当前包摘要与真实 guest 返回值，并验证换包后观察清空、错误摘要、空事件、停止后旧事件均被拒绝。该测试没有真实 MQTT 授权入口。运行中卸载必须证明 `stop/close/join`、native 已回收，并确认卸载不擦写包 Flash。macOS 另编译非 sanitizer 二进制，先校准 64 KiB 堆与 VM 映射能被采样，再比较第 10／50／100 次后的默认 malloc zone 已用字节、`TASK_VM_INFO` 虚拟字节与 region 数；ASan/UBSan 二进制也执行同一循环。这是宿主分配和线程回收检查，不代表 ESP 堆、Flash 耐久、公开安装或实板 100 次运行。
 
+产品包准备入口的同源签名 guest 用例在旧确认实例运行时，先用完整目标摘要和被篡改的下载字节触发校验失败，核对 WRITING 已持久转为 ABORTED、当前绑定和旧槽包字节不变；再以合法源完成独立读回的 PREPARED，核对候选使用未引用槽、旧 guest 仍接收事件。NVS 保留写入但读回失败时返回不确定、没有擦写包 Flash，调用者持有原存储 claim 并需从持久 ECS2 恢复。准备入口只是内部事务阶段，不含 HTTPS 来源、公开安装／升级命令、业务试运行或最终确认；宿主假 Flash／NVS 不证明实体掉电结果。
+
 仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
 
 ## NVS 仓外仿真

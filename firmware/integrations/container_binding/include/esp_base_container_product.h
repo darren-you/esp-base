@@ -8,6 +8,7 @@
 #include "esp_base_storage_owner.h"
 #include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
+#include "esp_container_slots.h"
 #include "eota.h"
 
 typedef enum {
@@ -74,6 +75,36 @@ typedef enum {
 esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
     esp_base_container_binding_snapshot_t *out);
+
+typedef struct {
+    char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
+    uint32_t expected_sequence;
+    bool previous_package_present;
+    uint8_t previous_package_sha256[32];
+    uint8_t package_sha256[32];
+    uint32_t package_size_bytes;
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
+} esp_base_container_package_request_t;
+
+typedef enum {
+    ESP_BASE_CONTAINER_PREPARED = 0,
+    ESP_BASE_CONTAINER_PREPARE_REJECTED,
+    ESP_BASE_CONTAINER_PREPARE_BUSY,
+    ESP_BASE_CONTAINER_PREPARE_UNCERTAIN,
+} esp_base_container_prepare_result_t;
+
+/* Internal preparation step for a later public install/upgrade worker. The
+ * caller has durably claimed its operation and holds Base's app/otadata claim.
+ * A bounded source supplies exact package bytes; no guest is stopped or
+ * started here. Success returns the independently read-back PREPARED sequence.
+ * Rejection after reservation durably abandons WRITING/PREPARED before return;
+ * uncertainty requires retaining the claim and resolving ECS2 on a new boot. */
+esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_container_package_request_t *request,
+    econtainer_slot_source_fn source_fn, void *source_context,
+    uint32_t *prepared_sequence);
 
 typedef enum {
     ESP_BASE_CONTAINER_EVENT_ACCEPTED = 0,

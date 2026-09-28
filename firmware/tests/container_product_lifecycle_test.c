@@ -245,6 +245,14 @@ static bool read_source(void *context, size_t offset, uint8_t *bytes, size_t siz
     return true;
 }
 
+static bool read_corrupt_source(void *context, size_t offset,
+                                uint8_t *bytes, size_t size)
+{
+    if (!read_source(context, offset, bytes, size)) return false;
+    if (offset == 0U) bytes[0] ^= 0x01U;
+    return true;
+}
+
 esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
     esp_base_ota_firmware_observation_t observation, const eota_prepared_t *prepared,
     esp_base_ota_firmware_set_t *firmware_set)
@@ -990,6 +998,121 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
 
+static void run_prepare_preserves_confirmed(const file_t *key,
+                                            const file_t *confirmed_package,
+                                            const file_t *candidate_package,
+                                            const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = confirmed_package,
+                                 .operation_marker = 0x91};
+    assert(esp_base_container_with_firmware_set(&claim,
+        ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
+        ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t original = {0};
+    assert(econtainer_slots_load(&io, &geometry, &original) == ECONTAINER_SLOTS_OK);
+    const int index = binding_index(&original, physical.running_firmware_sha256);
+    assert(index >= 0 && original.bindings[index].package_present);
+    const uint8_t original_slot = original.bindings[index].slot;
+    uint8_t *original_bytes = malloc(confirmed_package->size);
+    assert(original_bytes != NULL);
+    memcpy(original_bytes,
+        store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
+        confirmed_package->size);
+
+    esp_base_container_package_request_t request = {
+        .operation_id = "99999999-9999-4999-8999-999999999991",
+        .expected_sequence = original.sequence,
+        .previous_package_present = true,
+        .package_size_bytes = (uint32_t)candidate_package->size,
+        .guest_abi_version = 2U, .data_schema_version = 1U,
+    };
+    memcpy(request.previous_package_sha256,
+        original.bindings[index].package_sha256, 32);
+    assert(SHA256(candidate_package->bytes, candidate_package->size,
+                  request.package_sha256) != NULL);
+    uint32_t prepared_sequence = 123U;
+    const unsigned writes_before_wrong_binding = store.blob_writes;
+    request.previous_package_sha256[0] ^= 0x01U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, (void *)candidate_package,
+        &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_REJECTED);
+    assert(prepared_sequence == 0U &&
+           store.blob_writes == writes_before_wrong_binding);
+    request.previous_package_sha256[0] ^= 0x01U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_corrupt_source, (void *)candidate_package,
+        &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_REJECTED);
+    assert(prepared_sequence == 0U);
+    econtainer_slots_state_t rejected = {0};
+    assert(econtainer_slots_load(&io, &geometry, &rejected) == ECONTAINER_SLOTS_OK);
+    assert(rejected.phase == ECONTAINER_SLOT_ABORTED &&
+           rejected.sequence == original.sequence + 2U);
+    assert(rejected.bindings[index].slot == original_slot &&
+           memcmp(rejected.bindings[index].package_sha256,
+                  original.bindings[index].package_sha256, 32) == 0);
+    assert(memcmp(original_bytes,
+        store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
+        confirmed_package->size) == 0);
+    assert(esp_base_container_product_event_accepting());
+
+    memcpy(request.operation_id,
+           "99999999-9999-4999-8999-999999999992", sizeof request.operation_id);
+    request.expected_sequence = rejected.sequence;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, (void *)candidate_package,
+        &prepared_sequence) == ESP_BASE_CONTAINER_PREPARED);
+    econtainer_slots_state_t prepared = {0};
+    assert(econtainer_slots_load(&io, &geometry, &prepared) == ECONTAINER_SLOTS_OK);
+    assert(prepared_sequence == rejected.sequence + 2U &&
+           prepared.sequence == prepared_sequence &&
+           prepared.phase == ECONTAINER_SLOT_PREPARED &&
+           prepared.operation.slot != original_slot &&
+           prepared.bindings[index].slot == original_slot &&
+           memcmp(prepared.bindings[index].package_sha256,
+                  original.bindings[index].package_sha256, 32) == 0 &&
+           esp_base_container_product_event_accepting());
+    assert(memcmp(original_bytes,
+        store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
+        confirmed_package->size) == 0);
+    econtainer_slots_state_t abandoned = {0};
+    assert(econtainer_slots_abandon(&io, &geometry, prepared_sequence,
+        s_product.boot_id, NULL, NULL, &abandoned) == ECONTAINER_SLOTS_OK);
+
+    memcpy(request.operation_id,
+           "99999999-9999-4999-8999-999999999993", sizeof request.operation_id);
+    request.expected_sequence = abandoned.sequence;
+    prepared_sequence = 123U;
+    const unsigned erases_before_uncertain = store.flash_erases;
+    const unsigned writes_before_uncertain = store.flash_writes;
+    store.fail_read_after_next_write = 1U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, (void *)candidate_package,
+        &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_UNCERTAIN);
+    assert(prepared_sequence == 0U && esp_base_storage_claim_active(&claim) &&
+           store.flash_erases == erases_before_uncertain &&
+           store.flash_writes == writes_before_uncertain);
+    econtainer_slots_state_t unresolved = {0};
+    assert(econtainer_slots_load(&io, &geometry, &unresolved) == ECONTAINER_SLOTS_OK);
+    assert(unresolved.sequence == abandoned.sequence + 1U &&
+           unresolved.phase == ECONTAINER_SLOT_WRITING &&
+           unresolved.bindings[index].slot == original_slot &&
+           esp_base_container_product_event_accepting());
+    assert(econtainer_slots_abandon(&io, &geometry, unresolved.sequence,
+        s_product.boot_id, NULL, NULL, &abandoned) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    free(original_bytes);
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+}
+
 static void run_success_receipt_replay(const file_t *key, const file_t *package,
                                        const char boot_id[37])
 {
@@ -1172,6 +1295,7 @@ int main(int argc, char **argv)
     run_uninstall_reclaimed_guest(&key, &package, boot_id, true);
     run_uninstall_stop_timeout(&key, &package, boot_id);
     run_signed_reinstall_cycles(&key, &package, boot_id);
+    run_prepare_preserves_confirmed(&key, &package, &package_v1, boot_id);
     run_source_change_same_boot(&key, &package_v1, &package_v2, boot_id);
     run_success_receipt_replay(&key, &package, boot_id);
     free(package_v1.bytes);

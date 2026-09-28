@@ -1618,6 +1618,210 @@ esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
 }
 
 typedef struct {
+    econtainer_package_workspace_t package;
+    econtainer_wasm_workspace_t wasm;
+    econtainer_package_info_t info;
+} package_prepare_workspace_t;
+
+typedef struct {
+    const esp_base_container_package_request_t *request;
+    econtainer_slot_source_fn source_fn;
+    void *source_context;
+    econtainer_package_slot_validation_t validation;
+    uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
+    esp_base_container_prepare_result_t outcome;
+    uint32_t prepared_sequence;
+} package_prepare_context_t;
+
+static bool package_prepare_guest_ready(bool previous_package_present)
+{
+    const int result = atomic_load_explicit(&s_product.result, memory_order_acquire);
+    return atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire) &&
+        (previous_package_present ?
+            (result == ESP_BASE_CONTAINER_RUNNING &&
+             atomic_load_explicit(&s_product.instance_active, memory_order_acquire)) :
+            (result == ESP_BASE_CONTAINER_EMPTY && !s_product.thread_joinable));
+}
+
+static bool package_prepare_binding_matches(
+    const econtainer_slots_state_t *state,
+    const econtainer_slot_firmware_set_t *firmware_set,
+    const esp_base_container_package_request_t *request)
+{
+    const int index = binding_index(state, firmware_set->running_firmware_sha256);
+    if (index < 0 || state->sequence != request->expected_sequence ||
+        (state->phase != ECONTAINER_SLOT_IDLE &&
+         state->phase != ECONTAINER_SLOT_CONFIRMED &&
+         state->phase != ECONTAINER_SLOT_ABORTED) ||
+        !bindings_match_firmware_set(state, firmware_set)) return false;
+    const econtainer_slot_binding_t *binding = &state->bindings[index];
+    return binding->package_present == request->previous_package_present &&
+        (!binding->package_present ||
+         memcmp(binding->package_sha256, request->previous_package_sha256, 32) == 0);
+}
+
+static bool package_prepare_operation_matches(
+    const econtainer_slots_state_t *state,
+    const package_prepare_context_t *prepare)
+{
+    const esp_base_container_package_request_t *request = prepare->request;
+    return memcmp(state->operation.operation_id, prepare->operation_id, 16) == 0 &&
+        memcmp(state->operation.package_sha256, request->package_sha256, 32) == 0 &&
+        state->operation.package_size_bytes == request->package_size_bytes &&
+        state->operation.guest_abi_version == request->guest_abi_version &&
+        state->operation.data_schema_version == request->data_schema_version &&
+        state->operation.kind == ECONTAINER_SLOT_PACKAGE_WRITE &&
+        !state->operation.firmware_transition;
+}
+
+static bool package_prepare_abandon(
+    const package_prepare_context_t *prepare, uint32_t reserved_sequence)
+{
+    econtainer_slots_state_t current = {0};
+    if (econtainer_slots_load(&s_product.provider.io,
+            &s_product.provider.geometry, &current) != ECONTAINER_SLOTS_OK ||
+        current.sequence < reserved_sequence ||
+        (current.phase != ECONTAINER_SLOT_WRITING &&
+         current.phase != ECONTAINER_SLOT_PREPARED) ||
+        !package_prepare_operation_matches(&current, prepare)) return false;
+    const uint32_t sequence = current.sequence;
+    econtainer_slots_state_t abandoned = {0};
+    if (econtainer_slots_abandon(&s_product.provider.io,
+            &s_product.provider.geometry, sequence, s_product.boot_id,
+            NULL, NULL, &abandoned) != ECONTAINER_SLOTS_OK) return false;
+    econtainer_slots_state_t readback = {0};
+    return econtainer_slots_load(&s_product.provider.io,
+               &s_product.provider.geometry, &readback) == ECONTAINER_SLOTS_OK &&
+        readback.sequence == sequence + 1U &&
+        readback.phase == ECONTAINER_SLOT_ABORTED &&
+        package_prepare_operation_matches(&readback, prepare);
+}
+
+static econtainer_slots_result_t package_prepare_with_firmware(
+    const econtainer_slot_firmware_set_t *firmware_set, void *context)
+{
+    package_prepare_context_t *prepare = context;
+    const esp_base_container_package_request_t *request = prepare->request;
+    econtainer_slots_state_t state = {0};
+    econtainer_slots_result_t result = econtainer_slots_load(
+        &s_product.provider.io, &s_product.provider.geometry, &state);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    if (!package_prepare_binding_matches(&state, firmware_set, request) ||
+        !package_prepare_guest_ready(request->previous_package_present)) {
+        prepare->outcome = ESP_BASE_CONTAINER_PREPARE_REJECTED;
+        return ECONTAINER_SLOTS_CONFLICT;
+    }
+
+    econtainer_slot_operation_t operation = {.kind = ECONTAINER_SLOT_PACKAGE_WRITE,
+        .package_size_bytes = request->package_size_bytes,
+        .guest_abi_version = request->guest_abi_version,
+        .data_schema_version = request->data_schema_version};
+    memcpy(operation.operation_id, prepare->operation_id, sizeof operation.operation_id);
+    memcpy(operation.target_firmware_sha256,
+           firmware_set->running_firmware_sha256, 32);
+    memcpy(operation.package_sha256, request->package_sha256, 32);
+    result = econtainer_slots_reserve(&s_product.provider.io,
+        &s_product.provider.geometry, request->expected_sequence,
+        firmware_set, &operation, &state);
+    if (result != ECONTAINER_SLOTS_OK) {
+        prepare->outcome = result == ECONTAINER_SLOTS_BUSY ?
+            ESP_BASE_CONTAINER_PREPARE_BUSY :
+            result == ECONTAINER_SLOTS_CONFLICT || result == ECONTAINER_SLOTS_NO_SPACE ||
+            result == ECONTAINER_SLOTS_INVALID ?
+            ESP_BASE_CONTAINER_PREPARE_REJECTED :
+            ESP_BASE_CONTAINER_PREPARE_UNCERTAIN;
+        return result;
+    }
+    const uint32_t reserved_sequence = state.sequence;
+    result = econtainer_slots_write_and_prepare(&s_product.provider.io,
+        &s_product.provider.geometry, reserved_sequence,
+        prepare->source_fn, prepare->source_context,
+        econtainer_package_slot_validate, &prepare->validation, &state);
+    if (result == ECONTAINER_SLOTS_OK) {
+        econtainer_slots_state_t readback = {0};
+        result = econtainer_slots_load(&s_product.provider.io,
+            &s_product.provider.geometry, &readback);
+        if (result == ECONTAINER_SLOTS_OK &&
+            (readback.sequence != reserved_sequence + 1U ||
+             readback.phase != ECONTAINER_SLOT_PREPARED ||
+             !package_prepare_operation_matches(&readback, prepare))) {
+            result = ECONTAINER_SLOTS_CONFLICT;
+        }
+        if (result == ECONTAINER_SLOTS_OK &&
+            package_prepare_guest_ready(request->previous_package_present)) {
+            prepare->prepared_sequence = readback.sequence;
+            prepare->outcome = ESP_BASE_CONTAINER_PREPARED;
+            return ECONTAINER_SLOTS_OK;
+        }
+    }
+    /* A prepared candidate is still inactive. Its old binding remains intact,
+     * so an exact WRITING/PREPARED record can be abandoned without stopping it. */
+    if (!package_prepare_abandon(prepare, reserved_sequence)) {
+        prepare->outcome = ESP_BASE_CONTAINER_PREPARE_UNCERTAIN;
+        return ECONTAINER_SLOTS_UNCERTAIN;
+    }
+    prepare->outcome = ESP_BASE_CONTAINER_PREPARE_REJECTED;
+    return ECONTAINER_SLOTS_CONFLICT;
+}
+
+esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_container_package_request_t *request,
+    econtainer_slot_source_fn source_fn, void *source_context,
+    uint32_t *prepared_sequence)
+{
+    if (prepared_sequence != NULL) *prepared_sequence = 0U;
+    if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_PREPARE_BUSY;
+    if (!policy_present() || request == NULL || source_fn == NULL ||
+        prepared_sequence == NULL || !s_product.provider_bound ||
+        !s_product.start_attempted || s_product.trial_mode ||
+        s_product.uninstall_uncertain || request->expected_sequence == 0U ||
+        request->expected_sequence > UINT32_MAX - 3U ||
+        request->package_size_bytes == 0U ||
+        request->guest_abi_version == 0U ||
+        request->data_schema_version == 0U) {
+        return ESP_BASE_CONTAINER_PREPARE_REJECTED;
+    }
+    uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES] = {0};
+    if (!decode_uuid(request->operation_id, operation_id))
+        return ESP_BASE_CONTAINER_PREPARE_REJECTED;
+    unsigned digest_or = 0U, previous_or = 0U;
+    for (size_t index = 0; index < 32U; ++index) {
+        digest_or |= request->package_sha256[index];
+        previous_or |= request->previous_package_sha256[index];
+    }
+    if (digest_or == 0U ||
+        (request->previous_package_present != (previous_or != 0U)) ||
+        !package_prepare_guest_ready(request->previous_package_present)) {
+        return ESP_BASE_CONTAINER_PREPARE_REJECTED;
+    }
+    package_prepare_workspace_t *workspace = calloc(1, sizeof *workspace);
+    if (workspace == NULL) return ESP_BASE_CONTAINER_PREPARE_BUSY;
+    package_prepare_context_t prepare = {
+        .request = request, .source_fn = source_fn,
+        .source_context = source_context,
+        .validation = s_product.validation,
+        .outcome = ESP_BASE_CONTAINER_PREPARE_UNCERTAIN,
+    };
+    memcpy(prepare.operation_id, operation_id, sizeof operation_id);
+    prepare.validation.package_workspace = &workspace->package;
+    prepare.validation.wasm_workspace = &workspace->wasm;
+    prepare.validation.verified_info = &workspace->info;
+    const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
+        claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
+        package_prepare_with_firmware, &prepare);
+    free(workspace);
+    if (result == ECONTAINER_SLOTS_UNCERTAIN) return ESP_BASE_CONTAINER_PREPARE_UNCERTAIN;
+    if (result == ECONTAINER_SLOTS_BUSY) return ESP_BASE_CONTAINER_PREPARE_BUSY;
+    if (result == ECONTAINER_SLOTS_OK &&
+        prepare.outcome == ESP_BASE_CONTAINER_PREPARED) {
+        *prepared_sequence = prepare.prepared_sequence;
+        return ESP_BASE_CONTAINER_PREPARED;
+    }
+    return prepare.outcome;
+}
+
+typedef struct {
     uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
     uint8_t package_sha256[32];
     uint32_t expected_sequence;
