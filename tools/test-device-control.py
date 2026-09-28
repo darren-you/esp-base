@@ -2,12 +2,14 @@
 """用真实 POSIX 伪终端验证串口示例的字节传输与背压期限。"""
 import importlib.util
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
 import pty
 import select
 import termios
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -230,6 +232,75 @@ class ProductStatusTests(unittest.TestCase):
             control.product_status(Device(7, digest="0" * 64), current)
         self.assertIsNone(control.product_status(Device(4294967295), current)
                           ["result"]["next_operation_sequence"])
+
+
+class ProductPackageTests(unittest.TestCase):
+    def test_signed_bytes_bind_one_write_and_original_id_query(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        operation = "44444444-4444-4444-8444-444444444444"
+        current = {"device_id": device, "boot_id": boot}
+        package = b"signed-package-fixture" * 19
+        digest = hashlib.sha256(package).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "candidate.pkg")
+            path.write_bytes(package)
+            snapshot = {"state": "succeeded", "result": {
+                "next_operation_sequence": 7, "container_sequence": 12,
+                "package_sha256": None, "pending_operation_id": None}}
+            fresh = {**current, "result": {"uptime_ms": 1234}}
+            seen = []
+
+            def capture(_port, request):
+                seen.append(request)
+
+            def receipt(_port, request_id, _deadline):
+                yield {**current, "request_id": request_id, "state": "running",
+                       "error_code": None, "result": None}
+
+            unresolved = {**current, "state": "unknown",
+                          "error_code": "product_operation_unresolved", "result": {
+                              "operation_id": operation, "operation_sequence": 7,
+                              "container_sequence": 13, "kind": "install",
+                              "package_sha256": digest}}
+            with (mock.patch.object(control, "product_status", return_value=snapshot),
+                  mock.patch.object(control, "status", return_value=fresh),
+                  mock.patch.object(control, "send", side_effect=capture),
+                  mock.patch.object(control, "read_result", side_effect=receipt),
+                  mock.patch.object(control, "product_result", return_value=unresolved) as query):
+                result = control.product_package(object(), current, "product.install",
+                    operation, 7, 12, None, str(path),
+                    "https://packages.example.test/candidate.pkg", 2, 1)
+            self.assertEqual(result, unresolved)
+            query.assert_called_once()
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(seen[0]["command"], "product.install")
+            self.assertEqual(seen[0]["target_boot_id"], boot)
+            self.assertEqual(seen[0]["parameters"], {
+                "operation_id": operation, "operation_sequence": 7,
+                "expected_container_sequence": 12,
+                "previous_package_sha256": None,
+                "package_url": "https://packages.example.test/candidate.pkg",
+                "package_sha256": digest, "package_size_bytes": len(package),
+                "guest_abi_version": 2, "data_schema_version": 1})
+
+    def test_changed_binding_blocks_write(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        current = {"device_id": device, "boot_id": boot}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "candidate.pkg")
+            path.write_bytes(b"signed-package-fixture")
+            snapshot = {"state": "succeeded", "result": {
+                "next_operation_sequence": 8, "container_sequence": 12,
+                "package_sha256": None, "pending_operation_id": None}}
+            with (mock.patch.object(control, "product_status", return_value=snapshot),
+                  mock.patch.object(control, "send") as send):
+                with self.assertRaisesRegex(ValueError, "预期不符"):
+                    control.product_package(object(), current, "product.install",
+                        "44444444-4444-4444-8444-444444444444", 7, 12, None,
+                        str(path), "https://packages.example.test/candidate.pkg", 2, 1)
+                send.assert_not_called()
 
 
 class ProductUninstallTests(unittest.TestCase):

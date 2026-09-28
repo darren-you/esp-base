@@ -151,7 +151,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 
 2026-09-29 产品包未决安装／升级恢复已前移至普通 guest 装载之前：按原持久账本和签名固件集合核对 ECS2，可在候选包损坏时安全放弃未确认 trial，独立读回 `ABORTED` 与旧绑定并记失败后再启动旧包；无法证明或已确认候选保持阻断。[冷启动恢复检查点](docs/operations/product_package_cold_recovery_checkpoint.md)记录双目标签名 guest、双目标宿主和 C3 签名 QEMU 结果。持久确认及实体设备掉电仍待完成。
 
-产品包的[HTTPS 顺序来源](docs/operations/product_package_https_source_checkpoint.md)已加入 Base；公开 `product.install`／`product.upgrade` 现按原操作意图启动异步下载、验包和同 boot 候选试运行，拒绝后的 `ABORTED` 状态及旧绑定可读回后记失败。完整传输一结束即释放 TLS/HTTP 客户端，再由 Container 验签。双目标 host 与真实签名 guest 回归、隔离固定 SDK 完整链接通过；C3 测试键签名 app 为 `0x121000` B，候选 `0x130000` app 槽余 `0xf000` B，ESP32 显式离线镜像为 `0xedc60` B。这些隔离构建尚非冻结五仓正式制品；试运行业务健康判据、最终成功收据、真实 HTTPS／Broker／实板和容量总门仍未闭合。
+产品包的[HTTPS 顺序来源](docs/operations/product_package_https_source_checkpoint.md)已加入 Base；公开 `product.install`／`product.upgrade` 现按原操作意图启动异步下载、验包和同 boot 候选试运行，拒绝后的 `ABORTED` 状态及旧绑定可读回后记失败。[公开串口工具](tools/README.md)从本地已签名包计算整包摘要与长度，复核设备当前绑定后发送一次写命令，再按原 ID 查询。完整传输一结束即释放 TLS/HTTP 客户端，再由 Container 验签。双目标 host 与真实签名 guest 回归、隔离固定 SDK 完整链接通过；C3 测试键签名 app 为 `0x121000` B，候选 `0x130000` app 槽余 `0xf000` B，ESP32 显式离线镜像为 `0xedc60` B。这些隔离构建尚非冻结五仓正式制品；试运行业务健康判据、最终成功收据、真实 HTTPS／Broker／实板和容量总门仍未闭合。
 
 - [固件入口](firmware/README.md)
 - [C3 签名产品包 QEMU 检查点](docs/operations/c3-signed-product-qemu-checkpoint.md)

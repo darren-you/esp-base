@@ -2,9 +2,11 @@
 """最小串口协议调用示例；宿主 Python，不在 ESP 固件中运行。"""
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import select
+import stat
 import sys
 import termios
 import time
@@ -307,6 +309,97 @@ def product_uninstall(port, current, operation_id, operation_sequence,
     return result
 
 
+def product_package(port, current, command, operation_id, operation_sequence,
+                    expected_container_sequence, expected_package_sha256,
+                    package_file, package_url, guest_abi_version, data_schema_version):
+    canonical_id(operation_id)
+    if (command not in {"product.install", "product.upgrade"} or
+            type(operation_sequence) is not int or not 1 <= operation_sequence <= 4294967295 or
+            type(expected_container_sequence) is not int or
+            not 1 <= expected_container_sequence <= 4294967295 - 5 or
+            type(guest_abi_version) is not int or not 1 <= guest_abi_version <= 4294967295 or
+            type(data_schema_version) is not int or not 1 <= data_schema_version <= 4294967295 or
+            not isinstance(package_url, str) or not package_url.startswith("https://")):
+        raise ValueError("产品包参数无效；未发送命令")
+    if command == "product.install":
+        if expected_package_sha256 is not None:
+            raise ValueError("安装必须从无包绑定开始；未发送命令")
+    elif (not isinstance(expected_package_sha256, str) or
+          len(expected_package_sha256) != 64 or
+          set(expected_package_sha256) - set("0123456789abcdef") or
+          expected_package_sha256 == "0" * 64):
+        raise ValueError("升级的旧包摘要无效；未发送命令")
+
+    descriptor = os.open(package_file, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 2147483647:
+            raise ValueError("产品包不是合法大小的普通文件；未发送命令")
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            block = os.read(descriptor, 65536)
+            if not block:
+                break
+            size += len(block)
+            if size > before.st_size:
+                raise ValueError("产品包读取期间发生变化；未发送命令")
+            digest.update(block)
+        after = os.fstat(descriptor)
+        if (size != before.st_size or size != after.st_size or
+                before.st_mtime_ns != after.st_mtime_ns):
+            raise ValueError("产品包读取期间发生变化；未发送命令")
+    finally:
+        os.close(descriptor)
+    package_sha256 = digest.hexdigest()
+    snapshot = product_status(port, current)
+    if snapshot["state"] != "succeeded":
+        raise ValueError("产品绑定不可确认；未发送命令：" + str(snapshot["error_code"]))
+    binding = snapshot["result"]
+    if (binding["next_operation_sequence"] != operation_sequence or
+            binding["container_sequence"] != expected_container_sequence or
+            binding["package_sha256"] != expected_package_sha256 or
+            binding["pending_operation_id"] is not None):
+        raise ValueError("产品持久序号或旧包绑定与预期不符；未发送命令")
+    fresh = status(port)
+    if fresh["device_id"] != current["device_id"] or fresh["boot_id"] != current["boot_id"]:
+        raise ValueError("产品状态查询后设备已重启；未发送命令")
+    request_id = str(uuid.uuid4())
+    send(port, {"protocol_version": 1, "request_id": request_id,
+                "command": command, "device_id": current["device_id"],
+                "target_boot_id": current["boot_id"],
+                "expires_at_uptime_ms": fresh["result"]["uptime_ms"] + 10000,
+                "parameters": {"operation_id": operation_id,
+                               "operation_sequence": operation_sequence,
+                               "expected_container_sequence": expected_container_sequence,
+                               "previous_package_sha256": expected_package_sha256,
+                               "package_url": package_url,
+                               "package_sha256": package_sha256,
+                               "package_size_bytes": size,
+                               "guest_abi_version": guest_abi_version,
+                               "data_schema_version": data_schema_version}})
+    try:
+        for receipt in read_result(port, request_id, time.monotonic() + 5):
+            if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
+                raise ValueError("产品包回执来自另一设备或启动；按原操作 ID 查询")
+            if receipt["result"] is not None:
+                raise ValueError("产品包回执字段无效；按原操作 ID 查询")
+            if receipt["state"] in {"failed", "expired"}:
+                return receipt
+            break
+    except TimeoutError:
+        pass
+    result = product_result(port, current, operation_id)
+    evidence = result["result"]
+    if evidence is not None and (evidence["operation_sequence"] != operation_sequence or
+                                 evidence["kind"] != command.split(".")[1] or
+                                 evidence["package_sha256"] != package_sha256):
+        raise ValueError("产品包持久结果与请求不符；状态为 unknown")
+    if result["state"] in {"succeeded", "failed"}:
+        return result
+    return result
+
+
 def validate_configuration(config):
     if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "frp", "business"}:
         raise ValueError("配置字段不完整")
@@ -442,28 +535,46 @@ def main():
     parser.add_argument("--port", required=True, help="本轮枚举的 C3 USB Serial/JTAG 或 ESP32 UART 端点")
     parser.add_argument("--device-id", help="预期持久 UUID；写命令必填")
     parser.add_argument("--config-file", help="本机 0600 JSON 完整配置文件；仅用于 config.set")
-    parser.add_argument("--operation-id", help="product.result 查询或 product.uninstall 写入的原始操作 UUID")
-    parser.add_argument("--operation-sequence", type=int, help="product.uninstall 的持久操作序号")
+    parser.add_argument("--operation-id", help="产品写入或 product.result 查询的原始操作 UUID")
+    parser.add_argument("--operation-sequence", type=int, help="产品写入的持久操作序号")
     parser.add_argument("--expected-container-sequence", type=int,
-                        help="product.uninstall 的当前 ECS2 序号")
-    parser.add_argument("--expected-package-sha256", help="product.uninstall 的当前包 SHA-256")
+                        help="产品写入的当前 ECS2 序号")
+    parser.add_argument("--expected-package-sha256", help="卸载或升级的当前包 SHA-256")
+    parser.add_argument("--package-file", help="安装／升级时用于计算整包摘要和长度的本地签名包")
+    parser.add_argument("--package-url", help="设备下载同一签名包的 HTTPS URL")
+    parser.add_argument("--guest-abi-version", type=int, help="签名包声明的 guest ABI 版本")
+    parser.add_argument("--data-schema-version", type=int, help="签名包声明的数据 schema 版本")
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
     parser.add_argument("command", choices=["status", "restart", "config.set", "product.status",
-                                            "product.result", "product.uninstall"])
+                                            "product.result", "product.uninstall",
+                                            "product.install", "product.upgrade"])
     args = parser.parse_args()
-    if args.command in {"restart", "config.set", "product.uninstall"} and not args.device_id:
+    product_writes = {"product.uninstall", "product.install", "product.upgrade"}
+    package_writes = {"product.install", "product.upgrade"}
+    if args.command in {"restart", "config.set"} | product_writes and not args.device_id:
         parser.error("写命令必须指定已核对的 --device-id")
     if (args.command == "config.set") != bool(args.config_file):
         parser.error("config.set 必须且只能配合 --config-file")
-    if (args.command in {"product.result", "product.uninstall"}) != bool(args.operation_id):
-        parser.error("product.result／product.uninstall 必须且只能配合 --operation-id")
-    uninstall_options = (args.operation_sequence, args.expected_container_sequence,
-                         args.expected_package_sha256)
-    if args.command == "product.uninstall":
-        if any(value is None for value in uninstall_options):
-            parser.error("product.uninstall 必须提供操作序号、Container 序号和包摘要")
-    elif any(value is not None for value in uninstall_options):
-        parser.error("卸载前置参数只能用于 product.uninstall")
+    if (args.command in product_writes | {"product.result"}) != bool(args.operation_id):
+        parser.error("产品写入／product.result 必须且只能配合 --operation-id")
+    if args.command in product_writes:
+        if args.operation_sequence is None or args.expected_container_sequence is None:
+            parser.error("产品写入必须提供操作序号和 Container 序号")
+        if args.command != "product.install" and args.expected_package_sha256 is None:
+            parser.error("产品升级／卸载必须提供当前包摘要")
+        if args.command == "product.install" and args.expected_package_sha256 is not None:
+            parser.error("产品安装必须从无包绑定开始")
+    elif any(value is not None for value in (args.operation_sequence,
+                                             args.expected_container_sequence,
+                                             args.expected_package_sha256)):
+        parser.error("产品写入前置参数只能用于产品写命令")
+    package_options = (args.package_file, args.package_url,
+                       args.guest_abi_version, args.data_schema_version)
+    if args.command in package_writes:
+        if any(value is None for value in package_options):
+            parser.error("产品安装／升级必须提供本地包、HTTPS URL、guest ABI 和数据 schema")
+    elif any(value is not None for value in package_options):
+        parser.error("产品包参数只能用于 product.install／product.upgrade")
     if args.operation_id:
         canonical_id(args.operation_id)
     config = load_private_config(args.config_file) if args.config_file else None
@@ -502,13 +613,19 @@ def main():
             current = product_uninstall(port, current, args.operation_id,
                                         args.operation_sequence, args.expected_container_sequence,
                                         args.expected_package_sha256)
+        if args.command in package_writes:
+            current = product_package(port, current, args.command, args.operation_id,
+                                      args.operation_sequence, args.expected_container_sequence,
+                                      args.expected_package_sha256, args.package_file,
+                                      args.package_url, args.guest_abi_version,
+                                      args.data_schema_version)
         if args.json:
             print(json.dumps(current, ensure_ascii=False))
         else:
             print("ESP Base 串口操作\n  状态  " + current["state"] + "\n  设备  " + current["device_id"] + "\n  启动  " + current["boot_id"])
             if current["error_code"]:
                 print("  原因  " + current["error_code"])
-            if args.command in {"product.result", "product.uninstall"}:
+            if args.command in product_writes | {"product.result"}:
                 print("  操作  " + args.operation_id)
                 if current["result"] is not None:
                     print("  序号  " + str(current["result"]["operation_sequence"]))
