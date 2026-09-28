@@ -25,6 +25,11 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   "$ROOT/components/device_protocol/product_ledger_nvs.c" \
   "$ROOT/tests/product_ledger_nvs_test.c" -o "$BUILD_DIR/product_ledger_nvs_test"
 "$BUILD_DIR/product_ledger_nvs_test"
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes/product_package_source" -I "$ROOT/components/device_protocol/include" \
+  "$ROOT/components/device_protocol/product_package_source.c" \
+  "$ROOT/tests/product_package_source_test.c" -o "$BUILD_DIR/product_package_source_test"
+"$BUILD_DIR/product_package_source_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/network_auth" -I "$ROOT/components/device_protocol/include" \
   "$ROOT/components/device_protocol/network_auth.c" \

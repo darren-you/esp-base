@@ -151,6 +151,8 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 
 2026-09-29 产品包未决安装／升级恢复已前移至普通 guest 装载之前：按原持久账本和签名固件集合核对 ECS2，可在候选包损坏时安全放弃未确认 trial，独立读回 `ABORTED` 与旧绑定并记失败后再启动旧包；无法证明或已确认候选保持阻断。[冷启动恢复检查点](docs/operations/product_package_cold_recovery_checkpoint.md)记录双目标签名 guest、双目标宿主和 C3 签名 QEMU 结果。公开安装／升级、持久确认及实体设备掉电仍待完成。
 
+产品包的[HTTPS 顺序来源](docs/operations/product_package_https_source_checkpoint.md)已加入 Base 并经双目标 host 故障测试及固定 SDK 构建；它限定 URL、TLS、响应长度和传输进展，供后续候选槽下载使用。当前公开安装／升级 worker 尚未接线，来源代码未进入生产 app 的链接路径，容量和真实网络仍待验证。
+
 - [固件入口](firmware/README.md)
 - [C3 签名产品包 QEMU 检查点](docs/operations/c3-signed-product-qemu-checkpoint.md)
 - [C3 产品卸载版本 QEMU 检查点](docs/operations/c3-product-uninstall-branch-qemu-checkpoint.md)

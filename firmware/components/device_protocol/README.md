@@ -4,6 +4,8 @@
 
 单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart、config.set、只读 product.status／product.result、公开 product.uninstall 与受控签名构建中的 ota.start/ota.result；Wi-Fi 由单一控制任务调度，SNTP 同步结果每秒非阻塞轮询。每轮完成后记录原子进展时刻和轮次，供 pending OTA 启动门核对；pending 和下载期间拒绝配置写入。
 
+产品包 HTTPS 来源已有独立的顺序读取原语：要求可信时间和精确已授权长度、证书 bundle TLS、HTTP 200、非 chunked、禁止重定向，按 Container 候选槽连续 offset 供字节；正文末尾必须由 SDK 判为完整，单次读、无进展和总期限均有单调时钟检查。它尚未由公开安装／升级命令调用，生产镜像未链接此路径，见[来源检查点](../../../docs/operations/product_package_https_source_checkpoint.md)。
+
 ## 架构拓扑
 
 ```mermaid

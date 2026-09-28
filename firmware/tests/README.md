@@ -2,6 +2,8 @@
 
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
+`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器并注入 HTTP／单调时钟假件，检查 URL 和证书 bundle 配置、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，见[来源检查点](../../docs/operations/product_package_https_source_checkpoint.md)。
+
 `command_decoder_test` 另检查只读 `product.status`／`product.result` 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown`、持久序号与绑定快照、成功记录的结果序列化，以及绑定观察不确定后保留存储 claim。公开 Python 串口工具的伪设备测试核对原 ID 查询、窗口外 `unknown`、序号与可选包摘要；真实签名 guest 生命周期测试覆盖空绑定、已安装和卸载后的 ECS2 快照。正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
 
 公开 `product.uninstall` 的解码测试验证精确字段、序号边界和小写非零 SHA-256；协议假件验证先提交 PREPARED、后调用内部卸载，成功后结果持久化、跨 request ID 同 operation ID 不再执行、参数冲突拒绝，以及复位后根据 ECS2 结果只读裁决。真实 Container/WAMR 签名 guest 测试验证 ECS2 中原 operation ID／序号、无包绑定与未提交绑定的恢复判定；串口伪设备测试验证精确前置参数和按原 ID 查询。组合软件测试不替代实体 Flash 掉电、真实 Broker 授权或两板迁移。
