@@ -344,6 +344,38 @@ static void reply_product_result(const char *request_id,
     funlockfile(stdout);
 }
 
+static void reply_product_status(const char *request_id,
+                                 const ebase_product_ledger_t *ledger)
+{
+    const char *pending = NULL;
+    if (ledger->count && ledger->records[ledger->count - 1U].state == EBASE_PRODUCT_PREPARED)
+        pending = ledger->records[ledger->count - 1U].operation_id;
+    char next[16];
+    if (ledger->high_watermark == UINT32_MAX) {
+        memcpy(next, "null", 5);
+    } else {
+        (void)snprintf(next, sizeof next, "%" PRIu32, ledger->high_watermark + 1U);
+    }
+    const int length = snprintf(s_response_json, sizeof s_response_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":\"%s\",\"state\":\"succeeded\",\"error_code\":null,"
+        "\"result\":{\"operation_sequence_high_watermark\":%" PRIu32
+        ",\"next_operation_sequence\":%s,\"pending_operation_id\":%s%s%s}}",
+        s_context.device_id, s_boot_id, request_id, ledger->high_watermark, next,
+        pending ? "\"" : "null", pending ? pending : "", pending ? "\"" : "");
+    if (length < 0 || (size_t)length >= sizeof s_response_json) return;
+    if (s_reply_mqtt) {
+        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
+        return;
+    }
+    flockfile(stdout);
+    fputc('\n', stdout);
+    (void)fwrite(s_response_json, 1, (size_t)length, stdout);
+    fputc('\n', stdout);
+    fflush(stdout);
+    funlockfile(stdout);
+}
+
 static void emit_outcome(size_t slot, bool via_mqtt)
 {
     command_outcome_t *out = &s_outcomes[slot];
@@ -579,6 +611,23 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     if (command->kind == EBASE_STATUS) {
         status_snapshot_t current = snapshot();
         reply(command->request.request_id, "succeeded", NULL, &current);
+        return;
+    }
+    if (command->kind == EBASE_PRODUCT_STATUS) {
+        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+        if (ledger == NULL) {
+            reply(command->request.request_id, "unknown", "resource_failure", NULL);
+            return;
+        }
+        const ebase_product_ledger_io_t io =
+            ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+        const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+        if (opened == EBASE_LEDGER_OK) reply_product_status(command->request.request_id, ledger);
+        free(ledger);
+        if (opened != EBASE_LEDGER_OK)
+            reply(command->request.request_id, "unknown",
+                  opened == EBASE_LEDGER_UNINITIALIZED ? "product_ledger_uninitialized" :
+                  opened == EBASE_LEDGER_BUSY ? "operation_busy" : "storage_uncertain", NULL);
         return;
     }
     if (command->kind == EBASE_OTA_RESULT) {

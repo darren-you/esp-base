@@ -209,6 +209,34 @@ def product_result(port, current, operation_id):
         return value
 
 
+def product_status(port, current):
+    request_id = str(uuid.uuid4())
+    send(port, {"protocol_version": 1, "request_id": request_id,
+                "command": "product.status"})
+    for value in read_result(port, request_id, time.monotonic() + 5):
+        if value["device_id"] != current["device_id"] or value["boot_id"] != current["boot_id"]:
+            raise ValueError("产品状态来自另一设备或启动；状态为 unknown")
+        result = value["result"]
+        if value["state"] == "unknown":
+            if result is not None or value["error_code"] not in {
+                    "product_ledger_uninitialized", "operation_busy", "storage_uncertain", "resource_failure"}:
+                raise ValueError("设备产品状态的 unknown 证据无效")
+            return value
+        if value["state"] != "succeeded" or not isinstance(result, dict) or set(result) != {
+                "operation_sequence_high_watermark", "next_operation_sequence", "pending_operation_id"}:
+            raise ValueError("设备产品状态字段无效；状态为 unknown")
+        watermark = result["operation_sequence_high_watermark"]
+        next_sequence = result["next_operation_sequence"]
+        pending = result["pending_operation_id"]
+        if (type(watermark) is not int or not 0 <= watermark <= 4294967295 or
+                (watermark < 4294967295 and
+                 (type(next_sequence) is not int or next_sequence != watermark + 1)) or
+                (watermark == 4294967295 and next_sequence is not None) or
+                (pending is not None and (watermark == 0 or canonical_id(pending) != pending))):
+            raise ValueError("设备产品操作序号无效；状态为 unknown")
+        return value
+
+
 def validate_configuration(config):
     if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "frp", "business"}:
         raise ValueError("配置字段不完整")
@@ -346,7 +374,7 @@ def main():
     parser.add_argument("--config-file", help="本机 0600 JSON 完整配置文件；仅用于 config.set")
     parser.add_argument("--operation-id", help="查询 product.result 的原始操作 UUID")
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
-    parser.add_argument("command", choices=["status", "restart", "config.set", "product.result"])
+    parser.add_argument("command", choices=["status", "restart", "config.set", "product.status", "product.result"])
     args = parser.parse_args()
     if args.command in {"restart", "config.set"} and not args.device_id:
         parser.error("写命令必须指定已核对的 --device-id")
@@ -386,6 +414,8 @@ def main():
             current = apply_configuration(port, current, config)
         if args.command == "product.result":
             current = product_result(port, current, args.operation_id)
+        if args.command == "product.status":
+            current = product_status(port, current)
         if args.json:
             print(json.dumps(current, ensure_ascii=False))
         else:
@@ -396,6 +426,11 @@ def main():
                 print("  操作  " + args.operation_id)
                 if current["result"] is not None:
                     print("  序号  " + str(current["result"]["operation_sequence"]))
+            if args.command == "product.status" and current["result"] is not None:
+                print("  高水位  " + str(current["result"]["operation_sequence_high_watermark"]))
+                print("  下一序号  " + str(current["result"]["next_operation_sequence"]))
+                if current["result"]["pending_operation_id"] is not None:
+                    print("  未决操作  " + current["result"]["pending_operation_id"])
     finally:
         port.close()
 

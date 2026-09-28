@@ -91,7 +91,7 @@ C3 签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SEC
 
 `ota.start` 先用 OTA 库的 HTTPS URL 与最小镜像头长度规则做静态校验，再在目标槽写入前将 operation ID、设备 ID、目标 C 摘要/长度、签名 A 与原独立 B 摘要、源/目标物理槽和已对账 ECS2 sequence 作为 V2 单 blob 保存到 `base_store/base_ota/operation`，commit 和逐字节读回成功才启动 worker；同 ID 不再次下载。签名构建的只读 `ota.result` 查询最近一次收据，只有新槽本地确认 VALID、完整运行镜像摘要匹配、产品启动与配置时的 Container 确认完成，且 V2 `SUCCEEDED` 收据持久读回才成功；A 仍运行时，目标槽未开始写入前的可证明失败，或写入后按原收据完成物理槽与 Container 清理并持久记失败，才报告 failed。旧 V1 或不可信 blob 阻断新操作和自动清理；回滚到尚无查询代码的旧镜像不能由设备提供最终结果，工具必须记 unknown。身份 NVS 保持原位；配置仍用 `base_config/committed` 单键，v3-only 读写不兼容旧 v1/v2 记录。真实回滚和 NVS 掉电行为待实板验证。
 
-只读 `product.result` 从独立的 `base_product/operations` 账本按原 operation ID 查询；账本候选为 910 字节、最近 8 条和不回退的操作序号，提交后精确读回。窗口外旧 ID 返回 unknown，绝不触发安装重放。固定 SDK／QEMU 的 C3 六／八页和 ESP32 六页已完成 100 代四记录容量与重启读回；当前尚无产品写入口和实板磨损证据，不能将该查询当作产品生命周期交付。
+只读 `product.status` 返回账本高水位、下一序号及未决 ID；键缺失明确返回未初始化，不自行建账。`product.result` 从独立的 `base_product/operations` 账本按原 operation ID 查询；账本候选为 910 字节、最近 8 条和不回退的操作序号，提交后精确读回。窗口外旧 ID 返回 unknown，绝不触发安装重放。固定 SDK／QEMU 的 C3 六／八页和 ESP32 六页已完成 100 代四记录容量与重启读回；当前尚无产品写入口和实板磨损证据，不能将该查询当作产品生命周期交付。
 
 `ota_operation` 另提供只读固件集合观察：已确认模式要求运行槽 `VALID`；显式 pending trial 模式要求运行槽 `PENDING_VERIFY`、另一槽 `VALID` 且 IDF 证明可回滚。prepared candidate 模式需要本次 `eota_prepare` 的收据，要求 A 仍运行且被选为 boot、otadata 为 `VALID`，C 未选 boot 且旧 inactive otadata 已失效；重新验签 A/C 并核对 C 的完整长度/摘要。三种模式都要求运行槽与当前 boot selector 一致，拒绝过程中变化。已确认模式中若另一槽未受管，镜像校验必须明确无效且目标首字节须擦除为 `0xff`，才输出单固件集合；应用侧验签失败不足以证明 bootloader 不会后备扫描。调用方在观察及消费结果期间独占 app/otadata 写入；prepared 观察现由无包 OTA worker 在选 boot 前持久 stage，pending 观察用于候选 trial。
 

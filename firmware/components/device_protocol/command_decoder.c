@@ -103,13 +103,15 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (end != json + length || !cJSON_IsObject(root) || !cJSON_IsNumber(version) || version->valuedouble != 1 || !cJSON_IsString(command)) goto done;
     bool status = !strcmp(command->valuestring, "status");
+    bool product_status = !strcmp(command->valuestring, "product.status");
     bool ota_result = !strcmp(command->valuestring, "ota.result");
     bool product_result = !strcmp(command->valuestring, "product.result");
     const bool query = ota_result || product_result;
-    if (!exact_keys(root, status ? status_keys : query ? query_keys : write_keys,
-                    status ? 3 : query ? 4 : 7)) goto done;
+    if (!exact_keys(root, (status || product_status) ? status_keys : query ? query_keys : write_keys,
+                    (status || product_status) ? 3 : query ? 4 : 7)) goto done;
     if (!copy_id(root, "request_id", out->request.request_id)) goto done;
     if (status) { out->kind = EBASE_STATUS; error = NULL; goto done; }
+    if (product_status) { out->kind = EBASE_PRODUCT_STATUS; error = NULL; goto done; }
     if (query) {
         const char *const keys[] = {"operation_id"};
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");

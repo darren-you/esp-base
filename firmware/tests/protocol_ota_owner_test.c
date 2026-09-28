@@ -161,6 +161,10 @@ int main(void)
 {
     reset_case();
     s_reply_mqtt = true;
+    handle_line("product-status-1", strlen("product-status-1"), NULL);
+    s_reply_mqtt = false;
+    expect_reply("unknown", "product_ledger_uninitialized");
+    s_reply_mqtt = true;
     handle_line("product-1", 9, NULL);
     s_reply_mqtt = false;
     expect_reply("unknown", "product_operation_not_found");
@@ -185,6 +189,22 @@ int main(void)
     assert(strstr(latest_reply, "\"operation_sequence\":1") &&
            strstr(latest_reply, "\"container_sequence\":10") &&
            strstr(latest_reply, "\"package_sha256\":\"abab"));
+    s_reply_mqtt = true;
+    handle_line("product-status-1", strlen("product-status-1"), NULL);
+    s_reply_mqtt = false;
+    expect_reply("succeeded", NULL);
+    assert(strstr(latest_reply, "\"operation_sequence_high_watermark\":1") &&
+           strstr(latest_reply, "\"next_operation_sequence\":2") &&
+           strstr(latest_reply, "\"pending_operation_id\":null"));
+    product_intent.sequence = 2U;
+    strcpy(product_intent.operation_id, "44444444-4444-4444-8444-000000000002");
+    assert(ebase_product_ledger_begin(&product_ledger, &product_io, &product_intent) == EBASE_LEDGER_OK);
+    s_reply_mqtt = true;
+    handle_line("product-status-1", strlen("product-status-1"), NULL);
+    s_reply_mqtt = false;
+    expect_reply("succeeded", NULL);
+    assert(strstr(latest_reply, "\"next_operation_sequence\":3") &&
+           strstr(latest_reply, "\"pending_operation_id\":\"44444444-4444-4444-8444-000000000002\""));
     s_reply_mqtt = true;
     reply("11111111-1111-4111-8111-111111111111", "succeeded", NULL, NULL);
     s_reply_mqtt = false;
@@ -455,12 +475,14 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
     const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
     const bool product_query = length > 8U && sscanf(line, "product-%u", &number) == 1;
-    assert(configure || query || product_query ||
+    const bool product_status_query = length > 15U && sscanf(line, "product-status-%u", &number) == 1;
+    assert(configure || query || product_query || product_status_query ||
            (length > 6U && sscanf(line, "start-%u", &number) == 1));
     memset(out, 0, sizeof *out);
     out->kind = configure ? EBASE_CONFIG_SET :
                 query ? EBASE_OTA_RESULT :
-                product_query ? EBASE_PRODUCT_RESULT : EBASE_OTA_START;
+                product_query ? EBASE_PRODUCT_RESULT :
+                product_status_query ? EBASE_PRODUCT_STATUS : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u", number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");

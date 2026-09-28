@@ -1,6 +1,6 @@
 # 设备控制协议 v1
 
-本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、只读 `product.result`、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执；产品写命令仍待实现。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与实板证据见开发检查点。
+本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、只读 `product.status`／`product.result`、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执；产品写命令仍待实现。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与实板证据见开发检查点。
 
 ## 帧与身份
 
@@ -11,6 +11,8 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 只读 `ota.result` 请求精确包含 `protocol_version:1`、`request_id`、`command:"ota.result"`、`parameters:{"operation_id":"<UUID v4>"}`；它不携带写入期限或目标 boot，允许在新启动后按原 operation ID 读取结果。响应 `request_id` 对应本次查询，`result` 含 `operation_id`、完整 signed bin `sha256`、`image_size_bytes`、固定 `target` 和 `target_slot`。设备身份仍以响应的 `device_id` 由调用方核对。
 
 只读 `product.result` 使用相同的四个顶层字段，`command` 为 `product.result`，`parameters` 只含原 `operation_id`。它从 `base_store/base_product/operations` 的持久账本读取最近固定条数；已记录结果包含 `operation_id`、`operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与数值 `result_code`。已完成记录返回 `succeeded`／`failed`，未决意图返回 `unknown/product_operation_unresolved`，窗口外旧 ID 或尚未初始化的账本返回 `unknown/product_operation_not_found`，存储不确定返回 `unknown/storage_uncertain`。缺失 NVS 键不能自行重置操作序号并受理写入；首次初始化须由未来控制器从持久 Container 基线另行证明。查询不会触发安装、下载、试运行或重放。当前设备尚无 `product.*` 写入口，因此此只读查询只形成软件合同，不代表业务安装能力已交付；最近 8 条虽已通过固定 SDK／QEMU 的 C3 六／八页和 ESP32 六页容量复测，仍需真实磨损与设备链路验收。
+
+只读 `product.status` 精确包含 `protocol_version:1`、`request_id`、`command:"product.status"`，没有 `parameters`。已初始化账本返回 `operation_sequence_high_watermark`、`next_operation_sequence` 与 `pending_operation_id`；高水位耗尽时下一序号为 null，末条为未决 PREPARED 时返回其原 ID，否则未决 ID 为 null。键缺失返回 `unknown/product_ledger_uninitialized` 且 result 为 null，忙或存储不确定同样不输出序号。查询不初始化账本，也不保证后来写入时序号仍未被另一请求占用；正式写命令必须在持久账本上原子核对连续序号。
 
 写命令必须且仅包含 `protocol_version`、`device_id`、`target_boot_id`、`request_id`、`command`、`expires_at_uptime_ms`、`parameters`。request_id 为规范 UUID v4；target_boot_id 必须精确等于当前启动值，受理期限为当前设备 uptime 后不超过 30000 ms；在出队执行前再次验证。过期拒绝，不跨启动重放。
 

@@ -177,5 +177,50 @@ class ProductResultTests(unittest.TestCase):
                          ("unknown", "product_operation_not_found"))
 
 
+class ProductStatusTests(unittest.TestCase):
+    def testPersistentSequenceAndUninitialized(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        pending = "44444444-4444-4444-8444-444444444444"
+
+        class Device:
+            def __init__(self, watermark=None, pending_id=None):
+                self.watermark = watermark
+                self.pending_id = pending_id
+                self.response = bytearray()
+
+            def write(self, payload):
+                request = json.loads(payload.strip())
+                assert set(request) == {"protocol_version", "request_id", "command"}
+                assert request["command"] == "product.status"
+                result = None if self.watermark is None else {
+                    "operation_sequence_high_watermark": self.watermark,
+                    "next_operation_sequence": self.watermark + 1 if self.watermark < 4294967295 else None,
+                    "pending_operation_id": self.pending_id}
+                response = {"protocol_version": 1, "device_id": device,
+                            "boot_id": boot, "request_id": request["request_id"],
+                            "state": "unknown" if result is None else "succeeded",
+                            "error_code": "product_ledger_uninitialized" if result is None else None,
+                            "result": result}
+                self.response = bytearray(b"\n" + json.dumps(response).encode() + b"\n")
+                return len(payload)
+
+            def read(self, size=1):
+                if not self.response:
+                    return b""
+                value = bytes(self.response[:size])
+                del self.response[:size]
+                return value
+
+        current = {"device_id": device, "boot_id": boot}
+        self.assertEqual(control.product_status(Device(), current)["error_code"],
+                         "product_ledger_uninitialized")
+        result = control.product_status(Device(7, pending), current)["result"]
+        self.assertEqual(result["next_operation_sequence"], 8)
+        self.assertEqual(result["pending_operation_id"], pending)
+        self.assertIsNone(control.product_status(Device(4294967295), current)
+                          ["result"]["next_operation_sequence"])
+
+
 if __name__ == "__main__":
     unittest.main()
