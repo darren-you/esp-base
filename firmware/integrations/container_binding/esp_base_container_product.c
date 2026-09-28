@@ -35,6 +35,7 @@ enum {
 typedef struct {
     size_t size_bytes;
     uint64_t event_sequence;
+    uint8_t event_sha256[32];
     uint8_t bytes[];
 } product_event_t;
 
@@ -513,9 +514,10 @@ esp_base_container_product_event_observation(
 
 esp_base_container_event_result_t esp_base_container_product_offer_event(
     const uint8_t package_sha256[32], uint64_t event_sequence,
-    const uint8_t *event, size_t size_bytes)
+    const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes)
 {
-    if (package_sha256 == NULL || event_sequence == 0U || event == NULL || size_bytes == 0U ||
+    if (package_sha256 == NULL || event_sha256 == NULL || event_sequence == 0U ||
+        event == NULL || size_bytes == 0U ||
         size_bytes > s_product.limits.max_event_bytes) {
         return ESP_BASE_CONTAINER_EVENT_INVALID;
     }
@@ -525,6 +527,7 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
     if (copy == NULL) return ESP_BASE_CONTAINER_EVENT_NO_MEMORY;
     copy->size_bytes = size_bytes;
     copy->event_sequence = event_sequence;
+    memcpy(copy->event_sha256, event_sha256, sizeof copy->event_sha256);
     memcpy(copy->bytes, event, size_bytes);
     if (xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) {
         memset(copy->bytes, 0, size_bytes);
@@ -715,6 +718,8 @@ static void *product_thread(void *unused)
         if (event != NULL) {
             int32_t guest_result = 0;
             const uint64_t event_sequence = event->event_sequence;
+            uint8_t event_sha256[32];
+            memcpy(event_sha256, event->event_sha256, sizeof event_sha256);
             const econtainer_runtime_result_t delivered = econtainer_product_on_event(
                 open.runtime, event->bytes, event->size_bytes, &guest_result);
             memset(event->bytes, 0, event->size_bytes);
@@ -725,6 +730,8 @@ static void *product_thread(void *unused)
             }
             memcpy(s_product.last_event_observation.package_sha256,
                    s_product.event_package_sha256, 32);
+            memcpy(s_product.last_event_observation.event_sha256,
+                   event_sha256, 32);
             s_product.last_event_observation.event_sequence = event_sequence;
             s_product.last_event_observation.runtime_ok =
                 delivered == ECONTAINER_RUNTIME_OK;
@@ -1793,12 +1800,14 @@ static econtainer_slots_result_t confirm_package_trial(
 bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
-    uint64_t verified_event_sequence, uint32_t *confirmed_sequence)
+    uint64_t verified_event_sequence, const uint8_t verified_event_sha256[32],
+    uint32_t *confirmed_sequence)
 {
     if (confirmed_sequence != NULL) *confirmed_sequence = 0U;
     package_confirm_context_t confirm = {.trial_sequence = trial_sequence};
     if (!esp_base_storage_claim_active(claim) || confirmed_sequence == NULL ||
-        verified_event_sequence == 0U || trial_sequence == 0U ||
+        verified_event_sequence == 0U || verified_event_sha256 == NULL ||
+        trial_sequence == 0U ||
         trial_sequence > UINT32_MAX - 2U ||
         !decode_uuid(operation_id, confirm.operation_id) ||
         !s_product.trial_mode || !s_product.package_trial_mode ||
@@ -1814,6 +1823,7 @@ bool esp_base_container_product_confirm_package_trial(
     const esp_base_container_event_observation_t event =
         s_product.last_event_observation;
     const bool settled = event.event_sequence == verified_event_sequence &&
+        memcmp(event.event_sha256, verified_event_sha256, 32) == 0 &&
         event.runtime_ok && event.guest_result >= 0 &&
         s_product.event_count == 0U && !s_product.guest_call_processing &&
         !s_product.trial_commit_active &&

@@ -164,10 +164,11 @@ typedef enum {
 /* Only an authenticated Base ingress may call this. Copy one event into the
  * signed package's bounded FIFO; the MQTT/control task never executes guest
  * code. The exact package digest prevents delivery across a same-boot switch.
- * ACCEPTED means queued, not processed or successful. */
+ * The event digest is SHA-256 of the exact copied guest bytes, computed by
+ * the authenticated Base ingress. ACCEPTED means queued, not successful. */
 esp_base_container_event_result_t esp_base_container_product_offer_event(
     const uint8_t package_sha256[32], uint64_t event_sequence,
-    const uint8_t *event, size_t size_bytes);
+    const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes);
 bool esp_base_container_product_event_accepting(void);
 /* Counts completed guest calls with runtime OK. The caller must still check
  * the product-specific result; this counter alone is not a trial health proof. */
@@ -175,6 +176,7 @@ uint32_t esp_base_container_product_event_progress_count(void);
 
 typedef struct {
     uint8_t package_sha256[32];
+    uint8_t event_sha256[32];
     uint64_t event_sequence;
     int32_t guest_result;
     bool runtime_ok;
@@ -196,7 +198,7 @@ esp_base_container_product_event_observation(
 /* Internal product-only commit after the Base product policy has independently
  * accepted the exact authorized representative event and its verification
  * window. This checks that the current candidate actually completed that
- * event without a runtime or business failure; it does not define product
+ * event bytes without a runtime or business failure; it does not define product
  * health. Close event admission only after the queue and current guest call
  * are drained. Under the original storage claim, persist HEALTH_VERIFIED and then
  * CONFIRMED, independently read back both states and the new binding. A false
@@ -204,7 +206,8 @@ esp_base_container_product_event_observation(
 bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
-    uint64_t verified_event_sequence, uint32_t *confirmed_sequence);
+    uint64_t verified_event_sequence, const uint8_t verified_event_sha256[32],
+    uint32_t *confirmed_sequence);
 
 typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,

@@ -22,6 +22,16 @@
 bool test_policy_enabled = true;
 #include "esp_base_container_product.c"
 
+static esp_base_container_event_result_t offer_event(
+    const uint8_t package_sha256[32], uint64_t event_sequence,
+    const uint8_t *event, size_t size_bytes)
+{
+    uint8_t digest[32] = {0};
+    if (size_bytes != 0U) assert(SHA256(event, size_bytes, digest) != NULL);
+    return esp_base_container_product_offer_event(
+        package_sha256, event_sequence, digest, event, size_bytes);
+}
+
 enum { FLASH_BASE = 0x10000, SLOT_BYTES = 32768, FLASH_BYTES = 3 * SLOT_BYTES };
 
 typedef struct {
@@ -614,7 +624,7 @@ static void run_event_failure_trial(const char *directory)
         prepared_sequence, request.operation_id, boot_id) ==
         ESP_BASE_CONTAINER_RUNNING);
     const uint8_t event[] = {1U};
-    assert(esp_base_container_product_offer_event(request.package_sha256,
+    assert(offer_event(request.package_sha256,
         1U, event, sizeof event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
          attempt < 500U && esp_base_container_product_event_accepting();
@@ -993,15 +1003,15 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
            ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION);
     memcpy(wrong_sha256, first_state.bindings[first_index].package_sha256, 32);
     wrong_sha256[0] ^= 0xff;
-    assert(esp_base_container_product_offer_event(wrong_sha256, 1U, event, sizeof event) ==
+    assert(offer_event(wrong_sha256, 1U, event, sizeof event) ==
            ESP_BASE_CONTAINER_EVENT_INVALID);
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         first_state.bindings[first_index].package_sha256, 0U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_INVALID);
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         first_state.bindings[first_index].package_sha256, 1U, event, 0U) ==
         ESP_BASE_CONTAINER_EVENT_INVALID);
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         first_state.bindings[first_index].package_sha256, 1U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
@@ -1021,9 +1031,12 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
            observed_event.runtime_ok && observed_event.guest_result == 3 &&
            !memcmp(observed_event.package_sha256,
                    first_state.bindings[first_index].package_sha256, 32));
+    uint8_t event_digest[32];
+    assert(SHA256(event, sizeof event, event_digest) != NULL &&
+           !memcmp(observed_event.event_sha256, event_digest, 32));
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(!esp_base_container_product_event_accepting());
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         first_state.bindings[first_index].package_sha256, 2U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
     int32_t expected = 3;
@@ -1048,10 +1061,10 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     assert(esp_base_container_product_event_progress_count() == 0U);
     assert(esp_base_container_product_event_observation(&observed_event) ==
            ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION);
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         first_state.bindings[first_index].package_sha256, 2U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_INVALID);
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         second_state.bindings[second_index].package_sha256, 2U, event, sizeof event) ==
         ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
@@ -1195,10 +1208,10 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     s_product.package_trial_operation_id[0] ^= 1U;
     assert(!esp_base_container_product_confirm_firmware(&claim));
     const uint8_t trial_event[] = {1U, 2U, 3U};
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         original.bindings[index].package_sha256, 1U,
         trial_event, sizeof trial_event) == ESP_BASE_CONTAINER_EVENT_INVALID);
-    assert(esp_base_container_product_offer_event(
+    assert(offer_event(
         request.package_sha256, 1U, trial_event,
         sizeof trial_event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
@@ -1211,6 +1224,9 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     assert(trial_observation.event_sequence == 1U && trial_observation.runtime_ok &&
            trial_observation.guest_result == 3 &&
            !memcmp(trial_observation.package_sha256, request.package_sha256, 32));
+    uint8_t trial_event_digest[32];
+    assert(SHA256(trial_event, sizeof trial_event, trial_event_digest) != NULL &&
+           !memcmp(trial_observation.event_sha256, trial_event_digest, 32));
     assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
            trial.phase == ECONTAINER_SLOT_TRIAL_STARTED);
     assert(esp_base_container_product_abandon_package_trial(
@@ -1292,12 +1308,14 @@ static void run_package_trial_confirmation(const file_t *key,
            digest_zero(pending_binding.package_sha256));
     uint32_t confirmed_sequence = 123U;
     const unsigned before_event = store.blob_writes;
+    const uint8_t event[] = {1U, 2U, 3U};
+    uint8_t event_digest[32];
+    assert(SHA256(event, sizeof event, event_digest) != NULL);
     assert(!esp_base_container_product_confirm_package_trial(&claim,
-        trial.sequence, request.operation_id, 1U, &confirmed_sequence));
+        trial.sequence, request.operation_id, 1U, event_digest, &confirmed_sequence));
     assert(confirmed_sequence == 0U && store.blob_writes == before_event &&
            esp_base_container_product_event_accepting());
-    const uint8_t event[] = {1U, 2U, 3U};
-    assert(esp_base_container_product_offer_event(request.package_sha256, 1U,
+    assert(offer_event(request.package_sha256, 1U,
         event, sizeof event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
          attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
@@ -1310,16 +1328,22 @@ static void run_package_trial_confirmation(const file_t *key,
     const unsigned before_wrong_id = store.blob_writes;
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence, "99999999-9999-4999-8999-999999999998", 1U,
-        &confirmed_sequence));
+        event_digest, &confirmed_sequence));
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence - 1U, request.operation_id, 1U,
-        &confirmed_sequence));
+        event_digest, &confirmed_sequence));
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence, request.operation_id, 2U,
-        &confirmed_sequence));
+        event_digest, &confirmed_sequence));
+    uint8_t wrong_event_digest[32];
+    memcpy(wrong_event_digest, event_digest, sizeof wrong_event_digest);
+    wrong_event_digest[0] ^= 1U;
+    assert(!esp_base_container_product_confirm_package_trial(&claim,
+        trial.sequence, request.operation_id, 1U,
+        wrong_event_digest, &confirmed_sequence));
     assert(store.blob_writes == before_wrong_id && confirmed_sequence == 0U);
     assert(esp_base_container_product_confirm_package_trial(&claim,
-        trial.sequence, request.operation_id, 1U, &confirmed_sequence));
+        trial.sequence, request.operation_id, 1U, event_digest, &confirmed_sequence));
     econtainer_slots_state_t confirmed = {0};
     assert(econtainer_slots_load(&io, &geometry, &confirmed) == ECONTAINER_SLOTS_OK &&
            confirmed.sequence == trial.sequence + 2U &&
@@ -1331,7 +1355,7 @@ static void run_package_trial_confirmation(const file_t *key,
            store.blob_writes == before_wrong_id + 2U &&
            esp_base_container_product_event_accepting());
     assert(!esp_base_container_product_confirm_package_trial(&claim,
-        trial.sequence, request.operation_id, 1U, &confirmed_sequence));
+        trial.sequence, request.operation_id, 1U, event_digest, &confirmed_sequence));
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(esp_base_container_product_boot(&claim, boot_id) ==
            ESP_BASE_CONTAINER_RUNNING);
@@ -1433,7 +1457,9 @@ static void run_package_trial_confirmation_uncertain(
         prepared_sequence, request.operation_id, boot_id) ==
         ESP_BASE_CONTAINER_RUNNING);
     const uint8_t event[] = {1U, 2U, 3U};
-    assert(esp_base_container_product_offer_event(request.package_sha256, 1U,
+    uint8_t event_digest[32];
+    assert(SHA256(event, sizeof event, event_digest) != NULL);
+    assert(offer_event(request.package_sha256, 1U,
         event, sizeof event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
     for (unsigned attempt = 0;
          attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
@@ -1443,7 +1469,7 @@ static void run_package_trial_confirmation_uncertain(
     uint32_t confirmed_sequence = 123U;
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         prepared_sequence + 1U, request.operation_id, 1U,
-        &confirmed_sequence));
+        event_digest, &confirmed_sequence));
     assert(confirmed_sequence == 0U && esp_base_storage_claim_active(&claim) &&
            !esp_base_container_product_event_accepting());
     econtainer_slots_state_t persisted = {0};

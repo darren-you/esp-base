@@ -2,6 +2,7 @@
 """产品事件发布器的精确帧、前置高水位与设备结果验证。"""
 
 import contextlib
+import hashlib
 import io
 import json
 import pathlib
@@ -33,6 +34,7 @@ def reported(sequence, completed=None, outcome="none"):
         "last_accepted_event_sequence": sequence,
         "last_completed_event_sequence": completed,
         "last_completed_package_sha256": PACKAGE if completed else None,
+        "last_completed_event_sha256": hashlib.sha256(b"\x01\x02\x03").hexdigest() if completed else None,
         "last_event_outcome": outcome,
         "last_guest_result": 3 if completed else None,
     }).encode()
@@ -148,6 +150,15 @@ class ProductEventPublishTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(output, "")
         self.assertIn("已发布", error)
+        self.assertEqual(len(FakeClient.published), 1)
+
+    def test_same_sequence_and_package_with_other_event_is_unknown(self):
+        value = json.loads(reported(1, 1, "succeeded"))
+        value["last_completed_event_sha256"] = "22" * 32
+        FakeClient.after = json.dumps(value).encode()
+        code, output, error = self.invoke()
+        self.assertEqual((code, output), (2, ""))
+        self.assertIn("结果与本帧不一致", error)
         self.assertEqual(len(FakeClient.published), 1)
 
     def test_wrong_frame_or_reported_boot_is_not_accepted(self):

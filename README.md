@@ -2,6 +2,8 @@
 
 当前产品命令候选已接公开安装／升级、HTTPS 验包、持久操作账本和同 boot 候选试运行；`product.status` 在试运行期间只报告仍已确认的旧绑定。业务健康成功判据、生产 Broker／设备联调、正式分区迁移与实板验收仍未闭合，不能作为产品发布结果。
 
+2026-09-29 独立 MQTT 业务事件已有公开严格 TLS 一次发布客户端：发布前核对本 boot 的 reported 高水位，发布后按包、序号和实际 guest 原始事件 SHA-256 对账最近完成结果。Base 在授权入口计算事件摘要，Container 随有界队列将它绑定到完成观察，内部 trial 确认也须核对已验证摘要。双目标 host、锁定签名 guest 生命周期和固定 SDK C3 签名／ESP32 离线构建通过；生产账户、真实 Broker/设备消息与业务健康最终确认仍待闭合。
+
 2026-09-28 C3 三份 `0x77000` 包槽候选的仓外 QEMU 无包启动发现默认 3,584 B `app_main` 栈在后续签名校验时溢出；将正式 C3 产品主任务栈设为 6,144 B 并加构建下限后，同布局 UART 诊断首启／同片冷启动均到 `container=empty`，首次主栈最低余 2,440 B，公开 `product.status`、身份／序号持久读回与二启前后整片 Flash 一致。正式 USB 控制台副本重签后仍为 `0x121000` B，签名与双 app 容量门通过；[输入与边界](docs/operations/c3_slot_77000_capacity_probe.md)。
 
 2026-09-28 C3 仓外三份 `0x77000` 包槽候选经正式 TLS 配置完整签名构建、RSA 验签和官方分区／app 容量门通过：双 `0x130000` app 槽各余 `0xf000` B；这会缩小通用签名包可接受范围，尚待维护者决定包槽上限，且未覆盖公开安装代码、同机网络负载或实板。[容量探针与边界](docs/operations/c3_slot_77000_capacity_probe.md)。
@@ -44,7 +46,7 @@
 
 命令配置、OTA 请求与结果 operation ID 的解析载荷互斥；该阶段固定 SDK 双目标链接图各释放 632 B 常驻 `.bss`，旧／新 host ASan／UBSan 与普通构建均通过。当时的候选配置、已提交配置、NVS 提交双缓冲和 MQTT 事件分别保留；后续 NVS 单缓冲改动见本页顶部。该阶段没有签名 guest 运行堆读数，P6-03 未据此验收。见[命令载荷容量检查点](docs/operations/p6-03-command-payload-capacity-checkpoint.md)。
 
-控制任务复用互斥使用的 JSON result 与周期 reported 工作区，保留后者 512 B 的原容量门。精确锁 MQTT 的默认 outbox 在 enqueue 返回前复制报文；双目标 host 回归及普通构建通过，链接图各再释放 512 B 常驻 `.bss`。该组合尚无网络运行堆或实板测量，见[网络回执工作区检查点](docs/operations/p6-03-network-json-scratch-checkpoint.md)。
+控制任务复用互斥使用的 JSON result 与周期 reported 工作区；该阶段 reported 的格式上限为 512 B，当前为承载已完成事件 SHA-256 扩至 768 B，共用静态工作区仍为 1,024 B。精确锁 MQTT 的默认 outbox 在 enqueue 返回前复制报文；该阶段双目标 host 回归及普通构建通过，链接图各释放 512 B 常驻 `.bss`。该组合尚无网络运行堆或实板测量，见[网络回执工作区检查点](docs/operations/p6-03-network-json-scratch-checkpoint.md)。
 
 移栈后的 Base `6ef7a02` 另用三份独立签名 ESP32 QEMU 探针接 OpenETH 与官方 FRPS：原样静态 TLS 在 `CONNECTING` 阶段因 2,212 B 分配失败；仓外 SDK 动态缓冲完成严格验签和 session 建立，进入 `AUTHENTICATING` 后认证超时，尚未证明 Login 收发、注册或 Pong。额外 4 KiB 探针任务与测试时钟不属于正式 FRP owner，Base SNTP 门保持 false；这批镜像也早于上述命令去重表收缩，堆读数不得混用。详见[移栈后 FRPS 容量检查点](docs/operations/esp32-frps-stack-workspace-qemu-capacity-checkpoint.md)。该批三份镜像的受管组件已严格重算并匹配精确锁，未受前述另一仓外目录的插桩影响；[认证超时只读诊断](docs/operations/esp32-frps-stack-auth-timeout-diagnosis.md)仍无法判定 Hello／Login 的实际收发。
 

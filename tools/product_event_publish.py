@@ -2,6 +2,7 @@
 """经严格 TLS 发布一帧已签名产品事件，并核对设备 reported。"""
 
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -13,6 +14,8 @@ import sys
 import time
 
 import product_event
+
+FRAME_HEADER_BYTES = 65 + len(product_event.DOMAIN) + 36 + 36 + 32 + 8
 
 
 def private_file(path: pathlib.Path, limit: int) -> bytes:
@@ -53,12 +56,11 @@ def credentials(path: pathlib.Path) -> dict:
 def verified_frame(path: pathlib.Path, key_file: pathlib.Path, device_id: str,
                    boot_id: str, package_sha256: str, sequence: int) -> bytes:
     frame = private_file(path, product_event.MAX_FRAME_BYTES)
-    header = 65 + len(product_event.DOMAIN) + 36 + 36 + 32 + 8
-    if len(frame) <= header:
+    if len(frame) <= FRAME_HEADER_BYTES:
         raise ValueError("业务事件帧不完整")
     key = product_event.private_key(key_file)
     expected = product_event.event_frame(key, device_id, boot_id,
-                                         package_sha256, sequence, frame[header:])
+                                         package_sha256, sequence, frame[FRAME_HEADER_BYTES:])
     if not hmac.compare_digest(frame, expected):
         raise ValueError("业务事件帧与本轮设备、启动、包、序号或管理密钥不匹配")
     return frame
@@ -71,7 +73,8 @@ def reported_message(payload: bytes, device_id: str, boot_id: str) -> dict:
     required = {"protocol_version", "device_id", "boot_id", "uptime_ms", "revision",
                 "wifi_state", "time_ready", "frp_state",
                 "last_accepted_event_sequence", "last_completed_event_sequence",
-                "last_completed_package_sha256", "last_event_outcome", "last_guest_result"}
+                "last_completed_package_sha256", "last_completed_event_sha256",
+                "last_event_outcome", "last_guest_result"}
     if not isinstance(value, dict) or set(value) != required:
         raise ValueError("设备 reported 字段不符合当前协议")
     if (type(value["protocol_version"]) is not int or value["protocol_version"] != 1 or
@@ -91,12 +94,16 @@ def reported_message(payload: bytes, device_id: str, boot_id: str) -> dict:
             outcome not in {"none", "busy", "succeeded", "business_failed", "runtime_failed"}):
         raise ValueError("设备业务事件结果无效")
     package = value["last_completed_package_sha256"]
+    event_sha256 = value["last_completed_event_sha256"]
     guest_result = value["last_guest_result"]
     if completed is None:
-        if package is not None or guest_result is not None or outcome not in {"none", "busy"}:
+        if (package is not None or event_sha256 is not None or
+                guest_result is not None or outcome not in {"none", "busy"}):
             raise ValueError("设备尚无完成事件却提供了结果")
     elif (not isinstance(package, str) or len(package) != 64 or
           any(char not in "0123456789abcdef" for char in package) or
+          not isinstance(event_sha256, str) or len(event_sha256) != 64 or
+          any(char not in "0123456789abcdef" for char in event_sha256) or
           (guest_result is not None and type(guest_result) is not int) or
           outcome in {"none", "busy"} or
           (outcome == "runtime_failed" and guest_result is not None) or
@@ -127,6 +134,7 @@ def main() -> int:
         frame = verified_frame(args.frame_file, args.management_key_file,
                                args.device_id, args.boot_id,
                                args.package_sha256, args.event_sequence)
+        event_sha256 = hashlib.sha256(frame[FRAME_HEADER_BYTES:]).hexdigest()
         account = credentials(args.credentials_file)
         import paho.mqtt.client as mqtt
     except (OSError, ValueError, UnicodeError, ImportError) as error:
@@ -222,10 +230,12 @@ def main() -> int:
             if accepted != args.event_sequence or completed != args.event_sequence:
                 continue
             if (current["last_completed_package_sha256"] != args.package_sha256 or
+                    current["last_completed_event_sha256"] != event_sha256 or
                     current["last_event_outcome"] not in {"succeeded", "business_failed", "runtime_failed"}):
-                raise RuntimeError("设备完成结果与本帧包不一致；状态 unknown")
+                raise RuntimeError("设备完成结果与本帧不一致；状态 unknown")
             result = {"device_id": args.device_id, "boot_id": args.boot_id,
                       "package_sha256": args.package_sha256,
+                      "event_sha256": event_sha256,
                       "event_sequence": args.event_sequence,
                       "event_outcome": current["last_event_outcome"],
                       "guest_result": current["last_guest_result"]}

@@ -52,7 +52,7 @@ static unsigned register_calls, failure_record_calls, task_calls, prepare_calls,
 static unsigned snapshot_calls, load_receipt_calls, retire_calls,
     product_retire_calls, validate_calls, query_calls;
 static char latest_reply[1200];
-static char latest_reported[512];
+static char latest_reported[768];
 static unsigned reported_calls;
 static unsigned wifi_apply_calls, config_commit_calls;
 static const char *fake_frp_state = "stopped";
@@ -60,6 +60,9 @@ static uint32_t fake_free_heap = 1000;
 static esp_base_container_event_observation_result_t fake_event_observation_state;
 static int32_t fake_event_guest_result;
 static bool fake_event_runtime_ok;
+static unsigned offered_event_calls;
+static uint8_t offered_event_digest[32];
+static esp_base_container_event_result_t offered_event_result;
 #if defined(CONFIG_IDF_TARGET_ESP32)
 static unsigned iram_work_allocations;
 #endif
@@ -664,6 +667,7 @@ int main(void)
            strstr(latest_reported, "\"last_accepted_event_sequence\":3") &&
            strstr(latest_reported, "\"last_completed_event_sequence\":2") &&
            strstr(latest_reported, "\"last_completed_package_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"") &&
+           strstr(latest_reported, "\"last_completed_event_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"") &&
            strstr(latest_reported, "\"last_event_outcome\":\"succeeded\"") &&
            strstr(latest_reported, "\"last_guest_result\":3") &&
            !strcmp(latest_reply, copied_result));
@@ -930,6 +934,22 @@ int main(void)
     check_product_uninstall_path();
     check_product_package_guard();
     check_product_package_preboot_recovery();
+    const uint8_t business_bytes[] = {1U, 2U, 3U};
+    ebase_mqtt_event_view_t business_event = {
+        .event_sequence = 1U, .event = business_bytes,
+        .event_size_bytes = sizeof business_bytes,
+    };
+    memset(business_event.package_sha256, 0x11, 32);
+    uint8_t expected_event_digest[32];
+    size_t digest_size = 0U;
+    assert(psa_hash_compute(PSA_ALG_SHA_256, business_bytes,
+        sizeof business_bytes, expected_event_digest,
+        sizeof expected_event_digest, &digest_size) == PSA_SUCCESS && digest_size == 32U);
+    offered_event_result = ESP_BASE_CONTAINER_EVENT_ACCEPTED;
+    assert(handle_mqtt_event(&business_event, NULL) && offered_event_calls == 1U &&
+           !memcmp(offered_event_digest, expected_event_digest, 32));
+    offered_event_result = ESP_BASE_CONTAINER_EVENT_FULL;
+    assert(!handle_mqtt_event(&business_event, NULL) && offered_event_calls == 2U);
     puts("  protocol_ota_owner passed (OTA owner faults; product ledger/uninstall/recovery; USB FRP storage gate; MQTT write rejection)");
 }
 
@@ -1101,6 +1121,7 @@ esp_base_container_product_event_observation(
     *out = (esp_base_container_event_observation_t){0};
     if (fake_event_observation_state == ESP_BASE_CONTAINER_EVENT_OBSERVED) {
         memset(out->package_sha256, 0x11, 32);
+        memset(out->event_sha256, 0x22, 32);
         out->event_sequence = 2U;
         out->guest_result = fake_event_guest_result;
         out->runtime_ok = fake_event_runtime_ok;
@@ -1349,6 +1370,18 @@ bool esp_base_container_product_abandon_package_trial(
 bool esp_base_container_product_event_accepting(void)
 {
     return package_event_accepting;
+}
+
+esp_base_container_event_result_t esp_base_container_product_offer_event(
+    const uint8_t package_sha256[32], uint64_t event_sequence,
+    const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes)
+{
+    assert(package_sha256[0] == 0x11 && event_sequence == 1U &&
+           event != NULL && size_bytes == 3U &&
+           event[0] == 1U && event[1] == 2U && event[2] == 3U);
+    memcpy(offered_event_digest, event_sha256, sizeof offered_event_digest);
+    ++offered_event_calls;
+    return offered_event_result;
 }
 
 esp_base_container_uninstall_result_t esp_base_container_product_uninstall(

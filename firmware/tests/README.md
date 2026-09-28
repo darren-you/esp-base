@@ -20,7 +20,7 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `mqtt_owner_test` 编译普通 Base 的真实 owner、Topic 与公开 emqtt 配置校验源码，注入客户端事件；覆盖无凭据不建客户端、UUID ClientID、严格 TLS、离线 LWT、双订阅 SUBACK 前不受理消息、命令 retained/错 Topic/HMAC 拒绝、业务事件签名/boot/连续序号与入队后推进、队列拒绝后原序号重试、同 boot 重配保留高水位、结果和 reported 的 QoS/retain、断连重新订阅门、QoS 1 outbox 过期后的停止与重新取得 SUBACK、发布或订阅失败的停止重试，以及配置更换时 stop 失败不释放旧 handle、清除旧 key 且不再派发。`network_auth_test` 的固定 HMAC 向量与 `tools/test_product_event.py` 的主机生成结果一致。Fake 不模拟实际 Broker、TLS 握手或设备任务调度。
 
-`protocol_ota_owner_test` 使用真实 reported 格式器验证已入队序号与最近完成事件的包摘要、非负 guest 结果、负数业务失败、runtime 失败时 null 结果及超限状态不发布；它的 Container 观察是假件。签名 guest 的真实结果与同 boot 换包清空由 `run_container_lifecycle_test.sh` 验证，仍没有真实 Broker 投递。
+`protocol_ota_owner_test` 使用真实 reported 格式器验证已入队序号与最近完成事件的包摘要及事件字节 SHA-256、非负 guest 结果、负数业务失败、runtime 失败时 null 结果及超限状态不发布；它的 Container 观察是假件。签名 guest 的真实结果与同 boot 换包清空由 `run_container_lifecycle_test.sh` 验证，仍没有真实 Broker 投递。
 
 `frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
 

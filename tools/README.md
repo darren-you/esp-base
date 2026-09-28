@@ -94,9 +94,9 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 
 ## 产品 MQTT 业务事件帧
 
-`product_event.py` 读取权限精确为 0600、内容为 64 个小写十六进制字符的**现有设备管理密钥文件**，使用当前设备 UUID、当前 boot UUID、已核对的签名包 SHA-256、下一个连续事件序号和原始 guest 事件文件，生成新的 0600 二进制帧文件；不在命令行或终端输出密钥。它只生成 wire 帧，不替代 Broker 账户、TLS、正式发布、guest 执行结果或试运行健康裁决。调用方须向脚本显示的精确 `esp-base/<device_id>/event` Topic 以 QoS 1、非 retained 方式发布该帧，并从新鲜非 retained `reported.last_accepted_event_sequence` 判断入队。Broker PUBACK 不能证明入队；`reported.last_completed_event_sequence`、`last_completed_package_sha256`、`last_event_outcome` 与 `last_guest_result` 是最近启动的产品实例中的最近一次 guest 调用的只读观察，仍不能单独确认产品健康。旧 boot、错包、满队列或离线时序号不推进。重试须重新核对高水位及当前 boot，原序号使用原帧，不改内容。
+`product_event.py` 读取权限精确为 0600、内容为 64 个小写十六进制字符的**现有设备管理密钥文件**，使用当前设备 UUID、当前 boot UUID、已核对的签名包 SHA-256、下一个连续事件序号和原始 guest 事件文件，生成新的 0600 二进制帧文件；不在命令行或终端输出密钥。它只生成 wire 帧，不替代 Broker 账户、TLS、正式发布、guest 执行结果或试运行健康裁决。调用方须向脚本显示的精确 `esp-base/<device_id>/event` Topic 以 QoS 1、非 retained 方式发布该帧，并从新鲜非 retained `reported.last_accepted_event_sequence` 判断入队。Broker PUBACK 不能证明入队；`reported.last_completed_event_sequence`、`last_completed_package_sha256`、`last_completed_event_sha256`、`last_event_outcome` 与 `last_guest_result` 是最近启动的产品实例中的最近一次 guest 调用的只读观察，仍不能单独确认产品健康。旧 boot、错包、满队列或离线时序号不推进。重试须重新核对高水位及当前 boot，原序号使用原帧，不改内容。
 
-`product_event_publish.py` 消费上面的原始签名帧和本轮明确指定的 Broker/CA/控制账户。账户 JSON 只有 `username` 与 `password`，文件须由当前用户独占、权限精确为 0600。先等待精确 `reported` 订阅的 SUBACK 和本次 boot 的非 retained 消息，确认入队序号恰为本帧序号减一；只有此前置条件成立才发布一次 QoS 1、非 retained 事件。发布后继续等待同 boot、同序号和同包摘要的入队及 guest 完成结果，输出 `event_outcome`；超时、断线或读回不符均标记 unknown，不自动重发。返回码 0 仅表示本次 guest 报告非负结果，2 表示已发布但执行失败或结果不确定，1 表示发布前拒绝；这些都不是产品安装、升级或试运行健康的最终结果。依赖与现有 MQTT 宿主检查器相同，安装 `tools/mqtt-lab-requirements.txt` 中固定的 Paho 版本即可。
+`product_event_publish.py` 消费上面的原始签名帧和本轮明确指定的 Broker/CA/控制账户。账户 JSON 只有 `username` 与 `password`，文件须由当前用户独占、权限精确为 0600。先等待精确 `reported` 订阅的 SUBACK 和本次 boot 的非 retained 消息，确认入队序号恰为本帧序号减一；只有此前置条件成立才发布一次 QoS 1、非 retained 事件。发布后继续等待同 boot、同序号、同包摘要和事件字节 SHA-256 的入队及 guest 完成结果，输出 `event_outcome`；超时、断线或读回不符均标记 unknown，不自动重发。返回码 0 仅表示本次 guest 报告非负结果，2 表示已发布但执行失败或结果不确定，1 表示发布前拒绝；这些都不是产品安装、升级或试运行健康的最终结果。依赖与现有 MQTT 宿主检查器相同，安装 `tools/mqtt-lab-requirements.txt` 中固定的 Paho 版本即可。
 
 ```bash
 python3 tools/product_event.py --management-key-file <私有0600密钥文件> \

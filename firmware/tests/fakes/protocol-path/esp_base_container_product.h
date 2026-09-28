@@ -114,10 +114,11 @@ typedef enum {
 } esp_base_container_event_result_t;
 esp_base_container_event_result_t esp_base_container_product_offer_event(
     const uint8_t package_sha256[32], uint64_t event_sequence,
-    const uint8_t *event, size_t size_bytes);
+    const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes);
 bool esp_base_container_product_event_accepting(void);
 typedef struct {
     uint8_t package_sha256[32];
+    uint8_t event_sha256[32];
     uint64_t event_sequence;
     int32_t guest_result;
     bool runtime_ok;

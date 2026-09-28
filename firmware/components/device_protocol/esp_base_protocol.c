@@ -98,7 +98,7 @@ const char *esp_base_protocol_boot_id(void)
 {
     return s_started && ebase_is_uuid(s_boot_id) ? s_boot_id : NULL;
 }
-#define MQTT_REPORTED_JSON_BYTES 512u
+#define MQTT_REPORTED_JSON_BYTES 768u
 /* The control task formats one result or one periodic report at a time.
  * MQTT enqueue copies the payload before returning. */
 static char s_response_json[1024];
@@ -237,10 +237,12 @@ static void reported(void)
     char completed_sequence[24] = "null";
     char guest_result[16] = "null";
     char event_package[67] = "null";
+    char completed_event[67] = "null";
     if (observed == ESP_BASE_CONTAINER_EVENT_OBSERVED) {
         (void)snprintf(completed_sequence, sizeof completed_sequence,
                        "%" PRIu64, event.event_sequence);
         package_digest_hex(event_package, event.package_sha256);
+        package_digest_hex(completed_event, event.event_sha256);
         if (event.runtime_ok)
             (void)snprintf(guest_result, sizeof guest_result,
                            "%" PRId32, event.guest_result);
@@ -251,10 +253,12 @@ static void reported(void)
         "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\","
         "\"last_accepted_event_sequence\":%" PRIu64 ","
         "\"last_completed_event_sequence\":%s,\"last_completed_package_sha256\":%s,"
+        "\"last_completed_event_sha256\":%s,"
         "\"last_event_outcome\":\"%s\",\"last_guest_result\":%s}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
         esp_base_wifi_state(), time_ready ? "true" : "false", frp.state,
         esp_base_mqtt_owner_event_sequence(), completed_sequence, event_package,
+        completed_event,
         event_outcome, guest_result);
     if (size > 0 && (size_t)size < MQTT_REPORTED_JSON_BYTES)
         (void)esp_base_mqtt_owner_reported(s_response_json, (size_t)size);
@@ -1641,10 +1645,15 @@ static void handle_mqtt_command(const uint8_t *json, size_t length, void *contex
 static bool handle_mqtt_event(const ebase_mqtt_event_view_t *event, void *context)
 {
     (void)context;
-    return event != NULL &&
-        esp_base_container_product_offer_event(event->package_sha256,
-            event->event_sequence, event->event,
-            event->event_size_bytes) == ESP_BASE_CONTAINER_EVENT_ACCEPTED;
+    if (event == NULL) return false;
+    uint8_t digest[32];
+    size_t digest_size = 0;
+    if (psa_hash_compute(PSA_ALG_SHA_256, event->event, event->event_size_bytes,
+                         digest, sizeof digest, &digest_size) != PSA_SUCCESS ||
+        digest_size != sizeof digest) return false;
+    return esp_base_container_product_offer_event(event->package_sha256,
+        event->event_sequence, digest, event->event,
+        event->event_size_bytes) == ESP_BASE_CONTAINER_EVENT_ACCEPTED;
 }
 
 static void feed_serial(const unsigned char *bytes, size_t count)
