@@ -80,6 +80,12 @@ if(IDF_TARGET STREQUAL "esp32" AND (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
     NOT CONFIG_BOOTLOADER_LOG_LEVEL_NONE))
     message(FATAL_ERROR "ESP32 Base requires its 4 MiB partition, six static Wi-Fi RX buffers, BA window six, STA/TLS client, single-core 8BIT IRAM and v1 bootloader configuration")
 endif()
+if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32" AND
+    (NOT CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED OR
+    NOT CONFIG_ESP_BASE_FRP_SCRATCH_LABEL STREQUAL "frp_scratch" OR
+    NOT CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET EQUAL 0x3ea000))
+    message(FATAL_ERROR "ESP32 Base requires frp_scratch at 0x3ea000 in its product partition table")
+endif()
 if(IDF_TARGET STREQUAL "esp32")
     if(CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT)
         if(NOT CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME OR

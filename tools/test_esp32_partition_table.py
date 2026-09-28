@@ -23,7 +23,8 @@ EXPECTED = {
     # Container slots_idf binds ESP_PARTITION_SUBTYPE_DATA_UNDEFINED (0x06).
     "product_pkgs": (1, 0x06, 0x260000, 0x186000, 0),
     "at_old_raw": (1, 0x06, 0x3e6000, 0x4000, 2),
-    "base_store": (1, 2, 0x3ea000, 0x16000, 0),
+    "frp_scratch": (1, 0x06, 0x3ea000, 0x10000, 0),
+    "base_store": (1, 2, 0x3fa000, 0x6000, 0),
 }
 
 
@@ -50,6 +51,8 @@ class PartitionTests(unittest.TestCase):
                               int.from_bytes(raw[28:32], "little"))
         self.assertEqual(entries, EXPECTED)
         self.assertEqual(EXPECTED["product_pkgs"][3], 3 * 0x82000)
+        self.assertEqual(EXPECTED["frp_scratch"][2], EXPECTED["at_old_raw"][2] + EXPECTED["at_old_raw"][3])
+        self.assertEqual(EXPECTED["base_store"][2], EXPECTED["frp_scratch"][2] + EXPECTED["frp_scratch"][3])
         self.assertEqual(EXPECTED["base_store"][2] + EXPECTED["base_store"][3], 0x400000)
 
 
