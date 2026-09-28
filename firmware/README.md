@@ -59,6 +59,8 @@ ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`�
 
 当前 FRP 精确锁将 ESP32 的工作流及 TLS 私有对象条件分配至 8BIT IRAM；双目标签名容量、Base host 回归和 ESP32 一条真实 FRPS 工作流的仓外 QEMU 检查见[工作流 IRAM 精确锁检查点](../docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。正式 Base owner、MQTT／OTA／Container 并发与实体板容量尚未验收。
 
+ESP32 控制任务栈与命令／配置临时工作区已按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；双流、三条 MQTT 消息与一次真实配置提交的仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
+
 本轮 FRP 会话阶段复用仅改变公开组件的私有 `src/session.c`；两目标主固件锁由官方 Component Manager 重新生成，固定 SDK 普通构建、host ASan/UBSan 与仓外 scratch 候选布局的测试键签名容量通过。正式 ESP32 CSV 没有 `frp_scratch`，本轮签名 ESP32 镜像使用仓外候选 CSV；[精确锁检查点](../docs/operations/frp-session-phase-union-base-dependency-checkpoint.md)记录静态输入。从该提交另行重建双目标签名 app、ECS2 和 Flash 的[无网络 QEMU 检查点](../docs/operations/p6-03-frp-phase-union-current-lock-qemu-checkpoint.md)均到产品 `RUNNING` 与 Base `READY`，不代表 FRPS、Broker、HTTPS 同存或实体板验收。
 
 另签的[ESP32 FRPS 容量诊断](../docs/operations/esp32-frps-phase-union-current-lock-qemu-checkpoint.md)使用额外任务和测试时钟：静态 TLS 缓冲未完成验签；SDK 原生动态缓冲完成严格验签后仍因内存失败，没有注册或 Pong。诊断镜像与无网络原样产品不能混作同一容量读数。

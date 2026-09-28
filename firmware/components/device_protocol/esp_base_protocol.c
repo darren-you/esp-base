@@ -325,6 +325,17 @@ static void restore_committed(uint64_t now)
     if (esp_base_wifi_apply(&s_context.config.wifi, now) != ESP_OK) s_config_uncertain = true;
 }
 
+static void *protocol_work_alloc(size_t size)
+{
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    /* Classic ESP32 uses single-core 8BIT IRAM for transient protocol data.
+     * Task stacks remain in ordinary byte-addressable internal RAM. */
+    return heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_IRAM_8BIT);
+#else
+    return malloc(size);
+#endif
+}
+
 static void clear_candidate(void)
 {
     if (s_candidate == NULL) return;
@@ -341,7 +352,7 @@ static void poll_configuration(uint64_t now)
     if (ready && now < s_trial_deadline) {
         /* The control task is the sole reader/writer of s_context.config after
          * startup. Network owners copy their config before starting workers. */
-        esp_base_remote_config_t *work = malloc(sizeof *work);
+        esp_base_remote_config_t *work = protocol_work_alloc(sizeof *work);
         if (work == NULL) {
             s_trial_active = false;
             clear_candidate();
@@ -668,7 +679,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         if (command->config.frp.configured && s_context.frp_flash_store == NULL) {
             save_outcome(slot, "failed", "frp_storage_unavailable", false); return;
         }
-        s_candidate = malloc(sizeof *s_candidate);
+        s_candidate = protocol_work_alloc(sizeof *s_candidate);
         if (s_candidate == NULL) {
             save_outcome(slot, "failed", "resource_failure", false); return;
         }
@@ -692,7 +703,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
 static void handle_line(const char *line, size_t length, void *context)
 {
     (void)context;
-    ebase_command_t *command = malloc(sizeof *command);
+    ebase_command_t *command = protocol_work_alloc(sizeof *command);
     if (command == NULL) {
         reply("", "failed", "resource_failure", NULL);
         return;
@@ -863,7 +874,12 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     if (error != ESP_OK) {
         ESP_LOGW("base_wifi", "ESP_BASE_WIFI_UNAVAILABLE error=%s", esp_err_to_name(error));
     }
-    if (xTaskCreate(control_task, "base_control", 6144, NULL, 5, NULL) != pdPASS) {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    const uint32_t control_stack_bytes = 4096;
+#else
+    const uint32_t control_stack_bytes = 6144;
+#endif
+    if (xTaskCreate(control_task, "base_control", control_stack_bytes, NULL, 5, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     s_started = true;

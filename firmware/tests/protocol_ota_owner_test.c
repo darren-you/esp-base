@@ -27,6 +27,9 @@ static unsigned reported_calls;
 static unsigned wifi_apply_calls, config_commit_calls;
 static const char *fake_frp_state = "stopped";
 static uint32_t fake_free_heap = 1000;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+static unsigned iram_work_allocations;
+#endif
 
 static void reset_case(void)
 {
@@ -67,6 +70,9 @@ static void reset_case(void)
     reported_calls = 0;
     fake_frp_state = "stopped";
     fake_free_heap = 1000;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    iram_work_allocations = 0;
+#endif
     wifi_apply_calls = config_commit_calls = 0;
 }
 
@@ -205,6 +211,9 @@ int main(void)
     poll_configuration(1001U);
     assert(!s_trial_active && s_candidate == NULL && config_commit_calls == 1U &&
            s_context.config.revision == 8U && wifi_apply_calls == 1U);
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    assert(iram_work_allocations == 3U);
+#endif
 
     reset_case();
     s_context.config.revision = 7U;
@@ -488,6 +497,14 @@ const char *esp_base_mqtt_owner_state(void) { return "ready"; }
 esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = fake_frp_state}; }
 uint32_t esp_get_free_heap_size(void) { return fake_free_heap; }
 size_t heap_caps_get_minimum_free_size(unsigned caps) { (void)caps; return 1000; }
+#if defined(CONFIG_IDF_TARGET_ESP32)
+void *heap_caps_malloc(size_t size, unsigned caps)
+{
+    assert(caps == (MALLOC_CAP_INTERNAL | MALLOC_CAP_IRAM_8BIT));
+    ++iram_work_allocations;
+    return malloc(size);
+}
+#endif
 int64_t esp_timer_get_time(void) { return 1000000; }
 bool esp_base_mqtt_owner_result(const char *json, size_t length)
 {
