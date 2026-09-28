@@ -1081,9 +1081,53 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     assert(memcmp(original_bytes,
         store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
         confirmed_package->size) == 0);
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence, request.operation_id, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    const unsigned writes_before_trial = store.blob_writes;
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence - 1U, request.operation_id, boot_id) ==
+           ESP_BASE_CONTAINER_BLOCKED);
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence, "99999999-9999-4999-8999-999999999994", boot_id) ==
+           ESP_BASE_CONTAINER_BLOCKED);
+    assert(store.blob_writes == writes_before_trial);
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence, request.operation_id, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    econtainer_slots_state_t trial = {0};
+    assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK);
+    assert(trial.sequence == prepared_sequence + 1U &&
+           trial.phase == ECONTAINER_SLOT_TRIAL_STARTED &&
+           trial.bindings[index].slot == original_slot &&
+           esp_base_container_product_event_accepting());
+    assert(!esp_base_container_product_confirm_firmware(&claim));
+    const uint8_t trial_event[] = {1U, 2U, 3U};
+    assert(esp_base_container_product_offer_event(
+        original.bindings[index].package_sha256, 1U,
+        trial_event, sizeof trial_event) == ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(
+        request.package_sha256, 1U, trial_event,
+        sizeof trial_event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0;
+         attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
+         ++attempt) vTaskDelay(1U);
+    assert(esp_base_container_product_event_progress_count() == 1U);
+    esp_base_container_event_observation_t trial_observation = {0};
+    assert(esp_base_container_product_event_observation(&trial_observation) ==
+           ESP_BASE_CONTAINER_EVENT_OBSERVED);
+    assert(trial_observation.event_sequence == 1U && trial_observation.runtime_ok &&
+           trial_observation.guest_result == 3 &&
+           !memcmp(trial_observation.package_sha256, request.package_sha256, 32));
+    assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
+           trial.phase == ECONTAINER_SLOT_TRIAL_STARTED);
+    assert(esp_base_container_product_abandon_package_trial(
+        &claim, trial.sequence, request.operation_id));
     econtainer_slots_state_t abandoned = {0};
-    assert(econtainer_slots_abandon(&io, &geometry, prepared_sequence,
-        s_product.boot_id, NULL, NULL, &abandoned) == ECONTAINER_SLOTS_OK);
+    assert(econtainer_slots_load(&io, &geometry, &abandoned) == ECONTAINER_SLOTS_OK &&
+           abandoned.phase == ECONTAINER_SLOT_ABORTED &&
+           abandoned.sequence == trial.sequence + 1U &&
+           abandoned.bindings[index].slot == original_slot);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
 
     memcpy(request.operation_id,
            "99999999-9999-4999-8999-999999999993", sizeof request.operation_id);

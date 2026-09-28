@@ -71,6 +71,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 产品包准备入口的同源签名 guest 用例在旧确认实例运行时，先用完整目标摘要和被篡改的下载字节触发校验失败，核对 WRITING 已持久转为 ABORTED、当前绑定和旧槽包字节不变；再以合法源完成独立读回的 PREPARED，核对候选使用未引用槽、旧 guest 仍接收事件。NVS 保留写入但读回失败时返回不确定、没有擦写包 Flash，调用者持有原存储 claim 并需从持久 ECS2 恢复。准备入口只是内部事务阶段，不含 HTTPS 来源、公开安装／升级命令、业务试运行或最终确认；宿主假 Flash／NVS 不证明实体掉电结果。
 
+同一真实签名 guest 用例还验证内部产品试运行：旧实例未停止时拒绝，停止后错误 PREPARED 序号或 operation ID 不写存储，正确参数持久进入 `TRIAL_STARTED` 并运行候选；旧包事件被拒绝，候选事件返回 3 后仍未自动确认。固件 OTA 的确认入口不能确认产品 trial；放弃后独立读回 `ABORTED` 和未变的旧绑定，允许同 boot 重开旧 guest。此测试没有公开安装／升级、真实 Broker、产品健康谓词或实体掉电，见[检查点](../../docs/operations/product_package_trial_checkpoint.md)。
+
 仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
 
 ## NVS 仓外仿真

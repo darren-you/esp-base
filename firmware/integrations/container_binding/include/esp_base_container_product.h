@@ -106,6 +106,22 @@ esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
     econtainer_slot_source_fn source_fn, void *source_context,
     uint32_t *prepared_sequence);
 
+/* Internal same-boot product-only trial. The caller still owns its durable
+ * operation and Base claim, and has proven the old instance stopped. Only the
+ * exact PREPARED operation may start; the candidate remains unconfirmed until
+ * an authorized business event and product-specific health policy succeed. */
+esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    const char boot_id[37]);
+
+/* Stop and join the candidate, then durably abandon its exact trial and
+ * independently read back ABORTED. Success permits reopening the old binding
+ * under the same claim. An uncertain result keeps reopening blocked. */
+bool esp_base_container_product_abandon_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
+    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES]);
+
 typedef enum {
     ESP_BASE_CONTAINER_EVENT_ACCEPTED = 0,
     ESP_BASE_CONTAINER_EVENT_UNAVAILABLE,
