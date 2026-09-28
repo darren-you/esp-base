@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-28 C3 仓外三份 `0x77000` 包槽候选经正式 TLS 配置完整签名构建、RSA 验签和官方分区／app 容量门通过：双 `0x130000` app 槽各余 `0xf000` B；这会缩小通用签名包可接受范围，尚待维护者决定包槽上限，且未覆盖公开安装代码、同机网络负载或实板。[容量探针与边界](docs/operations/c3_slot_77000_capacity_probe.md)。
+
 2026-09-28 C3 正式 JSON 卸载入口在仓外测试键 QEMU 中完成卸载、同片冷启动原 ID 查询与重复请求不重执行，6 KiB 控制任务栈没有溢出；为适配 QEMU UART 和装入当前签名 app，此镜像临时缩小包槽。独立保留正式 USB 控制台与三份 `0x82000` 包槽的签名构建得到 `0x121000` B app，超过双 `0x120000` 槽各 `0x1000` B；构建级收敛探针仅在 56 B 内容余量下装槽，不能容纳后续安装／升级功能。[输入、回执与容量边界](docs/operations/product_uninstall_c3_protocol_qemu_checkpoint.md)。P6-03 布局与 P6-04/P7 实板验收继续开放。
 
 2026-09-28 ESP32 正式串口 `product.uninstall` 的双目标签名 QEMU 复测发现控制任务 4 KiB／6 KiB 栈分别在状态查询／卸载时溢出；ESP32 提至 8 KiB、C3 保持 6 KiB 后，最终源码重签镜像完成卸载、同片冷启动查询原操作及重复 ID 不重执行。官方 NVS parser 和逐区 Flash 读回通过；[完整输入与边界](docs/operations/product_uninstall_protocol_qemu_checkpoint.md)。这仍不是实板或 P6-04 完整验收。
