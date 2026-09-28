@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-29 P4-05/P6-03 OTA 槽状态读取仲裁：公开 OTA `04acb5e80a744649f8442607fb8d901d30880ca0` 经 Base 唯一清单与双目标锁解析，组件摘要均为 `865f054e54efba8c0f153387d1902f550a5f4342a8083646ae567916559eec3f`。OTA 库的运行／boot／目标槽、otadata 状态、回退资格和故障读回逐次持有共同 Flash I/O claim；Base 启动和确认后的直接 `eota_inspect` 也持有该 claim。双目标 host ASan/UBSan、固定 SDK C3 RSA v2／ESP32 ECDSA v1 仓外测试键签名构建与官方验签通过，签名 app 分别 `0x111000`／`0xffff4` B。SDK 整镜像验签及回退资格检查的最长占用、FRP 最大合法记录同机期限和实体 Flash 寿命仍需实测；本轮未写实体设备，P4-05/P6-03/P7 不据此验收。
+
 2026-09-29 P4-05/P6-03 OTA 显式读取接线：公开 OTA `a6bf4e362756ea2cee9febc95555a6866af4c931` 经 Base 唯一清单与 C3／ESP32 两目标锁解析，组件摘要均为 `7faec2419173ce4c935efa1159bfe0047344e0f5e79567c73030d17a791f7ddf`。OTA 库的显式分区读取每次最多 1024 字节取得共同 Flash I/O claim，释放后计算摘要；SDK 整镜像验签在整次调用期间持有 claim。Base 双目标 host ASan/UBSan 通过，固定 SDK 仓外测试键签名 C3 RSA v2／ESP32 ECDSA v1 构建及官方验签通过，签名 app 分别 `0x111000`／`0xffff4` B。槽状态观察和验签调用的物理时延、最大 FRP 记录与正式 OTA 同机进展及两板寿命预算仍未测量；本轮未写实体设备，P4-05/P6-03/P7 不据此验收。
 
 2026-09-29 P4-05/P6-03 短 Flash I/O 软件接线：公开 OTA `195201aed3f7c5ddd13517b7d8ad3dc2877e4ab4` 经 Base 唯一清单与 C3／ESP32 两目标锁解析，组件摘要均为 `9ba1e3566247cf0ecb2db290c568fe1b9841ef7abd240e947e31356341ebbea9`。Base 启动绑定同一短 owner，OTA 库对旧槽退役、逐扇区准备、切槽和失败恢复中的 app／otadata 写调用逐次获取／释放；Base 的 pending 确认／回滚与收据 NVS 读写也接入，FRP scratch 和 OTA 各次获取最多等待 500 毫秒，网络和进度回调不持锁。双目标 host ASan/UBSan 通过，含 NVS 假件持锁断言、确认期间 scratch 争用超时及释放后可再获取。固定 SDK 普通双目标构建和仓外测试键签名双目标构建通过，C3 RSA v2／ESP32 ECDSA v1 官方验签通过，签名 app 分别 `0x111000`／`0xffff4` B。本轮未进行实体设备写入、最大 FRP 记录与 OTA 同机推进或大范围 Flash 读验签时延／寿命测量；P4-05/P6-03/P7 不据此验收。

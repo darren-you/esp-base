@@ -58,6 +58,13 @@ static bool ota_flash_release(void *context)
            esp_base_storage_release(&s_ota_flash_claim);
 }
 
+static esp_err_t inspect_with_flash_io(eota_current_t *ota)
+{
+    if (!ota_flash_acquire(&s_flash_io_owner)) return ESP_ERR_TIMEOUT;
+    const esp_err_t result = eota_inspect(ota);
+    return ota_flash_release(&s_flash_io_owner) ? result : ESP_FAIL;
+}
+
 static esp_err_t confirm_pending_with_flash_io(eota_current_t *ota)
 {
     if (!ota_flash_acquire(&s_flash_io_owner)) return ESP_ERR_TIMEOUT;
@@ -250,7 +257,7 @@ void app_main(void)
         return;
     }
     eota_current_t ota = {0};
-    const esp_err_t ota_status = eota_inspect(&ota);
+    const esp_err_t ota_status = inspect_with_flash_io(&ota);
     if (ota_status != ESP_OK) {
         ESP_LOGE(TAG, "OTA slot state unavailable (%s); initialization stopped", esp_err_to_name(ota_status));
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback=not_safe",
@@ -415,7 +422,8 @@ void app_main(void)
         }
         if (container_configured) {
             eota_current_t confirmed = {0};
-            if (eota_inspect(&confirmed) != ESP_OK || confirmed.state != EOTA_STATE_VALID ||
+            if (inspect_with_flash_io(&confirmed) != ESP_OK ||
+                confirmed.state != EOTA_STATE_VALID ||
                 confirmed.running_partition == NULL || ota.running_partition == NULL ||
                 strcmp(confirmed.running_partition, ota.running_partition) != 0 ||
                 !esp_base_container_product_confirm_firmware(&s_boot_storage_claim)) {

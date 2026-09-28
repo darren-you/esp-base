@@ -7,7 +7,7 @@ dependencies:
   esp_ota:
     git: "https://github.com/esp-space/esp-ota.git"
     path: "components/esp_ota"
-    version: "a6bf4e362756ea2cee9febc95555a6866af4c931"
+    version: "04acb5e80a744649f8442607fb8d901d30880ca0"
   esp_frp:
     git: "https://github.com/esp-space/esp-frp.git"
     version: "8f056273b3b93ea3273b4637038ddd0c6aea82a8"

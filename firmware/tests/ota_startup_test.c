@@ -214,6 +214,9 @@ void vTaskDelay(TickType_t ticks)
 
 esp_err_t eota_inspect(eota_current_t *current)
 {
+    esp_base_storage_claim_t competing = {0};
+    assert(bound_flash_io.context != NULL &&
+           !esp_base_storage_claim(bound_flash_io.context, &competing));
     current->running_partition = "ota_1";
     current->state = inspect_result == ESP_OK ? image_state : EOTA_STATE_UNKNOWN;
     return inspect_result;
