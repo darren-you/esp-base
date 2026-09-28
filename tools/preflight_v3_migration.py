@@ -30,6 +30,12 @@ APP_SIZE = 0x1E0000
 APP_OFFSETS = (0x20000, 0x200000)
 STORE_OFFSET = 0x3E0000
 STORE_SIZE = 0x20000
+SDK_NVS_TYPES = {
+    ("nvs.net80211", "ap.sndchan"): "uint8_t",
+    ("phy", "cal_mac"): "blob",
+    ("phy", "cal_data"): "blob",
+    ("phy", "cal_version"): "uint32_t",
+}
 IDF_COMMIT = "578cf89c343e388db43ba1f4ddcd602fedcb763c"
 NVS_GENERATOR_VERSION = "0.1.9"
 UUID_V4 = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
@@ -180,12 +186,13 @@ def validate_page(page, partition_name: str) -> None:
 
 
 def nvs_records(flash: bytes, name: str, offset: int, size: int, parser,
-                allowed: set[tuple[str, str]]) -> dict[tuple[str, str], tuple[str, bytes]]:
+                allowed: set[tuple[str, str]],
+                allowed_unused_namespaces: frozenset[str] = frozenset()) -> dict[tuple[str, str], tuple[str, bytes]]:
     partition = parser.NVS_Partition(name, bytearray(flash[offset:offset + size]))
-    require(any(page.header["status"] == "Empty" for page in partition.pages),
-            f"{name} 没有 NVS 空白页")
     for page in partition.pages:
         validate_page(page, name)
+    require(any(page.header["status"] == "Empty" for page in partition.pages),
+            f"{name} 没有 NVS 空白页")
     entries = [entry for page in partition.pages for entry in page.entries if entry.state == "Written"]
     namespaces: dict[int, str] = {}
     for entry in entries:
@@ -217,6 +224,13 @@ def nvs_records(flash: bytes, name: str, offset: int, size: int, parser,
             require(len(value) == entry.data["size"] and value.endswith(b"\0"),
                     f"{name} 字符串不完整")
             records[key] = ("string", value)
+        elif types in (["uint8_t"], ["uint32_t"]):
+            entry = group[0]
+            size = 1 if types == ["uint8_t"] else 4
+            value = entry.data["value"]
+            require(isinstance(value, int) and 0 <= value < 1 << (size * 8),
+                    f"{name} 数值记录超出类型范围")
+            records[key] = (types[0], value.to_bytes(size, "little"))
         elif types == ["blob"]:
             entry = group[0]
             value = b"".join(bytes(child.raw) for child in entry.children)[:entry.data["size"]]
@@ -238,7 +252,7 @@ def nvs_records(flash: bytes, name: str, offset: int, size: int, parser,
             records[key] = ("blob", value)
         else:
             raise PreflightError(f"{name} 含未知或重复的 NVS 记录类型")
-    require(set(namespaces.values()) == {namespace for namespace, _ in records},
+    require(set(namespaces.values()) - {namespace for namespace, _ in records} <= allowed_unused_namespaces,
             f"{name} 含未使用或未知的 NVS namespace")
     return records
 
@@ -393,11 +407,21 @@ def audit(flash: bytes, components: Path, device_id: str) -> tuple[list[str], di
     ota_lines = audit_otadata_and_slots(flash)
     parser = load_nvs_parser(components)
     identity = nvs_records(flash, "nvs", NVS_OFFSET, NVS_SIZE, parser,
-                           {("base_identity", "device_uuid")})
+                           {("base_identity", "device_uuid"), *SDK_NVS_TYPES},
+                           frozenset({"misc"}))
     store = nvs_records(flash, "base_store", STORE_OFFSET, STORE_SIZE, parser,
                         {("base_config", "committed"), ("base_ota", "operation")})
-    require(set(identity) == {("base_identity", "device_uuid")},
-            "默认 nvs 含非预期记录；停止迁移并人工确认事实")
+    require(("base_identity", "device_uuid") in identity and
+            all(identity[key][0] == expected_type for key, expected_type in SDK_NVS_TYPES.items()
+                if key in identity),
+            "默认 nvs 身份或 SDK 记录类型不符；停止迁移并人工确认事实")
+    phy_keys = {key for key in identity if key[0] == "phy"}
+    require(not phy_keys or phy_keys == {key for key in SDK_NVS_TYPES if key[0] == "phy"},
+            "默认 nvs PHY 校准记录不完整；停止迁移并人工确认事实")
+    if phy_keys:
+        require(len(identity[("phy", "cal_mac")][1]) == 6 and
+                bool(identity[("phy", "cal_data")][1]),
+                "默认 nvs PHY 校准记录长度无效")
     require(set(store) <= {("base_config", "committed"), ("base_ota", "operation")},
             "base_store 含非预期记录；停止迁移并人工确认事实")
     kind, raw_id = identity[("base_identity", "device_uuid")]
@@ -405,6 +429,8 @@ def audit(flash: bytes, components: Path, device_id: str) -> tuple[list[str], di
             raw_id[:-1].decode("ascii", errors="replace") == device_id and valid_uuid_text(device_id),
             "默认 nvs 的设备 UUID 与本轮绑定身份不一致")
     lines = ["nvs/base_identity/device_uuid: string, 37B，身份匹配"]
+    if len(identity) > 1:
+        lines.append("默认 nvs 的 SDK Wi-Fi/PHY 白名单记录已校验类型并保留原始分区字节")
     if ("base_config", "committed") in store:
         kind, blob = store[("base_config", "committed")]
         require(kind == "blob", "base_config/committed 不是 blob")

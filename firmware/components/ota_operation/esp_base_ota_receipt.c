@@ -62,7 +62,8 @@ static bool decode(const uint8_t bytes[OTA_BYTES], receipt_t *receipt)
     candidate.target_subtype = bytes[7];
     candidate.failure = bytes[8];
     for (unsigned i = 0; i < 4; ++i) candidate.image_size_bytes |= (uint32_t)bytes[10 + i] << (8 * i);
-    if (candidate.image_size_bytes == 0 || candidate.image_size_bytes > 0x1e0000 ||
+    if (candidate.image_size_bytes == 0 ||
+        candidate.image_size_bytes > esp_base_ota_policy(false).ota_size_bytes ||
         (candidate.status == OTA_STATUS_PREPARED && candidate.failure != 0) ||
         (candidate.status == OTA_STATUS_FAILED &&
          (candidate.failure == EOTA_UPDATE_OK ||

@@ -59,11 +59,11 @@ class PreflightTests(unittest.TestCase):
                              "base_config,namespace,,\ncommitted,data,base64," +
                              base64.b64encode(config_bytes).decode() + "\n" + extra)
 
-    def full_flash(self, *, store: bytes | None = None) -> bytearray:
+    def full_flash(self, *, store: bytes | None = None, identity: bytes | None = None) -> bytearray:
         flash = bytearray(b"\xff" * 0x400000)
         table = self.table.read_bytes()
         flash[0x8000:0x8000 + len(table)] = table
-        flash[0x9000:0xF000] = self.identity
+        flash[0x9000:0xF000] = self.identity if identity is None else identity
         flash[0x3E0000:0x400000] = self.store() if store is None else store
         flash[0x20000] = 0xE9
         selector = bytearray(b"\xff" * 32)
@@ -93,6 +93,29 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("ota_0: image-header", result.stdout)
         self.assertNotIn(DEVICE_ID, result.stdout)
 
+    def test_existing_sdk_wifi_and_phy_records_are_preserved(self) -> None:
+        identity = self.make_nvs("identity-with-sdk", 0x6000,
+                                 "misc,namespace,,\n"
+                                 f"base_identity,namespace,,\ndevice_uuid,data,string,{DEVICE_ID}\n"
+                                 "nvs.net80211,namespace,,\nap.sndchan,data,u8,6\n"
+                                 "phy,namespace,,\n"
+                                 "cal_mac,data,base64,AQIDBAUG\n"
+                                 "cal_data,data,base64,AQIDBA==\n"
+                                 "cal_version,data,u32,1\n")
+        result = self.run_preflight(self.full_flash(identity=identity),
+                                    candidate=self.work / "sdk-records-candidate.bin")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SDK Wi-Fi/PHY 白名单记录", result.stdout)
+        self.assertNotIn(DEVICE_ID, result.stdout)
+
+    def test_unknown_default_nvs_record_still_blocks(self) -> None:
+        identity = self.make_nvs("identity-with-unknown", 0x6000,
+                                 f"base_identity,namespace,,\ndevice_uuid,data,string,{DEVICE_ID}\n"
+                                 "unknown,namespace,,\nsecret,data,u8,1\n")
+        result = self.run_preflight(self.full_flash(identity=identity))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("非预期记录", result.stderr)
+
     def test_mismatched_full_backup_blocks(self) -> None:
         first = self.full_flash()
         second = bytearray(first)
@@ -115,6 +138,13 @@ class PreflightTests(unittest.TestCase):
         result = self.run_preflight(flash)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("CRC", result.stderr)
+
+    def test_non_nvs_bytes_in_store_block(self) -> None:
+        flash = self.full_flash()
+        flash[0x3E0000 + 0x1000] = 0xDF
+        result = self.run_preflight(flash)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("无法安全审计的 NVS 页状态", result.stderr)
 
     def test_malformed_v2_blob_is_rejected(self) -> None:
         result = self.run_preflight(self.full_flash(store=self.store(version=2)))

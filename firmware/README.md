@@ -1,6 +1,6 @@
 # ESP Base 固件
 
-当前应用包含 ESP32-C3 启动与 USB 命令运行面；不是五能力完成版本。
+当前可构建应用包含 ESP32-C3 启动与 USB 命令运行面；ESP32-D0WD-V3 已加入 UART0 控制入口前置，完整目标仍待分区、OTA 和签名启动链冻结。两者都不是五能力完成版本。
 
 ## 架构拓扑
 
@@ -35,14 +35,15 @@ flowchart LR
     frp_status -->|"绑定成功"| frp_owner
     frp_owner --> frp["公开 esp-frp：TLS / Yamux / Token"]
     host["公开 tools 或私有 Bridge"] <-->|"JSON Lines"| protocol
-    partitions["partitions/partition_table.csv"] --> build["ESP-IDF build"]
+    c3["partitions/partition_table.csv：仅 C3 当前布局"] --> build["ESP-IDF C3 build"]
+    esp32["ESP32 新布局 / 签名启动链：待冻结"] -.-> build
     lock["../sdk-lock.json：公开 IDF / lwIP"] --> build
     main --> build
     lab["apps/mqtt_integration/main：显式实验应用"] --> mqtt
     lab --> build
 ```
 
-从仓库根执行 `idf.py -C firmware build`，工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
+从仓库根执行 `idf.py -C firmware build`，默认工具链固定 ESP-IDF v6.1 / esp32c3，SDK 源码按仓根 `sdk-lock.json` 精确锁定公开 IDF fork 与 esp-lwip。CMake 核对两个提交、工作树、其他子模块和实际 lwIP 组件路径。`sdkconfig.defaults` 只包含共同选项，C3 的原生 USB 与现行分区表在 `sdkconfig.defaults.esp32c3`，ESP32 的 UART0 入口在 `sdkconfig.defaults.esp32`。现行 C3 保留两个 `0x1e0000` 应用槽，NVS 不自动擦除。`-DIDF_TARGET=esp32` 目前明确拒绝构建：新分区表、OTA policy 与签名启动链尚未确定，现存 ESP-AT 分区及 C3 分区均不能作为目标。烧录前重新枚举并核对芯片、身份与两份完整 Flash 备份；不得用固定串口名识别设备，不执行 eFuse、整片擦除或执行器输出。
 
 [嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由 `dependencies.lock` 固定；`mqtt` 唯一来源是公开 `esp-mqtt@5bff093646d8db810d64c50c39edc004e78bf40c`，`esp_ota` 唯一来源是公开 `esp-ota@3c3f72b823ce856b02f838fef17db1368e6d5448`，`esp_frp` 唯一来源是公开 `esp-frp@3a40a2c06580232bbe23cb981eeb21c4d14d33c1`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
@@ -52,7 +53,7 @@ flowchart LR
 
 普通应用从编译期 `CONFIG_ESP_BASE_TIME_SERVER` 初始化 SNTP，默认 `pool.ntp.org`；控制任务每秒非阻塞查询一次同步结果。`time_ready` 只在本次 boot 收到有效同步事件后为 true。时间失败不阻塞 USB 控制或 pending 本地确认；签名构建的 HTTPS OTA 在无可信时间时拒绝启动。服务器不写 NVS；时间同步与 Wi-Fi 重连仍待实板验收。
 
-签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、RSA-3072、证书包和构建签名密钥。当前未签名实板不能直接打开这些选项：IDF 在签名配置启动时需要运行镜像中的公钥。首次迁移必须保全原设备、核对旧 bootloader 的 rollback、建立已签名且 otadata 为 VALID 的基座与回退槽；本轮只使用仓外临时测试键编译，不写板卡或生成生产凭据。签名构建的软件路径检查完整 signed bin 长度、inactive 槽大小、project/芯片、SHA-256 与 IDF 签名结果，下载/配置提交互斥；外部串口 Flash 租约仍由工具侧控制。
+当前 C3 签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、RSA-3072、证书包和构建签名密钥。ESP32-D0WD-V3 在固定 SDK 中采用不同的 ECDSA v1 应用签名装配，不能复制 C3 的 RSA policy；其 Base 产品约束尚未接入。当前未签名实板不能直接打开这些选项：IDF 在签名配置启动时需要运行镜像中的公钥。首次迁移必须保全原设备、核对旧 bootloader 的 rollback、建立已签名且 otadata 为 VALID 的基座与回退槽；本轮只使用仓外临时测试键编译，不写板卡或生成生产凭据。签名构建的软件路径检查完整 signed bin 长度、inactive 槽大小、project/芯片、SHA-256 与 IDF 签名结果，下载/配置提交互斥；外部串口 Flash 租约仍由工具侧控制。
 
 `ota.start` 在目标槽写入前将 operation ID、设备 ID、摘要、长度与源/目标槽作为单 blob 保存到 `base_store` 的 `base_ota/operation`，commit 和读回成功才启动 worker；同 ID 不再次下载。签名构建的只读 `ota.result` 查询最近一次收据，只有新槽本地确认 VALID 且完整运行镜像摘要匹配才成功；回滚到尚无查询代码的旧镜像不能由设备提供最终结果，工具必须记 unknown。身份 NVS 保持原位；配置仍用 `base_config/committed` 单键，v3-only 读写不兼容旧 v1/v2 记录。真实回滚和 NVS 掉电行为待实板验证。
 

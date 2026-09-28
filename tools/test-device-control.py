@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""用真实 POSIX 伪终端验证 USB 示例的字节传输与背压期限。"""
+"""用真实 POSIX 伪终端验证串口示例的字节传输与背压期限。"""
 import importlib.util
 import copy
 import os
@@ -21,7 +21,7 @@ class SerialTransportTests(unittest.TestCase):
         options = termios.tcgetattr(self.slave)
         options[2] |= termios.HUPCL
         termios.tcsetattr(self.slave, termios.TCSANOW, options)
-        self.port = control.USBSerialPort(os.ttyname(self.slave))
+        self.port = control.SerialPort(os.ttyname(self.slave))
 
     def tearDown(self):
         self.port.close()
@@ -130,7 +130,7 @@ class ConfigurationV3Tests(unittest.TestCase):
             control.validate_configuration(candidate)
         class NeverWrite:
             def write(self, payload):
-                raise AssertionError("oversized USB frame was sent")
+                raise AssertionError("oversized serial frame was sent")
         with self.assertRaisesRegex(ValueError, "9216"):
             control.send(NeverWrite(), {"config": "A" * 9216})
 
