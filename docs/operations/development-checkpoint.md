@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-09-29 P4-05/P6-03 OTA 显式读取接线：公开 OTA `a6bf4e362756ea2cee9febc95555a6866af4c931` 经 Base 唯一清单与 C3／ESP32 两目标锁解析，组件摘要均为 `7faec2419173ce4c935efa1159bfe0047344e0f5e79567c73030d17a791f7ddf`。OTA 库的显式分区读取每次最多 1024 字节取得共同 Flash I/O claim，释放后计算摘要；SDK 整镜像验签在整次调用期间持有 claim。Base 双目标 host ASan/UBSan 通过，固定 SDK 仓外测试键签名 C3 RSA v2／ESP32 ECDSA v1 构建及官方验签通过，签名 app 分别 `0x111000`／`0xffff4` B。槽状态观察和验签调用的物理时延、最大 FRP 记录与正式 OTA 同机进展及两板寿命预算仍未测量；本轮未写实体设备，P4-05/P6-03/P7 不据此验收。
+
 2026-09-29 P4-05/P6-03 短 Flash I/O 软件接线：公开 OTA `195201aed3f7c5ddd13517b7d8ad3dc2877e4ab4` 经 Base 唯一清单与 C3／ESP32 两目标锁解析，组件摘要均为 `9ba1e3566247cf0ecb2db290c568fe1b9841ef7abd240e947e31356341ebbea9`。Base 启动绑定同一短 owner，OTA 库对旧槽退役、逐扇区准备、切槽和失败恢复中的 app／otadata 写调用逐次获取／释放；Base 的 pending 确认／回滚与收据 NVS 读写也接入，FRP scratch 和 OTA 各次获取最多等待 500 毫秒，网络和进度回调不持锁。双目标 host ASan/UBSan 通过，含 NVS 假件持锁断言、确认期间 scratch 争用超时及释放后可再获取。固定 SDK 普通双目标构建和仓外测试键签名双目标构建通过，C3 RSA v2／ESP32 ECDSA v1 官方验签通过，签名 app 分别 `0x111000`／`0xffff4` B。本轮未进行实体设备写入、最大 FRP 记录与 OTA 同机推进或大范围 Flash 读验签时延／寿命测量；P4-05/P6-03/P7 不据此验收。
 
 2026-09-29 P6-03 OTA Flash 写入切片：Base 的唯一 OTA 清单和 C3／ESP32 目标锁已精确更新到公开 `esp-ota@a00f0a76959ed7e3ef4b999dab1e54b9a87f469b`，组件摘要均为 `5acb530d88b692f495324caaa9d008299ea15bca476e8c1cbccac2339376dd55`，两锁除 target 外一致。上游将 `esp_ota_begin` 改为固定 SDK 支持的 `OTA_WITH_SEQUENTIAL_WRITES`，让下载过程中由 SDK 随 `esp_ota_write` 逐扇区擦写，避免开始下载时一次擦除整张应用镜像。Base 两目标 host ASan/UBSan 与固定 SDK 普通构建通过，C3／ESP32 镜像分别为 1,036,736／974,480 B。本项仅证明源码消费与离线编译；OTA 应用、otadata 和收据 NVS 写入仍须统一接入短 Flash I/O 仲裁，并进行同机负载与实体板验证，P6-03/P7 不据此验收。
