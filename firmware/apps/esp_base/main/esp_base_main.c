@@ -29,6 +29,49 @@ static const char *TAG = "esp_base";
 static esp_base_storage_owner_t s_storage_owner;
 static esp_base_storage_claim_t s_boot_storage_claim;
 static esp_base_storage_owner_t s_flash_io_owner;
+static esp_base_storage_claim_t s_ota_flash_claim;
+
+#define ESP_BASE_FLASH_IO_WAIT_US INT64_C(500000)
+
+static bool claim_flash_io(esp_base_storage_owner_t *owner,
+                           esp_base_storage_claim_t *claim)
+{
+    if (owner == NULL || claim == NULL) return false;
+    const int64_t started_us = esp_timer_get_time();
+    if (started_us < 0) return false;
+    do {
+        if (esp_base_storage_claim(owner, claim)) return true;
+        if (esp_timer_get_time() - started_us >= ESP_BASE_FLASH_IO_WAIT_US) return false;
+        vTaskDelay(1);
+    } while (true);
+}
+
+static bool ota_flash_acquire(void *context)
+{
+    return context == &s_flash_io_owner &&
+           claim_flash_io(context, &s_ota_flash_claim);
+}
+
+static bool ota_flash_release(void *context)
+{
+    return context == &s_flash_io_owner &&
+           esp_base_storage_release(&s_ota_flash_claim);
+}
+
+static esp_err_t confirm_pending_with_flash_io(eota_current_t *ota)
+{
+    if (!ota_flash_acquire(&s_flash_io_owner)) return ESP_ERR_TIMEOUT;
+    const esp_err_t result = eota_confirm_pending(ota);
+    return ota_flash_release(&s_flash_io_owner) ? result : ESP_FAIL;
+}
+
+static esp_err_t reject_pending_with_flash_io(eota_current_t *ota)
+{
+    if (!ota_flash_acquire(&s_flash_io_owner)) return ESP_ERR_TIMEOUT;
+    /* SDK success reboots. A returned error still needs the short claim freed. */
+    const esp_err_t result = eota_reject_pending(ota);
+    return ota_flash_release(&s_flash_io_owner) ? result : ESP_FAIL;
+}
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
 /* A scratch read/write must not inherit the OTA transaction's lifetime.
  * The provider retains its own record lease between these short I/O claims. */
@@ -39,7 +82,7 @@ static efrp_result_t frp_scratch_with_owner(
 {
     if (owner_context == NULL || operation == NULL) return EFRP_INVALID_ARGUMENT;
     esp_base_storage_claim_t claim = {0};
-    if (!esp_base_storage_claim(owner_context, &claim)) return EFRP_STORAGE_ERROR;
+    if (!claim_flash_io(owner_context, &claim)) return EFRP_STORAGE_ERROR;
     const efrp_result_t result = operation(operation_context);
     return esp_base_storage_release(&claim) ? result : EFRP_STORAGE_ERROR;
 }
@@ -76,7 +119,7 @@ static void stop_after_local_failure(eota_current_t *ota, bool pending_boot,
         return;
     }
     ESP_LOGE(TAG, "Pending OTA slot %s failed %s; requesting IDF rollback", ota->running_partition, check);
-    const esp_err_t rollback_status = eota_reject_pending(ota);
+    const esp_err_t rollback_status = reject_pending_with_flash_io(ota);
     /* ESP_OK never returns from the IDF rollback API. If it does return,
      * preserve this boot rather than force a reset without a viable slot. */
     ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED slot=%s state=%s rollback_error=%s",
@@ -172,6 +215,15 @@ void app_main(void)
      * startup's storage operations. The guest's lifetime is not a claim. */
     esp_base_storage_owner_init(&s_storage_owner);
     esp_base_storage_owner_init(&s_flash_io_owner);
+    s_ota_flash_claim = (esp_base_storage_claim_t){0};
+    if (!esp_base_ota_policy_bind_flash_io((eota_flash_io_t){
+            .acquire = ota_flash_acquire,
+            .release = ota_flash_release,
+            .context = &s_flash_io_owner,
+        })) {
+        ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED Flash I/O gate unavailable");
+        return;
+    }
     esp_base_container_product_set_flash_io_owner(&s_flash_io_owner);
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     /* Recover interrupted ciphertext before any pending OTA slot can be
@@ -356,7 +408,7 @@ void app_main(void)
         now_ms = uptime_ms();
         const esp_err_t confirm_status = now_ms >= stable_started_ms &&
             now_ms - stable_started_ms >= ESP_BASE_OTA_STABLE_WINDOW_MS ?
-            eota_confirm_pending(&ota) : ESP_ERR_NOT_FINISHED;
+            confirm_pending_with_flash_io(&ota) : ESP_ERR_NOT_FINISHED;
         if (confirm_status != ESP_OK) {
             stop_after_local_failure(&ota, pending_boot, "confirm", confirm_status);
             return;

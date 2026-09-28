@@ -21,10 +21,14 @@ static uint8_t observed_source[32], observed_inactive[32];
 static bool exists, signed_enabled, after_write, firmware_observation_ok;
 static size_t stored_size;
 static int fault, writes, commits, reads, partition_reads, handles;
+static bool flash_io_active;
+static int flash_io_acquires, flash_io_releases, flash_io_deny_at;
 enum { NO_FAULT, INIT_FAULT, READ_FAULT, OPEN_WRITE_FAULT, SET_BEFORE_FAULT, SET_AFTER_FAULT, COMMIT_FAULT, READBACK_FAULT, READBACK_MISMATCH };
 
 static void reset(void)
 {
+    assert(!flash_io_active);
+    flash_io_acquires = flash_io_releases = flash_io_deny_at = 0;
     running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
     source_state = EOTA_STATE_VALID;
     target_state = EOTA_STATE_UNDEFINED;
@@ -42,6 +46,23 @@ static void reset(void)
     firmware_observation_ok = true;
     after_write = false;
     fault = writes = commits = reads = partition_reads = handles = 0;
+}
+
+static bool acquire_flash_io(void *context)
+{
+    assert(context == &flash_io_acquires && !flash_io_active);
+    ++flash_io_acquires;
+    if (flash_io_acquires == flash_io_deny_at) return false;
+    flash_io_active = true;
+    return true;
+}
+
+static bool release_flash_io(void *context)
+{
+    assert(context == &flash_io_acquires && flash_io_active);
+    ++flash_io_releases;
+    flash_io_active = false;
+    return true;
 }
 
 static esp_base_ota_receipt_snapshot_t snapshot(void)
@@ -153,9 +174,10 @@ eota_result_t eota_sha256_running(const eota_policy_t *policy, uint32_t size, ui
     return EOTA_UPDATE_OK;
 }
 esp_err_t nvs_flash_init_partition(const char *partition)
-{ assert(!strcmp(partition, "base_store")); return fault == INIT_FAULT ? ESP_FAIL : ESP_OK; }
+{ assert(flash_io_active && !strcmp(partition, "base_store")); return fault == INIT_FAULT ? ESP_FAIL : ESP_OK; }
 esp_err_t nvs_open_from_partition(const char *partition, const char *space, nvs_open_mode_t mode, nvs_handle_t *handle)
 {
+    assert(flash_io_active);
     assert(!strcmp(partition, "base_store") && !strcmp(space, "base_ota"));
     if (mode == NVS_READWRITE && fault == OPEN_WRITE_FAULT) return ESP_FAIL;
     if (mode == NVS_READONLY && !exists) return ESP_ERR_NVS_NOT_FOUND;
@@ -163,9 +185,10 @@ esp_err_t nvs_open_from_partition(const char *partition, const char *space, nvs_
     *handle = 1;
     return ESP_OK;
 }
-void nvs_close(nvs_handle_t handle) { assert(handle == 1 && handles > 0); --handles; }
+void nvs_close(nvs_handle_t handle) { assert(flash_io_active && handle == 1 && handles > 0); --handles; }
 esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *output, size_t *size)
 {
+    assert(flash_io_active);
     assert(handle == 1 && handles == 1 && !strcmp(key, "operation"));
     ++reads;
     if (fault == READ_FAULT || (fault == READBACK_FAULT && after_write)) return ESP_FAIL;
@@ -178,6 +201,7 @@ esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *output, size_
 }
 esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *data, size_t size)
 {
+    assert(flash_io_active);
     assert(handle == 1 && handles == 1 && !strcmp(key, "operation") && size == sizeof stored);
     ++writes;
     if (fault == SET_BEFORE_FAULT) return ESP_FAIL;
@@ -189,6 +213,7 @@ esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *data, s
 }
 esp_err_t nvs_commit(nvs_handle_t handle)
 {
+    assert(flash_io_active);
     assert(handle == 1 && handles == 1);
     ++commits;
     if (fault == COMMIT_FAULT) return ESP_FAIL;
@@ -198,6 +223,11 @@ esp_err_t nvs_commit(nvs_handle_t handle)
 }
 int main(void)
 {
+    assert(esp_base_ota_policy_bind_flash_io((eota_flash_io_t){
+        .acquire = acquire_flash_io,
+        .release = release_flash_io,
+        .context = &flash_io_acquires,
+    }));
     esp_base_ota_receipt_view_t view;
     esp_base_ota_receipt_recovery_t recovery;
     reset();
@@ -450,6 +480,15 @@ int main(void)
         else assert(result == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
         assert(handles == 0);
     }
+    reset(); ota = request(OP);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+    assert(flash_io_acquires == flash_io_releases && !flash_io_active);
+    const int previous_writes = writes;
+    flash_io_deny_at = flash_io_acquires + 2; /* load succeeds; terminal NVS write waits/fails. */
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    assert(writes == previous_writes && flash_io_acquires == flash_io_releases + 1 &&
+           !flash_io_active);
     reset(); signed_enabled = false; ota = request(OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && writes == 0);
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && reads == 0);

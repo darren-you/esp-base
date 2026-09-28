@@ -57,6 +57,8 @@ static unsigned container_confirm_calls, container_stop_calls;
 static unsigned confirmed_stop_calls;
 static esp_base_storage_owner_t *storage_owner;
 static esp_base_storage_owner_t *container_flash_io_owner;
+static eota_flash_io_t bound_flash_io;
+static unsigned flash_io_bind_calls;
 static unsigned ota_gate_clears;
 static jmp_buf reboot_target;
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
@@ -103,6 +105,8 @@ static void reset_case(void)
     control_exits_late = control_pauses_cross_window = false;
     ota_gate_clears = 0;
     storage_owner = NULL;
+    bound_flash_io = (eota_flash_io_t){0};
+    flash_io_bind_calls = 0;
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     scratch_io_owner = NULL;
     scratch_config = (efrp_idf_flash_store_config_t){0};
@@ -220,6 +224,13 @@ eota_policy_t esp_base_ota_policy(bool trusted_time)
     (void)trusted_time;
     return (eota_policy_t){0};
 }
+bool esp_base_ota_policy_bind_flash_io(eota_flash_io_t flash_io)
+{
+    assert(flash_io.acquire && flash_io.release && flash_io.context);
+    bound_flash_io = flash_io;
+    ++flash_io_bind_calls;
+    return true;
+}
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
     const char *device_id, esp_base_ota_receipt_recovery_t *out)
 {
@@ -283,8 +294,12 @@ esp_err_t eota_confirm_pending(eota_current_t *current)
     esp_base_storage_claim_t competing = {0};
     assert(storage_owner != NULL && !esp_base_storage_claim(storage_owner, &competing));
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    const uint64_t flash_wait_started_ms = now_ms;
     assert(scratch_config.with_owner(scratch_config.owner_context,
-                                     scratch_during_ota, NULL) == EFRP_OK);
+                                     scratch_during_ota, NULL) == EFRP_STORAGE_ERROR);
+    /* The pending otadata write holds the short physical I/O claim. */
+    assert(now_ms - flash_wait_started_ms >= 500U &&
+           now_ms - flash_wait_started_ms <= 501U);
     assert(!esp_base_storage_claim(storage_owner, &competing));
 #endif
     image_state = state_after_mark;
@@ -364,6 +379,8 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     assert(context != NULL);
     assert(context->storage_owner != NULL);
     assert(context->flash_io_owner != NULL);
+    assert(flash_io_bind_calls == 1 &&
+           bound_flash_io.context == context->flash_io_owner);
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     assert(context->frp_flash_store != NULL);
 #else
@@ -630,6 +647,8 @@ int main(void)
     esp_base_storage_claim_t after_ready = {0};
     assert(esp_base_storage_claim(storage_owner, &after_ready));
     assert(esp_base_storage_release(&after_ready));
+    assert(bound_flash_io.acquire(bound_flash_io.context));
+    assert(bound_flash_io.release(bound_flash_io.context));
 
     reset_case();
     control_never_ready = true;

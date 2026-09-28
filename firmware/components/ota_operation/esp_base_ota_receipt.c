@@ -121,7 +121,7 @@ static bool decode(const uint8_t bytes[OTA_BYTES], receipt_t *receipt)
     return true;
 }
 
-static esp_base_ota_receipt_result_t load(receipt_t *receipt)
+static esp_base_ota_receipt_result_t load_unlocked(receipt_t *receipt)
 {
     esp_err_t error = nvs_flash_init_partition(OTA_PARTITION);
     if (error != ESP_OK) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
@@ -140,17 +140,35 @@ static esp_base_ota_receipt_result_t load(receipt_t *receipt)
     return ESP_BASE_OTA_RECEIPT_OK;
 }
 
+static esp_base_ota_receipt_result_t load(receipt_t *receipt)
+{
+    const eota_flash_io_t io = esp_base_ota_policy(false).flash_io;
+    if (!io.acquire(io.context)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+    const esp_base_ota_receipt_result_t result = load_unlocked(receipt);
+    return io.release(io.context) ? result : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+}
+
+static esp_base_ota_receipt_result_t write_unlocked(const uint8_t bytes[OTA_BYTES])
+{
+    nvs_handle_t handle;
+    esp_err_t error = nvs_open_from_partition(OTA_PARTITION, OTA_NAMESPACE, NVS_READWRITE, &handle);
+    if (error != ESP_OK) return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
+    error = nvs_set_blob(handle, OTA_KEY, bytes, OTA_BYTES);
+    if (error == ESP_OK) error = nvs_commit(handle);
+    nvs_close(handle);
+    return error == ESP_OK ? ESP_BASE_OTA_RECEIPT_OK :
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+}
+
 static esp_base_ota_receipt_result_t store(const receipt_t *receipt)
 {
     uint8_t bytes[OTA_BYTES];
     encode(receipt, bytes);
-    nvs_handle_t handle;
-    esp_err_t error = nvs_open_from_partition(OTA_PARTITION, OTA_NAMESPACE, NVS_READWRITE, &handle);
-    if (error != ESP_OK) return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
-    error = nvs_set_blob(handle, OTA_KEY, bytes, sizeof bytes);
-    if (error == ESP_OK) error = nvs_commit(handle);
-    nvs_close(handle);
-    if (error != ESP_OK) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+    const eota_flash_io_t io = esp_base_ota_policy(false).flash_io;
+    if (!io.acquire(io.context)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+    const esp_base_ota_receipt_result_t write_result = write_unlocked(bytes);
+    if (!io.release(io.context)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+    if (write_result != ESP_BASE_OTA_RECEIPT_OK) return write_result;
     receipt_t observed;
     if (load(&observed) != ESP_BASE_OTA_RECEIPT_OK) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     uint8_t actual[OTA_BYTES];
