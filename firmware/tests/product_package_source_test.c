@@ -2,6 +2,7 @@
 #include "esp_base_product_package_source.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
+#include "freertos/task.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -12,8 +13,9 @@ static int64_t clock_us;
 static int64_t open_time_us, header_time_us, read_time_us;
 static int64_t announced_length;
 static int status_code;
-static bool chunked, complete, open_ok, eagain_once;
-static unsigned init_calls, open_calls, cleanup_calls, read_calls;
+static bool chunked, complete, open_ok, eagain_once, header_eagain_once;
+static bool header_eagain_forever, read_eagain_forever;
+static unsigned init_calls, open_calls, cleanup_calls, read_calls, delay_calls;
 static size_t body_offset;
 
 static void reset(void)
@@ -25,12 +27,19 @@ static void reset(void)
     chunked = false;
     complete = true;
     open_ok = true;
-    eagain_once = false;
-    init_calls = open_calls = cleanup_calls = read_calls = 0;
+    eagain_once = header_eagain_once = false;
+    header_eagain_forever = read_eagain_forever = false;
+    init_calls = open_calls = cleanup_calls = read_calls = delay_calls = 0;
     body_offset = 0;
 }
 
 int64_t esp_timer_get_time(void) { return clock_us; }
+void vTaskDelay(TickType_t ticks)
+{
+    assert(ticks == 1U);
+    ++delay_calls;
+    clock_us += 1000;
+}
 int esp_crt_bundle_attach(void *config) { assert(config != NULL); return ESP_OK; }
 
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config)
@@ -54,6 +63,10 @@ int64_t esp_http_client_fetch_headers(esp_http_client_handle_t client)
 {
     assert(client == &clock_us);
     clock_us += header_time_us;
+    if (header_eagain_once || header_eagain_forever) {
+        header_eagain_once = false;
+        return -ESP_ERR_HTTP_EAGAIN;
+    }
     return announced_length;
 }
 
@@ -68,7 +81,7 @@ int esp_http_client_read(esp_http_client_handle_t client, char *buffer, int leng
     assert(client == &clock_us && buffer != NULL && length > 0);
     ++read_calls;
     clock_us += read_time_us;
-    if (eagain_once) {
+    if (eagain_once || read_eagain_forever) {
         eagain_once = false;
         return -ESP_ERR_HTTP_EAGAIN;
     }
@@ -89,6 +102,7 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client)
 static void valid_stream(void)
 {
     reset();
+    header_eagain_once = true;
     esp_base_product_package_source_t *source =
         esp_base_product_package_source_open("https://packages.example.test:443/product.pkg?token=a", 6U, true);
     assert(source != NULL && init_calls == 1U && open_calls == 1U);
@@ -98,6 +112,7 @@ static void valid_stream(void)
     assert(esp_base_product_package_source_read(source, 3U, bytes + 3U, 3U));
     assert(!memcmp(bytes, body, sizeof body));
     assert(esp_base_product_package_source_complete(source));
+    assert(delay_calls == 2U);
     esp_base_product_package_source_close(source);
     assert(cleanup_calls == 1U && read_calls >= 4U);
 
@@ -154,6 +169,10 @@ static void reject_wrong_response(void)
     reset();
     header_time_us = 300000000;
     assert(esp_base_product_package_source_open("https://host/x", 6U, true) == NULL);
+    reset();
+    header_eagain_forever = true;
+    assert(esp_base_product_package_source_open("https://host/x", 6U, true) == NULL);
+    assert(delay_calls == 30000U && cleanup_calls == 1U);
 }
 
 static void reject_late_or_incomplete_body(void)
@@ -165,6 +184,15 @@ static void reject_late_or_incomplete_body(void)
     uint8_t bytes[6] = {0};
     read_time_us = 30000000;
     assert(!esp_base_product_package_source_read(source, 0, bytes, 6U));
+    assert(!esp_base_product_package_source_complete(source));
+    esp_base_product_package_source_close(source);
+
+    reset();
+    source = esp_base_product_package_source_open("https://host/x", 6U, true);
+    assert(source != NULL);
+    read_eagain_forever = true;
+    assert(!esp_base_product_package_source_read(source, 0U, bytes, 6U));
+    assert(delay_calls == 30000U);
     assert(!esp_base_product_package_source_complete(source));
     esp_base_product_package_source_close(source);
 

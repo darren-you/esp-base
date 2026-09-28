@@ -8,6 +8,8 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 enum {
     PACKAGE_CONNECT_TIMEOUT_MS = 5000,
@@ -122,6 +124,9 @@ esp_base_product_package_source_t *esp_base_product_package_source_open(
         if (!deadline_valid(source)) goto fail;
         content_length = esp_http_client_fetch_headers(source->client);
         if (!deadline_valid(source)) goto fail;
+        /* Immediate EAGAIN must not spin on the single-core target while
+         * Wi-Fi and the control task need CPU to make network progress. */
+        if (content_length == -ESP_ERR_HTTP_EAGAIN) vTaskDelay(1U);
     } while (content_length == -ESP_ERR_HTTP_EAGAIN);
     if (content_length != expected_size_bytes ||
         esp_http_client_get_status_code(source->client) != 200 ||
@@ -152,7 +157,11 @@ bool esp_base_product_package_source_read(void *context,
         const int count = esp_http_client_read(source->client,
             (char *)destination + received, (int)(size_bytes - received));
         if (!deadline_valid(source)) break;
-        if (count == -ESP_ERR_HTTP_EAGAIN) continue;
+        if (count == -ESP_ERR_HTTP_EAGAIN) {
+            /* The next iteration rechecks both monotonic deadlines. */
+            vTaskDelay(1U);
+            continue;
+        }
         if (count <= 0 || (size_t)count > size_bytes - received) break;
         received += (size_t)count;
         source->progress_us = esp_timer_get_time();
