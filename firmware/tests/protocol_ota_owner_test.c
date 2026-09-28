@@ -34,8 +34,10 @@ static uint32_t binding_sequence;
 static bool network_ready, trusted_time_ready;
 static esp_base_container_boot_result_t package_trial_result;
 static bool package_stop_ok, package_abandon_prepared_ok;
+static bool package_event_accepting, package_abandon_trial_ok;
 static unsigned package_prepare_calls, package_trial_calls,
-    package_stop_calls, package_abandon_prepared_calls;
+    package_stop_calls, package_abandon_prepared_calls,
+    package_abandon_trial_calls;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -93,8 +95,10 @@ static void reset_case(void)
     network_ready = trusted_time_ready = true;
     package_trial_result = ESP_BASE_CONTAINER_RUNNING;
     package_stop_ok = package_abandon_prepared_ok = true;
+    package_event_accepting = true;
+    package_abandon_trial_ok = false;
     package_prepare_calls = package_trial_calls = package_stop_calls =
-        package_abandon_prepared_calls = 0U;
+        package_abandon_prepared_calls = package_abandon_trial_calls = 0U;
     memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
@@ -355,6 +359,16 @@ static void check_product_package_guard(void)
     product_package(43U); /* Same operation, new request ID, changed URL. */
     expect_reply("failed", "product_operation_conflict");
     assert(package_prepare_calls == 1U && task_calls == 1U);
+    package_event_accepting = false; /* Candidate runtime stopped unexpectedly. */
+    package_abandon_trial_ok = true;
+    poll_product_trial_failure();
+    expect_reply("failed", "product_runtime_failed");
+    assert(package_abandon_trial_calls == 1U && product_boot_calls == 1U &&
+           !s_product_active && !s_product_trial_running &&
+           atomic_load(&owner.active_token) == 0U);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_FAILED &&
+           ledger.records[0].container_sequence == 10U);
 
     reset_case();
     product_configured = true;
@@ -1283,7 +1297,14 @@ bool esp_base_container_product_abandon_package_trial(
 {
     assert(esp_base_storage_claim_active(claim) && trial_sequence == 9U &&
            operation_id != NULL);
-    return false; /* This fake fails before trial mutation; PREPARED is canceled. */
+    ++package_abandon_trial_calls;
+    if (package_abandon_trial_ok) binding_sequence = 10U;
+    return package_abandon_trial_ok;
+}
+
+bool esp_base_container_product_event_accepting(void)
+{
+    return package_event_accepting;
 }
 
 esp_base_container_uninstall_result_t esp_base_container_product_uninstall(

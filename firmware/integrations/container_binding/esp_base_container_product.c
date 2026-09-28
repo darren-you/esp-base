@@ -787,8 +787,12 @@ static void *product_thread(void *unused)
     release_event_queue();
     const econtainer_runtime_result_t stopped = econtainer_product_stop(open.runtime);
     const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
-    s_product.native_reclaimed = stopped == ECONTAINER_RUNTIME_OK &&
-                                 closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
+    /* A trapped event/timer has already put the VM in FAILED. stop() then
+     * reports INVALID_STATE, while close() is the native reclaim proof. */
+    s_product.native_reclaimed =
+        (stopped == ECONTAINER_RUNTIME_OK ||
+         (!requested_stop && stopped == ECONTAINER_RUNTIME_INVALID_STATE)) &&
+        closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
     s_product.stop_succeeded = requested_stop && s_product.native_reclaimed;
     atomic_store_explicit(&s_product.instance_active, false, memory_order_release);
     if (!s_product.stop_succeeded) {
@@ -1685,8 +1689,14 @@ bool esp_base_container_product_abandon_package_trial(
         trial_sequence == 0U || trial_sequence == UINT32_MAX ||
         !decode_uuid(operation_id, context.operation_id) ||
         memcmp(context.operation_id, s_product.package_trial_operation_id,
-               sizeof context.operation_id) != 0 ||
-        !esp_base_container_product_stop_trial(claim)) return false;
+               sizeof context.operation_id) != 0) return false;
+    const bool stopped = esp_base_container_product_stop_trial(claim);
+    if (!stopped && (s_product.thread_joinable || !s_product.native_reclaimed ||
+        atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
+        atomic_load_explicit(&s_product.result, memory_order_acquire) !=
+            ESP_BASE_CONTAINER_BLOCKED)) return false;
+    /* A trap or timer failure can finish the guest before stop_requested is
+     * seen. A joined, reclaimed BLOCKED trial is still safe to abandon. */
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, abandon_package_trial,
         &context);

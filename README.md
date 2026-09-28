@@ -153,6 +153,8 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 
 产品包的[HTTPS 顺序来源](docs/operations/product_package_https_source_checkpoint.md)已加入 Base；公开 `product.install`／`product.upgrade` 现按原操作意图启动异步下载、验包和同 boot 候选试运行，拒绝后的 `ABORTED` 状态及旧绑定可读回后记失败。[公开串口工具](tools/README.md)从本地已签名包计算整包摘要与长度，复核设备当前绑定后发送一次写命令，再按原 ID 查询。完整传输一结束即释放 TLS/HTTP 客户端，再由 Container 验签。双目标 host 与真实签名 guest 回归、隔离固定 SDK 完整链接通过；C3 测试键签名 app 为 `0x121000` B，候选 `0x130000` app 槽余 `0xf000` B，ESP32 显式离线镜像为 `0xedc60` B。这些隔离构建尚非冻结五仓正式制品；试运行业务健康判据、最终成功收据、真实 HTTPS／Broker／实板和容量总门仍未闭合。
 
+试运行中候选 guest 的运行时失败现在会在取得长存储 claim 后停止并回收原实例，读回同一操作的 `ABORTED` 和旧确认绑定，再重开旧 guest、把原操作记为失败；任一步不能证明时保留 claim 并报告不确定。真实签名 event-loop 包的双目标宿主测试覆盖事件预算失败和同 boot 旧 guest 重开；当前仍未按业务事件判断成功或执行产品验证窗口。
+
 - [固件入口](firmware/README.md)
 - [C3 签名产品包 QEMU 检查点](docs/operations/c3-signed-product-qemu-checkpoint.md)
 - [C3 产品卸载版本 QEMU 检查点](docs/operations/c3-product-uninstall-branch-qemu-checkpoint.md)

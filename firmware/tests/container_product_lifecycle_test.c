@@ -573,6 +573,88 @@ static void run_deadline_product(const char *directory)
     puts("container_product_deadline: signed ABI 2 expiry, cleanup, Base blocked boot and fresh-boot reopen passed");
 }
 
+static void run_event_failure_trial(const char *directory)
+{
+    file_t key = read_file(directory, "public.der");
+    file_t normal_package = read_file(directory, "normal.pkg");
+    file_t failed_package = read_file(directory, "event-loop.pkg");
+    const char boot_id[] = "22222222-2222-4222-8222-222222222222";
+    configure(&key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) ==
+           ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = &normal_package};
+    assert(esp_base_container_with_firmware_set(&claim,
+        ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
+        ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    esp_base_container_binding_snapshot_t old = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &old) ==
+           ESP_BASE_CONTAINER_BINDING_OK && old.package_present);
+    esp_base_container_package_request_t request = {
+        .operation_id = "99999999-9999-4999-8999-999999999999",
+        .expected_sequence = old.container_sequence,
+        .previous_package_present = true,
+        .package_size_bytes = (uint32_t)failed_package.size,
+        .guest_abi_version = 2U, .data_schema_version = 1U,
+    };
+    memcpy(request.previous_package_sha256, old.package_sha256, 32);
+    assert(SHA256(failed_package.bytes, failed_package.size,
+                  request.package_sha256) != NULL);
+    uint32_t prepared_sequence = 0U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, &failed_package, &prepared_sequence) ==
+        ESP_BASE_CONTAINER_PREPARED);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence, request.operation_id, boot_id) ==
+        ESP_BASE_CONTAINER_RUNNING);
+    const uint8_t event[] = {1U};
+    assert(esp_base_container_product_offer_event(request.package_sha256,
+        1U, event, sizeof event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0;
+         attempt < 500U && esp_base_container_product_event_accepting();
+         ++attempt) vTaskDelay(1U);
+    assert(!esp_base_container_product_event_accepting());
+    esp_base_container_event_observation_t observation = {0};
+    assert(esp_base_container_product_event_observation(&observation) ==
+           ESP_BASE_CONTAINER_EVENT_OBSERVED &&
+           observation.event_sequence == 1U && !observation.runtime_ok);
+    const uint32_t trial_sequence = prepared_sequence + 1U;
+    const unsigned writes_before_wrong = store.blob_writes;
+    assert(!esp_base_container_product_abandon_package_trial(&claim,
+        trial_sequence - 1U, request.operation_id));
+    assert(store.blob_writes == writes_before_wrong);
+    const bool abandoned = esp_base_container_product_abandon_package_trial(
+        &claim, trial_sequence, request.operation_id);
+    if (!abandoned) fprintf(stderr,
+        "event failure state: joined=%d reclaimed=%d stop=%d result=%d active=%d\n",
+        !s_product.thread_joinable, s_product.native_reclaimed,
+        s_product.stop_succeeded, atomic_load(&s_product.result),
+        atomic_load(&s_product.instance_active));
+    assert(abandoned);
+    esp_base_container_binding_snapshot_t restored = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &restored) ==
+           ESP_BASE_CONTAINER_BINDING_OK &&
+           restored.container_sequence == trial_sequence + 1U &&
+           restored.package_present &&
+           memcmp(restored.package_sha256, old.package_sha256, 32) == 0);
+    assert(esp_base_container_product_boot(&claim, boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+    free(key.bytes);
+    free(normal_package.bytes);
+    free(failed_package.bytes);
+    puts("container_product_event_failure: signed guest trap, ABORTED and old guest reopen passed");
+}
+
 static void run_uninstall_with_fallback(const file_t *key, const file_t *package,
                                         const char boot_id[37])
 {
@@ -1677,6 +1759,10 @@ int main(int argc, char **argv)
 {
     if (argc == 3 && strcmp(argv[2], "deadline") == 0) {
         run_deadline_product(argv[1]);
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[2], "event-failure") == 0) {
+        run_event_failure_trial(argv[1]);
         return 0;
     }
     assert(argc == 2);

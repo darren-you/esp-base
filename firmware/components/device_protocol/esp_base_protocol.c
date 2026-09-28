@@ -1001,6 +1001,52 @@ static void poll_product(void)
     save_outcome(s_product_slot, "unknown", "storage_uncertain", false);
 }
 
+static void poll_product_trial_failure(void)
+{
+    if (!s_product_active || !s_product_trial_running ||
+        esp_base_container_product_event_accepting()) return;
+    esp_base_storage_claim_t claim = {0};
+    if (!esp_base_storage_claim(s_context.storage_owner, &claim)) return;
+    bool recovered = esp_base_container_product_abandon_package_trial(
+        &claim, s_product_trial_sequence, s_product_operation_id);
+    esp_base_container_binding_snapshot_t binding = {0};
+    if (recovered) {
+        recovered = esp_base_container_product_binding_snapshot(&claim, &binding) ==
+            ESP_BASE_CONTAINER_BINDING_OK &&
+            binding.container_sequence == s_product_trial_sequence + 1U;
+    }
+    if (recovered) {
+        const esp_base_container_boot_result_t boot =
+            esp_base_container_product_boot(&claim, s_boot_id);
+        recovered = boot == (binding.package_present ?
+            ESP_BASE_CONTAINER_RUNNING : ESP_BASE_CONTAINER_EMPTY);
+    }
+    if (recovered) {
+        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+        if (ledger != NULL) {
+            const ebase_product_ledger_io_t io =
+                ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+            recovered = ebase_product_ledger_open(ledger, &io) == EBASE_LEDGER_OK &&
+                ebase_product_ledger_finish(ledger, &io,
+                    s_product_operation_sequence, s_product_operation_id,
+                    s_product_fingerprint, EBASE_PRODUCT_FAILED, 1U,
+                    binding.container_sequence) == EBASE_LEDGER_OK;
+            free(ledger);
+        } else recovered = false;
+    }
+    if (recovered && esp_base_storage_release(&claim)) {
+        s_product_trial_running = false;
+        s_product_active = false;
+        save_outcome(s_product_slot, "failed", "product_runtime_failed", false);
+        return;
+    }
+    /* A partial rollback cannot be retried as a new product operation. */
+    s_product_storage_claim = claim;
+    s_product_trial_running = false;
+    s_config_uncertain = true;
+    save_outcome(s_product_slot, "unknown", "storage_uncertain", false);
+}
+
 static void finish_product_without_worker(size_t slot, ebase_product_ledger_t *ledger,
                                           bool uncertain, const char *state,
                                           const char *error)
@@ -1639,6 +1685,7 @@ static void control_task(void *argument)
         poll_configuration(now);
         poll_ota();
         poll_product();
+        poll_product_trial_failure();
         if (now >= next_time_poll) {
             esp_base_time_poll();
             next_time_poll = now + 1000;

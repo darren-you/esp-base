@@ -58,6 +58,11 @@ def main() -> None:
         (temporary / "deadline.pkg").write_bytes(signed_package(
             private, guest.read_bytes(), expired))
         subprocess.run([str(binary), str(temporary), "deadline"], check=True)
+        event_failed = copy.deepcopy(spec)
+        event_failed["product_version"] = "v0-1-2"
+        (temporary / "event-loop.pkg").write_bytes(signed_package(
+            private, (guests / "event-loop.wasm").read_bytes(), event_failed))
+        subprocess.run([str(binary), str(temporary), "event-failure"], check=True)
 
 
 if __name__ == "__main__":
