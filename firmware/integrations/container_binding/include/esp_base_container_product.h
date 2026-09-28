@@ -70,8 +70,10 @@ typedef enum {
 } esp_base_container_binding_result_t;
 
 /* Under Base's app/otadata claim, read the durable ECS2 metadata against two
- * observations of the selected signed firmware. This exposes the exact
- * uninstall precondition; it does not validate package bytes or guest health. */
+ * observations of the selected signed firmware. During this boot's exact
+ * product-only trial, return the still-confirmed old binding and the current
+ * ECS2 sequence; the candidate is not reported as confirmed. This is a
+ * read-only status/precondition, not package-byte or guest-health proof. */
 esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
     esp_base_container_binding_snapshot_t *out);

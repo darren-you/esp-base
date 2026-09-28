@@ -350,6 +350,12 @@ static void check_product_package_guard(void)
            ledger.count == 1U &&
            ledger.records[0].state == EBASE_PRODUCT_PREPARED &&
            ledger.records[0].kind == EBASE_PRODUCT_INSTALL);
+    s_reply_mqtt = true;
+    handle_line("product-status-45", sizeof("product-status-45") - 1U, NULL);
+    s_reply_mqtt = false;
+    expect_reply("succeeded", NULL);
+    assert(strstr(latest_reply, "\"pending_operation_id\":\"44444444-4444-4444-8444-000000000040\"") &&
+           strstr(latest_reply, "\"container_sequence\":9"));
     product_package(40U);
     expect_reply("running", NULL);
     product_package(41U);
@@ -1288,6 +1294,8 @@ esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
     assert(esp_base_storage_claim_active(claim) && prepared_sequence == 8U &&
            operation_id != NULL && !strcmp(boot_id, s_boot_id));
     ++package_trial_calls;
+    if (package_trial_result == ESP_BASE_CONTAINER_RUNNING)
+        binding_sequence = prepared_sequence + 1U;
     return package_trial_result;
 }
 

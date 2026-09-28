@@ -1931,10 +1931,24 @@ static econtainer_slots_result_t read_binding_snapshot(
     const econtainer_slots_result_t loaded = econtainer_slots_load(
         &s_product.provider.io, &s_product.provider.geometry, &state);
     if (loaded != ECONTAINER_SLOTS_OK) return loaded;
+    const bool live_package_trial =
+        state.phase == ECONTAINER_SLOT_TRIAL_STARTED &&
+        s_product.package_trial_mode && s_product.trial_mode &&
+        s_product.package_trial_sequence != UINT32_MAX &&
+        state.sequence == s_product.package_trial_sequence + 1U &&
+        state.operation.kind == ECONTAINER_SLOT_PACKAGE_WRITE &&
+        !state.operation.firmware_transition &&
+        memcmp(state.operation.operation_id, s_product.package_trial_operation_id,
+               sizeof state.operation.operation_id) == 0 &&
+        memcmp(state.operation.target_firmware_sha256,
+               firmware_set->running_firmware_sha256, 32) == 0 &&
+        memcmp(state.operation.trial_boot_id, s_product.boot_id,
+               sizeof state.operation.trial_boot_id) == 0;
     if (state.sequence == 0U ||
         (state.phase != ECONTAINER_SLOT_IDLE &&
          state.phase != ECONTAINER_SLOT_CONFIRMED &&
-         state.phase != ECONTAINER_SLOT_ABORTED) ||
+         state.phase != ECONTAINER_SLOT_ABORTED &&
+         !live_package_trial) ||
         (state.operation.firmware_transition &&
          (state.phase == ECONTAINER_SLOT_ABORTED ||
           (state.phase == ECONTAINER_SLOT_CONFIRMED &&

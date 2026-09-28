@@ -1182,6 +1182,17 @@ static void run_prepare_preserves_confirmed(const file_t *key,
            trial.phase == ECONTAINER_SLOT_TRIAL_STARTED &&
            trial.bindings[index].slot == original_slot &&
            esp_base_container_product_event_accepting());
+    esp_base_container_binding_snapshot_t pending_binding = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &pending_binding) ==
+           ESP_BASE_CONTAINER_BINDING_OK &&
+           pending_binding.container_sequence == trial.sequence &&
+           pending_binding.package_present &&
+           memcmp(pending_binding.package_sha256,
+                  original.bindings[index].package_sha256, 32) == 0);
+    s_product.package_trial_operation_id[0] ^= 1U;
+    assert(esp_base_container_product_binding_snapshot(&claim, &pending_binding) ==
+           ESP_BASE_CONTAINER_BINDING_UNCERTAIN);
+    s_product.package_trial_operation_id[0] ^= 1U;
     assert(!esp_base_container_product_confirm_firmware(&claim));
     const uint8_t trial_event[] = {1U, 2U, 3U};
     assert(esp_base_container_product_offer_event(
@@ -1273,6 +1284,12 @@ static void run_package_trial_confirmation(const file_t *key,
     assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
            trial.phase == ECONTAINER_SLOT_TRIAL_STARTED &&
            trial.sequence == prepared_sequence + 1U);
+    esp_base_container_binding_snapshot_t pending_binding = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &pending_binding) ==
+           ESP_BASE_CONTAINER_BINDING_OK &&
+           pending_binding.container_sequence == trial.sequence &&
+           !pending_binding.package_present &&
+           digest_zero(pending_binding.package_sha256));
     uint32_t confirmed_sequence = 123U;
     const unsigned before_event = store.blob_writes;
     assert(!esp_base_container_product_confirm_package_trial(&claim,
