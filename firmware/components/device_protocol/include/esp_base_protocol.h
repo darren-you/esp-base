@@ -15,6 +15,7 @@ typedef struct {
     uint32_t flash_size_bytes;
     const char *reset_reason;
     esp_base_storage_owner_t *storage_owner;
+    esp_base_storage_owner_t *flash_io_owner;
     const efrp_aead_flash_store_t *frp_flash_store;
 } esp_base_protocol_context_t;
 

@@ -21,6 +21,7 @@ static unsigned confirm_calls, confirm_writes;
 static bool observation_changes;
 static bool load_fails, load_empty, confirm_fails, reconcile_untrusted;
 static esp_base_storage_owner_t owner;
+static esp_base_storage_owner_t flash_owner;
 static esp_base_storage_claim_t claim;
 static const char operation_id[] = "11111111-1111-4111-8111-111111111111";
 static const char boot_id[] = "22222222-2222-4222-8222-222222222222";
@@ -72,6 +73,8 @@ static void fixture(bool configured, bool two)
     observation_changes = load_fails = load_empty = confirm_fails =
         reconcile_untrusted = false;
     esp_base_storage_owner_init(&owner);
+    esp_base_storage_owner_init(&flash_owner);
+    esp_base_container_product_set_flash_io_owner(&flash_owner);
     claim = (esp_base_storage_claim_t){0};
     assert(esp_base_storage_claim(&owner, &claim));
     if (configured) {
@@ -235,7 +238,9 @@ econtainer_slots_result_t econtainer_slots_drop_aborted_firmware(
 bool econtainer_slots_idf_bind(econtainer_slots_idf_provider_t *provider,
                                const econtainer_slots_idf_config_t *config)
 {
-    assert(provider && config && config->storage_lock);
+    assert(provider && config && config->storage_lock &&
+           config->acquire_flash_io && config->release_flash_io &&
+           config->flash_io_context == &s_product);
     ++bind_calls;
     memset(provider, 0, sizeof *provider);
     return true;
@@ -244,6 +249,7 @@ bool econtainer_slots_idf_bind(econtainer_slots_idf_provider_t *provider,
 esp_err_t nvs_flash_init_partition(const char *label)
 {
     assert(label && label[0]);
+    assert(atomic_load(&flash_owner.active_token) != 0U);
     return ESP_OK;
 }
 

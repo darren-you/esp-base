@@ -25,7 +25,7 @@ flowchart LR
     recovery -->|"A 仍运行"| retire
 ```
 
-`esp_base_container_with_firmware_set` 使用调用者**已持有**的 Base claim，不再二次 claim。它支持 `CONFIRMED`、`PENDING_TRIAL`，以及仅在 `eota_prepare` 成功后、`eota_select` 前使用精确收据的 `PREPARED_CANDIDATE`；每次逐字段映射实际可启动签名固件集合，执行一次 Container 操作后复读。不一致返回 `UNCERTAIN`。provider 的 NVS/Flash 信号量与 Base 高层 claim 分开。
+`esp_base_container_with_firmware_set` 使用调用者**已持有**的 Base claim，不再二次 claim。它支持 `CONFIRMED`、`PENDING_TRIAL`，以及仅在 `eota_prepare` 成功后、`eota_select` 前使用精确收据的 `PREPARED_CANDIDATE`；每次逐字段映射实际可启动签名固件集合，执行一次 Container 操作后复读。不一致返回 `UNCERTAIN`。provider 的槽操作信号量与 Base 高层 claim 分开；其包分区、专用 NVS 初始化及 blob 操作通过启动时绑定的短时 owner 与 FRP scratch 串行。映射从 map 至 unmap 持有该租约，含验包与解释器装载的持有时间仍待测量。OTA app 和 Base 其他 NVS 路径尚未接入，不能据此声称全局 Flash 仲裁已完成。
 
 产品策略通过 `Kconfig` 的显式构建输入提供：产品 ID、RSA-3072 PKCS#1 公钥 DER 十六进制与 key ID、包分区和 NVS 分区的真实 label/offset/size、三个绝对槽区域，以及独立的 Wasm 大小、栈、事件队列、指令、宿主调用、capability、timer/log 与入口期限上限。公钥必须来自仓外受控产品信任源；签名包中的请求不能扩大这些授权。固定 ABI 2 只接受一页 Wasm 线性内存，持久包记录使用指定 NVS 分区的 `base_pkg/slots`。受控测试输入只供仓外容量原型，不能冒充生产信任源。
 
@@ -37,7 +37,7 @@ flowchart LR
 
 内部 `esp_base_container_product_uninstall` 在有效 Base claim 下，以独立签名固件集合双次观察、精确 ECS2 sequence、当前包 SHA-256 和新的 operation UUID 预检当前绑定，避免把参数错误变成 guest 停机。运行中的已确认 guest 由该入口停止、关闭并 join；已 `STOPPED` 或因包损坏而 `BLOCKED` 的 guest 只有在同一 worker 已 join 且 native runtime 未创建或确已停止、关闭后才能进入卸载。它以该真实回收证明调用 `esp-container@3b5f16f` 的公开 `econtainer_slots_uninstall`，只清运行固件的包绑定。Base 在 Container 提交/读回之外再次读取 ECS2，核对新的 sequence、无包 operation、清空的当前绑定及逐字段未变的回退固件绑定。只有此读回和固件双观察全部成功才开放同次启动 `product_boot`，此时真实槽返回 `EMPTY`；失去 ECS2 key、停止、提交、独立读回或物理固件观察不确定均保留本 boot claim、禁止重开，需由新启动从持久事实重新对账。签名包原始 Flash 与回退包引用不会被擦除。
 
-当前尚无公开 `product.*` 设备命令、产品包来源、持久请求收据或设备端 `product.result`。ECS2 只保留最近 operation ID 和卸载后的无包状态，不保留旧包 SHA/长度；跨 boot 的请求参数与历史结果关联仍须在控制器持久账本合同中完成，不能由该 ECS2 记录推断。此内部入口不授权物理设备写入。
+当前 Base 候选仅有只读 `product.result` 和独立的最近八条持久操作账本；尚无公开产品写命令或包来源，账本未接物理生命周期。ECS2 只保留最近 operation ID 和卸载后的无包状态，不保留旧包 SHA/长度；跨 boot 的请求参数与历史结果不能由 ECS2 单独推断。此内部入口不授权物理设备写入。
 
 当前只允许**持久无包绑定**进入联合固件 OTA。`ota.start` 在同一 owner 下取得已对账的签名 A/原独立 B 与 ECS2 sequence，并在写 app 槽前持久登记和读回 V2 收据。登记前的只读快照按实际路径检查 ECS2 序号余量：C 成功时需要 stage、begin_trial、mark_healthy、confirm 共 4 次提交；若 C 在 `HEALTH_VERIFIED` 后回滚到 A，恢复需要 stage、begin_trial、mark_healthy、abandon、drop 共 5 次。原 A/B 还需先退役旧 B，多 1 次；原 A-only 无需退役。因此 A/B 至少保留 6 个序号，A-only 至少保留 5 个。余量不足直接拒绝，不登记收据或擦除旧 B。worker 重新核对该收据后先调用 `eota_retire_inactive`：擦除确切 inactive 槽首扇区、读回首字节 `0xff`，使旧 B 的 otadata 失效，并核对 A 仍为 VALID 且被选为 boot；然后调用 `econtainer_slots_retire_inactive_firmware` 将 A/B 持久绑定退役为 A-only。原本已是 A-only 时仍验证物理单槽事实和原 sequence。只有退役完成才运行 `eota_prepare` 下载 C，以 prepare 收据重新核对 A/C，调用 `econtainer_slots_stage_firmware(NO_PACKAGE)` 持久 stage，成功后才 `eota_select`。C 的 `PENDING_VERIFY` boot 必须由 Container 返回精确 `BOOT_START_TRIAL`，先 `begin_trial`，再经过 Base 本地控制进展与稳定窗口、`mark_healthy`、`eota_confirm_pending`、VALID 与签名集合回读，最后 `confirm`。C 已 VALID 而 Container 仍为 `HEALTH_VERIFIED` 的复位恢复，在本 boot 完成本地基本检查后，用持久旧 `trial_boot_id` 补交 confirm。
 
@@ -49,7 +49,7 @@ flowchart LR
 
 带包产品在 OTA 写 inactive app **之前**拒绝：Base 尚无真实业务事件来源与代表性事件授权，不能以 `init`、平台管理命令或可选 timer 冒充 guest 事件进展。Container 已提供 REUSE 与 WRITE 状态合同，但 Base 目前也没有新包来源；两条路径仍未接线。已确认包的正常启动入口继续可用。退役、下载、签名、stage 或选 boot 中事实不确定时，worker 留住本 boot 的 claim 并报告 `unknown/storage_uncertain`，不会当作普通失败释放；claim 本身不跨重启，跨重启恢复仅由原 V2 收据授权。上述是软件恢复合同，host 假件不能模拟实板掉电时的 Flash/NVS 原子性、bootloader 后备扫描、双槽迁移或 guest 与 FRP/MQTT 并发。
 
-当前清单精确锁定 `esp-container@adef78ff28bc868e1c930b61fd232207aad31a3e` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
+当前清单精确锁定 `esp-container@f82e4b8f57eb6ae75309d5cfb7472feef2380912` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 无包分区与产品授权，不运行 guest；ESP32 仍只有仓外产品测试输入和离线布局。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
 
 历史 Base `3df1c33` 与当时的精确锁曾以仓外测试产品策略完成两目标深链接核验，两个 ELF 都确实包含 `econtainer_product_open` 与 WAMR load/instantiate/call。ESP32 测试键 ECDSA v1 签名镜像为 `0x10fff4`，官方验签通过，双 `0x120000` app 各余 `0x1000c`。C3 仅在隔离副本使用三 `0x82000` 包槽与双 `0x118000` app 的候选表，测试键 RSA v2 签名中间镜像为 `0x121000`，官方容量门判每槽溢出 `0x9000`，所以该布局没有可用构建。证据与隔离改动见[开发检查点](../../../docs/operations/development-checkpoint.md)；没有把测试策略、候选 C3 表或密钥写入本仓。
 

@@ -181,6 +181,34 @@ def status(port):
         return value
 
 
+def product_result(port, current, operation_id):
+    canonical_id(operation_id)
+    request_id = str(uuid.uuid4())
+    send(port, {"protocol_version": 1, "request_id": request_id,
+                "command": "product.result", "parameters": {"operation_id": operation_id}})
+    for value in read_result(port, request_id, time.monotonic() + 5):
+        if value["device_id"] != current["device_id"] or value["boot_id"] != current["boot_id"]:
+            raise ValueError("产品结果来自另一设备或启动；状态为 unknown")
+        result = value["result"]
+        if result is not None:
+            if result.get("operation_id") != operation_id:
+                raise ValueError("产品结果 operation_id 不匹配；状态为 unknown")
+            sequence = result.get("operation_sequence")
+            container_sequence = result.get("container_sequence")
+            code = result.get("result_code")
+            digest = result.get("package_sha256")
+            if (type(sequence) is not int or not 1 <= sequence <= 4294967295 or
+                    type(container_sequence) is not int or not 1 <= container_sequence <= 4294967295 or
+                    type(code) is not int or not 0 <= code <= 255 or
+                    result.get("kind") not in {"install", "upgrade", "uninstall"} or
+                    not isinstance(digest, str) or len(digest) != 64 or
+                    any(char not in "0123456789abcdef" for char in digest)):
+                raise ValueError("设备产品结果字段无效；状态为 unknown")
+        elif value["state"] != "unknown":
+            raise ValueError("设备产品结果缺少持久证据；状态为 unknown")
+        return value
+
+
 def validate_configuration(config):
     if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "frp", "business"}:
         raise ValueError("配置字段不完整")
@@ -316,13 +344,18 @@ def main():
     parser.add_argument("--port", required=True, help="本轮枚举的 C3 USB Serial/JTAG 或 ESP32 UART 端点")
     parser.add_argument("--device-id", help="预期持久 UUID；写命令必填")
     parser.add_argument("--config-file", help="本机 0600 JSON 完整配置文件；仅用于 config.set")
+    parser.add_argument("--operation-id", help="查询 product.result 的原始操作 UUID")
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
-    parser.add_argument("command", choices=["status", "restart", "config.set"])
+    parser.add_argument("command", choices=["status", "restart", "config.set", "product.result"])
     args = parser.parse_args()
-    if args.command != "status" and not args.device_id:
+    if args.command in {"restart", "config.set"} and not args.device_id:
         parser.error("写命令必须指定已核对的 --device-id")
     if (args.command == "config.set") != bool(args.config_file):
         parser.error("config.set 必须且只能配合 --config-file")
+    if (args.command == "product.result") != bool(args.operation_id):
+        parser.error("product.result 必须且只能配合 --operation-id")
+    if args.operation_id:
+        canonical_id(args.operation_id)
     config = load_private_config(args.config_file) if args.config_file else None
     if args.device_id:
         canonical_id(args.device_id)
@@ -351,10 +384,18 @@ def main():
             current = dict(observed, request_id=request_id)
         if args.command == "config.set":
             current = apply_configuration(port, current, config)
+        if args.command == "product.result":
+            current = product_result(port, current, args.operation_id)
         if args.json:
             print(json.dumps(current, ensure_ascii=False))
         else:
             print("ESP Base 串口操作\n  状态  " + current["state"] + "\n  设备  " + current["device_id"] + "\n  启动  " + current["boot_id"])
+            if current["error_code"]:
+                print("  原因  " + current["error_code"])
+            if args.command == "product.result":
+                print("  操作  " + args.operation_id)
+                if current["result"] is not None:
+                    print("  序号  " + str(current["result"]["operation_sequence"]))
     finally:
         port.close()
 

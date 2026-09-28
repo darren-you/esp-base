@@ -1,6 +1,6 @@
 dependencies:
   esp_container:
-    component_hash: 7552b87b4ff77cc236df95e208d6b4b3f1434444bcf3101a1987bd078453ae37
+    component_hash: a84a1efdf6a10549c89e03481003a364345cf07d9b1a45bf89f52fb352666f81
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -11,7 +11,7 @@ dependencies:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: adef78ff28bc868e1c930b61fd232207aad31a3e
+    version: f82e4b8f57eb6ae75309d5cfb7472feef2380912
   esp_frp:
     component_hash: 467ebd742c3dc1c7fd9a6b4ebf704808014b0197839259ca5af8a08326526327
     dependencies:
@@ -81,6 +81,6 @@ direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: 9a1471dbf2990368c6192b42e366dc402eaf988715c79b20616f8e2ac0f080ad
+manifest_hash: 47dd1b8ab1bddd6cd1ed7f9b24d84f7fbe56285e3730a1d15b441241140158da
 target: esp32c3
 version: 3.0.0

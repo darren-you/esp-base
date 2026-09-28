@@ -28,7 +28,10 @@
 static const char *TAG = "esp_base";
 static esp_base_storage_owner_t s_storage_owner;
 static esp_base_storage_claim_t s_boot_storage_claim;
+static esp_base_storage_owner_t s_flash_io_owner;
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+/* A scratch read/write must not inherit the OTA transaction's lifetime.
+ * The provider retains its own record lease between these short I/O claims. */
 static efrp_idf_flash_store_t s_frp_scratch;
 
 static efrp_result_t frp_scratch_with_owner(
@@ -168,16 +171,18 @@ void app_main(void)
     /* Hold the same owner as OTA and the optional Container adapter through
      * startup's storage operations. The guest's lifetime is not a claim. */
     esp_base_storage_owner_init(&s_storage_owner);
+    esp_base_storage_owner_init(&s_flash_io_owner);
+    esp_base_container_product_set_flash_io_owner(&s_flash_io_owner);
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     /* Recover interrupted ciphertext before any pending OTA slot can be
-     * confirmed. No other storage operation has started in this boot. */
+     * confirmed. Keep physical I/O distinct from the long upgrade claim. */
     const efrp_idf_flash_store_config_t scratch = {
         .partition_label = CONFIG_ESP_BASE_FRP_SCRATCH_LABEL,
         .partition_type = ESP_PARTITION_TYPE_DATA,
         .partition_subtype = ESP_PARTITION_SUBTYPE_DATA_UNDEFINED,
         .partition_offset_bytes = CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET,
         .partition_size_bytes = UINT32_C(0x10000),
-        .owner_context = &s_storage_owner,
+        .owner_context = &s_flash_io_owner,
         .with_owner = frp_scratch_with_owner,
     };
     if (!efrp_idf_flash_store_bind(&s_frp_scratch, &scratch) ||
@@ -257,6 +262,7 @@ void app_main(void)
         .flash_size_bytes = identity.flash_size_bytes,
         .reset_reason = safety.reset_reason,
         .storage_owner = &s_storage_owner,
+        .flash_io_owner = &s_flash_io_owner,
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
         .frp_flash_store = efrp_idf_flash_store_callbacks(&s_frp_scratch),
 #endif

@@ -12,6 +12,7 @@
 #include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
 #include "esp_base_container_product.h"
+#include "esp_base_product_ledger_nvs.h"
 #include "esp_attr.h"
 #include "esp_partition.h"
 #include "psa/crypto.h"
@@ -45,6 +46,7 @@ typedef struct {
     esp_base_remote_config_t config;
     const char *reset_reason;
     esp_base_storage_owner_t *storage_owner;
+    esp_base_storage_owner_t *flash_io_owner;
     const efrp_aead_flash_store_t *frp_flash_store;
 } protocol_state_t;
 static protocol_state_t s_context IRAM_BSS_ATTR;
@@ -303,6 +305,45 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
     funlockfile(stdout);
 }
 
+static void reply_product_result(const char *request_id,
+                                 const ebase_product_record_t *record)
+{
+    static const char digits[] = "0123456789abcdef";
+    char digest[65];
+    for (size_t i = 0; i < 32; ++i) {
+        digest[2 * i] = digits[record->package_sha256[i] >> 4];
+        digest[2 * i + 1] = digits[record->package_sha256[i] & 15U];
+    }
+    digest[64] = '\0';
+    const char *kind = record->kind == EBASE_PRODUCT_INSTALL ? "install" :
+        record->kind == EBASE_PRODUCT_UPGRADE ? "upgrade" : "uninstall";
+    const char *state = record->state == EBASE_PRODUCT_SUCCEEDED ? "succeeded" :
+        record->state == EBASE_PRODUCT_FAILED ? "failed" : "unknown";
+    const char *error = record->state == EBASE_PRODUCT_FAILED ? "product_operation_failed" :
+        record->state == EBASE_PRODUCT_PREPARED ? "product_operation_unresolved" : NULL;
+    const int length = snprintf(s_response_json, sizeof s_response_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
+        "\"result\":{\"operation_id\":\"%s\",\"operation_sequence\":%" PRIu32
+        ",\"kind\":\"%s\",\"package_sha256\":\"%s\","
+        "\"container_sequence\":%" PRIu32 ",\"result_code\":%u}}",
+        s_context.device_id, s_boot_id, request_id, state,
+        error ? "\"" : "null", error ? error : "", error ? "\"" : "",
+        record->operation_id, record->sequence, kind, digest,
+        record->container_sequence, (unsigned)record->result_code);
+    if (length < 0 || (size_t)length >= sizeof s_response_json) return;
+    if (s_reply_mqtt) {
+        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
+        return;
+    }
+    flockfile(stdout);
+    fputc('\n', stdout);
+    (void)fwrite(s_response_json, 1, (size_t)length, stdout);
+    fputc('\n', stdout);
+    fflush(stdout);
+    funlockfile(stdout);
+}
+
 static void emit_outcome(size_t slot, bool via_mqtt)
 {
     command_outcome_t *out = &s_outcomes[slot];
@@ -549,6 +590,26 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         else reply(command->request.request_id, result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "failed" : "unknown",
                    result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "ota_signing_unavailable" :
                    result == ESP_BASE_OTA_RECEIPT_NOT_FOUND ? "ota_operation_not_found" : "storage_uncertain", NULL);
+        return;
+    }
+    if (command->kind == EBASE_PRODUCT_RESULT) {
+        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+        if (ledger == NULL) {
+            reply(command->request.request_id, "unknown", "resource_failure", NULL);
+            return;
+        }
+        const ebase_product_ledger_io_t io =
+            ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+        const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+        ebase_product_record_t record;
+        const ebase_product_ledger_result_t found = opened == EBASE_LEDGER_OK ?
+            ebase_product_ledger_query(ledger, command->operation_id, &record) : opened;
+        free(ledger);
+        if (found == EBASE_LEDGER_OK) reply_product_result(command->request.request_id, &record);
+        else reply(command->request.request_id, "unknown",
+                   (found == EBASE_LEDGER_UNKNOWN || found == EBASE_LEDGER_UNINITIALIZED) ?
+                   "product_operation_not_found" :
+                   found == EBASE_LEDGER_BUSY ? "operation_busy" : "storage_uncertain", NULL);
         return;
     }
     if (command->kind == EBASE_CONFIG_SET) {
@@ -843,7 +904,8 @@ esp_err_t esp_base_protocol_load_config(uint32_t *revision)
 
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
-    if (!context || !ebase_is_uuid(context->device_id) || context->storage_owner == NULL) {
+    if (!context || !ebase_is_uuid(context->device_id) || context->storage_owner == NULL ||
+        context->flash_io_owner == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     if (s_started || !s_config_loaded) return ESP_ERR_INVALID_STATE;
@@ -869,6 +931,7 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     s_context.flash_size_bytes = context->flash_size_bytes;
     s_context.reset_reason = context->reset_reason;
     s_context.storage_owner = context->storage_owner;
+    s_context.flash_io_owner = context->flash_io_owner;
     s_context.frp_flash_store = context->frp_flash_store;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     error = esp_base_wifi_start(&s_context.config.wifi);

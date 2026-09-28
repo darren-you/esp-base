@@ -1,5 +1,7 @@
 idf_component_register(SRCS "nvs_capacity_probe.c" INCLUDE_DIRS "."
     REQUIRES nvs_flash remote_config mbedtls esp_partition esp_container)
+target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../../components/device_protocol/include")
 if(NOT DEFINED PROBE_STAGE OR NOT PROBE_STAGE MATCHES "^[123]$")
     message(FATAL_ERROR "Pass -D PROBE_STAGE=1, 2 or 3")
 endif()

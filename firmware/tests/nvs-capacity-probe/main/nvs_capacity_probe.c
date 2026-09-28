@@ -4,9 +4,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_base_remote_config.h"
+#include "esp_base_product_ledger.h"
 #include "esp_container_slots.h"
 #include "esp_container_slots_idf.h"
 #include "esp_partition.h"
@@ -21,8 +23,11 @@
 #define OTA_KEY "operation"
 #define CONTAINER_NAMESPACE "base_pkg"
 #define CONTAINER_KEY "slots"
+#define PRODUCT_NAMESPACE "base_product"
+#define PRODUCT_KEY "operations"
 #define OTA_BYTES 186U
 #define CONTAINER_BYTES ECONTAINER_SLOT_BLOB_BYTES
+#define PRODUCT_BYTES EBASE_PRODUCT_LEDGER_BYTES
 #define FINAL_REVISION 100U
 
 static esp_base_remote_config_t current_config;
@@ -32,10 +37,22 @@ static esp_base_remote_config_t work_config;
 static uint8_t canonical_bytes[EBASE_CONFIG_MAX_BYTES];
 static uint8_t ota_bytes[OTA_BYTES];
 static uint8_t container_bytes[CONTAINER_BYTES];
-static uint8_t side_readback[CONTAINER_BYTES];
+static uint8_t product_bytes[PRODUCT_BYTES];
+static uint8_t side_readback[PRODUCT_BYTES];
 static uint8_t previous_digest[32];
 static econtainer_slots_idf_provider_t container_provider;
 static SemaphoreHandle_t container_storage_lock;
+static SemaphoreHandle_t flash_io_lock;
+
+static bool acquire_flash_io(void *context)
+{
+    return xSemaphoreTake((SemaphoreHandle_t)context, 0) == pdTRUE;
+}
+
+static void release_flash_io(void *context)
+{
+    (void)xSemaphoreGive((SemaphoreHandle_t)context);
+}
 
 static void put_u32(uint8_t *bytes, uint32_t value)
 {
@@ -63,7 +80,8 @@ static uint32_t container_crc32(const uint8_t *bytes, size_t size)
 static bool container_initialize_or_load(void)
 {
     container_storage_lock = xSemaphoreCreateMutex();
-    if (container_storage_lock == NULL) return false;
+    flash_io_lock = xSemaphoreCreateMutex();
+    if (container_storage_lock == NULL || flash_io_lock == NULL) return false;
     const econtainer_slots_idf_config_t config = {
         .package_partition_label = "product_pkgs",
         .package_partition_offset_bytes = 0x260000,
@@ -76,6 +94,9 @@ static bool container_initialize_or_load(void)
         .nvs_namespace = CONTAINER_NAMESPACE,
         .nvs_key = CONTAINER_KEY,
         .storage_lock = container_storage_lock,
+        .acquire_flash_io = acquire_flash_io,
+        .release_flash_io = release_flash_io,
+        .flash_io_context = flash_io_lock,
     };
     if (!econtainer_slots_idf_bind(&container_provider, &config)) return false;
     econtainer_slots_state_t state;
@@ -172,6 +193,37 @@ static void make_container(uint32_t revision)
     put_u32(container_bytes + 8, revision + 1U);
     put_u32(container_bytes + CONTAINER_BYTES - 4U,
             container_crc32(container_bytes, CONTAINER_BYTES - 4U));
+}
+
+static void make_product(uint32_t revision, bool prepared)
+{
+    /* Match the fixed-size eight-record ledger and its two writes per product
+     * operation. This probes NVS capacity, not physical lifecycle safety. */
+    memset(product_bytes, 0, sizeof product_bytes);
+    memcpy(product_bytes, "EPRD", 4);
+    product_bytes[4] = 1;
+    const uint8_t count = revision < EBASE_PRODUCT_LEDGER_SLOTS ?
+        (uint8_t)revision : EBASE_PRODUCT_LEDGER_SLOTS;
+    product_bytes[5] = count;
+    put_u32(product_bytes + 6, revision);
+    for (uint8_t index = 0; index < count; ++index) {
+        const uint32_t sequence = revision - count + 1U + index;
+        uint8_t *record = product_bytes + 10U + (size_t)index * 112U;
+        put_u32(record, sequence);
+        char operation_id[EBASE_PRODUCT_ID_BYTES];
+        const int written = snprintf(operation_id, sizeof operation_id,
+                                     "00000000-0000-4000-8000-%012" PRIx32, sequence);
+        if (written != 36) abort();
+        memcpy(record + 4, operation_id, sizeof operation_id);
+        memset(record + 41, 0x5a, 32);
+        put_u32(record + 41, sequence);
+        record[73] = 1; /* install */
+        record[74] = prepared && index + 1U == count ? 1 : 2;
+        memset(record + 76, 0xab, 32);
+        put_u32(record + 108, sequence + 1U);
+    }
+    put_u32(product_bytes + PRODUCT_BYTES - 4U,
+            container_crc32(product_bytes, PRODUCT_BYTES - 4U));
 }
 
 static esp_err_t write_and_check(const char *name, const char *key,
@@ -296,9 +348,25 @@ static bool run_steps(uint32_t first, uint32_t last)
                    revision, (int)side_error);
             return false;
         }
+        make_product(revision, true);
+        side_error = write_and_check(PRODUCT_NAMESPACE, PRODUCT_KEY,
+                                     product_bytes, sizeof product_bytes);
+        if (side_error != ESP_OK) {
+            printf("PROBE_FAIL=product_prepared desired=%" PRIu32 " code=%d\n",
+                   revision, (int)side_error);
+            return false;
+        }
+        make_product(revision, false);
+        side_error = write_and_check(PRODUCT_NAMESPACE, PRODUCT_KEY,
+                                     product_bytes, sizeof product_bytes);
+        if (side_error != ESP_OK) {
+            printf("PROBE_FAIL=product_terminal desired=%" PRIu32 " code=%d\n",
+                   revision, (int)side_error);
+            return false;
+        }
         printf("PROBE_STEP=%" PRIu32 " config_sha256=", revision);
         print_digest(digest);
-        printf(" ota=ok container=ok\n");
+        printf(" ota=ok container=ok product=ok\n");
         memcpy(previous_digest, digest, sizeof digest);
         have_previous = true;
         print_stats(revision);
@@ -309,6 +377,7 @@ static bool run_steps(uint32_t first, uint32_t last)
 static bool verify_reboot(void)
 {
     uint8_t digest[32], observed_ota[OTA_BYTES], observed_container[CONTAINER_BYTES];
+    static uint8_t observed_product[PRODUCT_BYTES];
     const bool config_valid =
         ebase_config_valid(&current_config) &&
         esp_base_remote_config_with_canonical_bytes(&current_config,
@@ -318,9 +387,14 @@ static bool verify_reboot(void)
     const esp_err_t container_error = read_side(CONTAINER_NAMESPACE, CONTAINER_KEY,
                                                 observed_container,
                                                 sizeof observed_container);
+    const esp_err_t product_error = read_side(PRODUCT_NAMESPACE, PRODUCT_KEY,
+                                              observed_product,
+                                              sizeof observed_product);
     const uint32_t ota_revision = ota_error == ESP_OK ? get_u32(observed_ota + 86) : 0;
     const uint32_t container_revision =
         container_error == ESP_OK ? get_u32(observed_container + 8) - 1U : 0;
+    const uint32_t product_revision =
+        product_error == ESP_OK ? get_u32(observed_product + 6) : 0;
     printf("PROBE_RESTART_CONFIG_REV=%" PRIu32 " valid=%d sha256=",
            current_config.revision, config_valid);
     if (config_valid) print_digest(digest);
@@ -329,14 +403,19 @@ static bool verify_reboot(void)
            ota_revision, (int)ota_error);
     printf("PROBE_RESTART_CONTAINER_REV=%" PRIu32 " code=%d\n",
            container_revision, (int)container_error);
+    printf("PROBE_RESTART_PRODUCT_REV=%" PRIu32 " code=%d\n",
+           product_revision, (int)product_error);
     if (ota_error == ESP_OK) make_ota(ota_revision);
     if (container_error == ESP_OK) make_container(container_revision);
+    if (product_error == ESP_OK) make_product(product_revision, false);
     const bool intact = config_valid && ota_error == ESP_OK &&
-        container_error == ESP_OK &&
+        container_error == ESP_OK && product_error == ESP_OK &&
         memcmp(observed_ota, ota_bytes, OTA_BYTES) == 0 &&
         memcmp(observed_container, container_bytes, CONTAINER_BYTES) == 0 &&
+        memcmp(observed_product, product_bytes, PRODUCT_BYTES) == 0 &&
         ota_revision == current_config.revision &&
-        container_revision == current_config.revision;
+        container_revision == current_config.revision &&
+        product_revision == current_config.revision;
     econtainer_slots_state_t state;
     const bool decoded = econtainer_slots_load(&container_provider.io,
                                                &container_provider.geometry,

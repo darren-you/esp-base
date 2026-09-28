@@ -51,9 +51,12 @@ static esp_base_container_boot_result_t container_boot_result;
 static unsigned container_boot_calls, container_trial_calls, container_health_calls;
 static unsigned container_confirm_calls, container_stop_calls;
 static esp_base_storage_owner_t *storage_owner;
+static esp_base_storage_owner_t *container_flash_io_owner;
 static unsigned ota_gate_clears;
 static jmp_buf reboot_target;
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+static esp_base_storage_owner_t *scratch_io_owner;
+static efrp_idf_flash_store_config_t scratch_config;
 static bool scratch_bind_ok, scratch_recover_ok;
 static unsigned scratch_bind_calls, scratch_recover_calls, scratch_erase_calls;
 #endif
@@ -91,6 +94,8 @@ static void reset_case(void)
     ota_gate_clears = 0;
     storage_owner = NULL;
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    scratch_io_owner = NULL;
+    scratch_config = (efrp_idf_flash_store_config_t){0};
     scratch_bind_ok = scratch_recover_ok = true;
     scratch_bind_calls = scratch_recover_calls = scratch_erase_calls = 0U;
 #endif
@@ -104,11 +109,12 @@ bool efrp_idf_flash_store_bind(efrp_idf_flash_store_t *provider,
            !strcmp(config->partition_label, "frp_scratch") &&
            config->partition_type == ESP_PARTITION_TYPE_DATA &&
            config->partition_subtype == ESP_PARTITION_SUBTYPE_DATA_UNDEFINED &&
-           config->partition_offset_bytes == 0x3e6000U &&
+           config->partition_offset_bytes == CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET &&
            config->partition_size_bytes == UINT32_C(0x10000) &&
            config->with_owner != NULL);
     ++scratch_bind_calls;
-    storage_owner = config->owner_context;
+    scratch_io_owner = config->owner_context;
+    scratch_config = *config;
     provider->config = *config;
     return scratch_bind_ok;
 }
@@ -126,8 +132,19 @@ static efrp_result_t scratch_erase(void *context)
     assert(context != NULL);
     ++scratch_erase_calls;
     esp_base_storage_claim_t competing = {0};
-    assert(!esp_base_storage_claim(storage_owner, &competing));
+    assert(scratch_io_owner != NULL &&
+           !esp_base_storage_claim(scratch_io_owner, &competing));
     return scratch_recover_ok ? EFRP_OK : EFRP_STORAGE_ERROR;
+}
+
+static efrp_result_t scratch_during_ota(void *context)
+{
+    (void)context;
+    assert(storage_owner != NULL && scratch_io_owner != storage_owner);
+    esp_base_storage_claim_t competing = {0};
+    assert(!esp_base_storage_claim(storage_owner, &competing));
+    assert(!esp_base_storage_claim(scratch_io_owner, &competing));
+    return EFRP_OK;
 }
 
 efrp_result_t efrp_aead_flash_store_recover(const efrp_aead_flash_store_t *store)
@@ -255,6 +272,11 @@ esp_err_t eota_confirm_pending(eota_current_t *current)
     assert(ota_gate_pending);
     esp_base_storage_claim_t competing = {0};
     assert(storage_owner != NULL && !esp_base_storage_claim(storage_owner, &competing));
+#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
+    assert(scratch_config.with_owner(scratch_config.owner_context,
+                                     scratch_during_ota, NULL) == EFRP_OK);
+    assert(!esp_base_storage_claim(storage_owner, &competing));
+#endif
     image_state = state_after_mark;
     current->state = image_state;
     return image_state == EOTA_STATE_VALID ? ESP_OK :
@@ -331,6 +353,7 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     assert(context != NULL);
     assert(context->storage_owner != NULL);
+    assert(context->flash_io_owner != NULL);
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     assert(context->frp_flash_store != NULL);
 #else
@@ -425,12 +448,19 @@ esp_base_container_boot_result_t esp_base_container_product_boot(
     const esp_base_storage_claim_t *claim, const char boot_id[37])
 {
     ++container_boot_calls;
+    assert(container_flash_io_owner != NULL && container_flash_io_owner != storage_owner);
     assert(boot_id != NULL && boot_id[0] == '3');
     assert(esp_base_storage_claim_active(claim));
     assert(ota_gate_pending);
     esp_base_storage_claim_t competing = {0};
     assert(!esp_base_storage_claim(storage_owner, &competing));
     return container_boot_result;
+}
+
+void esp_base_container_product_set_flash_io_owner(esp_base_storage_owner_t *owner)
+{
+    assert(owner != NULL && owner != storage_owner);
+    container_flash_io_owner = owner;
 }
 
 esp_base_container_boot_result_t esp_base_container_product_start_trial(
@@ -526,7 +556,7 @@ int main(void)
            scratch_recover_calls == 1U && scratch_erase_calls == 1U &&
            nvs_calls == 0U && mark_calls == 0U);
     esp_base_storage_claim_t after_recover_failure = {0};
-    assert(esp_base_storage_claim(storage_owner, &after_recover_failure));
+    assert(esp_base_storage_claim(scratch_io_owner, &after_recover_failure));
     assert(esp_base_storage_release(&after_recover_failure));
 #endif
     reset_case();

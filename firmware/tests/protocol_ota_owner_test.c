@@ -9,6 +9,8 @@
 #include "../components/device_protocol/esp_base_protocol.c"
 
 static esp_base_storage_owner_t owner;
+static uint8_t product_bytes[EBASE_PRODUCT_LEDGER_BYTES];
+static bool product_present;
 static efrp_aead_flash_store_t frp_store;
 static esp_base_ota_receipt_result_t register_result, failure_record_result;
 static eota_result_t prepare_result, select_result, retire_result,
@@ -40,6 +42,9 @@ static void reset_case(void)
     memset(&s_context, 0, sizeof s_context);
     s_context.device_id = "22222222-2222-4222-8222-222222222222";
     s_context.storage_owner = &owner;
+    s_context.flash_io_owner = &owner;
+    product_present = false;
+    memset(product_bytes, 0, sizeof product_bytes);
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard);
     memset(s_outcomes, 0, sizeof s_outcomes);
@@ -155,6 +160,31 @@ static void check_frp_status(const char *request, int expected_http,
 int main(void)
 {
     reset_case();
+    s_reply_mqtt = true;
+    handle_line("product-1", 9, NULL);
+    s_reply_mqtt = false;
+    expect_reply("unknown", "product_operation_not_found");
+    const ebase_product_ledger_io_t product_io = ebase_product_ledger_nvs_io(&owner);
+    ebase_product_ledger_t product_ledger;
+    assert(ebase_product_ledger_open(&product_ledger, &product_io) == EBASE_LEDGER_UNINITIALIZED);
+    assert(ebase_product_ledger_initialize_empty(&product_ledger, &product_io) == EBASE_LEDGER_OK);
+    ebase_product_record_t product_intent = {.sequence = 1U,
+        .container_sequence = 6U, .kind = EBASE_PRODUCT_INSTALL,
+        .state = EBASE_PRODUCT_PREPARED};
+    strcpy(product_intent.operation_id, "44444444-4444-4444-8444-000000000001");
+    memset(product_intent.fingerprint, 0x5a, sizeof product_intent.fingerprint);
+    memset(product_intent.package_sha256, 0xab, sizeof product_intent.package_sha256);
+    assert(ebase_product_ledger_begin(&product_ledger, &product_io, &product_intent) == EBASE_LEDGER_OK);
+    assert(ebase_product_ledger_finish(&product_ledger, &product_io, 1U,
+        product_intent.operation_id, product_intent.fingerprint,
+        EBASE_PRODUCT_SUCCEEDED, 0U, 10U) == EBASE_LEDGER_OK);
+    s_reply_mqtt = true;
+    handle_line("product-1", 9, NULL);
+    s_reply_mqtt = false;
+    expect_reply("succeeded", NULL);
+    assert(strstr(latest_reply, "\"operation_sequence\":1") &&
+           strstr(latest_reply, "\"container_sequence\":10") &&
+           strstr(latest_reply, "\"package_sha256\":\"abab"));
     s_reply_mqtt = true;
     reply("11111111-1111-4111-8111-111111111111", "succeeded", NULL, NULL);
     s_reply_mqtt = false;
@@ -412,7 +442,7 @@ int main(void)
     poll_ota();
     expect_reply("unknown", "storage_uncertain");
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
-    puts("  protocol_ota_owner passed (OTA owner faults; USB FRP storage gate; MQTT write rejection)");
+    puts("  protocol_ota_owner passed (OTA owner faults; product result query; USB FRP storage gate; MQTT write rejection)");
 }
 
 const char *ebase_parse_command(const char *line, size_t length, ebase_command_t *out)
@@ -424,11 +454,13 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     unsigned number = 0;
     const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
     const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
-    assert(configure || query ||
+    const bool product_query = length > 8U && sscanf(line, "product-%u", &number) == 1;
+    assert(configure || query || product_query ||
            (length > 6U && sscanf(line, "start-%u", &number) == 1));
     memset(out, 0, sizeof *out);
     out->kind = configure ? EBASE_CONFIG_SET :
-                query ? EBASE_OTA_RESULT : EBASE_OTA_START;
+                query ? EBASE_OTA_RESULT :
+                product_query ? EBASE_PRODUCT_RESULT : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u", number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
@@ -440,7 +472,7 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
         out->config.wifi.configured = true;
         return NULL;
     }
-    if (query) {
+    if (query || product_query) {
         snprintf(out->operation_id, sizeof out->operation_id,
                  "44444444-4444-4444-8444-%012u", number);
         return NULL;
@@ -451,6 +483,32 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     out->ota.image_size_bytes = 4096;
     memset(out->ota.sha256, 0x5a, sizeof out->ota.sha256);
     return NULL;
+}
+
+static ebase_ledger_io_result_t read_product_ledger(
+    void *context, uint8_t bytes[EBASE_PRODUCT_LEDGER_BYTES])
+{
+    (void)bytes;
+    assert(context == &owner);
+    if (!product_present) return EBASE_LEDGER_IO_NOT_FOUND;
+    memcpy(bytes, product_bytes, sizeof product_bytes);
+    return EBASE_LEDGER_IO_OK;
+}
+
+static ebase_ledger_io_result_t write_product_ledger(
+    void *context, const uint8_t bytes[EBASE_PRODUCT_LEDGER_BYTES])
+{
+    assert(context == &owner);
+    memcpy(product_bytes, bytes, sizeof product_bytes);
+    product_present = true;
+    return EBASE_LEDGER_IO_OK;
+}
+
+ebase_product_ledger_io_t ebase_product_ledger_nvs_io(
+    esp_base_storage_owner_t *flash_io_owner)
+{
+    return (ebase_product_ledger_io_t){read_product_ledger, write_product_ledger,
+                                       flash_io_owner};
 }
 
 const char *ebase_parse_frp_status(const char *json, size_t length, ebase_request_t *out)

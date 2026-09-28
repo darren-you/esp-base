@@ -40,6 +40,8 @@ typedef struct {
     SemaphoreHandle_t ready;
     SemaphoreHandle_t stopped;
     SemaphoreHandle_t storage_lock;
+    esp_base_storage_owner_t *flash_io_owner;
+    esp_base_storage_claim_t flash_io_claim;
     const esp_base_storage_claim_t *claim;
     pthread_t thread;
     bool thread_joinable;
@@ -60,6 +62,28 @@ typedef struct {
 } product_context_t;
 
 static product_context_t s_product;
+
+void esp_base_container_product_set_flash_io_owner(esp_base_storage_owner_t *owner)
+{
+    if (s_product.provider_bound ||
+        esp_base_storage_claim_active(&s_product.flash_io_claim)) return;
+    s_product.flash_io_owner = owner;
+}
+
+static bool acquire_flash_io(void *context)
+{
+    product_context_t *product = context;
+    return product != NULL && product->flash_io_owner != NULL &&
+        esp_base_storage_claim(product->flash_io_owner, &product->flash_io_claim);
+}
+
+static void release_flash_io(void *context)
+{
+    product_context_t *product = context;
+    if (product == NULL || !esp_base_storage_release(&product->flash_io_claim)) {
+        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED short Flash I/O lease release failed");
+    }
+}
 
 /* Every field is an independently approved build input. An entirely empty
  * configuration is the existing no-package Base product; any partial input
@@ -536,7 +560,8 @@ static void *product_thread(void *unused)
 
 static bool ensure_provider(const esp_base_storage_claim_t *claim)
 {
-    if (!esp_base_storage_claim_active(claim) || !policy_present()) return false;
+    if (!esp_base_storage_claim_active(claim) || !policy_present() ||
+        s_product.flash_io_owner == NULL) return false;
     if (s_product.provider_bound) return true;
     /* A failed bind leaves this boot blocked. Do not replace a lock which may
      * already be referenced by the provider or retry with partial state. */
@@ -562,10 +587,19 @@ static bool ensure_provider(const esp_base_storage_claim_t *claim)
         .nvs_namespace = "base_pkg",
         .nvs_key = "slots",
         .storage_lock = s_product.storage_lock,
+        .acquire_flash_io = acquire_flash_io,
+        .release_flash_io = release_flash_io,
+        .flash_io_context = &s_product,
     };
     if (!econtainer_slots_idf_bind(&s_product.provider, &config) ||
-        nvs_flash_init_partition(CONFIG_ESP_BASE_CONTAINER_NVS_LABEL) != ESP_OK) {
+        !acquire_flash_io(&s_product)) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED unapproved partition or NVS");
+        return false;
+    }
+    const esp_err_t initialized = nvs_flash_init_partition(CONFIG_ESP_BASE_CONTAINER_NVS_LABEL);
+    const bool released = esp_base_storage_release(&s_product.flash_io_claim);
+    if (initialized != ESP_OK || !released) {
+        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED NVS initialization or I/O lease");
         return false;
     }
     s_product.provider_bound = true;

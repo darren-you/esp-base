@@ -1,5 +1,9 @@
 # 固件测试
 
+`product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
+
+`command_decoder_test` 另检查只读 `product.result` 原 ID 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown` 与持久成功记录的结果序列化。公开 Python 串口工具的伪设备测试核对原 ID 查询和窗口外 `unknown`；正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
+
 `bash firmware/tests/run_host_tests.sh`（仓库根执行）验证命令身份、启动条件、期限、指纹冲突、重复请求与容量拒绝，并启用 ASan/UBSan。解析测试覆盖逐字节分片、重复/转义键、非法 UTF-8、整数边界、超限排空和 10000 次确定性畸形输入。先运行 `idf.py -C firmware reconfigure` 解析锁定的 cJSON 依赖；测试直接使用该组件。配置测试覆盖最大 7,618 字节规范编码的同步复用、消费失败、工作配置擦除、revision 冲突/耗尽、损坏读取和写前/写后/commit/读回故障；注入的是 SDK 调用结果，不是 NVS 掉电仿真。OTA 测试覆盖槽状态读回、30 秒边界、第 29 秒后控制任务退出、跨窗口新一轮进展、启动失败、控制循环 5 秒活性边界、pending 配置写门、无回退镜像与确认失败后的持久状态；假件不模拟真实 bootloader、Flash 掉电或任务并发。完整 ESP-IDF 编译检查 USB VFS、Wi-Fi 与任务装配。
 
 时间测试注入官方 SNTP 的初始化与同步返回值，验证本次 boot 未同步不就绪、无效时间、初始化失败后重试、调用者字符串生命周期和零等待轮询；pending OTA 启动测试同时核对时间初始化失败不触发回滚。Fake 不模拟 DNS、NTP 报文、系统时钟精度或 Wi-Fi 重连。
@@ -20,7 +24,7 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `storage_owner_test` 验证跨任务 release、10 万次 BUSY 重试不消耗 token、下次成功只加 1、过期 token 拒绝和 `UINT_MAX` 耗尽后释放保留值。`protocol_ota_owner_test` 编译真实 `esp_base_protocol.c` 命令与异步完成分支，注入已解析请求、收据和 OTA worker 结果，验证 owner 忙时不登记收据、同镜像拒绝映射及重复请求回放不创建 worker/退役旧槽、收据已知失败释放、收据不确定保留、worker 创建失败先记录再释放、下载失败完成后释放、选槽状态不明时保留，以及成功选槽到重启仍持有 owner；它不执行真实命令解析、NVS、Flash 或 FreeRTOS 并发。`container_binding_test` 以假 Container 类型与调用记录验证真实 Base 固件集合逐字段映射、同 owner 互斥、观察失败及前后镜像变化时拒绝启动。可选固定 SDK 探针再用公开 Container 真头文件和组件编译本适配，但并不调用包槽 provider 或证明实板写入串行。
 
-`ota_startup_scratch_test` 在 C3 候选几何下编译真实 Base 启动与 storage owner 胶水、假 FRP provider，验证分区绑定/恢复失败均早于 NVS、pending 确认和网络启动，恢复回调运行时 owner 独占且返回后 token 释放。FRP 源仓的假 `esp_partition` 测试负责真实 provider 的分区精确绑定、短读/短写、lease、并发 guard 下 clear 重试、boot 擦除，以及 RAM/Flash reader 在 owner 争用时的路径；本仓启动假件不能替代 FRP provider 测试。当前 OTA 长持 owner 可能使 >4 KiB FRP 记录的 scratch I/O BUSY，记录安全失败，clear 只撤销 RAM lease 并允许关闭 session；这不代表并发活性通过。`frp_owner_test` 另以显式清理错误注入验证旧 client handle 保留和重试，不把该错误归因于 OTA BUSY。测试也不证明真实 Flash 掉电、实板网络或 P6-03。
+`ota_startup_scratch_test` 在 C3 候选几何下编译真实 Base 启动与 storage owner 胶水、假 FRP provider，验证分区绑定/恢复失败均早于 NVS、pending 确认和网络启动；短 I/O claim 在回调期间独占、返回后释放，pending 确认持有升级事务 claim 时仍可取得短 claim。ESP32 的同源定向编译还核对该目标的 scratch offset，启动假件核对 Container 绑定取得独立于升级事务的同一个短时 owner。Container 源仓的 IDF provider 假件验证每次包分区和专用 NVS 操作的短租约及 map/unmap 释放。FRP 源仓的假 `esp_partition` 测试负责真实 provider 的分区精确绑定、短读/短写、lease、并发 guard 下 clear 重试和 boot 擦除。OTA app 与 Base 其他 NVS 尚未接入同一短时 I/O 仲裁，测试不证明最大 FRP 记录与 OTA 下载并存活性、真实 Flash 掉电、实板网络或 P6-03。`frp_owner_test` 另以显式清理错误注入验证旧 client handle 保留和重试。
 
 `protocol_ota_owner_test` 的同一真实命令入口还验证无已恢复 scratch store 时，物理 USB `config.set` 返回 `frp_storage_unavailable`，MQTT `config.set` 仍先返回 `physical_usb_required`；两种拒绝均不启动 Wi-Fi 候选、不写新 revision 或覆盖旧配置。测试使用假规范字节与假哈希，只验证这两个路由的门禁顺序与无副作用。
 `container_product_retire_test` 编译真实产品入口和 Base 双观察适配，使用假 ECS2/SDK 注入精确 A/B 退役、A/C 中断恢复、selected C 身份与 sequence；还覆盖 A/B 需 6 次、A-only 需 5 次 ECS2 提交的 `ota.start` 序号边界，首个不足值必须拒绝且不改变绑定、不退役旧 B，并验证最后可用值在 `HEALTH_VERIFIED` 回滚时可完成 abandon/drop。`protocol_ota_owner_test` 验证快照拒绝时不登记 V2 收据、不启动退役。其余覆盖 V2 `PREPARED` + VALID C + `HEALTH_VERIFIED` 的一次确认、`CONFIRMED` 幂等、错误 operation/sequence/摘要与确认失败不写、无收据时 `PREPARED`/`CONFIRMED` 迁移只读拒绝，以及确实缺键首装。`ota_startup_test` 用产品假件验证 `NOT_FOUND`/`FAILED`/OTA 不可用时的阻断接线、原收据 selected C 成功/失败和本地 pending 窗口。这些假件不模拟 NVS 掉电原子性、真实包映射、bootloader 回退或 guest 执行。

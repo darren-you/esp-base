@@ -141,7 +141,7 @@ def main() -> int:
     revision_ok = args.stage != 3 or all(
         any(line.startswith(f"{key}={wanted_revision} ") for line in probe_lines)
         for key in ("PROBE_RESTART_CONFIG_REV", "PROBE_RESTART_OTA_REV",
-                    "PROBE_RESTART_CONTAINER_REV")
+                    "PROBE_RESTART_CONTAINER_REV", "PROBE_RESTART_PRODUCT_REV")
     )
     completion_ok = (completed_stop_line(output) if stop_marker is not None
                      else expected in output)

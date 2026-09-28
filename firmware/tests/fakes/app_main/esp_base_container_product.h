@@ -12,6 +12,8 @@ typedef enum {
     ESP_BASE_CONTAINER_RUNNING,
 } esp_base_container_boot_result_t;
 
+void esp_base_container_product_set_flash_io_owner(esp_base_storage_owner_t *owner);
+
 esp_base_container_boot_result_t esp_base_container_product_boot(
     const esp_base_storage_claim_t *claim, const char boot_id[37]);
 esp_base_container_boot_result_t esp_base_container_product_start_trial(

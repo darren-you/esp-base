@@ -14,6 +14,10 @@ typedef enum {
     ESP_BASE_CONTAINER_STOPPED,
 } esp_base_container_boot_result_t;
 
+/* Bind the boot's short Flash/NVS I/O owner before any product storage work.
+ * It is separate from the long app/otadata and product transaction owner. */
+void esp_base_container_product_set_flash_io_owner(esp_base_storage_owner_t *owner);
+
 /* Called with Base's already active boot claim after NVS and control start.
  * A fully specified product policy binds exact real package/NVS partitions,
  * then opens and initializes a persisted confirmed package on one pthread.

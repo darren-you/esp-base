@@ -2,11 +2,12 @@
 
 此独立 ESP-IDF 项目只使用合成数据和仓外 QEMU Flash，分别验证 C3 `base_store@0x138000` 连续六／八页，以及 ESP32 条件几何的 `base_store@0x3fa000/0x6000`。ESP32 合成表保留三包槽、旧 AT 原字节归档和 FRP scratch 的候选地址，但把真实双 OTA app 换成测试专用 factory app；它不接入产品固件，不读取设备备份，不修改产品分区表，也不提供刷板命令。
 
-每次提交包含三份实际格式记录：
+每代轮次覆盖四类实际格式记录：
 
 - Base v3 最大 **7,618 字节**规范配置，通过正式 `esp_base_remote_config_commit_verified` 提交至 `base_config/committed`，按 revision 执行 CAS 与回读。
 - 当前 OTA V2 **186 字节**合成收据形态，使用 `esp_base_ota_receipt.c` 的固定字段布局，在产品键 `base_ota/operation` 上直接调用 NVS API 提交及回读；前四个 SHA-256 字节承载测试 revision 以确保每代变值。此容量测试不调用正式收据解码、OTA 注册策略、下载或签名校验，不声称该记录是完整有效的 OTA 事务。
 - 精确锁定的 Container 组件用 `econtainer_slots_initialize` 的正式 ECS2 编码器生成 **288 字节**无包绑定初态；每代只改变 sequence 并重算 CRC，通过真实 IDF provider 向产品键 `base_pkg/slots` 提交，再用 `econtainer_slots_load` 的正式解码器校验。合成分区表提供 `product_pkgs` 几何供 provider 绑定；不读取或执行包。
+- Base 产品操作账本候选 **910 字节**单 blob，按当前八条槽位格式逐代填满最近记录，先写 `PREPARED`，再写 `SUCCEEDED`，每次都经 `base_product/operations` 提交及逐字节读回。这里只验证同一 NVS 分区的容量与页回收；不执行产品写命令、历史幂等裁决或实板磨损验收。
 
 Container 由本项目的 `main/idf_component.yml` 和目标专用 `dependencies.lock`／`dependencies.lock.esp32` 直接从公开源精确解析，版本与 Base 产品锁一致。不使用邻仓相对路径或复制 Container 源码。每个目标与页数必须使用不同的仓外构建目录、`sdkconfig` 和 Flash 文件，避免重用分区表。
 
@@ -49,7 +50,7 @@ for stage in 1 2 3; do
 done
 ```
 
-阶段 1 提交 revision 1–3 并验证旧 revision CAS 冲突；阶段 2 在新进程中先读回 revision 3，再提交 4–100；阶段 3 在另一新进程中读回 revision 100。runner 只替换合成 Flash 的 factory app 区，保留同一大小的 NVS。每步必须有不同配置摘要、两份旁侧 blob 回读及 ECS2 解码成功；退出码 0 才算该阶段成功。
+阶段 1 提交 revision 1–3 并验证旧 revision CAS 冲突；阶段 2 在新进程中先读回 revision 3，再提交 4–100；阶段 3 在另一新进程中读回 revision 100。runner 只替换合成 Flash 的 factory app 区，保留同一大小的 NVS。每步必须有不同配置摘要、OTA 与 ECS2 回读、产品账本两次提交读回及 ECS2 解码成功；退出码 0 才算该阶段成功。新增账本后的 C3 六／八页和 ESP32 六页已在固定 SDK／QEMU 完整重跑，输入摘要及边界见下方两份容量记录；旧三记录测试仍只作为历史事实。
 
 可用固定 SDK 官方 parser 检查最终 NVS 页完整性。以下 C3 提取只写入仓外目录，不提交二进制；ESP32 则从自己的 Flash 精确提取 `0x3fa000:0x400000`：
 

@@ -1,5 +1,9 @@
 # 开发检查点
 
+2026-09-28 P6-04 产品操作持久结果软件切片：按维护者“最近固定条数”裁决，Base 新增 EPRD v1 单 blob 账本候选，暂存最近 8 条及不回退的 `operation_sequence`；缺失 NVS 键为未初始化，不自行重置序号。读写经过共享短时 Flash I/O owner，意图与终态各自 commit 后逐字节读回；未决意图跨 boot 阻止下一操作。只读 `product.result` 和公开串口客户端已按原 ID 查询，产品写入口保持未开放。Base 主固件与独立 NVS 探针的 C3／ESP32 四份 Component Manager 锁均从空重新解析并精确消费已公开的 `esp-container@f82e4b8f57eb6ae75309d5cfb7472feef2380912`，其 IDF 包槽/NVS provider 也使用同一短时 I/O owner。Container host CTest **6/6**、Base 双目标完整 ASan/UBSan host 套件、公开设备客户端六项测试、固定 SDK 普通 C3 和显式未签名离线 ESP32 主固件构建通过；新镜像都不是实板刷写候选。
+
+同日按真实八槽布局在 C3 六／八页、ESP32 六页三档独立合成 4 MiB QEMU Flash 各跑 100 代最大 Base 配置、OTA V2 合成形态、Container ECS2 和 910 字节产品账本；每代账本双提交、每次回读，三档均通过阶段间重启与官方 NVS parser。最终六页 `used/free/available/total=297/459/333/756`，八页为 `298/710/584/1008`；最高页序号分别为 299、260、299。输入、日志摘要和边界见[C3](c3-eight-page-nvs-capacity.md)及[ESP32](esp32-six-page-nvs-capacity.md)容量记录。该结果仅是固定 SDK／QEMU 正常写入容量，未证明首次建账所需持久 Container 基线、产品写命令、真实 Flash 磨损、掉电或实体五能力，P6-03/P6-04/P7 不勾验收。
+
 2026-09-28 P6-03 MQTT IRAM 精确锁：Base 双目标正式锁定 `esp-mqtt@bebde3971c2f4b4ee99e150348213222bfd9e27e`。仅经典 ESP32 单核且启用 8BIT IRAM 时，MQTT 常驻实例与按消息存活期分配的入站消息体放入该区域；C3 仍按原路径分配。固定 SDK 双目标 host ASan／UBSan、正式 CSV 签名产品构建、尺寸和官方验签通过。仓外签名 ESP32 guest／隔离 MQTT TLS Broker／官方 FRPS 单工作流及并发一条 4096 B 入站消息的普通 8BIT 堆历史最低 **53,380 B**；同镜像三条各 4096 B 入站消息复测为 **53,348 B**，均高于不变门。第四条在途、双流、OTA、正式 owner 和实体板仍未测，[精确输入与边界](p6-03-mqtt-iram-precise-lock-checkpoint.md)单独记账，P6-03/P7-02 继续开放。
 
 2026-09-28 P6-03 MQTT 入站消息存活期精确消费：Base 双目标锁定公开 `esp-mqtt@a67cb8fd4f146550c210487dc281248967b6c61a`，空闲 MQTT 实例中三份固定消息体改为按入站消息实际存活期分配，字段静态差额 **13,092 B**，不计作五能力堆低水增量。固定 SDK 的双目标 host ASan／UBSan、正式 CSV 签名产品构建、尺寸与官方验签通过；ESP32 从空配置生成的单核／8BIT IRAM 默认项修正也通过独立离线构建。随后新锁签名 ESP32 QEMU 在 Container guest 运行、空闲 MQTT client 实例占用和官方 FRPS 单工作流同存时完成严格 TLS 与 300001 B 双向回显，历史最低普通 8BIT 堆 **65,780 B**；MQTT 未连 Broker、OTA 未运行，仍不作五能力验收。[双目标输入、QEMU 和未验收边界](p6-03-mqtt-message-lifetime-precise-lock.md)。

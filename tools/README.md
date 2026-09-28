@@ -57,12 +57,15 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 ```bash
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE status
+python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <原操作UUID> product.result
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> restart
 # ESP32-D0WD-V3 完成新布局、固件迁移和实板启动后，选择本轮 CH340 端点：
 python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
 ```
 
 默认输出块状摘要，`--json` 输出设备 JSON。重启先读取状态、精确绑定 UUID/boot/deadline，收到 `running` 后再次查询同设备的新启动，才报告成功；超时为 unknown，写命令不自动重试。直接打开 POSIX 串口，使用 `flock` 和 `TIOCEXCL` 独占当前端点，不切换 DTR/RTS，并关闭 HUPCL；串口写入限一秒，以设备回执确认执行。C3 原生 USB 与 ESP32 CH340 UART 均须验证打开端点不改变 boot_id；后者还须实测无 USB 背压时的整帧与超载行为。完整 probe/flash/恢复编排由设备工具负责。
+
+`product.result` 仅按原 operation ID 查询最近固定条数的设备持久账本，不触发产品写入或重放。旧记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。当前尚无公开 `product.install`／`product.upgrade`／`product.uninstall` 写命令，因此本查询入口只能用于后续正式生命周期的结果合同验证，不能独立交付安装能力。
 
 配置使用当前用户拥有、权限 0600 的本机 JSON 文件，不把密码放在命令行或输出中：
 

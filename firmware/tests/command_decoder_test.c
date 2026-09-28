@@ -105,6 +105,17 @@ static void ota_result_tests(void)
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"bad\"}}");
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"extra\":1}}");
 }
+static void product_result_tests(void)
+{
+    const char *valid = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\"}}";
+    ebase_command_t out;
+    assert(!ebase_parse_command(valid, strlen(valid), &out) &&
+           out.kind == EBASE_PRODUCT_RESULT);
+    assert(!strcmp(out.operation_id, "44444444-4444-4444-8444-444444444444"));
+    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{}}");
+    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{\"operation_id\":\"bad\"}}");
+    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"extra\":1}}");
+}
 static void frp_status_tests(void)
 {
     static const char valid[] =
@@ -133,6 +144,7 @@ int main(void)
     config_tests();
     ota_tests();
     ota_result_tests();
+    product_result_tests();
     frp_status_tests();
     ebase_command_t out;
     assert(!ebase_parse_command(status, strlen(status), &out) && out.kind == EBASE_STATUS);

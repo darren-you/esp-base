@@ -1,5 +1,20 @@
 # ESP32-C3 六／八页 NVS 合成容量验证
 
+## 2026-09-28：最近八条产品操作账本同分区复跑
+
+按维护者的最近固定条数裁决，在已有最大 7,618 字节 Base v3 配置、186 字节 OTA V2 合成形态及 288 字节 Container ECS2 初态上，增加单个 **910 字节** `base_product/operations` 账本。它用 EPRD v1 八槽格式保存连续序号、最近八条不同 UUID、请求指纹、包 SHA-256 和结果；每次产品操作先写 `PREPARED` 再写 `SUCCEEDED`，每次均经 NVS commit 与逐字节读回。这个探针按真实编码布局测容量与页回收，未调用尚未开放的产品写命令，不证明物理操作的成功或历史幂等裁决。
+
+独立仓外合成 Flash、构建目录和 `sdkconfig` 各用于 C3 六页与八页。固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`、Espressif QEMU `9.2.2 (esp_develop_9.2.2_20260417)`；Component Manager 从空锁正式解析 `esp-container@f82e4b8f57eb6ae75309d5cfb7472feef2380912`，WAMR 保持 `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。两档均完成三阶段：1–3 代与旧 CAS 拒绝、另一进程 4–100 代、再次新进程的 revision 100 四记录读回。全部 `PROBE_STEP` 的配置、OTA、Container 和产品账本读回为 `ok`，`PROBE_RESTART_MATCH=1 container_decoded=1`。
+
+| `base_store` | 最终 `used/free/available/total` | 最终官方 NVS parser | 最高页序号 |
+| --- | --- | --- | ---: |
+| C3 六页 `0x138000/0x6000` | `297/459/333/756` | 五页 `CRC32: OK`、一页 Empty | 299 |
+| C3 八页 `0x138000/0x8000` | `298/710/584/1008` | 七页 `CRC32: OK`、一页 Empty | 260 |
+
+仓内探针源码 SHA-256 为 `66d74021fb4257515f3205637b23b72c1383d90b41a8852fbb92596c4cd76ab9`，runner 为 `bcaeffe63d1154244b4b7dac53de9739753b3ab5a2777981c016bc130aa222fe`，C3 官方生成锁为 `a2dfd06b32cdd3c9e915e56fd737132a85259be3f3ce7daf19096227969a5699`。六页阶段 1/2/3 脱敏日志 SHA-256 依次为 `83db0ef1572bb27d45a28b161c92ebab70ceeabc07a513ab8d260816059e923b`、`6d9a821355a47d0a94dd36204e081072fbf3c369bb54a60f3f50bad1a764a818`、`1ab4da0a3ef06193c9bc4e7577d9b3a446fe5698dc8605145c848e0928d721d0`；八页依次为 `f8dc3282a9c36c813600aa51328ed3862085eae51bfd8927719b075d8bd97239`、`3ec4e18bd143fea527f2ca71be54c6122bf7b9ed6b3030f7ef0061f294555ab3`、`78d106f62f7b8085c3602e94c7a31289f7140fb0c148d92139d9dc584c680945`。最终 NVS 提取摘要分别为 `d5204379b1f5fe5c5415fb9c32a9ca63223e46494cff17e3f5c6699e412ea7a0`、`1e6c401bc1201ed8e0bb92b0bce340f0603bd3598d795ee7f06f3a39deaa8530`；原始串口日志、Flash 与解析输出留在仓外。
+
+这仅证明固定 SDK 的 QEMU 正常写入与新进程读回可承载上述 100 代。产品账本的首次建账安全性、写入中断电、真实 Flash 磨损、两板迁移和完整五能力仍待分别验证；八条上限暂不作为实板磨损验收结论。
+
 ## 2026-09-27：当前 OTA V2 与 Container ECS2 的六／八页复跑
 
 从 Base `f2d8b3623d60ca18b332c0a5f9913d50f406634d` 建立独立工作树，用[公开容量探针](../../firmware/tests/nvs-capacity-probe/README.md)在另一台 Mac 的独立 checkout 中构建、运行。该 checkout 不依靠邻仓源码：ESP-IDF Component Manager 通过公开 Git URL 解析 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc`、`wasm-micro-runtime@26c235e53e29acd8b43abe7f3b524577bd4d1ae5`，生成的 `dependencies.lock` 与探针仓内副本摘要相同。固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`、Espressif QEMU `9.2.2 (esp_develop_9.2.2_20260417)`；六、八页分别使用独立构建目录、`sdkconfig` 与初始全 `0xff` 的 4 MiB 合成 Flash。

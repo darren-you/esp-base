@@ -2,6 +2,7 @@
 """用真实 POSIX 伪终端验证串口示例的字节传输与背压期限。"""
 import importlib.util
 import copy
+import json
 import os
 from pathlib import Path
 import pty
@@ -133,6 +134,47 @@ class ConfigurationV3Tests(unittest.TestCase):
                 raise AssertionError("oversized serial frame was sent")
         with self.assertRaisesRegex(ValueError, "9216"):
             control.send(NeverWrite(), {"config": "A" * 9216})
+
+
+class ProductResultTests(unittest.TestCase):
+    def testOriginalIdQueryAndEvictedUnknown(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        operation = "44444444-4444-4444-8444-444444444444"
+
+        class Device:
+            def __init__(self, known):
+                self.known = known
+                self.response = bytearray()
+
+            def write(self, payload):
+                request = json.loads(payload.strip())
+                assert request["command"] == "product.result"
+                assert request["parameters"] == {"operation_id": operation}
+                result = ({"operation_id": operation, "operation_sequence": 7,
+                           "container_sequence": 12, "result_code": 0,
+                           "kind": "install", "package_sha256": "ab" * 32}
+                          if self.known else None)
+                response = {"protocol_version": 1, "device_id": device,
+                            "boot_id": boot, "request_id": request["request_id"],
+                            "state": "succeeded" if self.known else "unknown",
+                            "error_code": None if self.known else "product_operation_not_found",
+                            "result": result}
+                self.response = bytearray(b"\n" + json.dumps(response).encode() + b"\n")
+                return len(payload)
+
+            def read(self, size=1):
+                if not self.response:
+                    return b""
+                value = bytes(self.response[:size])
+                del self.response[:size]
+                return value
+
+        current = {"device_id": device, "boot_id": boot}
+        self.assertEqual(control.product_result(Device(True), current, operation)["state"], "succeeded")
+        unknown = control.product_result(Device(False), current, operation)
+        self.assertEqual((unknown["state"], unknown["error_code"]),
+                         ("unknown", "product_operation_not_found"))
 
 
 if __name__ == "__main__":

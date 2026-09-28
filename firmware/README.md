@@ -27,7 +27,11 @@ flowchart LR
     owner --> rollback
     binding["integrations/container_binding：确认绑定 / 产品启动 / 卸载"] -->|"真实 provider / 验签 / WAMR"| container["公开 esp-container：槽与 runtime API"]
     owner --> binding
-    owner --> frp_scratch["FRP scratch：公开 IDF provider / 短 claim / boot recover"]
+    io_owner["Flash I/O 短 claim"] --> frp_scratch["FRP scratch：公开 IDF provider / boot recover"]
+    io_owner --> binding
+    io_owner --> product_ledger["product_ledger：原 ID 只读 / 持久高水位"]
+    protocol -->|"product.result"| product_ledger
+    product_ledger --> product_nvs["base_store NVS：base_product/operations"]
     frp_scratch --> frp
     receipt --> binding
     main --> safety["safety_runtime：复位事实 / WDT"]
@@ -55,7 +59,7 @@ ESP32 产品目标由可设置的 `CONFIG_FREERTOS_UNICORE=y` 选出 SDK 派生�
 
 ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`，并要求关闭硬件 Secure Boot 与签名输出；它只用于离线容量与源码检查，**绝非可刷写候选**。ESP32 签名构建必须提供仓外绝对路径的 P-256 签名键，并在独立 sdkconfig 中启用 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y`、`CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、`CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y` 与 rollback；CMake 会拒绝缺失或错目标。测试键只用于仓外软件验证，不能作为设备首次启动密钥。签名 bin 还必须经固定 SDK 的 `espsecure verify-signature --version 1` 验证，并核对双槽与分区表。旧 ESP-AT 板卡的新启动链、两个已签名 Base 槽、otadata、旧区归档与完整恢复仍待 P7-01 受控实板验收。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@bebde3971c2f4b4ee99e150348213222bfd9e27e`，`esp_ota` 唯一来源是公开 `esp-ota@d98361f348e19e965efd7462277dde0ae13056fa`，`esp_frp` 唯一来源是公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`，`esp_container` 唯一来源是公开 `esp-container@adef78ff28bc868e1c930b61fd232207aad31a3e`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@bebde3971c2f4b4ee99e150348213222bfd9e27e`，`esp_ota` 唯一来源是公开 `esp-ota@d98361f348e19e965efd7462277dde0ae13056fa`，`esp_frp` 唯一来源是公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`，`esp_container` 唯一来源是公开 `esp-container@f82e4b8f57eb6ae75309d5cfb7472feef2380912`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
 当前 FRP 精确锁将 ESP32 的工作流及 TLS 私有对象条件分配至 8BIT IRAM；双目标签名容量、Base host 回归和 ESP32 一条真实 FRPS 工作流的仓外 QEMU 检查见[工作流 IRAM 精确锁检查点](../docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。正式 Base owner、MQTT／OTA／Container 并发与实体板容量尚未验收。
 
@@ -87,6 +91,8 @@ C3 签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SEC
 
 `ota.start` 先用 OTA 库的 HTTPS URL 与最小镜像头长度规则做静态校验，再在目标槽写入前将 operation ID、设备 ID、目标 C 摘要/长度、签名 A 与原独立 B 摘要、源/目标物理槽和已对账 ECS2 sequence 作为 V2 单 blob 保存到 `base_store/base_ota/operation`，commit 和逐字节读回成功才启动 worker；同 ID 不再次下载。签名构建的只读 `ota.result` 查询最近一次收据，只有新槽本地确认 VALID、完整运行镜像摘要匹配、产品启动与配置时的 Container 确认完成，且 V2 `SUCCEEDED` 收据持久读回才成功；A 仍运行时，目标槽未开始写入前的可证明失败，或写入后按原收据完成物理槽与 Container 清理并持久记失败，才报告 failed。旧 V1 或不可信 blob 阻断新操作和自动清理；回滚到尚无查询代码的旧镜像不能由设备提供最终结果，工具必须记 unknown。身份 NVS 保持原位；配置仍用 `base_config/committed` 单键，v3-only 读写不兼容旧 v1/v2 记录。真实回滚和 NVS 掉电行为待实板验证。
 
+只读 `product.result` 从独立的 `base_product/operations` 账本按原 operation ID 查询；账本候选为 910 字节、最近 8 条和不回退的操作序号，提交后精确读回。窗口外旧 ID 返回 unknown，绝不触发安装重放。固定 SDK／QEMU 的 C3 六／八页和 ESP32 六页已完成 100 代四记录容量与重启读回；当前尚无产品写入口和实板磨损证据，不能将该查询当作产品生命周期交付。
+
 `ota_operation` 另提供只读固件集合观察：已确认模式要求运行槽 `VALID`；显式 pending trial 模式要求运行槽 `PENDING_VERIFY`、另一槽 `VALID` 且 IDF 证明可回滚。prepared candidate 模式需要本次 `eota_prepare` 的收据，要求 A 仍运行且被选为 boot、otadata 为 `VALID`，C 未选 boot 且旧 inactive otadata 已失效；重新验签 A/C 并核对 C 的完整长度/摘要。三种模式都要求运行槽与当前 boot selector 一致，拒绝过程中变化。已确认模式中若另一槽未受管，镜像校验必须明确无效且目标首字节须擦除为 `0xff`，才输出单固件集合；应用侧验签失败不足以证明 bootloader 不会后备扫描。调用方在观察及消费结果期间独占 app/otadata 写入；prepared 观察现由无包 OTA worker 在选 boot 前持久 stage，pending 观察用于候选 trial。
 
 本次 boot 的启动存储操作和 pending 确认持有 `ota_operation` 串行 owner；完成后释放，已启动 guest 不长期占用。`ota.start` 在持久登记前取得 claim，跨控制任务与 worker 保持到下载、验签和选择完成。worker 凭原 V2 收据先调用 `eota_retire_inactive` 擦除旧 B 首扇区、回读首字节 `0xff` 并使其 otadata 失效，再将 Container 持久绑定退役为 A-only；此后才允许 `eota_prepare` 写 C。重启后的启动 claim 在产品装载之前读取同一收据：仍运行 A 时按原目标清理部分 C，并将 Container 的精确 PREPARED/TRIAL_STARTED/HEALTH_VERIFIED/ABORTED 操作收敛到 A-only，成功后才记失败；运行 C 时验其完整摘要、旧 A 的签名与回退资格；配置 Container 时再核原 operation、A/C 绑定和 ECS2 sequence。VALID C 的 `HEALTH_VERIFIED` 状态只凭该收据确认并读回；收据缺失、已失败或 OTA 不可用时，残留固件迁移只读阻断，普通产品启动不改写 ECS2。控制任务在恢复完成前保持配置写入与 MQTT/FRP owner 关闭。任一步不能核实就保持阻断；`ota.result` 不从 target otadata 单独推断失败。未知选择或存储结果保留本 boot claim；可证明失败并记账后释放。[Container 产品装配](integrations/container_binding/README.md)复用启动已持有的 claim，不二次争抢。策略完整且持久无包绑定时，首次确认启动可初始化，后续固件 OTA 依精确 prepared 收据 stage、pending trial 和 OTA VALID 回读确认；现有 confirmed 包仍可验签启动。带包升级在写 inactive app 前拒绝，因为 Base 尚无真实业务事件来源；无板的编译与 host 测试不证明电源中断、bootloader 回退或 guest 与五能力并发。
@@ -95,4 +101,4 @@ MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELE
 
 FRP 组件还要求 `CONFIG_MBEDTLS_MD5_C=y`、`CONFIG_LWIP_SO_LINGER=y` 和至少 12 个 lwIP socket；默认配置与 CMake 同时检查。普通镜像中保留库符号只证明编译组合，不能代替真实管理端点、FRPS/MQTT 同时运行或堆峰值测量。
 
-FRP Flash reader 的 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制。ESP32 产品配置启用，并固定 `frp_scratch@0x3ea000/0x10000`；C3 现行产品配置仍关闭，分区表没有 scratch。启用时公开 FRP provider 核对实际 64 KiB 分区，并在任何 pending OTA 确认前擦除本次启动遗留的密文。Base 只提供同一个 storage owner 的短 claim 包装；`clear` 不再次擦除。C3 对齐软件候选及 ESP32 新源码几何仍按五仓计划完成容量、迁移与实体运行裁决。小记录在 FRP RAM reader 中可不碰 Flash，大记录与 OTA 长 claim 冲突时会安全结束 FRP session，当前没有并发活性或实板验证。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
+FRP Flash reader 的 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制。ESP32 产品配置启用，并固定 `frp_scratch@0x3ea000/0x10000`；C3 现行产品配置仍关闭，分区表没有 scratch。启用时公开 FRP provider 核对实际 64 KiB 分区，并在任何 pending OTA 确认前擦除本次启动遗留的密文。FRP 每次物理操作使用独立短 claim，升级事务 claim 不再使它立即返回 BUSY；`clear` 不再次擦除。OTA app、Container 包和 NVS 尚未全部接入同一个短时 I/O 仲裁，FRP 最大记录与正式 OTA 下载的进展、期限和实板 Flash 时延仍未验收。C3 对齐软件候选及 ESP32 新源码几何仍按五仓计划完成容量、迁移与实体运行裁决。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
