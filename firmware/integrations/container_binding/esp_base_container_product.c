@@ -1648,6 +1648,64 @@ static econtainer_slots_result_t verify_selected_firmware(
     return ECONTAINER_SLOTS_OK;
 }
 
+static econtainer_slots_result_t reconcile_selected_package_prepared(
+    const econtainer_slot_firmware_set_t *firmware_set,
+    const selected_ota_context_t *selected)
+{
+    const esp_base_ota_receipt_recovery_t *receipt = selected->receipt;
+    if (selected->running_state != EOTA_STATE_PENDING_VERIFY ||
+        receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED ||
+        !stage_receipt_valid(receipt)) return ECONTAINER_SLOTS_CONFLICT;
+    econtainer_slots_state_t state = {0};
+    econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
+    const econtainer_slots_result_t result = econtainer_slots_reconcile(
+        &s_product.provider.io, &s_product.provider.geometry,
+        firmware_set, &state, &decision);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    const bool writing = receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE;
+    const uint32_t retired_sequence = receipt->container_sequence +
+        (digest_zero(receipt->inactive_sha256) ? 0U : 1U);
+    if (decision != ECONTAINER_SLOT_BOOT_START_TRIAL ||
+        state.phase != ECONTAINER_SLOT_PREPARED ||
+        state.sequence != retired_sequence + (writing ? 2U : 1U) ||
+        !state.operation.firmware_transition ||
+        state.operation.kind != (writing ? ECONTAINER_SLOT_PACKAGE_WRITE :
+                                         ECONTAINER_SLOT_PACKAGE_REUSE) ||
+        memcmp(state.operation.operation_id, selected->operation_id,
+               sizeof selected->operation_id) != 0 ||
+        memcmp(state.operation.target_firmware_sha256,
+               receipt->candidate_sha256, 32) != 0 ||
+        memcmp(state.operation.package_sha256,
+               receipt->package_sha256, 32) != 0 ||
+        state.operation.package_size_bytes != receipt->package_size_bytes ||
+        state.operation.guest_abi_version != receipt->guest_abi_version ||
+        state.operation.data_schema_version != receipt->data_schema_version ||
+        state.operation.slot >= ECONTAINER_SLOT_COUNT ||
+        memcmp(state.operation.trial_boot_id,
+               (const uint8_t[ECONTAINER_SLOT_BOOT_ID_BYTES]){0},
+               ECONTAINER_SLOT_BOOT_ID_BYTES) != 0) return ECONTAINER_SLOTS_CONFLICT;
+    const econtainer_slot_binding_t *source = snapshot_running_binding(
+        &state, receipt->source_sha256, receipt->candidate_sha256);
+    if (source == NULL ||
+        source->package_present != receipt->source_package_present)
+        return ECONTAINER_SLOTS_CONFLICT;
+    const econtainer_slot_binding_t *candidate =
+        source == &state.bindings[0] ? &state.bindings[1] : &state.bindings[0];
+    if (!candidate->present || candidate->package_present ||
+        (source->package_present &&
+         (source->package_size_bytes != receipt->source_package_size_bytes ||
+          source->guest_abi_version != receipt->source_guest_abi_version ||
+          source->data_schema_version != receipt->source_data_schema_version ||
+          memcmp(source->package_sha256,
+                 receipt->source_package_sha256, 32) != 0)) ||
+        (writing ? (source->package_present &&
+                    state.operation.slot == source->slot) :
+                   (!source->package_present ||
+                    state.operation.slot != source->slot)))
+        return ECONTAINER_SLOTS_CONFLICT;
+    return ECONTAINER_SLOTS_OK;
+}
+
 static econtainer_slots_result_t reconcile_selected_ota(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
 {
@@ -1655,6 +1713,8 @@ static econtainer_slots_result_t reconcile_selected_ota(
         return ECONTAINER_SLOTS_CONFLICT;
     const selected_ota_context_t *selected = context;
     const esp_base_ota_receipt_recovery_t *receipt = selected->receipt;
+    if (receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE)
+        return reconcile_selected_package_prepared(firmware_set, selected);
     const uint32_t retired_sequence = receipt->container_sequence +
         (digest_zero(receipt->inactive_sha256) ? 0U : 1U);
     const uint32_t confirmed_sequence = retired_sequence +
@@ -1746,6 +1806,8 @@ bool esp_base_container_product_reconcile_selected_ota(
 {
     if (!esp_base_storage_claim_active(claim) || receipt == NULL ||
         policy_present() != receipt->container_enabled ||
+        (receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+         !receipt->container_enabled) ||
         (receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED &&
          receipt->status != ESP_BASE_OTA_RECEIPT_SUCCEEDED) ||
         (running_state != EOTA_STATE_PENDING_VERIFY &&
@@ -1771,9 +1833,11 @@ bool esp_base_container_product_reconcile_selected_ota(
     }
     const uint32_t retirement_steps =
         digest_zero(receipt->inactive_sha256) ? 0U : 1U;
+    const uint32_t required_commits = ESP_BASE_CONTAINER_OTA_CONFIRM_COMMITS +
+        (receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ? 1U : 0U);
     if (receipt->container_sequence == 0U ||
         receipt->container_sequence > UINT32_MAX - retirement_steps -
-                                          ESP_BASE_CONTAINER_OTA_CONFIRM_COMMITS ||
+                                          required_commits ||
         s_product.ready != NULL ||
         atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
         !ensure_provider(claim)) return false;

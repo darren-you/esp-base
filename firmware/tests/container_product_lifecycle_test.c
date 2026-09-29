@@ -269,7 +269,9 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
     esp_base_ota_firmware_observation_t observation, const eota_prepared_t *prepared,
     esp_base_ota_firmware_set_t *firmware_set)
 {
-    assert((observation == ESP_BASE_OTA_FIRMWARE_CONFIRMED && prepared == NULL) ||
+    assert(((observation == ESP_BASE_OTA_FIRMWARE_CONFIRMED ||
+             observation == ESP_BASE_OTA_FIRMWARE_PENDING_TRIAL) &&
+            prepared == NULL) ||
            (observation == ESP_BASE_OTA_FIRMWARE_PREPARED_CANDIDATE &&
             prepared != NULL));
     *firmware_set = physical;
@@ -1825,6 +1827,22 @@ static void run_firmware_empty_stage(const file_t *key, const file_t *package,
                                     ECONTAINER_SLOT_NO_PACKAGE) &&
            store.flash_erases == erases && store.flash_writes == writes);
     if (mode == ESP_BASE_OTA_PACKAGE_WRITE) {
+        physical.bootable_count = 2U;
+        memcpy(physical.bootable_firmware_sha256[0], prepared.sha256, 32);
+        memcpy(physical.bootable_firmware_sha256[1], receipt.source_sha256, 32);
+        memcpy(physical.running_firmware_sha256, prepared.sha256, 32);
+        const unsigned writing_blob_writes = store.blob_writes;
+        const unsigned writing_flash_erases = store.flash_erases;
+        const unsigned writing_flash_writes = store.flash_writes;
+        assert(!esp_base_container_product_reconcile_selected_ota(
+            &claim, &receipt, EOTA_STATE_PENDING_VERIFY));
+        assert(store.blob_writes == writing_blob_writes &&
+               store.flash_erases == writing_flash_erases &&
+               store.flash_writes == writing_flash_writes);
+        physical.bootable_count = 1U;
+        memcpy(physical.running_firmware_sha256, receipt.source_sha256, 32);
+        memcpy(physical.bootable_firmware_sha256[0], receipt.source_sha256, 32);
+        memset(physical.bootable_firmware_sha256[1], 0, 32);
         const uint32_t target_offset = geometry.slots[state.operation.slot].offset_bytes -
                                        FLASH_BASE;
         assert(esp_base_container_product_write_staged_firmware_package(
@@ -1835,6 +1853,20 @@ static void run_firmware_empty_stage(const file_t *key, const file_t *package,
                state.sequence == original_sequence + 3U &&
                memcmp(store.flash + target_offset, package->bytes,
                       package->size) == 0);
+        physical.bootable_count = 2U;
+        memcpy(physical.bootable_firmware_sha256[0], prepared.sha256, 32);
+        memcpy(physical.bootable_firmware_sha256[1], receipt.source_sha256, 32);
+        memcpy(physical.running_firmware_sha256, prepared.sha256, 32);
+        dispose_product();
+        configure_product(key);
+        const unsigned selected_blob_writes = store.blob_writes;
+        const unsigned selected_flash_erases = store.flash_erases;
+        const unsigned selected_flash_writes = store.flash_writes;
+        assert(esp_base_container_product_reconcile_selected_ota(
+            &claim, &receipt, EOTA_STATE_PENDING_VERIFY));
+        assert(store.blob_writes == selected_blob_writes &&
+               store.flash_erases == selected_flash_erases &&
+               store.flash_writes == selected_flash_writes);
     }
     assert(esp_base_storage_release(&claim));
     dispose_product();
@@ -1995,6 +2027,43 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
             ESP_BASE_CONTAINER_STAGE_REJECTED &&
             store.flash_writes == completed_writes);
     }
+    physical.bootable_count = 2U;
+    memcpy(physical.bootable_firmware_sha256[0], candidate, 32);
+    memcpy(physical.bootable_firmware_sha256[1], receipt.source_sha256, 32);
+    memcpy(physical.running_firmware_sha256, candidate, 32);
+    dispose_product();
+    configure_product(key);
+    const unsigned selected_blob_writes = store.blob_writes;
+    const unsigned selected_flash_erases = store.flash_erases;
+    const unsigned selected_flash_writes = store.flash_writes;
+    assert(esp_base_container_product_reconcile_selected_ota(
+        &claim, &receipt, EOTA_STATE_PENDING_VERIFY));
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &receipt, EOTA_STATE_VALID));
+    esp_base_ota_receipt_recovery_t wrong_selected = receipt;
+    strcpy(wrong_selected.operation_id, "99999999-9999-4999-8999-999999999996");
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &wrong_selected, EOTA_STATE_PENDING_VERIFY));
+    wrong_selected = receipt;
+    ++wrong_selected.package_size_bytes;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &wrong_selected, EOTA_STATE_PENDING_VERIFY));
+    wrong_selected = receipt;
+    wrong_selected.source_package_sha256[0] ^= 1U;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &wrong_selected, EOTA_STATE_PENDING_VERIFY));
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK);
+    const uint32_t selected_offset =
+        geometry.slots[state.operation.slot].offset_bytes - FLASH_BASE;
+    store.flash[selected_offset] ^= 1U;
+    assert(!esp_base_container_product_reconcile_selected_ota(
+        &claim, &receipt, EOTA_STATE_PENDING_VERIFY));
+    store.flash[selected_offset] ^= 1U;
+    assert(esp_base_container_product_reconcile_selected_ota(
+        &claim, &receipt, EOTA_STATE_PENDING_VERIFY));
+    assert(store.blob_writes == selected_blob_writes &&
+           store.flash_erases == selected_flash_erases &&
+           store.flash_writes == selected_flash_writes);
 finished:
     assert(esp_base_storage_release(&claim));
     dispose_product();

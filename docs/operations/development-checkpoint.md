@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 带包 selected C 只读预检
+
+内部 `esp_base_container_product_reconcile_selected_ota` 在签名 `PENDING_VERIFY` C 与可回退 A 的双次物理观察后，按原 V3 收据只读核对 ECS2：必须为原操作的固件迁移 `PREPARED`，序号须精确包含旧 B 退役、stage，以及 `WRITE` 多一次的包写入提交。来源固件包身份须逐项等于收据；候选固件尚未绑定包，`REUSE` 指向来源包槽，`WRITE` 指向非来源槽。Container `reconcile` 同时复核真实包字节，只有决策为 `BOOT_START_TRIAL` 才通过。`WRITING`、错误操作或包参数、来源包不符与目标槽字节损坏均阻断，不写 NVS 或 Flash。
+
+C3／ESP32 host ASan/UBSan、锁定 Container/WAMR 的双目标真实签名 guest 生命周期各 100 次重装，以及固定 SDK 双目标签名构建和官方 RSA v2／ECDSA v1 验签通过；签名 app 分别为 `0x121000/0x130000`、`0xffff4/0x120000`。新增用例包含无来源包 `WRITE`、有来源包 `REUSE`／`WRITE`、未完成 `WRITING`、收据与包字节篡改，断言预检不擦写。普通 Base 启动及公开 `ota.start` 仍在带包执行门前阻断；A 仍运行时的恢复、候选业务事件、30 秒在线健康确认、实体掉电与两板验证尚未闭合，P6-10/P7-04 不验收。
+
 ## 2026-09-30 联合 OTA V3 收据只读恢复字段
 
 `esp_base_ota_receipt_load_for_recovery` 现在对格式完整且绑定一致的 `REUSE`／`WRITE` V3 收据返回原包模式、目标包摘要／长度／ABI／schema、代表事件摘要、来源包身份与固件 A/B/C 身份。旧 V1/V2 长度、畸形 V3、跨 schema 或字段冲突仍返回存储不确定；读取本身不写 NVS 或 Flash。Base 启动入口及 OTA worker 显式检查 `NO_PACKAGE` 后才进入已闭合的无包恢复／擦槽路径；合法带包收据在当前版本仍阻断启动推进。`ota.result` 对带包记录保持 unknown，带包终态提交仍拒绝，公开带包请求在登记前拒绝。

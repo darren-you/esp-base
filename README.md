@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-30 联合 OTA 带包 selected C 只读预检续进：内部 Container 对账入口现在核对原 V3 收据、完整签名的 pending C／回退 A、ECS2 `PREPARED` 的操作与精确序号、来源包绑定，以及 `REUSE`／`WRITE` 目标包槽的真实字节摘要。`WRITING`、错误操作／包身份或损坏包均阻断，预检不改写 NVS 或 Flash。双目标真实签名 guest 生命周期与 host 回归、测试键签名构建及官方验签通过；普通启动和公开 `ota.start` 仍在带包执行门前停止，业务试运行及联合确认未接通。
+
 2026-09-30 联合 OTA V3 收据只读恢复续进：收据层现可完整返回有效 `REUSE`／`WRITE` 的包模式、目标与来源包身份和代表事件摘要；旧格式或不一致字段继续拒绝。Base worker 与启动入口另设明确的无包执行门，故带包收据不会触发擦槽、选 boot 或确认。双目标 host 故障回归覆盖只读返回及门禁；带包事务恢复与联合健康仍未接通。
 
 2026-09-30 联合 OTA 公开命令合同续进：`ota.start` 现强制声明 `package_mode`，`reuse`／`write` 还必须绑定包摘要、长度、ABI、schema 与代表事件 SHA-256，`write` 另需包 HTTPS URL；同一次请求的指纹包含所有字段。公开客户端同步生成该合同，`ota.result` 返回包模式与包摘要。带包命令目前在持久登记与任何 Flash 擦写前返回 `product_ota_unavailable`，待启动恢复及联合健康链完成后开放；无包命令仍按原路径执行。双目标 host 与客户端测试覆盖此边界。
