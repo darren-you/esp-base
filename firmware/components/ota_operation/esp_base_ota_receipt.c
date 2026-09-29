@@ -2,6 +2,7 @@
 #include "esp_base_ota_firmware.h"
 
 #include <stddef.h>
+#include <limits.h>
 #include <string.h>
 
 #include "esp_partition.h"
@@ -56,6 +57,53 @@ static bool zero_sha256(const uint8_t sha256[EOTA_SHA256_BYTES])
     uint8_t any = 0;
     for (size_t index = 0; index < EOTA_SHA256_BYTES; ++index) any |= sha256[index];
     return any == 0;
+}
+
+static bool request_matches_snapshot(const esp_base_ota_request_t *request,
+                                     const esp_base_ota_receipt_snapshot_t *snapshot)
+{
+    if (request->package_mode > ESP_BASE_OTA_PACKAGE_WRITE ||
+        (snapshot->source_package_present ?
+         (snapshot->source_package_size_bytes == 0U ||
+          snapshot->source_package_size_bytes > INT_MAX ||
+          snapshot->source_guest_abi_version == 0U ||
+          snapshot->source_data_schema_version == 0U ||
+          zero_sha256(snapshot->source_package_sha256)) :
+         (snapshot->source_package_size_bytes != 0U ||
+          snapshot->source_guest_abi_version != 0U ||
+          snapshot->source_data_schema_version != 0U ||
+          !zero_sha256(snapshot->source_package_sha256)))) return false;
+    const bool target_empty = request->package_size_bytes == 0U &&
+        request->guest_abi_version == 0U && request->data_schema_version == 0U &&
+        zero_sha256(request->package_sha256) &&
+        zero_sha256(request->trial_event_sha256);
+    if (request->package_mode == ESP_BASE_OTA_NO_PACKAGE)
+        return target_empty && !snapshot->source_package_present;
+    if (!snapshot->container_enabled || target_empty ||
+        request->package_size_bytes == 0U || request->package_size_bytes > INT_MAX ||
+        request->guest_abi_version == 0U || request->data_schema_version == 0U ||
+        zero_sha256(request->package_sha256) ||
+        zero_sha256(request->trial_event_sha256)) return false;
+    if (request->package_mode == ESP_BASE_OTA_PACKAGE_REUSE)
+        return snapshot->source_package_present &&
+            request->package_size_bytes == snapshot->source_package_size_bytes &&
+            request->guest_abi_version == snapshot->source_guest_abi_version &&
+            request->data_schema_version == snapshot->source_data_schema_version &&
+            memcmp(request->package_sha256, snapshot->source_package_sha256, 32) == 0;
+    return !snapshot->source_package_present ||
+        request->data_schema_version == snapshot->source_data_schema_version;
+}
+
+static bool same_request(const receipt_t *previous, const esp_base_ota_request_t *request)
+{
+    return previous->image_size_bytes == request->image_size_bytes &&
+        memcmp(previous->sha256, request->sha256, 32) == 0 &&
+        previous->package_mode == request->package_mode &&
+        previous->package_size_bytes == request->package_size_bytes &&
+        previous->guest_abi_version == request->guest_abi_version &&
+        previous->data_schema_version == request->data_schema_version &&
+        memcmp(previous->package_sha256, request->package_sha256, 32) == 0 &&
+        memcmp(previous->trial_event_sha256, request->trial_event_sha256, 32) == 0;
 }
 
 static bool same_slots(const eota_slots_t *first, const eota_slots_t *second)
@@ -172,6 +220,7 @@ static bool decode(const uint8_t bytes[OTA_BYTES], receipt_t *receipt)
         (!candidate.source_package_present && !source_empty) ||
         (candidate.source_package_present &&
          (source_empty || candidate.source_package_size_bytes == 0U ||
+          candidate.source_package_size_bytes > INT_MAX ||
           candidate.source_guest_abi_version == 0U ||
           candidate.source_data_schema_version == 0U ||
           zero_sha256(candidate.source_package_sha256))) ||
@@ -180,6 +229,7 @@ static bool decode(const uint8_t bytes[OTA_BYTES], receipt_t *receipt)
         (candidate.package_mode != ESP_BASE_OTA_NO_PACKAGE &&
          (!candidate.container_enabled || target_empty ||
           candidate.package_size_bytes == 0U ||
+          candidate.package_size_bytes > INT_MAX ||
           candidate.guest_abi_version == 0U ||
           candidate.data_schema_version == 0U ||
           zero_sha256(candidate.package_sha256) ||
@@ -190,7 +240,10 @@ static bool decode(const uint8_t bytes[OTA_BYTES], receipt_t *receipt)
           candidate.guest_abi_version != candidate.source_guest_abi_version ||
           candidate.data_schema_version != candidate.source_data_schema_version ||
           memcmp(candidate.package_sha256,
-                 candidate.source_package_sha256, 32) != 0))) return false;
+                 candidate.source_package_sha256, 32) != 0)) ||
+        (candidate.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+         candidate.source_package_present &&
+         candidate.data_schema_version != candidate.source_data_schema_version)) return false;
     *receipt = candidate;
     return true;
 }
@@ -358,16 +411,7 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
         snapshot == NULL) {
         return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
     }
-    if (request->package_mode != ESP_BASE_OTA_NO_PACKAGE ||
-        request->package_size_bytes != 0U || request->guest_abi_version != 0U ||
-        request->data_schema_version != 0U ||
-        !zero_sha256(request->package_sha256) ||
-        !zero_sha256(request->trial_event_sha256) ||
-        snapshot->source_package_present ||
-        snapshot->source_package_size_bytes != 0U ||
-        snapshot->source_guest_abi_version != 0U ||
-        snapshot->source_data_schema_version != 0U ||
-        !zero_sha256(snapshot->source_package_sha256)) {
+    if (!request_matches_snapshot(request, snapshot)) {
         return ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH;
     }
     eota_image_t image = {.image_url = request->image_url,
@@ -402,8 +446,7 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     if (existing == ESP_BASE_OTA_RECEIPT_OK) {
         if (strcmp(previous.device_id, device_id)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
         if (!strcmp(previous.operation_id, request->operation_id)) {
-            return previous.image_size_bytes == request->image_size_bytes &&
-                   memcmp(previous.sha256, request->sha256, 32) == 0 ?
+            return same_request(&previous, request) ?
                    ESP_BASE_OTA_RECEIPT_EXISTS : ESP_BASE_OTA_RECEIPT_CONFLICT;
         }
         esp_base_ota_receipt_view_t view = {0};

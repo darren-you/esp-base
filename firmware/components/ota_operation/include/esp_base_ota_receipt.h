@@ -91,7 +91,8 @@ typedef struct {
 /* One latest operation is retained in base_store/base_ota/operation. V3 stores
  * the source, old distinct inactive and requested candidate identities plus
  * the current ECS2 sequence and package metadata in that same blob. The
- * public registration and recovery path currently permits NO_PACKAGE only.
+ * internal register validates all three package modes; the public command
+ * and boot recovery paths currently permit NO_PACKAGE only.
  * The caller holds the storage claim and supplies a reconciled Container
  * snapshot; register independently rechecks the signed Base firmware set
  * before commit/readback. A candidate with the running firmware's signed

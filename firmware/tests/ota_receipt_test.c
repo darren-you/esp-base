@@ -461,6 +461,73 @@ int main(void)
            ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0 && commits == 0);
 
     reset(); ota = request(OP);
+    ota.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
+    memset(ota.package_sha256, 0x42, 32);
+    memset(ota.trial_event_sha256, 0x24, 32);
+    ota.package_size_bytes = 1024U;
+    ota.guest_abi_version = 2U;
+    ota.data_schema_version = 1U;
+    package_snapshot = snapshot();
+    package_snapshot.source_package_present = true;
+    memcpy(package_snapshot.source_package_sha256, ota.package_sha256, 32);
+    package_snapshot.source_package_size_bytes = ota.package_size_bytes;
+    package_snapshot.source_guest_abi_version = ota.guest_abi_version;
+    package_snapshot.source_data_schema_version = ota.data_schema_version;
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_OK && writes == 1 && commits == 1);
+    assert(stored[186] == ESP_BASE_OTA_PACKAGE_REUSE && stored[263] == 1U &&
+           !memcmp(stored + 199, ota.package_sha256, 32) &&
+           !memcmp(stored + 231, ota.trial_event_sha256, 32) &&
+           !memcmp(stored + 276, ota.package_sha256, 32));
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
+    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_EXISTS && writes == 1);
+    ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_CONFLICT && writes == 1);
+
+    reset(); ota = request(OP);
+    ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
+    memset(ota.package_sha256, 0x52, 32);
+    memset(ota.trial_event_sha256, 0x24, 32);
+    ota.package_size_bytes = 2048U;
+    ota.guest_abi_version = 2U;
+    ota.data_schema_version = 1U;
+    package_snapshot = snapshot();
+    package_snapshot.source_package_present = true;
+    memset(package_snapshot.source_package_sha256, 0x42, 32);
+    package_snapshot.source_package_size_bytes = 1024U;
+    package_snapshot.source_guest_abi_version = 2U;
+    package_snapshot.source_data_schema_version = 1U;
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_OK && stored[186] == ESP_BASE_OTA_PACKAGE_WRITE);
+    stored[195] = 2U;
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    stored[195] = 1U;
+    stored[190] = 0x80U;
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    reset(); package_snapshot = snapshot();
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_OK && stored[263] == 0U);
+    reset(); package_snapshot = snapshot();
+    package_snapshot.source_package_present = true;
+    memset(package_snapshot.source_package_sha256, 0x42, 32);
+    package_snapshot.source_package_size_bytes = 1024U;
+    package_snapshot.source_guest_abi_version = 2U;
+    package_snapshot.source_data_schema_version = 2U;
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
+    package_snapshot = snapshot();
+    memset(ota.trial_event_sha256, 0, 32);
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
+
+    reset(); ota = request(OP);
     target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
     assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK);
