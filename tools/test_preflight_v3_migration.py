@@ -202,7 +202,7 @@ class PreflightTests(unittest.TestCase):
         result = self.run_preflight(self.full_flash(store=self.store(config=config, receipt=receipt)),
                                     candidate=output)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(output.stat().st_size, 0x20000)
+        self.assertEqual(output.stat().st_size, 0xb000)
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
         parser = self.idf / "components/nvs_flash/nvs_partition_tool/nvs_tool.py"
         inspect = subprocess.run([sys.executable, str(parser), "-f", "json", "-d", "minimal", str(output)],

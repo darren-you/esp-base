@@ -1,6 +1,8 @@
 # 当前 C3 实板基线：ESP32-C3 rev 0.4，4 MiB Flash，USB Serial/JTAG。
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/partition_table.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/c3-product-partition-table.csv"
+CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED=y
+CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET=0x3e5000
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # app_main 首次建立无包 Container 后仍需连续验证签名固件；仓外 C3 QEMU
 # 用 3584 B 主任务栈在后续验签时溢出，6144 B 的最低空闲为 2440 B。

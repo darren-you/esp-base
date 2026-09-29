@@ -30,6 +30,7 @@ APP_SIZE = 0x1E0000
 APP_OFFSETS = (0x20000, 0x200000)
 STORE_OFFSET = 0x3E0000
 STORE_SIZE = 0x20000
+CANDIDATE_STORE_SIZE = 0xB000
 SDK_NVS_TYPES = {
     ("nvs.net80211", "ap.sndchan"): "uint8_t",
     ("phy", "cal_mac"): "blob",
@@ -130,7 +131,7 @@ def check_partition_table(flash: bytes, components: Path) -> None:
     actual = flash[TABLE_OFFSET:TABLE_OFFSET + TABLE_SIZE]
     require(len(table) <= TABLE_SIZE and actual[:len(table)] == table and
             actual[len(table):] == b"\xff" * (TABLE_SIZE - len(table)),
-            "Flash 分区表与当前仓库的精确布局不一致")
+            "Flash 分区表与保留的旧 C3 精确布局不一致")
 
 
 def load_nvs_parser(components: Path):
@@ -505,13 +506,15 @@ def write_candidate(output: Path, store: dict[tuple[str, str], tuple[str, bytes]
                 writer.writerow(("operation", "data", "base64", base64.b64encode(receipt[1]).decode("ascii")))
         generator = components / "nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
         result = subprocess.run([sys.executable, str(generator), "generate", "--version", "2",
-                                 str(source), str(generated), hex(STORE_SIZE)],
+                                 str(source), str(generated), hex(CANDIDATE_STORE_SIZE)],
                                 capture_output=True, check=False)
         require(result.returncode == 0 and generated.is_file(), "官方 NVS generator 未能生成候选")
         candidate = generated.read_bytes()
-    require(len(candidate) == STORE_SIZE, "官方 NVS generator 输出的 base_store 长度不符")
+    require(len(candidate) == CANDIDATE_STORE_SIZE,
+            "官方 NVS generator 输出的目标 base_store 长度不符")
     parser = load_nvs_parser(components)
-    reread = nvs_records(candidate, "candidate_base_store", 0, STORE_SIZE, parser,
+    reread = nvs_records(candidate, "candidate_base_store", 0,
+                         CANDIDATE_STORE_SIZE, parser,
                          {("base_config", "committed"), ("base_ota", "operation")})
     expected = {("base_config", "committed"): ("blob", new_config)}
     if receipt:
@@ -526,7 +529,8 @@ def write_candidate(output: Path, store: dict[tuple[str, str], tuple[str, bytes]
         os.link(temporary, output)
     finally:
         os.unlink(temporary)
-    require(output.stat().st_size == STORE_SIZE and output.read_bytes() == candidate,
+    require(output.stat().st_size == CANDIDATE_STORE_SIZE and
+            output.read_bytes() == candidate,
             "候选输出读回字节不一致")
     return hashlib.sha256(candidate).hexdigest()
 
@@ -558,7 +562,7 @@ def main() -> int:
     for record in records:
         print(f"{'Flash' if record.startswith(('ota_', 'otadata:')) else 'NVS'}：{record}")
     if candidate_sha:
-        print(f"v3 base_store 候选：0x20000 字节、0600、逐键读回相等；SHA-256 {candidate_sha}")
+        print(f"v3 base_store 候选：0xb000 字节、0600、逐键读回相等；SHA-256 {candidate_sha}")
     print("只读预检不批准写入；镜像头和选择器解析不能证明镜像可启动。")
     return 0
 

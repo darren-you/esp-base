@@ -2,7 +2,7 @@
 
 ## 当前事实
 
-P1-04 保存的 C3 实板基线仍运行 v1 配置，已观测 revision 5；`base_store/base_config/committed` 为可选的 112 字节 `EBCF` v1 blob。v2 只在此前软件候选中实现，并未完成实板部署。普通新固件只读 `EBCF` v3，遇到 v1 或 v2 会停止启动并保留 NVS，不会自动转换、擦除或生成凭据。分区仍为 4 MiB：默认 `nvs` 位于 `0x9000/0x6000`，`otadata` 位于 `0xf000/0x2000`，`ota_0`、`ota_1` 分别位于 `0x20000/0x1e0000`、`0x200000/0x1e0000`，`base_store` 位于 `0x3e0000/0x20000`。P1-04 是已保存的基线，未来物理写入前仍须重新确认同一设备的实时身份和状态。
+P1-04 保存的 C3 实板基线仍运行 v1 配置，已观测 revision 5；`base_store/base_config/committed` 为可选的 112 字节 `EBCF` v1 blob。v2 只在此前软件候选中实现，并未完成实板部署。普通新固件只读 `EBCF` v3，遇到 v1 或 v2 会停止启动并保留 NVS，不会自动转换、擦除或生成凭据。旧设备分区为 4 MiB：默认 `nvs` 位于 `0x9000/0x6000`，`otadata` 位于 `0xf000/0x2000`，`ota_0`、`ota_1` 分别位于 `0x20000/0x1e0000`、`0x200000/0x1e0000`，`base_store` 位于 `0x3e0000/0x20000`。P1-04 是已保存的基线，未来物理写入前仍须重新确认同一设备的实时身份和状态。源码中的旧 `partitions/partition_table.csv` 仅供本预检核对旧备份；C3 产品构建已改用 `partitions/c3-product-partition-table.csv`，目标 `base_store@0x3f5000/0xb000`。
 
 v3 候选只改同一个 `base_config/committed` 键，保留 revision 与原字段：v1 输入转为 40 字节 header 加原 Wi-Fi 字节，MQTT/FRP 未配置；v2 输入在严格校验后保留原 Wi-Fi、MQTT 凭据和管理 HMAC key 字节，FRP 未配置。可选 `base_ota/operation` 收据保持原 blob。候选不生成或更换任何 Token、key、密码、证书，也不替换默认 `nvs/base_identity/device_uuid`。
 
@@ -18,9 +18,9 @@ python3 tools/preflight_v3_migration.py \
   --device-id <本轮独立核对的设备UUID>
 ```
 
-可加 `--output-base-store <仓外未存在的目标文件>`，生成权限 0600 的独立 `0x20000` 字节 v3 候选分区镜像。脚本使用固定 SDK 官方 NVS generator 生成候选，再以官方 NVS parser 逐键读回，验证精确键集、类型与字节；输出完整 Flash 和候选 SHA-256，不输出身份值、Wi-Fi、MQTT 凭据或 OTA 收据内容。脚本不打开串口，不执行 Flash/NVS 写入。
+可加 `--output-base-store <仓外未存在的目标文件>`，生成权限 0600 的独立 `0xb000` 字节 v3 目标分区候选镜像。脚本使用固定 SDK 官方 NVS generator 生成候选，再以官方 NVS parser 逐键读回，验证精确键集、类型与字节；输出完整 Flash 和候选 SHA-256，不输出身份值、Wi-Fi、MQTT 凭据或 OTA 收据内容。脚本不打开串口，不执行 Flash/NVS 写入。
 
-预检先逐字节比较两份 Flash，核对本仓固定分区表、otadata 选择器和双槽头/全槽摘要；`base_store` 仅允许同键配置与可选 OTA 收据。默认 `nvs` 允许身份，以及实板已见的 SDK `nvs.net80211/ap.sndchan`、`phy/cal_mac`、`phy/cal_data`、`phy/cal_version` 和无活动键的 `misc` namespace；各记录须满足精确类型，PHY 三项须同时存在，候选不会重建或改写默认 `nvs`。非规范 v1/v2、未知/重复键、无效 NVS 页/CRC、加密 NVS、身份不符、未决或非 VALID 选槽均阻断。镜像头与全槽摘要仍不证明固件可启动或签名有效。候选使用官方生成器新建 NVS 分区，会改变页历史与空闲布局；证明范围是白名单内活动记录及目标配置值，不是其他 Flash 字节无差异。
+预检先逐字节比较两份 Flash，核对本仓保留的旧 C3 分区表、otadata 选择器和双槽头/全槽摘要；`base_store` 仅允许同键配置与可选 OTA 收据。默认 `nvs` 允许身份，以及实板已见的 SDK `nvs.net80211/ap.sndchan`、`phy/cal_mac`、`phy/cal_data`、`phy/cal_version` 和无活动键的 `misc` namespace；各记录须满足精确类型，PHY 三项须同时存在，候选不会重建或改写默认 `nvs`。非规范 v1/v2、未知/重复键、无效 NVS 页/CRC、加密 NVS、身份不符、未决或非 VALID 选槽均阻断。镜像头与全槽摘要仍不证明固件可启动或签名有效。候选使用官方生成器新建 NVS 分区，会改变页历史与空闲布局；证明范围是白名单内活动记录及目标配置值，不是其他 Flash 字节无差异。
 
 测试入口：
 
