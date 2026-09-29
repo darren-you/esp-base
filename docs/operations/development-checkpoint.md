@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-29 带包 OTA 目标容量与身份预检
+
+只读来源快照现在接收完整 OTA 请求。在原升级存储 claim 下，`REUSE` 逐项核对目标包 SHA-256、长度、ABI、data schema 与已验签来源包；`WRITE` 在保留当前包槽后按 Container 的槽选择条件预检是否还有足够大的目标槽，来源有包时拒绝跨 data schema。带包模式还要求非零目标包摘要、长度、ABI、schema 和请求绑定的代表事件摘要；无包模式拒绝带入这些字段。预检失败清空输出，不登记 V3 收据、退役旧 B 或擦写 app／包槽；公开 `ota.start` 仍仅解析无包合同。
+
+C3／ESP32 host ASan/UBSan 测试覆盖错误包身份、长度、schema、缺少事件摘要、仅来源槽可容纳目标及原有序号边界；锁定 `esp-container@e8a0d0b`、WAMR `c10736f` 的双目标签名 guest 生命周期各完成 100 次重装，核对快照没有 NVS blob 或包 Flash 写入。固定 SDK 双目标签名应用构建和官方验签通过：C3 RSA v2 `0x121000/0x130000`、SHA-256 `6b8a1807e20ebfcc7ee9bbb60addb3280b773386ccba75684075a3be7001fbf0`；ESP32 ECDSA v1 `0xffff4/0x120000`、SHA-256 `5b7898f6438f55b99e445040f0875bac829786c3bd7d2b8ce4ee37637f58781e`。这是软件预检，不是带包 `ota.start`、联合升级或实体板验收；P6-10/P7-04 继续进行中。
+
 ## 2026-09-29 带包 OTA 来源身份只读快照
 
 在原升级存储 claim 下，Base 先通过双次签名固件观察取得运行 A 与可选 B 的摘要，再以 Container `reconcile` 核对 ECS2 确认态、固件绑定和包引用。`REUSE` 仅接受运行中、事件入口开放的已确认包；`WRITE` 可接受同样的来源包或 `EMPTY` 无包来源。快照复制来源包 SHA-256、长度、ABI、schema 和 ECS2 序号，不登记 OTA 收据、不擦写包槽或 app 槽。对 `WRITE` 额外预留一次 `WRITING` 持久序号，双固件来源共需 7 次、单固件来源共需 6 次序号余量；`REUSE` 分别为 6 次和 5 次。无包原路径维持其原有条件。

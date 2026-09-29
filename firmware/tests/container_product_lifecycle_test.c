@@ -610,18 +610,28 @@ static void run_event_failure_trial(const char *directory)
     const unsigned snapshot_blob_writes = store.blob_writes;
     const unsigned snapshot_flash_writes = store.flash_writes;
     esp_base_ota_receipt_snapshot_t ota_snapshot = {0};
+    esp_base_ota_request_t ota_request = {
+        .package_mode = ESP_BASE_OTA_PACKAGE_REUSE,
+        .package_size_bytes = (uint32_t)normal_package.size,
+        .guest_abi_version = 2U,
+        .data_schema_version = 1U,
+    };
+    memcpy(ota_request.package_sha256, old.package_sha256, 32);
+    memset(ota_request.trial_event_sha256, 0xe5, 32);
     assert(esp_base_container_product_snapshot_for_ota(
-        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &ota_snapshot));
+        &claim, &ota_request, &ota_snapshot));
     assert(ota_snapshot.container_sequence == old.container_sequence &&
            ota_snapshot.source_package_present &&
            ota_snapshot.source_package_size_bytes == (uint32_t)normal_package.size &&
            ota_snapshot.source_guest_abi_version == 2U &&
            ota_snapshot.source_data_schema_version == 1U &&
            memcmp(ota_snapshot.source_package_sha256, old.package_sha256, 32) == 0);
+    ota_request.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
     assert(esp_base_container_product_snapshot_for_ota(
-        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &ota_snapshot));
+        &claim, &ota_request, &ota_snapshot));
+    ota_request = (esp_base_ota_request_t){0};
     assert(!esp_base_container_product_snapshot_for_ota(
-        &claim, ESP_BASE_OTA_NO_PACKAGE, &ota_snapshot));
+        &claim, &ota_request, &ota_snapshot));
     assert(store.blob_writes == snapshot_blob_writes &&
            store.flash_writes == snapshot_flash_writes);
     esp_base_container_package_request_t request = {

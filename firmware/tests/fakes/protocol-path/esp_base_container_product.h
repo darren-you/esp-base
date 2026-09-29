@@ -151,7 +151,7 @@ typedef struct {
 bool esp_base_container_product_trial_event_snapshot(
     esp_base_container_trial_event_snapshot_t *out);
 bool esp_base_container_product_snapshot_for_ota(
-    const esp_base_storage_claim_t *claim, esp_base_ota_package_mode_t package_mode,
+    const esp_base_storage_claim_t *claim, const esp_base_ota_request_t *request,
     esp_base_ota_receipt_snapshot_t *snapshot);
 typedef enum {
     ESP_BASE_CONTAINER_RETIRE_COMPLETE = 0,
