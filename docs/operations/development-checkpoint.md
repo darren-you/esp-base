@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-29 双板新鲜恢复基线与迁移阻断复核
+
+按五仓计划第 13.1 节，在 `mac-pro-1` 重新核对两块 4 MiB 板的串口、芯片、MAC 与原固件响应。C3 当前仍为 Base v1、配置 revision 5；ESP32-D0WD-V3 仍为 ESP-AT 1.1.b1.0。esptool 与 espefuse 只读探测会复位目标：C3 观察到 boot ID 变化后重新确认同一业务 UUID 的哈希和 revision，ESP32 最终硬复位后 `AT+GMR` 返回原版本及 OK。两块板的 Secure Boot 和 Flash Encryption eFuse 均未启用；本轮没有写 eFuse、Flash 或分区。
+
+各板分别取得两份 4 MiB、权限 `0600`、逐字节一致的完整 Flash 备份。C3 两次独立读取相等；ESP32 每次复位后读取的默认 NVS 相差 117 字节，因此让旧 AT 暂停在 bootloader 中连续读取两次，取得全片一致的配对恢复件，随后恢复旧 AT。固定 SDK 分区工具核对 ESP32 旧布局；当前 Base v3 离线预检用新的 C3 配对备份复跑，仍因 `base_store` 后续页无法安全审计而阻断，未生成 v3 候选。原始镜像、设备身份、安全读取、日志及尚未执行的同板恢复步骤仅在 ESP Tool 忽略的私有 `p6-04-board-baseline-20260929/` 保存。备份一致性不代表恢复写回演练、签名产品基线或 P7-01 迁移通过；C3 异常页与 ESP32 旧 AT 分区仍需分别解决。
+
 ## 2026-09-29 产品代表事件确认窗口
 
 维护者确定安装／升级请求必须绑定随后业务事件原始 guest 字节的 SHA-256；Base 精确解码并纳入原操作指纹，公开串口客户端从 `--trial-event-file` 计算同一值。候选 guest 完成同包、同摘要的授权事件且返回非负业务结果后，Base 连续 30 秒核对 Wi-Fi、可信时间、MQTT ready、最近完成事件与最多 1 秒的控制循环间隙。离线、错事件或 guest/runtime 失败不会确认；窗口通过后读取 Container 队列空闲快照，持原产品存储 claim 完成 `HEALTH_VERIFIED`、`CONFIRMED` 的独立读回，再将原 operation ID 账本写为成功。确认或账本结果不确定时保留 claim，由下次启动对账；不会自动重放请求。
