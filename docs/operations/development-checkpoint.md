@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 内部包槽 stage
+
+Base `stage_firmware` 现由原 V3 收据提供 operation ID、A/C 镜像摘要、来源／目标包身份及原 ECS2 sequence。旧 B 退役后，它要求 ECS2 只剩唯一 A 绑定且序号精确前进；来源有包时须先停止 guest、join 并证明原生资源回收。`REUSE` 用锁定 Container 的验证回调从来源槽重新读取签名包、Wasm 与授权，合格后持久提交 `PREPARED`；`WRITE` 只预约不占来源包的目标槽并提交 `WRITING`，不下载或擦写包字节。`WRITE` 的返回状态不能触发 `eota_select`，须待独立包写入、验签与 `PREPARED` 读回。
+
+C3／ESP32 host ASan/UBSan、锁定 Container/WAMR 的双目标签名 guest 生命周期各 100 次重装及新增 stage 回归通过。回归用构造的 V3 收据验证无包原路径、从空绑定 `WRITE`、带包来源 `REUSE`／`WRITE`，以及旧包字节损坏、过期序号、未停止 guest 和重复调用均不产生错误持久提交；成功 stage 各仅提交一次 ECS2，包 Flash 擦写计数不变。固定 SDK 双目标测试键签名构建与官方 RSA v2／ECDSA v1 验签通过，签名 app 为 `0x121000/0x130000` 与 `0xffff4/0x120000`。公开 `ota.start` 和启动恢复仍只允许无包；包写入、联合健康确认、掉电与实体板尚未完成，P6-10/P7-04 不验收。
+
 ## 2026-09-29 带包 OTA V3 内部登记校验
 
 内部 `esp_base_ota_receipt_register` 现接受经同一存储 claim 取得的 `REUSE`／`WRITE` 来源快照，并在提交 V3 前核对目标包摘要、长度、ABI、data schema、代表事件摘要和来源包身份。`REUSE` 必须逐项等于已确认来源包；`WRITE` 可从空来源开始，来源有包时要求相同 data schema。同 operation ID 的固件或包参数变化返回冲突，不再把只相同的固件摘要视为同一请求。V3 解码也拒绝超出有符号读取上限的包长度和跨 schema 的 `WRITE` 收据。

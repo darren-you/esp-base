@@ -1353,10 +1353,11 @@ const char *eota_error(eota_result_t result)
 
 esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
     const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
-    const char operation_id[37])
+    const esp_base_ota_receipt_recovery_t *receipt)
 {
     assert(esp_base_storage_claim_active(claim) && prepared != NULL &&
-           operation_id != NULL && operation_id[0] == '4');
+           receipt != NULL && receipt->operation_id[0] == '4' &&
+           receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE);
     ++stage_calls;
     return stage_result;
 }

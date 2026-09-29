@@ -60,7 +60,7 @@ Container 成功 open 返回本次重新验签包的 SHA-256 与签名 `event_qu
 
 收据确实不存在、已标记 `FAILED` 或 OTA 不可用时，在产品启动前只读检查真实 ECS2：允许缺键首装与无固件迁移的绑定，任何残留 `firmware_transition`（包括 `CONFIRMED`）都阻断启动且不写 ECS2。旧 V1/V2、损坏或读失败收据、身份/sequence 不匹配和任何存储不确定也阻断产品启动，不能改写成新的空状态。
 
-带包产品在 OTA 写 inactive app **之前**拒绝：产品专用操作已有独立 MQTT 授权业务事件入口与请求绑定的代表事件摘要，但联合 OTA 的公开参数、持久收据、带包启动试运行和恢复尚未接线，不能以产品专用试运行结果代替联合确认。Container 已提供 REUSE 与 WRITE 状态合同；两条联合路径仍未接线。已确认包的正常启动入口继续可用。退役、下载、签名、stage 或选 boot 中事实不确定时，worker 留住本 boot 的 claim 并报告 `unknown/storage_uncertain`，不会当作普通失败释放；claim 本身不跨重启，跨重启恢复仅由原 V3 收据授权。上述是软件恢复合同，host 假件不能模拟实板掉电时的 Flash/NVS 原子性、bootloader 后备扫描、双槽迁移或 guest 与 FRP/MQTT 并发。
+带包产品在 OTA 写 inactive app **之前**拒绝：产品专用操作已有独立 MQTT 授权业务事件入口与请求绑定的代表事件摘要；内部 V3 登记与包槽 stage 已接线，但联合 OTA 的公开参数、包写入、带包启动试运行和恢复尚未接线，不能以产品专用试运行结果代替联合确认。`REUSE` 内部 stage 重验现有签名包后提交 `PREPARED`；`WRITE` 内部 stage 只预约并提交 `WRITING`，不允许据此选择新 boot。已确认包的正常启动入口继续可用。退役、下载、签名、stage 或选 boot 中事实不确定时，worker 留住本 boot 的 claim 并报告 `unknown/storage_uncertain`，不会当作普通失败释放；claim 本身不跨重启，跨重启恢复仅由原 V3 收据授权。上述是软件恢复合同，host 假件不能模拟实板掉电时的 Flash/NVS 原子性、bootloader 后备扫描、双槽迁移或 guest 与 FRP/MQTT 并发。
 
 当前清单精确锁定 `esp-container@e8a0d0b6384bbba813b955ed08ebc315c134a707` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 未配置产品授权，不运行 guest；两目标正式源码均有包分区，但现役设备尚未完成布局迁移。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
 

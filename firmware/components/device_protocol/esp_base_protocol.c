@@ -791,7 +791,7 @@ static void ota_task(void *argument)
         if (result != EOTA_UPDATE_OK) goto done;
         const esp_base_container_stage_result_t stage =
             esp_base_container_product_stage_firmware(
-                &s_ota_storage_claim, &prepared, s_ota_request.operation_id);
+                &s_ota_storage_claim, &prepared, &receipt);
         if ((receipt.container_enabled &&
              stage == ESP_BASE_CONTAINER_STAGE_PREPARED) ||
             (!receipt.container_enabled &&

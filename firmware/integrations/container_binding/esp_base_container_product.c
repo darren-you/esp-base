@@ -292,60 +292,178 @@ static bool configure_policy(void)
 
 typedef struct {
     uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
+    const esp_base_ota_receipt_recovery_t *receipt;
+    econtainer_package_slot_validation_t *validation;
 } stage_context_t;
+
+static bool digest_zero(const uint8_t sha256[32]);
 
 static econtainer_slots_result_t stage_firmware(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
 {
+    const stage_context_t *stage = context;
+    const esp_base_ota_receipt_recovery_t *receipt = stage->receipt;
     if (firmware_set->bootable_count != 2U) return ECONTAINER_SLOTS_CONFLICT;
+    if (memcmp(firmware_set->running_firmware_sha256,
+               receipt->source_sha256, 32) != 0 ||
+        memcmp(firmware_set->bootable_firmware_sha256[1],
+               receipt->candidate_sha256, 32) != 0) return ECONTAINER_SLOTS_CONFLICT;
     econtainer_slots_state_t current = {0};
     econtainer_slots_result_t result = econtainer_slots_load(
         &s_product.provider.io, &s_product.provider.geometry, &current);
     if (result != ECONTAINER_SLOTS_OK) return result;
+    const uint32_t retired_sequence = receipt->container_sequence +
+        (digest_zero(receipt->inactive_sha256) ? 0U : 1U);
+    if (current.sequence != retired_sequence ||
+        current.phase != ECONTAINER_SLOT_IDLE)
+        return ECONTAINER_SLOTS_CONFLICT;
 
     const econtainer_slot_binding_t *running = NULL;
     for (size_t index = 0; index < ECONTAINER_SLOT_BINDING_COUNT; ++index) {
-        if (current.bindings[index].present &&
+        if (!current.bindings[index].present) continue;
+        if (running != NULL ||
             memcmp(current.bindings[index].firmware_sha256,
-                   firmware_set->running_firmware_sha256, 32) == 0) {
-            running = &current.bindings[index];
-            break;
-        }
+                   firmware_set->running_firmware_sha256, 32) != 0)
+            return ECONTAINER_SLOTS_CONFLICT;
+        running = &current.bindings[index];
     }
     if (running == NULL) return ECONTAINER_SLOTS_CONFLICT;
-    /* The product-only event predicate does not authorize a firmware trial.
-     * REUSE and WRITE need their receipt-bound startup/health path first. */
-    if (running->package_present) return ECONTAINER_SLOTS_UNTRUSTED;
-
-    const stage_context_t *stage = context;
+    if (running->package_present != receipt->source_package_present ||
+        (running->package_present &&
+         (memcmp(running->package_sha256, receipt->source_package_sha256, 32) != 0 ||
+          running->package_size_bytes != receipt->source_package_size_bytes ||
+          running->guest_abi_version != receipt->source_guest_abi_version ||
+          running->data_schema_version != receipt->source_data_schema_version)))
+        return ECONTAINER_SLOTS_CONFLICT;
     econtainer_slot_operation_t operation = {0};
     memcpy(operation.operation_id, stage->operation_id, sizeof operation.operation_id);
     memcpy(operation.target_firmware_sha256,
-           firmware_set->bootable_firmware_sha256[1], 32);
-    operation.kind = ECONTAINER_SLOT_NO_PACKAGE;
+           receipt->candidate_sha256, 32);
+    operation.package_size_bytes = receipt->package_size_bytes;
+    operation.guest_abi_version = receipt->guest_abi_version;
+    operation.data_schema_version = receipt->data_schema_version;
+    memcpy(operation.package_sha256, receipt->package_sha256, 32);
+    if (receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE) {
+        if (running->package_present) return ECONTAINER_SLOTS_CONFLICT;
+        operation.kind = ECONTAINER_SLOT_NO_PACKAGE;
+    } else if (receipt->package_mode == ESP_BASE_OTA_PACKAGE_REUSE) {
+        if (!running->package_present || stage->validation == NULL)
+            return ECONTAINER_SLOTS_CONFLICT;
+        operation.kind = ECONTAINER_SLOT_PACKAGE_REUSE;
+        operation.slot = running->slot;
+    } else if (receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE) {
+        if (running->package_present &&
+            running->data_schema_version != receipt->data_schema_version)
+            return ECONTAINER_SLOTS_CONFLICT;
+        operation.kind = ECONTAINER_SLOT_PACKAGE_WRITE;
+    } else {
+        return ECONTAINER_SLOTS_INVALID;
+    }
     return econtainer_slots_stage_firmware(
         &s_product.provider.io, &s_product.provider.geometry, current.sequence,
-        firmware_set, &operation, NULL, NULL, &current);
+        firmware_set, &operation,
+        receipt->package_mode == ESP_BASE_OTA_PACKAGE_REUSE ?
+            econtainer_package_slot_validate_binding : NULL,
+        stage->validation, &current);
+}
+
+typedef struct {
+    econtainer_package_workspace_t package;
+    econtainer_wasm_workspace_t wasm;
+    econtainer_package_info_t info;
+} firmware_stage_workspace_t;
+
+static bool stage_receipt_valid(const esp_base_ota_receipt_recovery_t *receipt)
+{
+    if (receipt->source_package_present ?
+        (receipt->source_package_size_bytes == 0U ||
+         receipt->source_package_size_bytes > INT_MAX ||
+         receipt->source_guest_abi_version == 0U ||
+         receipt->source_data_schema_version == 0U ||
+         digest_zero(receipt->source_package_sha256)) :
+        (receipt->source_package_size_bytes != 0U ||
+         receipt->source_guest_abi_version != 0U ||
+         receipt->source_data_schema_version != 0U ||
+         !digest_zero(receipt->source_package_sha256))) return false;
+    if (receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE)
+        return !receipt->source_package_present &&
+            receipt->package_size_bytes == 0U &&
+            receipt->guest_abi_version == 0U &&
+            receipt->data_schema_version == 0U &&
+            digest_zero(receipt->package_sha256) &&
+            digest_zero(receipt->trial_event_sha256);
+    if (receipt->package_size_bytes == 0U ||
+        receipt->package_size_bytes > INT_MAX ||
+        receipt->guest_abi_version == 0U ||
+        receipt->data_schema_version == 0U ||
+        digest_zero(receipt->package_sha256) ||
+        digest_zero(receipt->trial_event_sha256)) return false;
+    if (receipt->package_mode == ESP_BASE_OTA_PACKAGE_REUSE)
+        return receipt->source_package_present &&
+            receipt->package_size_bytes == receipt->source_package_size_bytes &&
+            receipt->guest_abi_version == receipt->source_guest_abi_version &&
+            receipt->data_schema_version == receipt->source_data_schema_version &&
+            memcmp(receipt->package_sha256,
+                   receipt->source_package_sha256, 32) == 0;
+    return receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+        (!receipt->source_package_present ||
+         receipt->data_schema_version == receipt->source_data_schema_version);
 }
 
 esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
     const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
-    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES])
+    const esp_base_ota_receipt_recovery_t *receipt)
 {
-    if (!policy_present()) return ESP_BASE_CONTAINER_STAGE_NOT_CONFIGURED;
+    if (!policy_present()) return receipt != NULL &&
+        receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE ?
+        ESP_BASE_CONTAINER_STAGE_NOT_CONFIGURED : ESP_BASE_CONTAINER_STAGE_REJECTED;
     if (!esp_base_storage_claim_active(claim) || prepared == NULL ||
+        receipt == NULL || receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED ||
+        !receipt->container_enabled || receipt->container_sequence == 0U ||
+        receipt->container_sequence >= UINT32_MAX -
+            (digest_zero(receipt->inactive_sha256) ? 0U : 1U) ||
+        receipt->package_mode > ESP_BASE_OTA_PACKAGE_WRITE ||
+        !stage_receipt_valid(receipt) ||
+        receipt->image_size_bytes != prepared->image_size_bytes ||
+        memcmp(receipt->candidate_sha256, prepared->sha256, 32) != 0 ||
+        digest_zero(receipt->source_sha256) ||
+        digest_zero(receipt->candidate_sha256) ||
         s_product.ready == NULL ||
         !atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire)) {
         return ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
     }
-    stage_context_t stage = {0};
-    if (!decode_uuid(operation_id, stage.operation_id)) {
+    const int guest_state = atomic_load_explicit(&s_product.result,
+                                                  memory_order_acquire);
+    if (s_product.trial_mode || s_product.uninstall_uncertain ||
+        (receipt->source_package_present ?
+         (guest_state != ESP_BASE_CONTAINER_STOPPED ||
+          s_product.thread_joinable || !s_product.stop_succeeded ||
+          !s_product.native_reclaimed ||
+          atomic_load_explicit(&s_product.instance_active,
+                               memory_order_acquire)) :
+         guest_state != ESP_BASE_CONTAINER_EMPTY))
         return ESP_BASE_CONTAINER_STAGE_REJECTED;
+    stage_context_t stage = {.receipt = receipt};
+    if (!decode_uuid(receipt->operation_id, stage.operation_id)) {
+        return ESP_BASE_CONTAINER_STAGE_REJECTED;
+    }
+    firmware_stage_workspace_t *workspace = NULL;
+    econtainer_package_slot_validation_t validation = s_product.validation;
+    if (receipt->package_mode == ESP_BASE_OTA_PACKAGE_REUSE) {
+        workspace = calloc(1, sizeof *workspace);
+        if (workspace == NULL) return ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
+        validation.package_workspace = &workspace->package;
+        validation.wasm_workspace = &workspace->wasm;
+        validation.verified_info = &workspace->info;
+        stage.validation = &validation;
     }
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_PREPARED_CANDIDATE, prepared,
         stage_firmware, &stage);
-    if (result == ECONTAINER_SLOTS_OK) return ESP_BASE_CONTAINER_STAGE_PREPARED;
+    free(workspace);
+    if (result == ECONTAINER_SLOTS_OK) return
+        receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ?
+        ESP_BASE_CONTAINER_STAGE_WRITING : ESP_BASE_CONTAINER_STAGE_PREPARED;
     if (result == ECONTAINER_SLOTS_CONFLICT || result == ECONTAINER_SLOTS_UNTRUSTED ||
         result == ECONTAINER_SLOTS_EMPTY || result == ECONTAINER_SLOTS_NO_SPACE) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_STAGE_REJECTED result=%d", (int)result);

@@ -331,14 +331,16 @@ bool esp_base_container_product_reconcile_selected_ota(
 typedef enum {
     ESP_BASE_CONTAINER_STAGE_NOT_CONFIGURED = 0,
     ESP_BASE_CONTAINER_STAGE_PREPARED,
+    ESP_BASE_CONTAINER_STAGE_WRITING,
     ESP_BASE_CONTAINER_STAGE_REJECTED,
     ESP_BASE_CONTAINER_STAGE_UNCERTAIN,
 } esp_base_container_stage_result_t;
 
-/* Called by the OTA worker with its existing claim, after eota_prepare and
- * before eota_select. Only a real persisted running binding without a package
- * stages NO_PACKAGE. A package trial lacks an authorized business event source;
- * until that input exists, REUSE and WRITE are rejected before app Flash write. */
+/* Called by the OTA worker with its existing claim and its verified original
+ * V3 receipt, after eota_prepare and before eota_select. The receipt binds the
+ * source, candidate, operation and Container sequence. REUSE verifies the
+ * existing signed package for C and commits PREPARED; WRITE only reserves
+ * WRITING; a separate verified package write must finish before eota_select. */
 esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
     const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
-    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES]);
+    const esp_base_ota_receipt_recovery_t *receipt);
