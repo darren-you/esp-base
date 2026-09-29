@@ -436,7 +436,12 @@ int main(void)
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
            ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
     assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+           ESP_BASE_OTA_RECEIPT_OK &&
+           recovery.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+           recovery.package_size_bytes == 1024U &&
+           recovery.guest_abi_version == 2U &&
+           recovery.data_schema_version == 1U &&
+           !recovery.source_package_present);
     next = request(NEXT_OP);
     assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_BUSY && writes == 1);
 
@@ -482,6 +487,22 @@ int main(void)
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
            ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
     assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
+           ESP_BASE_OTA_RECEIPT_OK &&
+           recovery.package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
+           recovery.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
+           recovery.source_package_present &&
+           recovery.package_size_bytes == ota.package_size_bytes &&
+           recovery.source_package_size_bytes == ota.package_size_bytes &&
+           recovery.guest_abi_version == ota.guest_abi_version &&
+           recovery.source_guest_abi_version == ota.guest_abi_version &&
+           recovery.data_schema_version == ota.data_schema_version &&
+           recovery.source_data_schema_version == ota.data_schema_version &&
+           !memcmp(recovery.package_sha256, ota.package_sha256, 32) &&
+           !memcmp(recovery.source_package_sha256, ota.package_sha256, 32) &&
+           !memcmp(recovery.trial_event_sha256, ota.trial_event_sha256, 32));
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
+           EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    assert(esp_base_ota_receipt_record_success(DEVICE) ==
            ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
     assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
            ESP_BASE_OTA_RECEIPT_EXISTS && writes == 1);
@@ -504,6 +525,15 @@ int main(void)
     package_snapshot.source_data_schema_version = 1U;
     assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
            ESP_BASE_OTA_RECEIPT_OK && stored[186] == ESP_BASE_OTA_PACKAGE_WRITE);
+    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
+           ESP_BASE_OTA_RECEIPT_OK &&
+           recovery.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+           recovery.source_package_present &&
+           recovery.package_size_bytes == ota.package_size_bytes &&
+           recovery.source_package_size_bytes == package_snapshot.source_package_size_bytes &&
+           !memcmp(recovery.package_sha256, ota.package_sha256, 32) &&
+           !memcmp(recovery.source_package_sha256,
+                   package_snapshot.source_package_sha256, 32));
     stored[195] = 2U;
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
            ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);

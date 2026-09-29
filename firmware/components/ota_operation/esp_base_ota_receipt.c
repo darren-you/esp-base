@@ -354,8 +354,6 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
     const esp_base_ota_receipt_result_t result = load(&receipt);
     if (result != ESP_BASE_OTA_RECEIPT_OK) return result;
     if (strcmp(receipt.device_id, device_id)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
-    if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE)
-        return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     recovery->status = (esp_base_ota_receipt_status_t)receipt.status;
     memcpy(recovery->operation_id, receipt.operation_id, sizeof recovery->operation_id);
     recovery->source_subtype = receipt.source_subtype;

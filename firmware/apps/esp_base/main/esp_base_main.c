@@ -172,6 +172,9 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
     if (loaded == ESP_BASE_OTA_RECEIPT_NOT_FOUND)
         return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     if (loaded != ESP_BASE_OTA_RECEIPT_OK) return false;
+    /* The receipt is readable, but package trial and rollback recovery must
+     * be proven before a package transition may advance this boot. */
+    if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) return false;
     if (receipt.status == ESP_BASE_OTA_RECEIPT_FAILED)
         return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     if ((receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED &&

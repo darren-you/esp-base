@@ -91,8 +91,8 @@ typedef struct {
 /* One latest operation is retained in base_store/base_ota/operation. V3 stores
  * the source, old distinct inactive and requested candidate identities plus
  * the current ECS2 sequence and package metadata in that same blob. The
- * internal register validates all three package modes; the public command
- * and boot recovery paths currently permit NO_PACKAGE only.
+ * internal register and read-only recovery load validate all three package
+ * modes; public execution and boot recovery currently permit NO_PACKAGE only.
  * The caller holds the storage claim and supplies a reconciled Container
  * snapshot; register independently rechecks the signed Base firmware set
  * before commit/readback. A candidate with the running firmware's signed
@@ -102,9 +102,10 @@ typedef struct {
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const char *device_id, const esp_base_ota_request_t *request,
     const esp_base_ota_receipt_snapshot_t *snapshot);
-/* Read the original committed intent before deciding whether an interrupted
- * target may be erased. FAILED is terminal and never authorizes replay. A
- * corrupt or older-format record is uncertain, not absent. */
+/* Read the complete original V3 intent, including package modes. A read does
+ * not authorize erasure or boot advancement: the caller must prove the
+ * mode-specific physical/Container state first. FAILED is terminal and never
+ * authorizes replay. A corrupt or older-format record is uncertain, not absent. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
     const char *device_id, esp_base_ota_receipt_recovery_t *recovery);
 /* Record failure after either no app/Container mutation occurred or the

@@ -711,6 +711,23 @@ int main(void)
 
     reset_case();
     container_configured = true;
+    selected_receipt(true, EOTA_STATE_PENDING_VERIFY);
+    receipt.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
+    assert(rebooted() && rollback_calls == 1 && receipt_observe_calls == 0 &&
+           container_selected_calls == 0 && container_trial_calls == 0 &&
+           mark_calls == 0 && ready_logs == 0);
+
+    reset_case();
+    container_configured = true;
+    interrupted_receipt(true);
+    image_state = EOTA_STATE_VALID;
+    receipt.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
+    assert(!rebooted() && receipt_observe_calls == 0 &&
+           receipt_retire_calls == 0 && container_recover_calls == 0 &&
+           container_boot_calls == 0 && ready_logs == 0 && ota_gate_pending);
+
+    reset_case();
+    container_configured = true;
     container_boot_result = ESP_BASE_CONTAINER_RUNNING;
     selected_receipt(true, EOTA_STATE_PENDING_VERIFY);
     assert(!rebooted() && container_trial_calls == 1 &&

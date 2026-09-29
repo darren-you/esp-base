@@ -55,6 +55,7 @@ static bool worker_created;
 static unsigned register_calls, failure_record_calls, task_calls, prepare_calls, stage_calls, select_calls, restart_calls;
 static unsigned snapshot_calls, load_receipt_calls, retire_calls,
     product_retire_calls, validate_calls, query_calls;
+static esp_base_ota_package_mode_t loaded_package_mode;
 static char latest_reply[1200];
 static char latest_reported[768];
 static unsigned reported_calls;
@@ -156,6 +157,7 @@ static void reset_case(void)
     worker_created = true;
     register_calls = failure_record_calls = task_calls = prepare_calls = stage_calls = select_calls = restart_calls = 0;
     snapshot_calls = load_receipt_calls = retire_calls = product_retire_calls = 0;
+    loaded_package_mode = ESP_BASE_OTA_NO_PACKAGE;
     validate_calls = query_calls = 0;
     latest_reply[0] = '\0';
     latest_reported[0] = '\0';
@@ -1053,6 +1055,15 @@ int main(void)
            atomic_load(&owner.active_token) == s_ota_storage_claim.token);
 
     reset_case();
+    loaded_package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
+    start(20);
+    poll_ota();
+    expect_reply("unknown", "storage_uncertain");
+    assert(load_receipt_calls == 1 && retire_calls == 0 &&
+           product_retire_calls == 0 && prepare_calls == 0 &&
+           stage_calls == 0 && select_calls == 0 && failure_record_calls == 0);
+
+    reset_case();
     product_retire_result = ESP_BASE_CONTAINER_RETIRE_UNCERTAIN;
     start(18);
     poll_ota();
@@ -1338,6 +1349,7 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
         .image_size_bytes = s_ota_request.image_size_bytes,
         .container_enabled = product_configured,
         .container_sequence = 7,
+        .package_mode = loaded_package_mode,
     };
     memcpy(receipt->operation_id, s_ota_request.operation_id,
            sizeof receipt->operation_id);

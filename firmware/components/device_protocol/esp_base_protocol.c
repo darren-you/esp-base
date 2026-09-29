@@ -808,6 +808,8 @@ static void ota_task(void *argument)
     if (esp_base_ota_receipt_load_for_recovery(
             s_context.device_id, &receipt) != ESP_BASE_OTA_RECEIPT_OK ||
         receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED ||
+        receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE ||
+        s_ota_request.package_mode != ESP_BASE_OTA_NO_PACKAGE ||
         strcmp(receipt.operation_id, s_ota_request.operation_id) != 0 ||
         receipt.image_size_bytes != image.image_size_bytes ||
         memcmp(receipt.candidate_sha256, image.sha256, sizeof image.sha256) != 0) {
