@@ -126,7 +126,7 @@ bool esp_base_container_product_abandon_prepared_package(
 esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
-    const char boot_id[37]);
+    const char boot_id[37], const uint8_t trial_event_sha256[32]);
 
 /* Stop and join the candidate, then durably abandon its exact trial and
  * independently read back ABORTED. Success permits reopening the old binding
@@ -195,6 +195,17 @@ esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
     esp_base_container_event_observation_t *out);
 
+/* Accumulated within this exact package trial. The representative sequence
+ * remains visible after later successful events; any guest/runtime failure
+ * clears it and increments failure_count. A busy lock returns false. */
+typedef struct {
+    uint64_t representative_event_sequence;
+    uint64_t failure_count;
+    uint8_t package_sha256[32];
+} esp_base_container_trial_event_snapshot_t;
+bool esp_base_container_product_trial_event_snapshot(
+    esp_base_container_trial_event_snapshot_t *out);
+
 /* A read-only hint for the Base policy. False means a queued event or guest
  * call is still active; the confirm operation rechecks under the same lock. */
 bool esp_base_container_product_trial_quiescent(void);
@@ -211,6 +222,7 @@ bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint64_t verified_event_sequence, const uint8_t verified_event_sha256[32],
+    uint64_t verified_failure_count,
     uint32_t *confirmed_sequence);
 
 typedef enum {

@@ -80,6 +80,7 @@ static uint32_t s_product_trial_sequence;
 static uint8_t s_product_trial_event_sha256[32];
 static uint8_t s_product_trial_package_sha256[32];
 static uint64_t s_product_trial_event_sequence;
+static uint64_t s_product_trial_failure_count;
 static uint64_t s_product_trial_stable_since_ms;
 static uint64_t s_product_trial_last_poll_ms;
 static size_t s_ota_slot;
@@ -971,7 +972,7 @@ static void product_task(void *argument)
     const esp_base_container_boot_result_t trial =
         esp_base_container_product_start_package_trial(
             &s_product_storage_claim, prepared_sequence,
-            request->operation_id, s_boot_id);
+            request->operation_id, s_boot_id, request->trial_event_sha256);
     if (trial == ESP_BASE_CONTAINER_RUNNING) {
         resolved_sequence = prepared_sequence + 1U;
         outcome = PRODUCT_WORK_TRIAL_RUNNING;
@@ -1043,6 +1044,7 @@ static void poll_product(void)
         s_product_trial_running = true;
         s_product_trial_sequence = resolved_sequence;
         s_product_trial_event_sequence = 0U;
+        s_product_trial_failure_count = 0U;
         s_product_trial_stable_since_ms = 0U;
         s_product_trial_last_poll_ms = 0U;
         save_outcome(s_product_slot, "running", NULL, false);
@@ -1062,26 +1064,28 @@ static void poll_product_trial_health(uint64_t now)
     if (!s_product_active || !s_product_trial_running || s_config_uncertain) return;
     const bool online = esp_base_wifi_ready() && esp_base_time_ready() &&
         esp_base_mqtt_owner_ready();
-    esp_base_container_event_observation_t event = {0};
-    const bool observed = esp_base_container_product_event_observation(&event) ==
-        ESP_BASE_CONTAINER_EVENT_OBSERVED;
-    const bool representative = observed && event.event_sequence != 0U &&
-        event.runtime_ok && event.guest_result >= 0 &&
-        memcmp(event.package_sha256, s_product_trial_package_sha256, 32) == 0 &&
-        memcmp(event.event_sha256, s_product_trial_event_sha256, 32) == 0;
+    esp_base_container_trial_event_snapshot_t snapshot = {0};
+    const bool observed = esp_base_container_product_trial_event_snapshot(&snapshot);
+    const bool representative = observed &&
+        snapshot.representative_event_sequence != 0U &&
+        memcmp(snapshot.package_sha256, s_product_trial_package_sha256, 32) == 0;
+    const bool failure_changed = observed &&
+        snapshot.failure_count != s_product_trial_failure_count;
     if (!online || !esp_base_container_product_event_accepting() ||
-        !representative ||
+        !representative || failure_changed ||
+        (observed && snapshot.failure_count == UINT64_MAX) ||
         (s_product_trial_last_poll_ms != 0U &&
          (now < s_product_trial_last_poll_ms ||
           now - s_product_trial_last_poll_ms > PRODUCT_TRIAL_PROGRESS_GAP_MS))) {
         s_product_trial_event_sequence = 0U;
         s_product_trial_stable_since_ms = 0U;
         s_product_trial_last_poll_ms = now;
+        if (observed) s_product_trial_failure_count = snapshot.failure_count;
         return;
     }
-    if (s_product_trial_event_sequence != event.event_sequence ||
+    if (s_product_trial_event_sequence != snapshot.representative_event_sequence ||
         s_product_trial_stable_since_ms == 0U) {
-        s_product_trial_event_sequence = event.event_sequence;
+        s_product_trial_event_sequence = snapshot.representative_event_sequence;
         s_product_trial_stable_since_ms = now;
     }
     s_product_trial_last_poll_ms = now;
@@ -1095,6 +1099,7 @@ static void poll_product_trial_health(uint64_t now)
     bool confirmed = esp_base_container_product_confirm_package_trial(
         &claim, s_product_trial_sequence, s_product_operation_id,
         s_product_trial_event_sequence, s_product_trial_event_sha256,
+        s_product_trial_failure_count,
         &confirmed_sequence);
     if (confirmed && confirmed_sequence != s_product_trial_sequence + 2U) confirmed = false;
     if (confirmed) {

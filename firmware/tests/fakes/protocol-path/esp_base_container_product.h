@@ -100,7 +100,8 @@ bool esp_base_container_product_stop_confirmed(
     const esp_base_storage_claim_t *claim);
 esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
-    const char operation_id[37], const char boot_id[37]);
+    const char operation_id[37], const char boot_id[37],
+    const uint8_t trial_event_sha256[32]);
 bool esp_base_container_product_abandon_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[37]);
@@ -120,7 +121,8 @@ bool esp_base_container_product_trial_quiescent(void);
 bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[37], uint64_t verified_event_sequence,
-    const uint8_t verified_event_sha256[32], uint32_t *confirmed_sequence);
+    const uint8_t verified_event_sha256[32], uint64_t verified_failure_count,
+    uint32_t *confirmed_sequence);
 typedef struct {
     uint8_t package_sha256[32];
     uint8_t event_sha256[32];
@@ -136,6 +138,13 @@ typedef enum {
 esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
     esp_base_container_event_observation_t *out);
+typedef struct {
+    uint64_t representative_event_sequence;
+    uint64_t failure_count;
+    uint8_t package_sha256[32];
+} esp_base_container_trial_event_snapshot_t;
+bool esp_base_container_product_trial_event_snapshot(
+    esp_base_container_trial_event_snapshot_t *out);
 bool esp_base_container_product_snapshot_for_ota(
     const esp_base_storage_claim_t *claim,
     esp_base_ota_receipt_snapshot_t *snapshot);

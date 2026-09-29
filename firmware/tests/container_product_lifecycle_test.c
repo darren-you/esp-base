@@ -55,6 +55,7 @@ static esp_base_storage_owner_t flash_io_owner;
 static econtainer_package_workspace_t test_package_workspace;
 static econtainer_wasm_workspace_t test_wasm_workspace;
 static econtainer_package_info_t test_verified_info;
+static uint8_t trial_event_digest[32];
 static const econtainer_slots_geometry_t geometry = {
     .partition_offset_bytes = FLASH_BASE, .partition_size_bytes = FLASH_BYTES,
     .erase_unit_bytes = 4096, .write_unit_bytes = 4,
@@ -622,7 +623,7 @@ static void run_event_failure_trial(const char *directory)
         ESP_BASE_CONTAINER_PREPARED);
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, request.operation_id, boot_id) ==
+        prepared_sequence, request.operation_id, boot_id, trial_event_digest) ==
         ESP_BASE_CONTAINER_RUNNING);
     const uint8_t event[] = {1U};
     assert(offer_event(request.package_sha256,
@@ -1178,18 +1179,18 @@ static void run_prepare_preserves_confirmed(const file_t *key,
         store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
         confirmed_package->size) == 0);
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, request.operation_id, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+        prepared_sequence, request.operation_id, boot_id, trial_event_digest) == ESP_BASE_CONTAINER_BLOCKED);
     assert(esp_base_container_product_stop_confirmed(&claim));
     const unsigned writes_before_trial = store.blob_writes;
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence - 1U, request.operation_id, boot_id) ==
+        prepared_sequence - 1U, request.operation_id, boot_id, trial_event_digest) ==
            ESP_BASE_CONTAINER_BLOCKED);
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, "99999999-9999-4999-8999-999999999994", boot_id) ==
+        prepared_sequence, "99999999-9999-4999-8999-999999999994", boot_id, trial_event_digest) ==
            ESP_BASE_CONTAINER_BLOCKED);
     assert(store.blob_writes == writes_before_trial);
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, request.operation_id, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+        prepared_sequence, request.operation_id, boot_id, trial_event_digest) == ESP_BASE_CONTAINER_RUNNING);
     econtainer_slots_state_t trial = {0};
     assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK);
     assert(trial.sequence == prepared_sequence + 1U &&
@@ -1295,7 +1296,7 @@ static void run_package_trial_confirmation(const file_t *key,
         read_source, (void *)candidate_package, &prepared_sequence) ==
         ESP_BASE_CONTAINER_PREPARED);
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, request.operation_id, boot_id) ==
+        prepared_sequence, request.operation_id, boot_id, trial_event_digest) ==
         ESP_BASE_CONTAINER_RUNNING);
     econtainer_slots_state_t trial = {0};
     assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
@@ -1313,7 +1314,7 @@ static void run_package_trial_confirmation(const file_t *key,
     uint8_t event_digest[32];
     assert(SHA256(event, sizeof event, event_digest) != NULL);
     assert(!esp_base_container_product_confirm_package_trial(&claim,
-        trial.sequence, request.operation_id, 1U, event_digest, &confirmed_sequence));
+        trial.sequence, request.operation_id, 1U, event_digest, 0U, &confirmed_sequence));
     assert(confirmed_sequence == 0U && store.blob_writes == before_event &&
            esp_base_container_product_event_accepting());
     assert(offer_event(request.package_sha256, 1U,
@@ -1326,25 +1327,43 @@ static void run_package_trial_confirmation(const file_t *key,
            ESP_BASE_CONTAINER_EVENT_OBSERVED &&
            observation.event_sequence == 1U && observation.runtime_ok &&
            observation.guest_result == 3);
+    esp_base_container_trial_event_snapshot_t trial_events = {0};
+    assert(esp_base_container_product_trial_event_snapshot(&trial_events) &&
+           trial_events.representative_event_sequence == 1U &&
+           trial_events.failure_count == 0U &&
+           memcmp(trial_events.package_sha256, request.package_sha256, 32) == 0);
+    const uint8_t later_event[] = {4U, 5U, 6U};
+    assert(offer_event(request.package_sha256, 2U, later_event,
+                       sizeof later_event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0;
+         attempt < 200U && esp_base_container_product_event_progress_count() < 2U;
+         ++attempt) vTaskDelay(1U);
+    assert(esp_base_container_product_event_observation(&observation) ==
+           ESP_BASE_CONTAINER_EVENT_OBSERVED &&
+           observation.event_sequence == 2U && observation.runtime_ok &&
+           observation.guest_result >= 0);
+    assert(esp_base_container_product_trial_event_snapshot(&trial_events) &&
+           trial_events.representative_event_sequence == 1U &&
+           trial_events.failure_count == 0U);
     const unsigned before_wrong_id = store.blob_writes;
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence, "99999999-9999-4999-8999-999999999998", 1U,
-        event_digest, &confirmed_sequence));
+        event_digest, 0U, &confirmed_sequence));
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence - 1U, request.operation_id, 1U,
-        event_digest, &confirmed_sequence));
+        event_digest, 0U, &confirmed_sequence));
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence, request.operation_id, 2U,
-        event_digest, &confirmed_sequence));
+        event_digest, 0U, &confirmed_sequence));
     uint8_t wrong_event_digest[32];
     memcpy(wrong_event_digest, event_digest, sizeof wrong_event_digest);
     wrong_event_digest[0] ^= 1U;
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         trial.sequence, request.operation_id, 1U,
-        wrong_event_digest, &confirmed_sequence));
+        wrong_event_digest, 0U, &confirmed_sequence));
     assert(store.blob_writes == before_wrong_id && confirmed_sequence == 0U);
     assert(esp_base_container_product_confirm_package_trial(&claim,
-        trial.sequence, request.operation_id, 1U, event_digest, &confirmed_sequence));
+        trial.sequence, request.operation_id, 1U, event_digest, 0U, &confirmed_sequence));
     econtainer_slots_state_t confirmed = {0};
     assert(econtainer_slots_load(&io, &geometry, &confirmed) == ECONTAINER_SLOTS_OK &&
            confirmed.sequence == trial.sequence + 2U &&
@@ -1356,7 +1375,7 @@ static void run_package_trial_confirmation(const file_t *key,
            store.blob_writes == before_wrong_id + 2U &&
            esp_base_container_product_event_accepting());
     assert(!esp_base_container_product_confirm_package_trial(&claim,
-        trial.sequence, request.operation_id, 1U, event_digest, &confirmed_sequence));
+        trial.sequence, request.operation_id, 1U, event_digest, 0U, &confirmed_sequence));
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(esp_base_container_product_boot(&claim, boot_id) ==
            ESP_BASE_CONTAINER_RUNNING);
@@ -1455,7 +1474,7 @@ static void run_package_trial_confirmation_uncertain(
         read_source, (void *)candidate_package, &prepared_sequence) ==
         ESP_BASE_CONTAINER_PREPARED);
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, request.operation_id, boot_id) ==
+        prepared_sequence, request.operation_id, boot_id, trial_event_digest) ==
         ESP_BASE_CONTAINER_RUNNING);
     const uint8_t event[] = {1U, 2U, 3U};
     uint8_t event_digest[32];
@@ -1470,7 +1489,7 @@ static void run_package_trial_confirmation_uncertain(
     uint32_t confirmed_sequence = 123U;
     assert(!esp_base_container_product_confirm_package_trial(&claim,
         prepared_sequence + 1U, request.operation_id, 1U,
-        event_digest, &confirmed_sequence));
+        event_digest, 0U, &confirmed_sequence));
     assert(confirmed_sequence == 0U && esp_base_storage_claim_active(&claim) &&
            !esp_base_container_product_event_accepting());
     econtainer_slots_state_t persisted = {0};
@@ -1576,7 +1595,7 @@ static void run_package_trial_cold_recovery(const file_t *key,
         ESP_BASE_CONTAINER_PREPARED);
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(esp_base_container_product_start_package_trial(&claim,
-        prepared_sequence, request.operation_id, old_boot_id) ==
+        prepared_sequence, request.operation_id, old_boot_id, trial_event_digest) ==
         ESP_BASE_CONTAINER_RUNNING);
     econtainer_slots_state_t trial = {0};
     assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
@@ -1801,6 +1820,9 @@ static void run_success_receipt_replay(const file_t *key, const file_t *package,
 
 int main(int argc, char **argv)
 {
+    const uint8_t representative_event[] = {1U, 2U, 3U};
+    assert(SHA256(representative_event, sizeof representative_event,
+                  trial_event_digest) != NULL);
     if (argc == 3 && strcmp(argv[2], "deadline") == 0) {
         run_deadline_product(argv[1]);
         return 0;

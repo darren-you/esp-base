@@ -75,6 +75,9 @@ typedef struct {
     bool guest_call_processing;
     bool trial_commit_active;
     uint8_t event_package_sha256[32];
+    uint8_t trial_event_sha256[32];
+    uint64_t representative_event_sequence;
+    uint64_t trial_failure_count;
     esp_base_container_event_observation_t last_event_observation;
     bool stop_succeeded;
     /* Native runtime was absent or stop/close completed before worker join.
@@ -515,6 +518,24 @@ esp_base_container_product_event_observation(
         ESP_BASE_CONTAINER_EVENT_OBSERVED;
 }
 
+bool esp_base_container_product_trial_event_snapshot(
+    esp_base_container_trial_event_snapshot_t *out)
+{
+    if (out == NULL) return false;
+    *out = (esp_base_container_trial_event_snapshot_t){0};
+    if (s_product.event_lock == NULL ||
+        xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) return false;
+    const bool active = s_product.trial_mode && s_product.package_trial_mode &&
+        atomic_load_explicit(&s_product.instance_active, memory_order_acquire);
+    if (active) {
+        out->representative_event_sequence = s_product.representative_event_sequence;
+        out->failure_count = s_product.trial_failure_count;
+        memcpy(out->package_sha256, s_product.event_package_sha256, 32);
+    }
+    xSemaphoreGive(s_product.event_lock);
+    return active;
+}
+
 esp_base_container_event_result_t esp_base_container_product_offer_event(
     const uint8_t package_sha256[32], uint64_t event_sequence,
     const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes)
@@ -740,6 +761,15 @@ static void *product_thread(void *unused)
                 delivered == ECONTAINER_RUNTIME_OK;
             s_product.last_event_observation.guest_result =
                 delivered == ECONTAINER_RUNTIME_OK ? guest_result : 0;
+            if (s_product.package_trial_mode) {
+                if (delivered != ECONTAINER_RUNTIME_OK || guest_result < 0) {
+                    if (s_product.trial_failure_count != UINT64_MAX)
+                        ++s_product.trial_failure_count;
+                    s_product.representative_event_sequence = 0U;
+                } else if (memcmp(event_sha256, s_product.trial_event_sha256, 32) == 0) {
+                    s_product.representative_event_sequence = event_sequence;
+                }
+            }
             s_product.guest_call_processing = false;
             xSemaphoreGive(s_product.event_lock);
             if (delivered != ECONTAINER_RUNTIME_OK) {
@@ -1360,10 +1390,12 @@ static esp_base_container_boot_result_t start_product(
     const esp_base_storage_claim_t *claim, bool trial_mode, bool package_trial_mode,
     uint32_t package_trial_sequence,
     const uint8_t package_trial_operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES],
-    const char boot_id[37])
+    const char boot_id[37], const uint8_t trial_event_sha256[32])
 {
     if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_BLOCKED;
     if (!policy_present()) return ESP_BASE_CONTAINER_NOT_CONFIGURED;
+    if (package_trial_mode && trial_event_sha256 == NULL)
+        return ESP_BASE_CONTAINER_BLOCKED;
     if (s_product.thread_joinable ||
         (s_product.start_attempted && !s_product.reopen_allowed)) {
         return ESP_BASE_CONTAINER_BLOCKED;
@@ -1404,6 +1436,12 @@ static esp_base_container_boot_result_t start_product(
     s_product.last_event_observation = (esp_base_container_event_observation_t){0};
     s_product.guest_call_processing = false;
     s_product.trial_commit_active = false;
+    s_product.representative_event_sequence = 0U;
+    s_product.trial_failure_count = 0U;
+    if (package_trial_mode)
+        memcpy(s_product.trial_event_sha256, trial_event_sha256, 32);
+    else
+        memset(s_product.trial_event_sha256, 0, 32);
     xSemaphoreGive(s_product.event_lock);
     pthread_attr_t attributes;
     if (pthread_attr_init(&attributes) != 0) return ESP_BASE_CONTAINER_BLOCKED;
@@ -1447,7 +1485,7 @@ static esp_base_container_boot_result_t start_product(
 esp_base_container_boot_result_t esp_base_container_product_boot(
     const esp_base_storage_claim_t *claim, const char boot_id[37])
 {
-    return start_product(claim, false, false, 0U, NULL, boot_id);
+    return start_product(claim, false, false, 0U, NULL, boot_id, NULL);
 }
 
 static econtainer_slots_result_t pristine_baseline(
@@ -1477,7 +1515,7 @@ bool esp_base_container_product_pristine_baseline(
 esp_base_container_boot_result_t esp_base_container_product_start_trial(
     const esp_base_storage_claim_t *claim, const char boot_id[37])
 {
-    return start_product(claim, true, false, 0U, NULL, boot_id);
+    return start_product(claim, true, false, 0U, NULL, boot_id, NULL);
 }
 
 typedef struct {
@@ -1507,12 +1545,13 @@ static econtainer_slots_result_t preflight_package_trial(
 esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
-    const char boot_id[37])
+    const char boot_id[37], const uint8_t trial_event_sha256[32])
 {
     uint8_t decoded_id[ECONTAINER_SLOT_OPERATION_ID_BYTES] = {0};
     if (!esp_base_storage_claim_active(claim) || prepared_sequence == 0U ||
         prepared_sequence >= UINT32_MAX - 1U ||
-        !decode_uuid(operation_id, decoded_id) || !s_product.reopen_allowed ||
+        !decode_uuid(operation_id, decoded_id) || trial_event_sha256 == NULL ||
+        !s_product.reopen_allowed ||
         s_product.thread_joinable || !s_product.native_reclaimed ||
         s_product.trial_mode ||
         (atomic_load_explicit(&s_product.result, memory_order_acquire) !=
@@ -1528,7 +1567,8 @@ esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
             preflight_package_trial, &preflight) != ECONTAINER_SLOTS_OK) {
         return ESP_BASE_CONTAINER_BLOCKED;
     }
-    return start_product(claim, true, true, prepared_sequence, decoded_id, boot_id);
+    return start_product(claim, true, true, prepared_sequence, decoded_id, boot_id,
+                         trial_event_sha256);
 }
 
 static econtainer_slots_result_t mark_trial_healthy(
@@ -1817,6 +1857,7 @@ bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint64_t verified_event_sequence, const uint8_t verified_event_sha256[32],
+    uint64_t verified_failure_count,
     uint32_t *confirmed_sequence)
 {
     if (confirmed_sequence != NULL) *confirmed_sequence = 0U;
@@ -1836,25 +1877,25 @@ bool esp_base_container_product_confirm_package_trial(
             ESP_BASE_CONTAINER_RUNNING) return false;
     if (s_product.event_lock == NULL ||
         xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) return false;
-    const esp_base_container_event_observation_t event =
-        s_product.last_event_observation;
-    const bool settled = event.event_sequence == verified_event_sequence &&
-        memcmp(event.event_sha256, verified_event_sha256, 32) == 0 &&
-        event.runtime_ok && event.guest_result >= 0 &&
+    const bool settled =
+        s_product.representative_event_sequence == verified_event_sequence &&
+        memcmp(s_product.trial_event_sha256, verified_event_sha256, 32) == 0 &&
+        s_product.trial_failure_count == verified_failure_count &&
+        verified_failure_count != UINT64_MAX &&
         s_product.event_count == 0U && !s_product.guest_call_processing &&
         !s_product.trial_commit_active &&
         esp_base_container_product_event_accepting();
     if (settled) {
         /* offer_event checks the same flag again under this lock. No new
          * business frame or timer call can enter during the commit. */
+        memcpy(confirm.observed_package_sha256, s_product.event_package_sha256,
+               sizeof confirm.observed_package_sha256);
         s_product.trial_commit_active = true;
         atomic_store_explicit(&s_product.event_accepting, false,
                               memory_order_release);
     }
     xSemaphoreGive(s_product.event_lock);
     if (!settled) return false;
-    memcpy(confirm.observed_package_sha256, event.package_sha256,
-           sizeof confirm.observed_package_sha256);
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
         confirm_package_trial, &confirm);
@@ -1870,6 +1911,9 @@ bool esp_base_container_product_confirm_package_trial(
     s_product.package_trial_sequence = 0U;
     memset(s_product.package_trial_operation_id, 0,
            sizeof s_product.package_trial_operation_id);
+    memset(s_product.trial_event_sha256, 0, sizeof s_product.trial_event_sha256);
+    s_product.representative_event_sequence = 0U;
+    s_product.trial_failure_count = 0U;
     s_product.trial_commit_active = false;
     atomic_store_explicit(&s_product.event_accepting, true,
                           memory_order_release);

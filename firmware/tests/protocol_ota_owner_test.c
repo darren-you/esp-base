@@ -64,6 +64,8 @@ static uint32_t fake_free_heap = 1000;
 static esp_base_container_event_observation_result_t fake_event_observation_state;
 static int32_t fake_event_guest_result;
 static bool fake_event_runtime_ok;
+static bool fake_trial_snapshot_ready;
+static uint64_t fake_trial_representative_sequence, fake_trial_failure_count;
 static unsigned offered_event_calls;
 static uint8_t offered_event_digest[32];
 static esp_base_container_event_result_t offered_event_result;
@@ -128,6 +130,7 @@ static void reset_case(void)
     memset(s_product_trial_package_sha256, 0, sizeof s_product_trial_package_sha256);
     s_product_trial_event_sequence = s_product_trial_stable_since_ms =
         s_product_trial_last_poll_ms = 0U;
+    s_product_trial_failure_count = 0U;
     s_product_active = s_product_trial_running = false;
     atomic_store(&s_product_done, false);
     atomic_store(&s_product_result, PRODUCT_WORK_UNCERTAIN);
@@ -160,6 +163,8 @@ static void reset_case(void)
     fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION;
     fake_event_guest_result = 3;
     fake_event_runtime_ok = true;
+    fake_trial_snapshot_ready = false;
+    fake_trial_representative_sequence = fake_trial_failure_count = 0U;
 #if defined(CONFIG_IDF_TARGET_ESP32)
     iram_work_allocations = 0;
 #endif
@@ -535,20 +540,24 @@ static void check_product_trial_health(void)
     poll_product();
     assert(s_product_trial_running && !atomic_load(&owner.active_token));
     fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_OBSERVED;
+    fake_trial_snapshot_ready = true;
     fake_observed_package_byte = 0x7bU;
     fake_observed_event_byte = 0x33U;
     for (uint64_t now = 1000U; now <= 16000U; now += 1000U)
         poll_product_trial_health(now);
     assert(package_confirm_calls == 0U);
     fake_observed_event_byte = 0x22U;
+    fake_trial_representative_sequence = 2U;
     for (uint64_t now = 17000U; now <= 32000U; now += 1000U)
         poll_product_trial_health(now);
     assert(package_confirm_calls == 0U);
     mqtt_ready = false;
     poll_product_trial_health(33000U);
     mqtt_ready = true;
-    for (uint64_t now = 34000U; now < 64000U; now += 1000U)
+    for (uint64_t now = 34000U; now < 64000U; now += 1000U) {
+        if (now == 50000U) fake_observed_event_byte = 0x33U;
         poll_product_trial_health(now);
+    }
     assert(package_confirm_calls == 0U);
     poll_product_trial_health(64000U);
     expect_reply("succeeded", NULL);
@@ -566,9 +575,17 @@ static void check_product_trial_health(void)
     product_package(40U);
     poll_product();
     fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_OBSERVED;
+    fake_trial_snapshot_ready = true;
     fake_observed_package_byte = 0x7bU;
+    fake_trial_representative_sequence = 2U;
     package_confirm_ok = false;
-    for (uint64_t now = 1000U; now <= 31000U; now += 1000U)
+    for (uint64_t now = 1000U; now <= 10000U; now += 1000U)
+        poll_product_trial_health(now);
+    fake_trial_failure_count = 1U;
+    fake_trial_representative_sequence = 0U;
+    poll_product_trial_health(11000U);
+    fake_trial_representative_sequence = 2U;
+    for (uint64_t now = 12000U; now <= 42000U; now += 1000U)
         poll_product_trial_health(now);
     expect_reply("unknown", "storage_uncertain");
     assert(package_confirm_calls == 1U && s_config_uncertain &&
@@ -1216,6 +1233,16 @@ esp_base_container_product_event_observation(
     }
     return fake_event_observation_state;
 }
+bool esp_base_container_product_trial_event_snapshot(
+    esp_base_container_trial_event_snapshot_t *out)
+{
+    *out = (esp_base_container_trial_event_snapshot_t){0};
+    if (!fake_trial_snapshot_ready) return false;
+    out->representative_event_sequence = fake_trial_representative_sequence;
+    out->failure_count = fake_trial_failure_count;
+    memset(out->package_sha256, fake_observed_package_byte, 32);
+    return true;
+}
 bool esp_base_mqtt_owner_result(const char *json, size_t length)
 {
     assert(length < sizeof latest_reply);
@@ -1434,10 +1461,12 @@ bool esp_base_container_product_stop_confirmed(
 
 esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t prepared_sequence,
-    const char operation_id[37], const char boot_id[37])
+    const char operation_id[37], const char boot_id[37],
+    const uint8_t trial_event_sha256[32])
 {
     assert(esp_base_storage_claim_active(claim) && prepared_sequence == 8U &&
-           operation_id != NULL && !strcmp(boot_id, s_boot_id));
+           operation_id != NULL && !strcmp(boot_id, s_boot_id) &&
+           trial_event_sha256[0] == 0x22U);
     ++package_trial_calls;
     if (package_trial_result == ESP_BASE_CONTAINER_RUNNING)
         binding_sequence = prepared_sequence + 1U;
@@ -1467,11 +1496,13 @@ bool esp_base_container_product_trial_quiescent(void)
 bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[37], uint64_t verified_event_sequence,
-    const uint8_t verified_event_sha256[32], uint32_t *confirmed_sequence)
+    const uint8_t verified_event_sha256[32], uint64_t verified_failure_count,
+    uint32_t *confirmed_sequence)
 {
     assert(esp_base_storage_claim_active(claim) && trial_sequence == 9U &&
            !strcmp(operation_id, s_product_operation_id) &&
            verified_event_sequence == 2U && verified_event_sha256[0] == 0x22U &&
+           verified_failure_count == fake_trial_failure_count &&
            confirmed_sequence != NULL);
     ++package_confirm_calls;
     if (package_confirm_ok) {
