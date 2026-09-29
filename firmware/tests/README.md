@@ -35,6 +35,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 `protocol_ota_owner_test` 的同一真实命令入口还验证无已恢复 scratch store 时，物理 USB `config.set` 返回 `frp_storage_unavailable`，MQTT `config.set` 仍先返回 `physical_usb_required`；两种拒绝均不启动 Wi-Fi 候选、不写新 revision 或覆盖旧配置。测试使用假规范字节与假哈希，只验证这两个路由的门禁顺序与无副作用。
 `container_product_retire_test` 编译真实产品入口和 Base 双观察适配，使用假 ECS2/SDK 注入精确 A/B 退役、A/C 中断恢复、selected C 身份与 sequence；还覆盖 A/B 需 6 次、A-only 需 5 次 ECS2 提交的 `ota.start` 序号边界，首个不足值必须拒绝且不改变绑定、不退役旧 B，并验证最后可用值在 `HEALTH_VERIFIED` 回滚时可完成 abandon/drop。带包来源快照假件另覆盖 `REUSE`／`WRITE` 的确认包身份、无包起点、请求包摘要／长度／ABI／schema、代表事件摘要、非来源槽容量、事件入口与序号余量；真实签名 guest 生命周期核对快照不写 NVS 或 Flash；同一测试还核对无包原路径、空来源 `WRITE` 预约，并以真实签名包核对 `REUSE` 的重验签与 `PREPARED`、带包来源 `WRITE` 的仅预约 `WRITING`，以及来源包损坏、过期序号、guest 未停止和重复 stage 拒绝。公开带包写路径仍关闭。`protocol_ota_owner_test` 验证快照拒绝时不登记 V3 收据、不启动退役。其余覆盖 V3 `PREPARED` + VALID C + `HEALTH_VERIFIED` 的一次确认、`CONFIRMED` 幂等、错误 operation/sequence/摘要与确认失败不写、无收据时 `PREPARED`/`CONFIRMED` 迁移只读拒绝，以及确实缺键首装。`ota_startup_test` 用产品假件验证 `NOT_FOUND`/`FAILED`/OTA 不可用时的阻断接线、原收据 selected C 成功/失败和本地 pending 窗口。这些假件不模拟 NVS 掉电原子性、真实包映射、bootloader 回退或 guest 执行。
 
+联合 OTA 内部 `WRITE` 续写用例在锁定 Container/WAMR 的签名 guest 生命周期中覆盖空来源和已确认包来源、错误 operation 在擦写前拒绝、真实签名包写入及 `PREPARED` 独立读回、来源槽字节不变、重复续写拒绝，以及篡改下载字节后保留 `WRITING` 与旧包。C3／ESP32 host ASan/UBSan 与固定 SDK 签名构建通过；本用例直接调用内部入口，公开带包 worker、HTTPS 下载与新 boot 联合健康确认尚未接通。
+
 2026-09-27 序号预算修复使用固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c` 与锁定组件，在独立副本运行上述完整 ASan/UBSan 入口：默认 C3 20 项、`ESP_BASE_TEST_TARGET=esp32` 19 项均通过。边界用例只验证软件调用和假持久状态，不能证明实板掉电后的 Flash/NVS 行为。
 
 ## 架构拓扑

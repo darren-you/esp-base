@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 内部 WRITE 包槽续写
+
+Base 新增仅供同一 OTA owner 使用的 `write_staged_firmware_package`。它在擦包槽前从原 V3 收据重新核对 operation ID、A/C 签名固件摘要、目标镜像大小、来源包身份和旧 B 退役后精确的 `WRITING` 序号；来源有包时还要求 guest 已停止、join 并回收原生资源。锁定 Container 将来源字节写入已预约的非来源包槽，回读完整 SHA-256，验证包签名、Wasm 与授权，持久提交并独立读回 `PREPARED`。参数或持久状态冲突在擦写前拒绝；一旦开始写入，断流、摘要错误或读回不确定均保持未决，不选择新 app boot。
+
+C3／ESP32 host ASan/UBSan 与锁定 Container/WAMR 的双目标真实签名 guest 生命周期各 100 次重装通过。新增用例验证从空来源和已确认包来源续写、错误 operation 无擦写、真实签名包 `PREPARED` 读回、来源槽保持原字节、重复续写拒绝，以及篡改下载字节时保留 `WRITING` 和旧包。固定 SDK 双目标签名构建及官方 RSA v2／ECDSA v1 验签通过，签名 app 仍分别为 `0x121000/0x130000`、`0xffff4/0x120000`。测试调用内部入口并使用构造 V3 收据；公开带包 `ota.start`、HTTPS 来源、启动恢复、代表事件后 30 秒联合确认、掉电和实体板仍未完成，P6-10/P7-04 不验收。
+
 ## 2026-09-30 联合 OTA 内部包槽 stage
 
 Base `stage_firmware` 现由原 V3 收据提供 operation ID、A/C 镜像摘要、来源／目标包身份及原 ECS2 sequence。旧 B 退役后，它要求 ECS2 只剩唯一 A 绑定且序号精确前进；来源有包时须先停止 guest、join 并证明原生资源回收。`REUSE` 用锁定 Container 的验证回调从来源槽重新读取签名包、Wasm 与授权，合格后持久提交 `PREPARED`；`WRITE` 只预约不占来源包的目标槽并提交 `WRITING`，不下载或擦写包字节。`WRITE` 的返回状态不能触发 `eota_select`，须待独立包写入、验签与 `PREPARED` 读回。

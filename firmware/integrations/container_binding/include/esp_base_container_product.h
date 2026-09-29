@@ -344,3 +344,15 @@ typedef enum {
 esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
     const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
     const esp_base_ota_receipt_recovery_t *receipt);
+
+/* Continue only the exact durable WRITE reservation made by stage_firmware.
+ * The caller retains the same OTA owner and supplies bounded package bytes.
+ * Before the first erase this rechecks the signed A/C set, original receipt,
+ * operation, source binding and WRITING sequence. Success includes package
+ * Flash readback, signature/authorization validation and an independent
+ * PREPARED readback. Any failure after writing starts is uncertain: retain
+ * the owner and resolve the original receipt on a fresh boot. */
+esp_base_container_stage_result_t esp_base_container_product_write_staged_firmware_package(
+    const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    econtainer_slot_source_fn source_fn, void *source_context);
