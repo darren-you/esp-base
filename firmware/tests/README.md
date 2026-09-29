@@ -85,4 +85,4 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 [nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。
 
-[nvs-capacity-probe](nvs-capacity-probe/README.md) 只用合成数据验证 C3 六／八页与 ESP32 六页 NVS 对最大 v3 配置、当前 OTA V2 收据形态和精确 Container ECS2 产品键的反复提交、页回收与重启读回；它不修改产品分区表或实板。结果分别见[C3 容量记录](../../docs/operations/c3-eight-page-nvs-capacity.md)与[ESP32 容量记录](../../docs/operations/esp32-six-page-nvs-capacity.md)。
+[nvs-capacity-probe](nvs-capacity-probe/README.md) 只用合成数据验证历史 C3 六／八页、正式 C3 十一页数据布局与 ESP32 六页 NVS 对最大 v3 配置、当前 OTA V2 收据形态、精确 Container ECS2 产品键和最近八条产品操作账本的反复提交、页回收与重启读回；它不修改产品分区表或实板。十一页结果见[C3 产品布局容量记录](../../docs/operations/c3_eleven_page_nvs_capacity.md)，旧结果分别见[C3 容量记录](../../docs/operations/c3-eight-page-nvs-capacity.md)与[ESP32 容量记录](../../docs/operations/esp32-six-page-nvs-capacity.md)。

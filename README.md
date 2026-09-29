@@ -8,6 +8,8 @@
 
 当前产品命令候选已接公开安装／升级、HTTPS 验包、持久操作账本和同 boot 候选试运行；`product.status` 在试运行期间只报告仍已确认的旧绑定。业务代表事件和 30 秒稳定窗口已有软件实现；生产 Broker／设备联调、正式分区迁移与实板验收仍未闭合，不能作为产品发布结果。
 
+2026-09-29 C3 十一页 `base_store` 容量续验：同正式产品数据区几何的合成 QEMU Flash 在三次独立启动中完成 100 轮最大 v3 配置、当前 OTA V2 收据形态、Container ECS2 与八条产品账本的提交／回读，最终 revision 100 与全部键读回相符；官方 NVS parser 页 CRC 通过。它未运行正式 Base、未来联合 OTA 新收据或实体 Flash，详见[容量记录](docs/operations/c3_eleven_page_nvs_capacity.md)。
+
 2026-09-29 独立 MQTT 业务事件已有公开严格 TLS 一次发布客户端：发布前核对本 boot 的 reported 高水位，发布后按包、序号和实际 guest 原始事件 SHA-256 对账最近完成结果。Base 在授权入口计算事件摘要，Container 随有界队列将它绑定到完成观察，内部 trial 确认也须核对已验证摘要。双目标 host、锁定签名 guest 生命周期和固定 SDK C3 签名／ESP32 离线构建通过；生产账户、真实 Broker/设备消息与业务健康最终确认仍待闭合。
 
 2026-09-28 C3 三份 `0x77000` 包槽候选的仓外 QEMU 无包启动发现默认 3,584 B `app_main` 栈在后续签名校验时溢出；将正式 C3 产品主任务栈设为 6,144 B 并加构建下限后，同布局 UART 诊断首启／同片冷启动均到 `container=empty`，首次主栈最低余 2,440 B，公开 `product.status`、身份／序号持久读回与二启前后整片 Flash 一致。正式 USB 控制台副本重签后仍为 `0x121000` B，签名与双 app 容量门通过；[输入与边界](docs/operations/c3_slot_77000_capacity_probe.md)。

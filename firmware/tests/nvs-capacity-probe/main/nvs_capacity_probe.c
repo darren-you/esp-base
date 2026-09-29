@@ -84,10 +84,13 @@ static bool container_initialize_or_load(void)
     if (container_storage_lock == NULL || flash_io_lock == NULL) return false;
     const econtainer_slots_idf_config_t config = {
         .package_partition_label = "product_pkgs",
-        .package_partition_offset_bytes = 0x260000,
-        .package_partition_size_bytes = 0x186000,
-        .slots = {{0x260000, 0x82000}, {0x2e2000, 0x82000},
-                  {0x364000, 0x82000}},
+        .package_partition_offset_bytes = PROBE_PACKAGE_OFFSET,
+        .package_partition_size_bytes = PROBE_PACKAGE_SIZE,
+        .slots = {{PROBE_PACKAGE_OFFSET, PROBE_PACKAGE_SLOT_SIZE},
+                  {PROBE_PACKAGE_OFFSET + PROBE_PACKAGE_SLOT_SIZE,
+                   PROBE_PACKAGE_SLOT_SIZE},
+                  {PROBE_PACKAGE_OFFSET + 2 * PROBE_PACKAGE_SLOT_SIZE,
+                   PROBE_PACKAGE_SLOT_SIZE}},
         .nvs_partition_label = PARTITION,
         .nvs_partition_offset_bytes = PROBE_NVS_OFFSET,
         .nvs_partition_size_bytes = PROBE_NVS_PAGES * 0x1000,

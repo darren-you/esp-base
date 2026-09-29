@@ -1,6 +1,6 @@
-# C3 六／八页与 ESP32 六页 NVS 容量探针
+# C3 六／八／十一页与 ESP32 六页 NVS 容量探针
 
-此独立 ESP-IDF 项目只使用合成数据和仓外 QEMU Flash，分别验证 C3 `base_store@0x138000` 连续六／八页，以及 ESP32 条件几何的 `base_store@0x3fa000/0x6000`。ESP32 合成表保留三包槽、旧 AT 原字节归档和 FRP scratch 的候选地址，但把真实双 OTA app 换成测试专用 factory app；它不接入产品固件，不读取设备备份，不修改产品分区表，也不提供刷板命令。
+此独立 ESP-IDF 项目只使用合成数据和仓外 QEMU Flash，分别验证历史 C3 `base_store@0x138000` 连续六／八页、C3 产品数据布局的 `base_store@0x3f5000/0xb000`，以及 ESP32 `base_store@0x3fa000/0x6000`。ESP32 合成表保留三包槽、旧 AT 原字节归档和 FRP scratch 的候选地址，但把真实双 OTA app 换成测试专用 factory app；它不接入产品固件，不读取设备备份，不修改产品分区表，也不提供刷板命令。
 
 每代轮次覆盖四类实际格式记录：
 
@@ -32,6 +32,21 @@ for pages in 6 8; do
             --stage "$stage" --target esp32c3 --nvs-pages "$pages" --qemu "$qemu_bin" \
             --timeout-seconds 600
     done
+done
+```
+
+C3 正式产品数据布局的 11 页变体使用同一区域的合成 factory app，包槽／scratch／NVS 地址与正式表相同；三个阶段沿同一 4 MiB 合成 Flash 续跑：
+
+```bash
+work="$probe_work_root/c3-11-pages"
+mkdir -p "$work"
+for stage in 1 2 3; do
+    idf.py -C . -B "$work/build" -D "SDKCONFIG=$work/sdkconfig" \
+        -D "IDF_TARGET=esp32c3" -D "PROBE_NVS_PAGES=11" \
+        -D "PROBE_STAGE=$stage" build
+    python3 run-qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
+        --stage "$stage" --target esp32c3 --nvs-pages 11 --qemu "$qemu_bin" \
+        --timeout-seconds 600
 done
 ```
 
@@ -78,4 +93,4 @@ python3 "$IDF_PATH/components/nvs_flash/nvs_partition_tool/nvs_tool.py" \
     -i -d none "$probe_work_root/esp32-6-pages/base_store-final.bin"
 ```
 
-当前 C3 结果和输入摘要见[C3 容量记录](../../../docs/operations/c3-eight-page-nvs-capacity.md)，ESP32 结果见[ESP32 容量记录](../../../docs/operations/esp32-six-page-nvs-capacity.md)。`evidence/` 中已提交的 118 字节 OTA／占位 Container 日志属于 2026-09-26 的历史八页测试，不能作为当前精确记录的证据。完整 QEMU 串口日志、合成 Flash、提取的 NVS 和构建产物均留在仓外。
+11 页新布局结果见[C3 十一页容量记录](../../../docs/operations/c3_eleven_page_nvs_capacity.md)。历史六／八页结果和输入摘要见[C3 容量记录](../../../docs/operations/c3-eight-page-nvs-capacity.md)，ESP32 结果见[ESP32 容量记录](../../../docs/operations/esp32-six-page-nvs-capacity.md)。`evidence/` 中已提交的 118 字节 OTA／占位 Container 日志属于 2026-09-26 的历史八页测试，不能作为当前精确记录的证据。完整 QEMU 串口日志、合成 Flash、提取的 NVS 和构建产物均留在仓外。

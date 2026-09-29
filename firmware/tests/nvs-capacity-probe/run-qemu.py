@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument("--flash", required=True, type=Path)
     parser.add_argument("--stage", required=True, type=int, choices=(1, 2, 3))
     parser.add_argument("--target", required=True, choices=("esp32c3", "esp32"))
-    parser.add_argument("--nvs-pages", required=True, type=int, choices=(6, 8))
+    parser.add_argument("--nvs-pages", required=True, type=int, choices=(6, 8, 11))
     parser.add_argument("--qemu", help="Espressif QEMU binary for the selected target")
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--stop-after-revision", type=int,
@@ -53,11 +53,14 @@ def main() -> int:
     manifest = json.loads((build / "flasher_args.json").read_text())
     flash_files = {int(offset, 16): build / name
                    for offset, name in manifest["flash_files"].items()}
-    app = flash_files.get(APP_OFFSET)
+    app_offset, app_capacity = ((0x20000, 0x130000)
+                                if args.target == "esp32c3" and args.nvs_pages == 11
+                                else (APP_OFFSET, APP_BYTES))
+    app = flash_files.get(app_offset)
     if app is None:
-        parser.error("build has no factory app at 0x10000")
+        parser.error(f"build has no factory app at 0x{app_offset:x}")
     app_bytes = app.read_bytes()
-    if len(app_bytes) > APP_BYTES:
+    if len(app_bytes) > app_capacity:
         parser.error("probe app exceeds its synthetic factory partition")
 
     if args.stage == 1:
@@ -74,9 +77,9 @@ def main() -> int:
         if image.stat().st_size != FLASH_BYTES:
             parser.error("existing synthetic flash must be exactly 4 MiB")
         with image.open("r+b") as file:
-            file.seek(APP_OFFSET)
-            file.write(b"\xff" * APP_BYTES)
-            file.seek(APP_OFFSET)
+            file.seek(app_offset)
+            file.write(b"\xff" * app_capacity)
+            file.seek(app_offset)
             file.write(app_bytes)
 
     qemu = args.qemu or ("qemu-system-xtensa" if args.target == "esp32" else
