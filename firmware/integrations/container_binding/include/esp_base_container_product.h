@@ -274,7 +274,7 @@ esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uni
 bool esp_base_container_product_configured(void);
 /* Reject a blocked or uninitialized product before any inactive-app write. */
 bool esp_base_container_product_ota_ready(void);
-/* Before normal boot without an active V2 receipt, read the real ECS2 key
+/* Before normal boot without an active V3 receipt, read the real ECS2 key
  * under Base's claim. A genuinely absent key permits first initialization;
  * any persisted firmware transition requires its original receipt. */
 bool esp_base_container_product_without_ota_receipt(
@@ -316,7 +316,7 @@ esp_base_container_retire_result_t esp_base_container_product_recover_retired_fi
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     const char boot_id[37]);
 
-/* Before starting a guest on selected C, bind the original V2 receipt to the
+/* Before starting a guest on selected C, bind the original V3 receipt to the
  * exact A/C ECS2 transition and sequence. A successful prior receipt requires
  * a durable CONFIRMED phase; a PREPARED receipt permits the exact pending
  * trial, or completes HEALTH_VERIFIED -> CONFIRMED for a VALID C and reads it

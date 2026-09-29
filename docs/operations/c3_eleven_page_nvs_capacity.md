@@ -7,3 +7,9 @@
 最终启动输出 `PROBE_RESTART_MATCH=1 container_decoded=1`，ECS2 sequence 为 101，配置／OTA／产品记录 revision 均为 100。11 页 NVS 最终 `total=1386`、`used=298`、`free=1088`、`available=962`、`namespaces=4`；固定 SDK 官方 NVS parser 对非空页均报告 `CRC32: OK`。仓外最终 4 MiB 合成 Flash SHA-256 为 `f56f8d3285fbebb4dedaebc330bc4ef9014ed364ad0d200a7c07924d8c41706a`，提取的 `0xb000` 字节 NVS SHA-256 为 `91afd0824d01dfa2f2f68c1799a15471fb393cfe55e321e7823dcb55f0d621e8`，测试分区表 SHA-256 为 `fea8e3f611862312d359a6460a4ea72d87545d95a6e225146c8786fe44ef6c37`。
 
 本探针只覆盖当前四种记录形态、合成数据和 QEMU 的重复提交／冷启动；它没有运行新布局下的正式 Base、真实包、Broker、FRP 或 OTA 下载，也没有测量实体 Flash 擦写寿命和断电结果。未来联合 OTA 收据结构变化后须按实际新长度重跑容量验证；P6-03／P7-01 不因此验收。
+
+## V3 收据长度复测（2026-09-29）
+
+Base OTA 收据源码改为固定 **308 字节 V3**，在原固件 A/B/C、槽与 ECS2 sequence 后加入包模式、目标包摘要／长度／ABI／schema、代表事件摘要和来源包身份。当前正式入口仍只登记无包模式；此处用新长度的合成形态重复同一四记录容量测试，不能证明带包事务执行。固定 SDK `578cf89c`、锁定 Container `e8a0d0b` 和上述 QEMU 在全新的 4 MiB 合成 Flash 上完成阶段 1 的 revision 1–3、阶段 2 的 4–100 和阶段 3 的冷启动读回，三个阶段退出码均为 0。最终 `PROBE_RESTART_MATCH=1 container_decoded=1`，配置／OTA／产品 revision 均为 100、ECS2 sequence 为 101；11 页 NVS 为 `total=1386 used=300 free=1086 available=960 namespaces=4`，官方 parser 对全部非空页报告 `CRC32: OK`。
+
+V3 本轮合成 Flash SHA-256 为 `021e697afbcb52dd2b3990baeb26c582a01a5b89ea88e3db12c5d465a8947b5d`，提取的 11 页 NVS 为 `3378425175ae4abe82ec2c19cbb0b3bdf8a14fc27338e20d90c5fc3a32a97ba1`；同一测试分区表仍为 `fea8e3f611862312d359a6460a4ea72d87545d95a6e225146c8786fe44ef6c37`。完整三阶段日志、构建和合成 Flash 保存在仓外 `/private/tmp/esp-five-repo-v3-nvs-11/`。它没有运行正式 Base、真实授权包、网络并发或实体 Flash；P6-03／P7-01 继续进行中。

@@ -25,7 +25,7 @@
 #define CONTAINER_KEY "slots"
 #define PRODUCT_NAMESPACE "base_product"
 #define PRODUCT_KEY "operations"
-#define OTA_BYTES 186U
+#define OTA_BYTES 308U
 #define CONTAINER_BYTES ECONTAINER_SLOT_BLOB_BYTES
 #define PRODUCT_BYTES EBASE_PRODUCT_LEDGER_BYTES
 #define FINAL_REVISION 100U
@@ -173,7 +173,7 @@ static void make_ota(uint32_t revision)
 {
     memset(ota_bytes, 0, sizeof ota_bytes);
     memcpy(ota_bytes, "EOTA", 4);
-    ota_bytes[4] = 2;       // Current V2 wire layout.
+    ota_bytes[4] = 3;       // Current V3 wire layout.
     ota_bytes[5] = 1;       // PREPARED
     ota_bytes[6] = 0x10;    // OTA_0
     ota_bytes[7] = 0x11;    // OTA_1

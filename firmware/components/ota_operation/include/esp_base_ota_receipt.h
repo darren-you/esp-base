@@ -37,6 +37,8 @@ typedef struct {
     uint8_t sha256[32];
     uint32_t image_size_bytes;
     uint8_t target_subtype;
+    esp_base_ota_package_mode_t package_mode;
+    uint8_t package_sha256[32];
 } esp_base_ota_receipt_view_t;
 
 /* Captured under the app/otadata storage owner immediately before registering
@@ -49,6 +51,11 @@ typedef struct esp_base_ota_receipt_snapshot {
     uint8_t inactive_sha256[EOTA_SHA256_BYTES];
     bool container_enabled;
     uint32_t container_sequence;
+    bool source_package_present;
+    uint8_t source_package_sha256[EOTA_SHA256_BYTES];
+    uint32_t source_package_size_bytes;
+    uint32_t source_guest_abi_version;
+    uint32_t source_data_schema_version;
 } esp_base_ota_receipt_snapshot_t;
 
 typedef enum {
@@ -68,14 +75,27 @@ typedef struct {
     uint32_t image_size_bytes;
     bool container_enabled;
     uint32_t container_sequence;
+    esp_base_ota_package_mode_t package_mode;
+    uint8_t package_sha256[EOTA_SHA256_BYTES];
+    uint8_t trial_event_sha256[EOTA_SHA256_BYTES];
+    uint32_t package_size_bytes;
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
+    bool source_package_present;
+    uint8_t source_package_sha256[EOTA_SHA256_BYTES];
+    uint32_t source_package_size_bytes;
+    uint32_t source_guest_abi_version;
+    uint32_t source_data_schema_version;
 } esp_base_ota_receipt_recovery_t;
 
-/* One latest operation is retained in base_store/base_ota/operation. V2 stores
+/* One latest operation is retained in base_store/base_ota/operation. V3 stores
  * the source, old distinct inactive and requested candidate identities plus
- * the current ECS2 sequence in that same blob. The caller holds the storage
- * claim and supplies a reconciled Container snapshot; register independently
- * rechecks the signed Base firmware set before commit/readback. A candidate
- * with the running firmware's signed digest is rejected before any receipt
+ * the current ECS2 sequence and package metadata in that same blob. The
+ * public registration and recovery path currently permits NO_PACKAGE only.
+ * The caller holds the storage claim and supplies a reconciled Container
+ * snapshot; register independently rechecks the signed Base firmware set
+ * before commit/readback. A candidate with the running firmware's signed
+ * digest is rejected before any receipt
  * write or inactive-slot retirement. A new operation may replace only a
  * terminal result; the same ID never downloads twice. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(

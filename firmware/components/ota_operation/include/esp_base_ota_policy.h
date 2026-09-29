@@ -25,11 +25,23 @@
 #endif
 #define ESP_BASE_OTA_0_ADDRESS_BYTES 0x20000
 
+typedef enum {
+    ESP_BASE_OTA_NO_PACKAGE = 0,
+    ESP_BASE_OTA_PACKAGE_REUSE = 1,
+    ESP_BASE_OTA_PACKAGE_WRITE = 2,
+} esp_base_ota_package_mode_t;
+
 typedef struct {
     char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
     char image_url[EOTA_URL_BYTES + 1];
     uint8_t sha256[EOTA_SHA256_BYTES];
     uint32_t image_size_bytes;
+    esp_base_ota_package_mode_t package_mode;
+    uint8_t package_sha256[EOTA_SHA256_BYTES];
+    uint8_t trial_event_sha256[EOTA_SHA256_BYTES];
+    uint32_t package_size_bytes;
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
 } esp_base_ota_request_t;
 
 /* Fixed, trusted Base product/partition policy; never derive it from ota.start. */

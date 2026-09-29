@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-29 OTA V3 联合意图存储前置
+
+无包 OTA 的最新收据从 186 字节 V2 硬切为 308 字节 V3，新增包模式、目标包长度／摘要／ABI／schema、代表事件摘要及来源包身份字段；提交后仍逐字节读回。当前正式 `ota.start` 只登记 `NO_PACKAGE`；带包请求在登记前拒绝，读到带包 V3 或旧 V2 长度时启动恢复保留不确定状态，不能凭字节完整性执行擦除。双目标 Base host 回归、固定 SDK C3 正式产品测试键签名构建与 RSA v2 验签、ESP32 测试键签名构建与 ECDSA v1 验签通过。C3 签名 app `0x121000/0x130000`，ESP32 `0xffff4/0x120000`；两者尚未运行联合 OTA。
+
+新 V3 长度的 11 页 C3 合成 NVS 在三次独立 QEMU 启动完成 100 轮最大配置、OTA 收据形态、ECS2 和八条产品账本写入／读回，最终 `available=960/total=1386`，官方非空页 CRC 通过；完整输入摘要见[十一页容量记录](c3_eleven_page_nvs_capacity.md)。V3 源码只是 P6-10 的持久意图前置：公开带包授权、REUSE／WRITE 准备、代表事件完成后的联合确认与跨提交恢复仍未接通；未写实体设备，P6-10/P7-04 保持进行中。
+
 ## 2026-09-29 双板新鲜恢复基线与迁移阻断复核
 
 按五仓计划第 13.1 节，在 `mac-pro-1` 重新核对两块 4 MiB 板的串口、芯片、MAC 与原固件响应。C3 当前仍为 Base v1、配置 revision 5；ESP32-D0WD-V3 仍为 ESP-AT 1.1.b1.0。esptool 与 espefuse 只读探测会复位目标：C3 观察到 boot ID 变化后重新确认同一业务 UUID 的哈希和 revision，ESP32 最终硬复位后 `AT+GMR` 返回原版本及 OK。两块板的 Secure Boot 和 Flash Encryption eFuse 均未启用；本轮没有写 eFuse、Flash 或分区。
