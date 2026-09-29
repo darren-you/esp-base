@@ -1,5 +1,11 @@
 # ESP32 六页 NVS 合成容量验证
 
+## 2026-09-29：OTA V3 308 字节收据长度复测
+
+正式收据改为固定 308 字节 V3 后，以当前探针源码在独立 4 MiB 合成 Flash 上重跑最大 7,618 字节 Base v3 配置、OTA 收据形态、288 字节 Container ECS2 绑定及 910 字节八条产品账本。固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、锁定 Container `e8a0d0b6384bbba813b955ed08ebc315c134a707` 与 Espressif Xtensa QEMU `esp_develop_9.2.2_20260417`；三个独立进程依次完成 revision 1–3、4–100 和 revision 100 冷启动读回，100 条 `PROBE_STEP` 的配置／OTA／Container／产品记录均通过，最终 `PROBE_RESTART_MATCH=1 container_decoded=1`。六页 `base_store` 最终 `used=302 free=454 available=328 total=756 namespaces=4`，固定 SDK 官方 NVS parser 报告五个非空页 `CRC32: OK`、一页 Empty。
+
+最终合成 Flash SHA-256 为 `deb7f3a1479fedb5080e0f0e8d9e99b05531c152f76a9f945331310d5395fe9b`，提取的 24 KiB NVS 为 `b04a56d08fbd1581da413387cbad7483301109904975d4850398b8b2f62dc29e`，测试分区表所在 4 KiB 扇区为 `cabf64389f75d4a42768cc3ec38439fe6a3e05f56fd3ca130c7c22ae5982ff41`；`product_pkgs`、`at_old_raw` 和 `frp_scratch` 仍逐字节为 `0xff`。首次全新 Flash 运行以 600 秒上限终止于 revision 93，未计通过；上述结果来自另一次全新 Flash、阶段 2 改用 1200 秒上限的完整三阶段运行，原始日志与镜像保存在仓外 `/private/tmp/esp-five-repo-v3-nvs-esp32-6-retry/`。探针只写合成记录，不执行正式收据解码、包下载、授权、真实固件 OTA 或实板断电；P6-03/P6-10/P7-04 不据此验收。
+
 ## 2026-09-28：最近八条产品操作账本同分区复跑
 
 在上一轮最大 7,618 字节 Base v3 配置、186 字节 OTA V2 合成形态与 288 字节 Container ECS2 初态的同分区压力上，加入单个 **910 字节** `base_product/operations` 账本。它按当前八条槽位格式保存连续序号、请求指纹和结果；每代先提交 `PREPARED` 再提交 `SUCCEEDED`，两次均逐字节读回。探针只按真实编码布局验证 NVS 容量和页回收，未调用尚未开放的产品写命令。
