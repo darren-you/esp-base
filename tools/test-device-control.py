@@ -311,6 +311,116 @@ class ProductPackageTests(unittest.TestCase):
                 send.assert_not_called()
 
 
+class OtaClientTests(unittest.TestCase):
+    def testSignedImageRequestAndOriginalIdQuery(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        operation = "44444444-4444-4444-8444-444444444444"
+        current = {"device_id": device, "boot_id": boot}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "candidate.bin")
+            path.write_bytes(b"signed-image-fixture")
+            observed = []
+            fresh = {**current, "result": {"uptime_ms": 1234,
+                     "capabilities": {"ota": "ready"}}}
+
+            def capture(_port, request):
+                observed.append(request)
+
+            def accepted(_port, request_id, _deadline):
+                yield {**current, "request_id": request_id, "state": "running",
+                       "error_code": None, "result": None}
+
+            with (mock.patch.object(control, "status", return_value=fresh),
+                  mock.patch.object(control, "send", side_effect=capture),
+                  mock.patch.object(control, "read_result", side_effect=accepted)):
+                pending = control.ota_start(object(), current, operation, str(path),
+                                            "https://images.example.test/candidate.bin",
+                                            "esp32c3/esp_base")
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(observed[0]["command"], "ota.start")
+            self.assertEqual(observed[0]["target_boot_id"], boot)
+            self.assertEqual(observed[0]["expires_at_uptime_ms"], 11234)
+            self.assertEqual(observed[0]["parameters"], {
+                "operation_id": operation,
+                "image_url": "https://images.example.test/candidate.bin",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "image_size_bytes": len(path.read_bytes()),
+                "target": "esp32c3/esp_base",
+                "signature": {"scheme": "esp_secure_boot_v2_rsa3072"}})
+            self.assertEqual(pending["state"], "running")
+            self.assertIsNone(pending["result"])
+
+            next_boot = "55555555-5555-4555-8555-555555555555"
+            final = {**current, "boot_id": next_boot, "state": "succeeded",
+                     "error_code": None, "result": {
+                         "operation_id": operation,
+                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                         "image_size_bytes": len(path.read_bytes()),
+                         "target": "esp32c3/esp_base", "target_slot": "ota_1"}}
+
+            def reply(_port, _request_id, _deadline):
+                yield final
+
+            observed.clear()
+            with (mock.patch.object(control, "send", side_effect=capture),
+                  mock.patch.object(control, "read_result", side_effect=reply)):
+                self.assertEqual(control.ota_result(object(), current, operation,
+                    final["result"]["sha256"], final["result"]["image_size_bytes"]), final)
+            self.assertEqual(observed[0]["command"], "ota.result")
+            self.assertEqual(observed[0]["parameters"], {"operation_id": operation})
+
+    def testNoWriteForWrongBootOrOversizedImage(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        current = {"device_id": device, "boot_id": boot}
+        operation = "44444444-4444-4444-8444-444444444444"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "candidate.bin")
+            path.write_bytes(b"test")
+            fresh = {**current, "boot_id": "55555555-5555-4555-8555-555555555555",
+                     "result": {"uptime_ms": 1234,
+                                "capabilities": {"ota": "ready"}}}
+            with (mock.patch.object(control, "status", return_value=fresh),
+                  mock.patch.object(control, "send") as send):
+                with self.assertRaisesRegex(ValueError, "已重启"):
+                    control.ota_start(object(), current, operation, str(path),
+                                      "https://images.example.test/candidate.bin",
+                                      "esp32c3/esp_base")
+                send.assert_not_called()
+            with path.open("wb") as output:
+                output.truncate(0x130000 + 1)
+            with mock.patch.object(control, "send") as send:
+                with self.assertRaisesRegex(ValueError, "目标槽"):
+                    control.ota_start(object(), current, operation, str(path),
+                                      "https://images.example.test/candidate.bin",
+                                      "esp32c3/esp_base")
+                send.assert_not_called()
+
+    def testQueryRejectsDifferentImageAndNeverWritesAgain(self):
+        device = "22222222-2222-4222-8222-222222222222"
+        boot = "33333333-3333-4333-8333-333333333333"
+        operation = "44444444-4444-4444-8444-444444444444"
+        current = {"device_id": device, "boot_id": boot}
+        reply = {**current, "state": "succeeded", "error_code": None,
+                 "result": {"operation_id": operation, "sha256": "ab" * 32,
+                            "image_size_bytes": 512, "target": "esp32c3/esp_base",
+                            "target_slot": "ota_1"}}
+        sent = []
+
+        def capture(_port, request):
+            sent.append(request)
+
+        def response(_port, _request_id, _deadline):
+            yield reply
+
+        with (mock.patch.object(control, "send", side_effect=capture),
+              mock.patch.object(control, "read_result", side_effect=response)):
+            with self.assertRaisesRegex(ValueError, "与请求不符"):
+                control.ota_result(object(), current, operation, "cd" * 32, 512)
+        self.assertEqual([request["command"] for request in sent], ["ota.result"])
+
+
 class ProductUninstallTests(unittest.TestCase):
     def testExactBindingWriteAndOriginalIdResult(self):
         device = "22222222-2222-4222-8222-222222222222"

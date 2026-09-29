@@ -211,6 +211,103 @@ def product_result(port, current, operation_id):
         return value
 
 
+OTA_TARGETS = {
+    "esp32c3/esp_base": ("esp_secure_boot_v2_rsa3072", 0x130000),
+    "esp32/esp_base": ("esp_secure_boot_v1_ecdsa_p256", 0x120000),
+}
+
+
+def ota_result(port, current, operation_id, expected_sha256=None, expected_size_bytes=None):
+    canonical_id(operation_id)
+    request_id = str(uuid.uuid4())
+    send(port, {"protocol_version": 1, "request_id": request_id,
+                "command": "ota.result", "parameters": {"operation_id": operation_id}})
+    for value in read_result(port, request_id, time.monotonic() + 5):
+        if value["device_id"] != current["device_id"]:
+            raise ValueError("OTA 结果来自另一设备；状态为 unknown")
+        result = value["result"]
+        if result is None:
+            if value["state"] not in {"unknown", "failed"}:
+                raise ValueError("OTA 查询缺少持久结果；状态为 unknown")
+            return value
+        if not isinstance(result, dict) or set(result) != {
+                "operation_id", "sha256", "image_size_bytes", "target", "target_slot"}:
+            raise ValueError("OTA 持久结果字段无效；状态为 unknown")
+        digest = result["sha256"]
+        target = result["target"]
+        if (result["operation_id"] != operation_id or
+                not isinstance(digest, str) or len(digest) != 64 or
+                set(digest) - set("0123456789abcdef") or digest == "0" * 64 or
+                type(result["image_size_bytes"]) is not int or
+                not isinstance(target, str) or target not in OTA_TARGETS or
+                not 1 <= result["image_size_bytes"] <= OTA_TARGETS[target][1] or
+                not isinstance(result["target_slot"], str) or
+                result["target_slot"] not in {"ota_0", "ota_1"} or
+                (expected_sha256 is not None and digest != expected_sha256) or
+                (expected_size_bytes is not None and
+                 result["image_size_bytes"] != expected_size_bytes)):
+            raise ValueError("OTA 持久结果与请求不符；状态为 unknown")
+        return value
+
+
+def ota_start(port, current, operation_id, image_file, image_url, target):
+    canonical_id(operation_id)
+    if target not in OTA_TARGETS or not isinstance(image_url, str) or not image_url.startswith("https://") or len(image_url) > 512:
+        raise ValueError("OTA 目标或 HTTPS URL 无效；未发送命令")
+    scheme, slot_size_bytes = OTA_TARGETS[target]
+    descriptor = os.open(image_file, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 1 <= before.st_size <= slot_size_bytes:
+            raise ValueError("签名固件不是目标槽可容纳的普通文件；未发送命令")
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            block = os.read(descriptor, 65536)
+            if not block:
+                break
+            size += len(block)
+            if size > before.st_size:
+                raise ValueError("签名固件读取期间发生变化；未发送命令")
+            digest.update(block)
+        after = os.fstat(descriptor)
+        if (size != before.st_size or size != after.st_size or
+                before.st_mtime_ns != after.st_mtime_ns):
+            raise ValueError("签名固件读取期间发生变化；未发送命令")
+    finally:
+        os.close(descriptor)
+    fresh = status(port)
+    if fresh["device_id"] != current["device_id"] or fresh["boot_id"] != current["boot_id"]:
+        raise ValueError("OTA 发送前设备已重启；未发送命令")
+    if fresh["result"].get("capabilities", {}).get("ota") != "ready":
+        raise ValueError("设备 OTA 当前不可用；未发送命令")
+    request_id = str(uuid.uuid4())
+    send(port, {"protocol_version": 1, "request_id": request_id,
+                "command": "ota.start", "device_id": current["device_id"],
+                "target_boot_id": current["boot_id"],
+                "expires_at_uptime_ms": fresh["result"]["uptime_ms"] + 10000,
+                "parameters": {"operation_id": operation_id, "image_url": image_url,
+                               "sha256": digest.hexdigest(), "image_size_bytes": size,
+                               "target": target, "signature": {"scheme": scheme}}})
+    try:
+        for receipt in read_result(port, request_id, time.monotonic() + 5):
+            if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
+                raise ValueError("OTA 写回执来自另一设备或启动；按原操作 ID 查询")
+            if receipt["result"] is not None:
+                raise ValueError("OTA 写回执字段无效；按原操作 ID 查询")
+            if receipt["state"] in {"failed", "expired", "unknown", "running"}:
+                return receipt
+            if receipt["state"] == "succeeded":
+                raise ValueError("OTA 写回执缺少持久结果证明；按原操作 ID 查询")
+    except TimeoutError:
+        pass
+    # New boot may close the current serial port. A separate ota.result call
+    # uses the original operation ID; never resend this write.
+    return {"device_id": current["device_id"], "boot_id": current["boot_id"],
+            "request_id": request_id, "state": "unknown",
+            "error_code": "ota_write_receipt_missing", "result": None}
+
+
 def product_status(port, current):
     request_id = str(uuid.uuid4())
     send(port, {"protocol_version": 1, "request_id": request_id,
@@ -555,7 +652,10 @@ def main():
     parser.add_argument("--port", required=True, help="本轮枚举的 C3 USB Serial/JTAG 或 ESP32 UART 端点")
     parser.add_argument("--device-id", help="预期持久 UUID；写命令必填")
     parser.add_argument("--config-file", help="本机 0600 JSON 完整配置文件；仅用于 config.set")
-    parser.add_argument("--operation-id", help="产品写入或 product.result 查询的原始操作 UUID")
+    parser.add_argument("--operation-id", help="产品或 OTA 写入及结果查询的原始操作 UUID")
+    parser.add_argument("--image-file", help="ota.start 时用于计算完整摘要和长度的本地签名固件")
+    parser.add_argument("--image-url", help="设备下载同一签名固件的 HTTPS URL")
+    parser.add_argument("--ota-target", choices=sorted(OTA_TARGETS), help="固件构建的精确 target")
     parser.add_argument("--operation-sequence", type=int, help="产品写入的持久操作序号")
     parser.add_argument("--expected-container-sequence", type=int,
                         help="产品写入的当前 ECS2 序号")
@@ -566,18 +666,24 @@ def main():
     parser.add_argument("--guest-abi-version", type=int, help="签名包声明的 guest ABI 版本")
     parser.add_argument("--data-schema-version", type=int, help="签名包声明的数据 schema 版本")
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
-    parser.add_argument("command", choices=["status", "restart", "config.set", "product.status",
+    parser.add_argument("command", choices=["status", "restart", "config.set", "ota.start", "ota.result", "product.status",
                                             "product.result", "product.uninstall",
                                             "product.install", "product.upgrade"])
     args = parser.parse_args()
     product_writes = {"product.uninstall", "product.install", "product.upgrade"}
     package_writes = {"product.install", "product.upgrade"}
-    if args.command in {"restart", "config.set"} | product_writes and not args.device_id:
+    if args.command in {"restart", "config.set", "ota.start"} | product_writes and not args.device_id:
         parser.error("写命令必须指定已核对的 --device-id")
     if (args.command == "config.set") != bool(args.config_file):
         parser.error("config.set 必须且只能配合 --config-file")
-    if (args.command in product_writes | {"product.result"}) != bool(args.operation_id):
-        parser.error("产品写入／product.result 必须且只能配合 --operation-id")
+    if (args.command in product_writes | {"product.result", "ota.start", "ota.result"}) != bool(args.operation_id):
+        parser.error("产品／OTA 写入和结果查询必须且只能配合 --operation-id")
+    image_options = (args.image_file, args.image_url, args.ota_target)
+    if args.command == "ota.start":
+        if any(value is None for value in image_options):
+            parser.error("ota.start 必须提供本地签名固件、HTTPS URL 和精确 target")
+    elif any(value is not None for value in image_options):
+        parser.error("固件参数只能用于 ota.start")
     if args.command in product_writes:
         if args.operation_sequence is None or args.expected_container_sequence is None:
             parser.error("产品写入必须提供操作序号和 Container 序号")
@@ -627,6 +733,11 @@ def main():
             current = dict(observed, request_id=request_id)
         if args.command == "config.set":
             current = apply_configuration(port, current, config)
+        if args.command == "ota.start":
+            current = ota_start(port, current, args.operation_id,
+                                args.image_file, args.image_url, args.ota_target)
+        if args.command == "ota.result":
+            current = ota_result(port, current, args.operation_id)
         if args.command == "product.result":
             current = product_result(port, current, args.operation_id)
         if args.command == "product.status":
@@ -647,10 +758,16 @@ def main():
             print("ESP Base 串口操作\n  状态  " + current["state"] + "\n  设备  " + current["device_id"] + "\n  启动  " + current["boot_id"])
             if current["error_code"]:
                 print("  原因  " + current["error_code"])
-            if args.command in product_writes | {"product.result"}:
+            if args.command in product_writes | {"product.result", "ota.start", "ota.result"}:
                 print("  操作  " + args.operation_id)
-                if current["result"] is not None:
+                if args.command in product_writes | {"product.result"} and current["result"] is not None:
                     print("  序号  " + str(current["result"]["operation_sequence"]))
+                if args.command == "ota.start":
+                    print("  后续  用原操作 UUID 查询 ota.result；不要重发 ota.start")
+                if args.command == "ota.result" and current["result"] is not None:
+                    print("  固件 SHA-256  " + current["result"]["sha256"])
+                    print("  目标  " + current["result"]["target"] + " / " +
+                          current["result"]["target_slot"])
             if args.command == "product.status" and current["result"] is not None:
                 print("  高水位  " + str(current["result"]["operation_sequence_high_watermark"]))
                 print("  Container 序号  " + str(current["result"]["container_sequence"]))

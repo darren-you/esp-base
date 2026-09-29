@@ -61,6 +61,9 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 ```bash
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE status
+python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --image-file <本地已签名.bin> --image-url <设备可达的HTTPS地址> --ota-target esp32c3/esp_base ota.start
+# 新启动后仍使用同一 operation UUID，只读查询；ESP32 构建的 target 为 esp32/esp_base：
+python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <同一操作UUID> ota.result
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE product.status
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <原操作UUID> product.result
 # 首次安装要求 product.status 的当前包摘要为 null；本地已签名 .pkg 与 HTTPS URL 必须指向同一组字节：
@@ -75,6 +78,8 @@ python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
 ```
 
 默认输出块状摘要，`--json` 输出设备 JSON。重启先读取状态、精确绑定 UUID/boot/deadline，收到 `running` 后再次查询同设备的新启动，才报告成功；超时为 unknown，写命令不自动重试。直接打开 POSIX 串口，使用 `flock` 和 `TIOCEXCL` 独占当前端点，不切换 DTR/RTS，并关闭 HUPCL；串口写入限一秒，以设备回执确认执行。C3 原生 USB 与 ESP32 CH340 UART 均须验证打开端点不改变 boot_id；后者还须实测无 USB 背压时的整帧与超载行为。完整 probe/flash/恢复编排由设备工具负责。
+
+`ota.start` 目前只调用正式无包固件 OTA：用户显式指定本轮精确 target，工具从本地已签名固件读取完整长度和 SHA-256，核对目标槽上限、新鲜 boot 与 OTA ready，再发送设备使用同一字节的 HTTPS URL；设备独立验证镜像签名和摘要。收到 `running` 仅表示已受理，固件随后可能重启；串口回执超时也不重发写命令。新启动后用原 operation UUID 调用 `ota.result`，只接受同一设备的持久结果，并检查固件摘要、长度、target 与目标槽字段。`unknown`、`running` 或尚未观察到新 boot 都不是成功。带包联合 OTA 的公开参数和最终确认仍需 P6-10 的持久收据、包槽与恢复链闭合后接入。
 
 `product.result` 仅按原 operation ID 查询最近固定条数的设备持久账本，不触发产品写入或重放。旧记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。`product.install`／`product.upgrade` 在发送前从本地普通文件计算整包 SHA-256 和长度，并从 `--trial-event-file` 的原始 guest 业务字节计算代表事件 SHA-256；后续帧生成器的 `--event-file` 必须使用同一原始字节。工具复核 `product.status` 的持久序号与旧绑定；设备从指定 HTTPS URL 下载并自行验签，本工具不上传包或生成签名。写回执之后只按原 ID 读取持久账本，超时也绝不重发写命令。候选试运行期间返回 `unknown/product_operation_unresolved`；代表事件完成后须连续在线 30 秒，才可能得到持久成功结果。真实 Broker 和两块实体板仍待端到端验收。
 
