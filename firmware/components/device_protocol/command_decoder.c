@@ -229,9 +229,51 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     }
     if (!strcmp(command->valuestring, "ota.start")) {
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
-        const char *const keys[] = {"operation_id", "image_url", "sha256", "image_size_bytes", "target", "signature"};
-        if (!exact_keys(parameters, keys, 6) ||
-            !copy_id(parameters, "operation_id", out->ota.operation_id)) goto done;
+        const char *const no_package_keys[] = {"operation_id", "image_url", "sha256",
+            "image_size_bytes", "target", "signature", "package_mode"};
+        const char *const reuse_keys[] = {"operation_id", "image_url", "sha256",
+            "image_size_bytes", "target", "signature", "package_mode",
+            "package_sha256", "trial_event_sha256", "package_size_bytes",
+            "guest_abi_version", "data_schema_version"};
+        const char *const write_keys[] = {"operation_id", "image_url", "sha256",
+            "image_size_bytes", "target", "signature", "package_mode",
+            "package_sha256", "trial_event_sha256", "package_size_bytes",
+            "guest_abi_version", "data_schema_version", "package_url"};
+        const cJSON *mode = cJSON_GetObjectItemCaseSensitive(parameters, "package_mode");
+        if (!cJSON_IsString(mode)) goto done;
+        if (!strcmp(mode->valuestring, "no_package")) {
+            if (!exact_keys(parameters, no_package_keys, 7U)) goto done;
+            out->ota.package_mode = ESP_BASE_OTA_NO_PACKAGE;
+        } else if (!strcmp(mode->valuestring, "reuse")) {
+            if (!exact_keys(parameters, reuse_keys, 12U)) goto done;
+            out->ota.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
+        } else if (!strcmp(mode->valuestring, "write")) {
+            if (!exact_keys(parameters, write_keys, 13U)) goto done;
+            out->ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
+        } else goto done;
+        if (!copy_id(parameters, "operation_id", out->ota.operation_id)) goto done;
+        if (out->ota.package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+            (!digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
+                       out->ota.package_sha256) ||
+             !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "trial_event_sha256"),
+                       out->ota.trial_event_sha256) ||
+             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "package_size_bytes"),
+                           INT_MAX, &out->ota.package_size_bytes) ||
+             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "guest_abi_version"),
+                           UINT32_MAX, &out->ota.guest_abi_version) ||
+             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "data_schema_version"),
+                           UINT32_MAX, &out->ota.data_schema_version))) goto done;
+        if (out->ota.package_mode == ESP_BASE_OTA_PACKAGE_WRITE) {
+            const cJSON *package_url = cJSON_GetObjectItemCaseSensitive(
+                parameters, "package_url");
+            if (!cJSON_IsString(package_url)) goto done;
+            const size_t package_url_size = strlen(package_url->valuestring);
+            if (package_url_size <= 8U ||
+                package_url_size > ESP_BASE_OTA_PACKAGE_URL_BYTES ||
+                strncmp(package_url->valuestring, "https://", 8U) != 0) goto done;
+            memcpy(out->ota.package_url, package_url->valuestring,
+                   package_url_size + 1U);
+        }
         const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "image_url");
         const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "sha256");
         const cJSON *size = cJSON_GetObjectItemCaseSensitive(parameters, "image_size_bytes");

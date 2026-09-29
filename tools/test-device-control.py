@@ -347,7 +347,8 @@ class OtaClientTests(unittest.TestCase):
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 "image_size_bytes": len(path.read_bytes()),
                 "target": "esp32c3/esp_base",
-                "signature": {"scheme": "esp_secure_boot_v2_rsa3072"}})
+                "signature": {"scheme": "esp_secure_boot_v2_rsa3072"},
+                "package_mode": "no_package"})
             self.assertEqual(pending["state"], "running")
             self.assertIsNone(pending["result"])
 
@@ -357,7 +358,8 @@ class OtaClientTests(unittest.TestCase):
                          "operation_id": operation,
                          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                          "image_size_bytes": len(path.read_bytes()),
-                         "target": "esp32c3/esp_base", "target_slot": "ota_1"}}
+                         "target": "esp32c3/esp_base", "target_slot": "ota_1",
+                         "package_mode": "no_package", "package_sha256": None}}
 
             def reply(_port, _request_id, _deadline):
                 yield final
@@ -369,6 +371,65 @@ class OtaClientTests(unittest.TestCase):
                     final["result"]["sha256"], final["result"]["image_size_bytes"]), final)
             self.assertEqual(observed[0]["command"], "ota.result")
             self.assertEqual(observed[0]["parameters"], {"operation_id": operation})
+
+    def testJointOtaRequestBindsPackageAndRepresentativeEvent(self):
+        current = {"device_id": "22222222-2222-4222-8222-222222222222",
+                   "boot_id": "33333333-3333-4333-8333-333333333333"}
+        operation = "44444444-4444-4444-8444-444444444444"
+        fresh = {**current, "result": {"uptime_ms": 1234,
+                 "capabilities": {"ota": "busy"}}}
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory, "candidate.bin")
+            package = Path(directory, "candidate.pkg")
+            event = Path(directory, "event.bin")
+            image.write_bytes(b"signed-image-fixture")
+            package.write_bytes(b"signed-package-fixture")
+            event.write_bytes(b"authorized-event")
+            observed = []
+
+            def accepted(_port, request_id, _deadline):
+                yield {**current, "request_id": request_id, "state": "failed",
+                       "error_code": "product_ota_unavailable", "result": None}
+
+            for mode in ("reuse", "write"):
+                observed.clear()
+                kwargs = {"package_mode": mode, "package_file": str(package),
+                          "guest_abi_version": 2, "data_schema_version": 1,
+                          "trial_event_file": str(event)}
+                if mode == "write":
+                    kwargs["package_url"] = "https://packages.example.test/candidate.pkg"
+                binding = {"state": "succeeded", "result": {
+                    "package_sha256": hashlib.sha256(package.read_bytes()).hexdigest()}}
+                with (mock.patch.object(control, "status", return_value=fresh),
+                      mock.patch.object(control, "product_status", return_value=binding),
+                      mock.patch.object(control, "send", side_effect=lambda _port, request:
+                                        observed.append(request)),
+                      mock.patch.object(control, "read_result", side_effect=accepted)):
+                    response = control.ota_start(
+                        object(), current, operation, str(image),
+                        "https://images.example.test/candidate.bin",
+                        "esp32c3/esp_base", **kwargs)
+                self.assertEqual(response["error_code"], "product_ota_unavailable")
+                params = observed[0]["parameters"]
+                self.assertEqual(params["package_mode"], mode)
+                self.assertEqual(params["package_sha256"],
+                                 hashlib.sha256(package.read_bytes()).hexdigest())
+                self.assertEqual(params["trial_event_sha256"],
+                                 hashlib.sha256(event.read_bytes()).hexdigest())
+                self.assertEqual(params["package_size_bytes"], len(package.read_bytes()))
+                self.assertEqual(params.get("package_url"), kwargs.get("package_url"))
+
+            with (mock.patch.object(control, "status", return_value=fresh),
+                  mock.patch.object(control, "product_status", return_value={
+                      "state": "succeeded", "result": {"package_sha256": "aa" * 32}}),
+                  mock.patch.object(control, "send") as send):
+                with self.assertRaisesRegex(ValueError, "当前确认包"):
+                    control.ota_start(object(), current, operation, str(image),
+                        "https://images.example.test/candidate.bin",
+                        "esp32c3/esp_base", package_mode="reuse",
+                        package_file=str(package), guest_abi_version=2,
+                        data_schema_version=1, trial_event_file=str(event))
+                send.assert_not_called()
 
     def testNoWriteForWrongBootOrOversizedImage(self):
         device = "22222222-2222-4222-8222-222222222222"
@@ -405,7 +466,8 @@ class OtaClientTests(unittest.TestCase):
         reply = {**current, "state": "succeeded", "error_code": None,
                  "result": {"operation_id": operation, "sha256": "ab" * 32,
                             "image_size_bytes": 512, "target": "esp32c3/esp_base",
-                            "target_slot": "ota_1"}}
+                            "target_slot": "ota_1", "package_mode": "no_package",
+                            "package_sha256": None}}
         sent = []
 
         def capture(_port, request):
@@ -419,6 +481,34 @@ class OtaClientTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "与请求不符"):
                 control.ota_result(object(), current, operation, "cd" * 32, 512)
         self.assertEqual([request["command"] for request in sent], ["ota.result"])
+
+    def testJointOtaResultRequiresPackageEvidence(self):
+        current = {"device_id": "22222222-2222-4222-8222-222222222222",
+                   "boot_id": "33333333-3333-4333-8333-333333333333"}
+        operation = "44444444-4444-4444-8444-444444444444"
+        reply = {**current, "state": "succeeded", "error_code": None,
+                 "result": {"operation_id": operation, "sha256": "ab" * 32,
+                            "image_size_bytes": 512, "target": "esp32c3/esp_base",
+                            "target_slot": "ota_1", "package_mode": "write",
+                            "package_sha256": "cd" * 32}}
+
+        def response(_port, _request_id, _deadline):
+            yield reply
+
+        with (mock.patch.object(control, "send"),
+              mock.patch.object(control, "read_result", side_effect=response)):
+            self.assertEqual(control.ota_result(
+                object(), current, operation, "ab" * 32, 512, "write", "cd" * 32),
+                reply)
+            with self.assertRaisesRegex(ValueError, "与请求不符"):
+                control.ota_result(object(), current, operation,
+                                   "ab" * 32, 512, "write", "ef" * 32)
+            reply["result"]["package_sha256"] = None
+            with self.assertRaisesRegex(ValueError, "与请求不符"):
+                control.ota_result(object(), current, operation)
+            reply["result"]["package_mode"] = []
+            with self.assertRaisesRegex(ValueError, "与请求不符"):
+                control.ota_result(object(), current, operation)
 
 
 class ProductUninstallTests(unittest.TestCase):

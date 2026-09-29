@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 公开参数与客户端合同
+
+`ota.start` 现要求 `package_mode`，无包只允许原固件参数；`reuse` 还须提供包 SHA-256、长度、guest ABI、data schema 与随后代表事件的原始字节 SHA-256；`write` 另须提供包 HTTPS URL。解码使用各模式精确键集合，完整值进入本 boot 请求指纹。公开串口客户端按本地签名文件计算固件与包的摘要／长度，C3 包槽上限为 `0x77000`、ESP32 为 `0x82000`，`reuse` 还核对设备当前确认包摘要。`ota.result` 现带包模式及可空包摘要，客户端严格核验字段。
+
+此处仅冻结设备与公开客户端的参数合同：设备对带包 `ota.start` 在登记 V3 收据、停止 guest 或任何 Flash 擦写前返回 `failed/product_ota_unavailable`，非法 `write` URL 更早返回 `invalid_request`。无包路径仍运行；带包 HTTPS 下载、启动恢复、授权事件后 30 秒联合健康确认及实板验证尚未完成，P6-10/P7-04 不验收。C3／ESP32 host ASan/UBSan 全套、公开客户端 Python 15 项、固定 SDK 双目标测试键签名构建及官方 RSA v2／ECDSA v1 验签通过；签名 app 分别为 `0x121000/0x130000`、`0xffff4/0x120000`，未写实体板。
+
 ## 2026-09-30 联合 OTA 内部 WRITE 包槽续写
 
 Base 新增仅供同一 OTA owner 使用的 `write_staged_firmware_package`。它在擦包槽前从原 V3 收据重新核对 operation ID、A/C 签名固件摘要、目标镜像大小、来源包身份和旧 B 退役后精确的 `WRITING` 序号；来源有包时还要求 guest 已停止、join 并回收原生资源。锁定 Container 将来源字节写入已预约的非来源包槽，回读完整 SHA-256，验证包签名、Wasm 与授权，持久提交并独立读回 `PREPARED`。参数或持久状态冲突在擦写前拒绝；一旦开始写入，断流、摘要错误或读回不确定均保持未决，不选择新 app boot。

@@ -79,12 +79,50 @@ static void ota_tests(void)
 {
     char json[1400];
     const char *prefix = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.start\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":";
-    const char *valid = "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/esp-base.bin\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}";
+    const char *valid = "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/esp-base.bin\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"},\"package_mode\":\"no_package\"}";
     ebase_command_t out;
     snprintf(json, sizeof json, "%s%s}", prefix, valid);
     assert(!ebase_parse_command(json, strlen(json), &out) && out.kind == EBASE_OTA_START);
     assert(out.ota.image_size_bytes == 123456 && out.ota.sha256[0] == 0 && out.ota.sha256[31] == 31);
     assert(!strcmp(out.ota.image_url, "https://example.test/esp-base.bin"));
+    assert(out.ota.package_mode == ESP_BASE_OTA_NO_PACKAGE &&
+           out.ota.package_url[0] == '\0');
+    const char *const package_fields =
+        "\"package_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\","
+        "\"trial_event_sha256\":\"22222222222222222222222222222222"
+        "22222222222222222222222222222222\","
+        "\"package_size_bytes\":2048,\"guest_abi_version\":2,\"data_schema_version\":1";
+    char packaged[1100];
+    const int reuse_length = snprintf(packaged, sizeof packaged,
+        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
+        "\"image_url\":\"https://example.test/esp-base.bin\","
+        "\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\","
+        "\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\","
+        "\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"},"
+        "\"package_mode\":\"reuse\",%s}", package_fields);
+    assert(reuse_length > 0 && (size_t)reuse_length < sizeof packaged);
+    snprintf(json, sizeof json, "%s%s}", prefix, packaged);
+    assert(!ebase_parse_command(json, strlen(json), &out) &&
+           out.ota.package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
+           out.ota.package_size_bytes == 2048U &&
+           out.ota.package_sha256[0] == 0x11U &&
+           out.ota.trial_event_sha256[0] == 0x22U &&
+           out.ota.package_url[0] == '\0');
+    const int write_length = snprintf(packaged, sizeof packaged,
+        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
+        "\"image_url\":\"https://example.test/esp-base.bin\","
+        "\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\","
+        "\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\","
+        "\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"},"
+        "\"package_mode\":\"write\",%s,"
+        "\"package_url\":\"https://packages.example.test/candidate.pkg\"}",
+        package_fields);
+    assert(write_length > 0 && (size_t)write_length < sizeof packaged);
+    snprintf(json, sizeof json, "%s%s}", prefix, packaged);
+    assert(!ebase_parse_command(json, strlen(json), &out) &&
+           out.ota.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+           !strcmp(out.ota.package_url,
+                   "https://packages.example.test/candidate.pkg"));
     const char *bad[] = {
         "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"http://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}",
         "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"esp32s3/esp_base\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}",

@@ -891,6 +891,24 @@ int main(void)
     assert(atomic_load(&owner.active_token) == 0);
 
     reset_case();
+    start(85);
+    expect_reply("failed", "product_ota_unavailable");
+    assert(register_calls == 0 && task_calls == 0 && retire_calls == 0 &&
+           product_retire_calls == 0 && atomic_load(&owner.active_token) == 0);
+
+    reset_case();
+    start(86);
+    expect_reply("failed", "product_ota_unavailable");
+    assert(register_calls == 0 && task_calls == 0 && retire_calls == 0 &&
+           product_retire_calls == 0 && atomic_load(&owner.active_token) == 0);
+
+    reset_case();
+    start(87);
+    expect_reply("failed", "invalid_request");
+    assert(register_calls == 0 && task_calls == 0 && retire_calls == 0 &&
+           product_retire_calls == 0 && atomic_load(&owner.active_token) == 0);
+
+    reset_case();
     ota_ready_after_first = false;
     start(14);
     poll_ota();
@@ -1060,6 +1078,25 @@ int main(void)
            !memcmp(offered_event_digest, expected_event_digest, 32));
     offered_event_result = ESP_BASE_CONTAINER_EVENT_FULL;
     assert(!handle_mqtt_event(&business_event, NULL) && offered_event_calls == 2U);
+    esp_base_ota_receipt_view_t ota_view = {
+        .state = ESP_BASE_OTA_OPERATION_RUNNING,
+        .image_size_bytes = 4096U,
+        .target_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1,
+        .package_mode = ESP_BASE_OTA_PACKAGE_REUSE,
+    };
+    strcpy(ota_view.operation_id, "44444444-4444-4444-8444-000000000085");
+    memset(ota_view.sha256, 0x5a, 32);
+    memset(ota_view.package_sha256, 0x7b, 32);
+    s_reply_mqtt = true;
+    reply_ota_result("11111111-1111-4111-8111-000000000085", &ota_view);
+    assert(strstr(latest_reply, "\"package_mode\":\"reuse\"") != NULL &&
+           strstr(latest_reply, "\"package_sha256\":\"7b7b7b7b") != NULL);
+    ota_view.package_mode = ESP_BASE_OTA_NO_PACKAGE;
+    memset(ota_view.package_sha256, 0, 32);
+    reply_ota_result("11111111-1111-4111-8111-000000000086", &ota_view);
+    assert(strstr(latest_reply, "\"package_mode\":\"no_package\"") != NULL &&
+           strstr(latest_reply, "\"package_sha256\":null") != NULL);
+    s_reply_mqtt = false;
     puts("  protocol_ota_owner passed (OTA owner faults; product ledger/uninstall/recovery; USB FRP storage gate; MQTT write rejection)");
 }
 
@@ -1140,6 +1177,19 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
     strcpy(out->ota.image_url, "https://example.invalid/signed.bin");
     out->ota.image_size_bytes = 4096;
     memset(out->ota.sha256, 0x5a, sizeof out->ota.sha256);
+    if (number == 85U || number == 86U || number == 87U) {
+        out->ota.package_mode = number == 85U ? ESP_BASE_OTA_PACKAGE_REUSE :
+                                ESP_BASE_OTA_PACKAGE_WRITE;
+        out->ota.package_size_bytes = 10240U;
+        out->ota.guest_abi_version = 2U;
+        out->ota.data_schema_version = 1U;
+        memset(out->ota.package_sha256, 0x7b, 32);
+        memset(out->ota.trial_event_sha256, 0x22, 32);
+        if (number != 85U)
+            strcpy(out->ota.package_url, number == 87U ?
+                   "http://packages.example.test/a.pkg" :
+                   "https://packages.example.test/a.pkg");
+    }
     return NULL;
 }
 

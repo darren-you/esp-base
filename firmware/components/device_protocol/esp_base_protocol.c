@@ -39,6 +39,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+_Static_assert(ESP_BASE_OTA_PACKAGE_URL_BYTES == ESP_BASE_PRODUCT_PACKAGE_URL_BYTES,
+               "OTA package URL must fit the shared HTTPS source contract");
+
 typedef struct {
     const char *device_id;
     const char *firmware_version;
@@ -197,6 +200,42 @@ static bool fingerprint_product_package(const ebase_command_t *command,
         psa_hash_update(&hash, (const uint8_t *)request->package_url,
                         strlen(request->package_url) + 1U) == PSA_SUCCESS &&
         psa_hash_finish(&hash, fingerprint, 32U, &written) == PSA_SUCCESS &&
+        written == 32U;
+    if (!valid) (void)psa_hash_abort(&hash);
+    return valid;
+}
+
+static bool fingerprint_ota_request(const esp_base_ota_request_t *request,
+                                    uint8_t fingerprint[32])
+{
+    static const uint8_t domain[] = "ota.start";
+    const uint32_t numbers[] = {request->image_size_bytes,
+        request->package_size_bytes, request->guest_abi_version,
+        request->data_schema_version};
+    const uint8_t mode = (uint8_t)request->package_mode;
+    psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
+    size_t written = 0U;
+    bool valid = psa_hash_setup(&hash, PSA_ALG_SHA_256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, domain, sizeof domain) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->operation_id,
+                        sizeof request->operation_id) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->image_url,
+                        strlen(request->image_url) + 1U) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->sha256, sizeof request->sha256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, &mode, sizeof mode) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->package_sha256,
+                        sizeof request->package_sha256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->trial_event_sha256,
+                        sizeof request->trial_event_sha256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->package_url,
+                        strlen(request->package_url) + 1U) == PSA_SUCCESS;
+    for (size_t index = 0; valid && index < sizeof numbers / sizeof numbers[0]; ++index) {
+        uint8_t number[4];
+        for (int shift = 24, byte = 0; shift >= 0; shift -= 8, ++byte)
+            number[byte] = (uint8_t)(numbers[index] >> shift);
+        valid = psa_hash_update(&hash, number, sizeof number) == PSA_SUCCESS;
+    }
+    valid = valid && psa_hash_finish(&hash, fingerprint, 32U, &written) == PSA_SUCCESS &&
         written == 32U;
     if (!valid) (void)psa_hash_abort(&hash);
     return valid;
@@ -398,17 +437,28 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
         digest[i * 2 + 1] = digits[view->sha256[i] & 15];
     }
     digest[64] = '\0';
+    const char *package_mode = view->package_mode == ESP_BASE_OTA_PACKAGE_REUSE ?
+        "reuse" : view->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ?
+        "write" : "no_package";
+    char package_digest[67] = {0};
+    const char *package_sha256 = "null";
+    if (view->package_mode != ESP_BASE_OTA_NO_PACKAGE) {
+        package_digest_hex(package_digest, view->package_sha256);
+        package_sha256 = package_digest;
+    }
     if (s_reply_mqtt) {
         const int length = snprintf(s_response_json, sizeof s_response_json,
             "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
             "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
             "\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
-            "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\"}}",
+            "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\","
+            "\"package_mode\":\"%s\",\"package_sha256\":%s}}",
             s_context.device_id, s_boot_id, request_id, state,
             view->error_code ? "\"" : "null", view->error_code ? view->error_code : "",
             view->error_code ? "\"" : "", view->operation_id, digest, view->image_size_bytes,
             ESP_BASE_OTA_TARGET,
-            view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1");
+            view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1",
+            package_mode, package_sha256);
         if (length > 0 && (size_t)length < sizeof s_response_json)
             (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
         return;
@@ -419,9 +469,11 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
            s_context.device_id, s_boot_id, request_id, state);
     if (view->error_code) printf("\"%s\"", view->error_code); else printf("null");
     printf(",\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
-           "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\"}}\n",
+           "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\","
+           "\"package_mode\":\"%s\",\"package_sha256\":%s}}\n",
            view->operation_id, digest, view->image_size_bytes, ESP_BASE_OTA_TARGET,
-           view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1");
+           view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1",
+           package_mode, package_sha256);
     fflush(stdout);
     funlockfile(stdout);
 }
@@ -1591,17 +1643,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     if (command->kind == EBASE_OTA_START) {
-        uint8_t bytes[10 + ESP_BASE_OTA_OPERATION_ID_BYTES + EOTA_URL_BYTES + 1 + 32 + 4];
-        size_t offset = 0;
-        memcpy(bytes + offset, "ota.start", 9); offset += 9;
-        memcpy(bytes + offset, command->ota.operation_id, ESP_BASE_OTA_OPERATION_ID_BYTES); offset += ESP_BASE_OTA_OPERATION_ID_BYTES;
-        const size_t url_bytes = strlen(command->ota.image_url) + 1;
-        memcpy(bytes + offset, command->ota.image_url, url_bytes); offset += url_bytes;
-        memcpy(bytes + offset, command->ota.sha256, 32); offset += 32;
-        for (int i = 3; i >= 0; --i) bytes[offset++] = (uint8_t)(command->ota.image_size_bytes >> (8 * i));
-        size_t size = 0;
-        if (psa_hash_compute(PSA_ALG_SHA_256, bytes, offset, command->request.fingerprint,
-                sizeof command->request.fingerprint, &size) != PSA_SUCCESS || size != 32) {
+        if (!fingerprint_ota_request(&command->ota, command->request.fingerprint)) {
             reply(command->request.request_id, "failed", "resource_failure", NULL); return;
         }
     }
@@ -1635,6 +1677,16 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     }
     if (command->kind == EBASE_OTA_START) {
         if (!eota_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
+        if (command->ota.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+            !esp_base_product_package_source_request_valid(
+                command->ota.package_url, command->ota.package_size_bytes)) {
+            save_outcome(slot, "failed", "invalid_request", false); return;
+        }
+        /* The selected-boot and rollback paths must consume the same V3
+         * receipt before package modes can authorize app-slot erasure. */
+        if (command->ota.package_mode != ESP_BASE_OTA_NO_PACKAGE) {
+            save_outcome(slot, "failed", "product_ota_unavailable", false); return;
+        }
         eota_image_t candidate = {
             .image_url = command->ota.image_url,
             .image_size_bytes = command->ota.image_size_bytes,

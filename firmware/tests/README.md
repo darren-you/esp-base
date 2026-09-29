@@ -14,7 +14,7 @@
 
 Wi-Fi 启动测试编译真实 `wifi_runtime`，逐项注入 netif、事件循环、队列、驱动、事件注册、配置和启动失败，验证明确 `failed` 状态及初始化中途资源释放；事件注入还验证不同 SSID 拒绝、同 SSID 但记录填充字节不同仍可取得关联/IP 证明。它不模拟真实 AP 关联、WPA3、DNS、无线恢复或 pending 槽的整机任务调度。
 
-OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度和 HTTPS URL。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽，断言直接槽检查持有短 Flash claim、pending 确认期间 FRP scratch 等待到 500 毫秒后失败、释放后可再次获取；`ota_receipt_test` 验证产品约束、持久收据及各次 NVS 调用持有短 Flash claim。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
+OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度、HTTPS URL、必需包模式及带包元数据。`protocol_ota_owner_test` 还断言有效 REUSE／WRITE 在收据登记和目标擦写前拒绝，非法 WRITE URL 更早拒绝；公开客户端测试核对包摘要、代表事件摘要、目标包槽上限与 `ota.result` 模式字段。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽，断言直接槽检查持有短 Flash claim、pending 确认期间 FRP scratch 等待到 500 毫秒后失败、释放后可再次获取；`ota_receipt_test` 验证产品约束、持久收据及各次 NVS 调用持有短 Flash claim。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
 
 v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 字节显式拒绝且无写入，以及 NVS 查询长度、写前/写后、commit 与读回故障；公开 USB 工具另验证相同 schema 的非法字段和整帧上限。
 

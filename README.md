@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-30 联合 OTA 公开命令合同续进：`ota.start` 现强制声明 `package_mode`，`reuse`／`write` 还必须绑定包摘要、长度、ABI、schema 与代表事件 SHA-256，`write` 另需包 HTTPS URL；同一次请求的指纹包含所有字段。公开客户端同步生成该合同，`ota.result` 返回包模式与包摘要。带包命令目前在持久登记与任何 Flash 擦写前返回 `product_ota_unavailable`，待启动恢复及联合健康链完成后开放；无包命令仍按原路径执行。双目标 host 与客户端测试覆盖此边界。
+
 2026-09-30 联合 OTA 内部 `WRITE` 续进：在已持久预约的 `WRITING` 包槽上，Base 现以原 V3 收据和 A/C 签名固件身份再次核对序号、操作、来源包及已停止 guest，再调用 Container 写入目标槽、完整回读摘要、验签授权并读回 `PREPARED`。错误操作在擦写前拒绝；写入开始后的失败保留未决，不选择新 boot。C3／ESP32 host、真实签名 guest 生命周期、固定 SDK 签名构建及官方验签通过。公开带包 `ota.start`、HTTPS 下载、启动恢复和联合确认仍未接通。
 
 2026-09-30 联合 OTA 内部包槽 stage 续进：Base 的 `stage_firmware` 现消费原 V3 收据、目标已验签固件和退役后的 ECS2 序号。`REUSE` 在新固件身份下重验来源签名包并持久提交 `PREPARED`；`WRITE` 只预约非来源包槽并提交 `WRITING`，不擦写包字节，也不授权选择新 boot。来源 guest 必须停止并回收；错误序号、已损坏来源包及重复 stage 被拒绝。公开 `ota.start` 与启动恢复仍只允许无包，内部 stage 不代表联合 OTA 已开放。双目标 host 与真实签名 guest 生命周期、固定 SDK 签名构建及官方验签通过。

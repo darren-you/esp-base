@@ -8,6 +8,7 @@
 #include "eota.h"
 
 #define ESP_BASE_OTA_OPERATION_ID_BYTES 37
+#define ESP_BASE_OTA_PACKAGE_URL_BYTES 1024U
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
 #define ESP_BASE_OTA_TARGET "esp32c3/esp_base"
 #define ESP_BASE_OTA_SIGNATURE_SCHEME "esp_secure_boot_v2_rsa3072"
@@ -42,6 +43,7 @@ typedef struct {
     uint32_t package_size_bytes;
     uint32_t guest_abi_version;
     uint32_t data_schema_version;
+    char package_url[ESP_BASE_OTA_PACKAGE_URL_BYTES + 1U];
 } esp_base_ota_request_t;
 
 /* Fixed, trusted Base product/partition policy; never derive it from ota.start. */

@@ -215,9 +215,13 @@ OTA_TARGETS = {
     "esp32c3/esp_base": ("esp_secure_boot_v2_rsa3072", 0x130000),
     "esp32/esp_base": ("esp_secure_boot_v1_ecdsa_p256", 0x120000),
 }
+OTA_PACKAGE_SLOT_BYTES = {"esp32c3/esp_base": 0x77000,
+                          "esp32/esp_base": 0x82000}
 
 
-def ota_result(port, current, operation_id, expected_sha256=None, expected_size_bytes=None):
+def ota_result(port, current, operation_id, expected_sha256=None,
+               expected_size_bytes=None, expected_package_mode=None,
+               expected_package_sha256=None):
     canonical_id(operation_id)
     request_id = str(uuid.uuid4())
     send(port, {"protocol_version": 1, "request_id": request_id,
@@ -231,10 +235,13 @@ def ota_result(port, current, operation_id, expected_sha256=None, expected_size_
                 raise ValueError("OTA 查询缺少持久结果；状态为 unknown")
             return value
         if not isinstance(result, dict) or set(result) != {
-                "operation_id", "sha256", "image_size_bytes", "target", "target_slot"}:
+                "operation_id", "sha256", "image_size_bytes", "target", "target_slot",
+                "package_mode", "package_sha256"}:
             raise ValueError("OTA 持久结果字段无效；状态为 unknown")
         digest = result["sha256"]
         target = result["target"]
+        package_mode = result["package_mode"]
+        package_digest = result["package_sha256"]
         if (result["operation_id"] != operation_id or
                 not isinstance(digest, str) or len(digest) != 64 or
                 set(digest) - set("0123456789abcdef") or digest == "0" * 64 or
@@ -243,17 +250,49 @@ def ota_result(port, current, operation_id, expected_sha256=None, expected_size_
                 not 1 <= result["image_size_bytes"] <= OTA_TARGETS[target][1] or
                 not isinstance(result["target_slot"], str) or
                 result["target_slot"] not in {"ota_0", "ota_1"} or
+                not isinstance(package_mode, str) or
+                package_mode not in {"no_package", "reuse", "write"} or
+                (package_mode == "no_package" and package_digest is not None) or
+                (package_mode != "no_package" and
+                 (not isinstance(package_digest, str) or
+                  len(package_digest) != 64 or
+                  set(package_digest) - set("0123456789abcdef") or
+                  package_digest == "0" * 64)) or
                 (expected_sha256 is not None and digest != expected_sha256) or
                 (expected_size_bytes is not None and
-                 result["image_size_bytes"] != expected_size_bytes)):
+                 result["image_size_bytes"] != expected_size_bytes) or
+                (expected_package_mode is not None and
+                 package_mode != expected_package_mode) or
+                (expected_package_sha256 is not None and
+                 package_digest != expected_package_sha256)):
             raise ValueError("OTA 持久结果与请求不符；状态为 unknown")
         return value
 
 
-def ota_start(port, current, operation_id, image_file, image_url, target):
+def ota_start(port, current, operation_id, image_file, image_url, target,
+              package_mode="no_package", package_file=None, package_url=None,
+              guest_abi_version=None, data_schema_version=None,
+              trial_event_file=None):
     canonical_id(operation_id)
-    if target not in OTA_TARGETS or not isinstance(image_url, str) or not image_url.startswith("https://") or len(image_url) > 512:
+    if not isinstance(target, str) or target not in OTA_TARGETS or not isinstance(image_url, str) or not image_url.startswith("https://") or len(image_url) > 512:
         raise ValueError("OTA 目标或 HTTPS URL 无效；未发送命令")
+    if not isinstance(package_mode, str) or package_mode not in {"no_package", "reuse", "write"}:
+        raise ValueError("OTA 包模式无效；未发送命令")
+    package_options = (package_file, guest_abi_version,
+                       data_schema_version, trial_event_file)
+    if package_mode == "no_package":
+        if any(value is not None for value in package_options) or package_url is not None:
+            raise ValueError("无包 OTA 不接受产品包参数；未发送命令")
+    elif (any(value is None for value in package_options) or
+          type(guest_abi_version) is not int or
+          not 1 <= guest_abi_version <= 4294967295 or
+          type(data_schema_version) is not int or
+          not 1 <= data_schema_version <= 4294967295 or
+          (package_mode == "reuse" and package_url is not None) or
+          (package_mode == "write" and
+           (not isinstance(package_url, str) or
+            not package_url.startswith("https://") or len(package_url) > 1024))):
+        raise ValueError("带包 OTA 参数无效；未发送命令")
     scheme, slot_size_bytes = OTA_TARGETS[target]
     descriptor = os.open(image_file, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
     try:
@@ -276,11 +315,52 @@ def ota_start(port, current, operation_id, image_file, image_url, target):
             raise ValueError("签名固件读取期间发生变化；未发送命令")
     finally:
         os.close(descriptor)
+    package_parameters = {"package_mode": package_mode}
+    if package_mode != "no_package":
+        descriptor = os.open(package_file, os.O_RDONLY | os.O_CLOEXEC |
+                             getattr(os, "O_NOFOLLOW", 0))
+        try:
+            before = os.fstat(descriptor)
+            if (not stat.S_ISREG(before.st_mode) or
+                    not 1 <= before.st_size <= OTA_PACKAGE_SLOT_BYTES[target]):
+                raise ValueError("签名包超过目标包槽或不是普通文件；未发送命令")
+            package_digest = hashlib.sha256()
+            package_size = 0
+            while True:
+                block = os.read(descriptor, 65536)
+                if not block:
+                    break
+                package_size += len(block)
+                if package_size > before.st_size:
+                    raise ValueError("签名包读取期间发生变化；未发送命令")
+                package_digest.update(block)
+            after = os.fstat(descriptor)
+            if (package_size != before.st_size or package_size != after.st_size or
+                    before.st_mtime_ns != after.st_mtime_ns):
+                raise ValueError("签名包读取期间发生变化；未发送命令")
+        finally:
+            os.close(descriptor)
+        package_parameters.update({
+            "package_sha256": package_digest.hexdigest(),
+            "trial_event_sha256": trial_event_digest(trial_event_file),
+            "package_size_bytes": package_size,
+            "guest_abi_version": guest_abi_version,
+            "data_schema_version": data_schema_version,
+        })
+        if package_mode == "write":
+            package_parameters["package_url"] = package_url
     fresh = status(port)
     if fresh["device_id"] != current["device_id"] or fresh["boot_id"] != current["boot_id"]:
         raise ValueError("OTA 发送前设备已重启；未发送命令")
-    if fresh["result"].get("capabilities", {}).get("ota") != "ready":
+    if (package_mode == "no_package" and
+            fresh["result"].get("capabilities", {}).get("ota") != "ready"):
         raise ValueError("设备 OTA 当前不可用；未发送命令")
+    if package_mode == "reuse":
+        binding = product_status(port, current)
+        if (binding["state"] != "succeeded" or
+                binding["result"]["package_sha256"] !=
+                package_parameters["package_sha256"]):
+            raise ValueError("当前确认包与复用请求不符；未发送命令")
     request_id = str(uuid.uuid4())
     send(port, {"protocol_version": 1, "request_id": request_id,
                 "command": "ota.start", "device_id": current["device_id"],
@@ -288,7 +368,8 @@ def ota_start(port, current, operation_id, image_file, image_url, target):
                 "expires_at_uptime_ms": fresh["result"]["uptime_ms"] + 10000,
                 "parameters": {"operation_id": operation_id, "image_url": image_url,
                                "sha256": digest.hexdigest(), "image_size_bytes": size,
-                               "target": target, "signature": {"scheme": scheme}}})
+                               "target": target, "signature": {"scheme": scheme},
+                               **package_parameters}})
     try:
         for receipt in read_result(port, request_id, time.monotonic() + 5):
             if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
@@ -656,6 +737,8 @@ def main():
     parser.add_argument("--image-file", help="ota.start 时用于计算完整摘要和长度的本地签名固件")
     parser.add_argument("--image-url", help="设备下载同一签名固件的 HTTPS URL")
     parser.add_argument("--ota-target", choices=sorted(OTA_TARGETS), help="固件构建的精确 target")
+    parser.add_argument("--ota-package-mode", choices=("no_package", "reuse", "write"),
+                        help="ota.start 的联合产品包模式；默认 no_package")
     parser.add_argument("--operation-sequence", type=int, help="产品写入的持久操作序号")
     parser.add_argument("--expected-container-sequence", type=int,
                         help="产品写入的当前 ECS2 序号")
@@ -684,6 +767,9 @@ def main():
             parser.error("ota.start 必须提供本地签名固件、HTTPS URL 和精确 target")
     elif any(value is not None for value in image_options):
         parser.error("固件参数只能用于 ota.start")
+    if args.command != "ota.start" and args.ota_package_mode is not None:
+        parser.error("--ota-package-mode 只能用于 ota.start")
+    ota_package_mode = args.ota_package_mode or "no_package"
     if args.command in product_writes:
         if args.operation_sequence is None or args.expected_container_sequence is None:
             parser.error("产品写入必须提供操作序号和 Container 序号")
@@ -701,8 +787,17 @@ def main():
     if args.command in package_writes:
         if any(value is None for value in package_options):
             parser.error("产品安装／升级必须提供本地包、HTTPS URL、guest ABI、数据 schema 和代表事件")
+    elif args.command == "ota.start" and ota_package_mode != "no_package":
+        required = (args.package_file, args.guest_abi_version,
+                    args.data_schema_version, args.trial_event_file)
+        if any(value is None for value in required):
+            parser.error("带包 OTA 必须提供本地签名包、guest ABI、数据 schema 和代表事件")
+        if ota_package_mode == "write" and args.package_url is None:
+            parser.error("WRITE OTA 必须提供包的 HTTPS URL")
+        if ota_package_mode == "reuse" and args.package_url is not None:
+            parser.error("REUSE OTA 不下载新包，不接受包 URL")
     elif any(value is not None for value in package_options):
-        parser.error("产品包参数只能用于 product.install／product.upgrade")
+        parser.error("产品包参数只能用于产品安装／升级或带包 OTA")
     if args.operation_id:
         canonical_id(args.operation_id)
     config = load_private_config(args.config_file) if args.config_file else None
@@ -735,7 +830,10 @@ def main():
             current = apply_configuration(port, current, config)
         if args.command == "ota.start":
             current = ota_start(port, current, args.operation_id,
-                                args.image_file, args.image_url, args.ota_target)
+                                args.image_file, args.image_url, args.ota_target,
+                                ota_package_mode, args.package_file,
+                                args.package_url, args.guest_abi_version,
+                                args.data_schema_version, args.trial_event_file)
         if args.command == "ota.result":
             current = ota_result(port, current, args.operation_id)
         if args.command == "product.result":
@@ -768,6 +866,9 @@ def main():
                     print("  固件 SHA-256  " + current["result"]["sha256"])
                     print("  目标  " + current["result"]["target"] + " / " +
                           current["result"]["target_slot"])
+                    print("  包模式  " + current["result"]["package_mode"])
+                    if current["result"]["package_sha256"] is not None:
+                        print("  包 SHA-256  " + current["result"]["package_sha256"])
             if args.command == "product.status" and current["result"] is not None:
                 print("  高水位  " + str(current["result"]["operation_sequence_high_watermark"]))
                 print("  Container 序号  " + str(current["result"]["container_sequence"]))
