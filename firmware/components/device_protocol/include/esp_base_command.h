@@ -20,6 +20,7 @@ typedef struct {
     bool previous_package_present;
     uint8_t previous_package_sha256[32];
     uint8_t package_sha256[32];
+    uint8_t trial_event_sha256[32];
     uint32_t package_size_bytes;
     uint32_t guest_abi_version;
     uint32_t data_schema_version;

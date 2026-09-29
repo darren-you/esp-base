@@ -32,10 +32,13 @@ static esp_base_container_prepare_result_t package_prepare_result;
 static bool package_prepare_rejected_after_write;
 static bool package_prepare_busy_snapshot_uncertain;
 static uint32_t binding_sequence;
-static bool network_ready, trusted_time_ready;
+static bool network_ready, trusted_time_ready, mqtt_ready;
 static esp_base_container_boot_result_t package_trial_result;
 static bool package_stop_ok, package_abandon_prepared_ok;
 static bool package_event_accepting, package_abandon_trial_ok;
+static bool package_confirm_ok;
+static unsigned package_confirm_calls;
+static uint8_t fake_observed_package_byte, fake_observed_event_byte;
 static unsigned package_prepare_calls, package_trial_calls,
     package_stop_calls, package_abandon_prepared_calls,
     package_abandon_trial_calls;
@@ -98,10 +101,14 @@ static void reset_case(void)
     package_prepare_rejected_after_write = false;
     package_prepare_busy_snapshot_uncertain = false;
     binding_sequence = 6U;
-    network_ready = trusted_time_ready = true;
+    network_ready = trusted_time_ready = mqtt_ready = true;
     package_trial_result = ESP_BASE_CONTAINER_RUNNING;
     package_stop_ok = package_abandon_prepared_ok = true;
     package_event_accepting = true;
+    package_confirm_ok = true;
+    package_confirm_calls = 0U;
+    fake_observed_package_byte = 0x11U;
+    fake_observed_event_byte = 0x22U;
     package_abandon_trial_ok = false;
     package_prepare_calls = package_trial_calls = package_stop_calls =
         package_abandon_prepared_calls = package_abandon_trial_calls = 0U;
@@ -117,6 +124,10 @@ static void reset_case(void)
     memset(s_product_operation_id, 0, sizeof s_product_operation_id);
     memset(s_product_fingerprint, 0, sizeof s_product_fingerprint);
     s_product_operation_sequence = s_product_trial_sequence = 0U;
+    memset(s_product_trial_event_sha256, 0, sizeof s_product_trial_event_sha256);
+    memset(s_product_trial_package_sha256, 0, sizeof s_product_trial_package_sha256);
+    s_product_trial_event_sequence = s_product_trial_stable_since_ms =
+        s_product_trial_last_poll_ms = 0U;
     s_product_active = s_product_trial_running = false;
     atomic_store(&s_product_done, false);
     atomic_store(&s_product_result, PRODUCT_WORK_UNCERTAIN);
@@ -324,6 +335,8 @@ static void check_product_package_guard(void)
            atomic_load(&owner.active_token) == 0U);
     product_package(41U); /* Same request ID, different signed package URL. */
     expect_reply("failed", "request_conflict");
+    product_package(46U); /* Same request ID, different representative event. */
+    expect_reply("failed", "request_conflict");
     assert(restart_calls == 0U && task_calls == 0U &&
            atomic_load(&owner.active_token) == 0U);
     product_package(50U);
@@ -510,6 +523,57 @@ void esp_base_product_package_source_close(
 {
     assert(source != NULL);
     ++package_source_closes;
+}
+
+static void check_product_trial_health(void)
+{
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    product_package(40U);
+    expect_reply("running", NULL);
+    poll_product();
+    assert(s_product_trial_running && !atomic_load(&owner.active_token));
+    fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_OBSERVED;
+    fake_observed_package_byte = 0x7bU;
+    fake_observed_event_byte = 0x33U;
+    for (uint64_t now = 1000U; now <= 16000U; now += 1000U)
+        poll_product_trial_health(now);
+    assert(package_confirm_calls == 0U);
+    fake_observed_event_byte = 0x22U;
+    for (uint64_t now = 17000U; now <= 32000U; now += 1000U)
+        poll_product_trial_health(now);
+    assert(package_confirm_calls == 0U);
+    mqtt_ready = false;
+    poll_product_trial_health(33000U);
+    mqtt_ready = true;
+    for (uint64_t now = 34000U; now < 64000U; now += 1000U)
+        poll_product_trial_health(now);
+    assert(package_confirm_calls == 0U);
+    poll_product_trial_health(64000U);
+    expect_reply("succeeded", NULL);
+    assert(package_confirm_calls == 1U && !s_product_active &&
+           !s_product_trial_running && !atomic_load(&owner.active_token));
+    ebase_product_ledger_t ledger = {0};
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK &&
+           ledger.records[0].state == EBASE_PRODUCT_SUCCEEDED &&
+           ledger.records[0].container_sequence == 11U);
+
+    reset_case();
+    product_configured = true;
+    initialize_empty_product_ledger();
+    product_package(40U);
+    poll_product();
+    fake_event_observation_state = ESP_BASE_CONTAINER_EVENT_OBSERVED;
+    fake_observed_package_byte = 0x7bU;
+    package_confirm_ok = false;
+    for (uint64_t now = 1000U; now <= 31000U; now += 1000U)
+        poll_product_trial_health(now);
+    expect_reply("unknown", "storage_uncertain");
+    assert(package_confirm_calls == 1U && s_config_uncertain &&
+           s_product_active && !s_product_trial_running &&
+           atomic_load(&owner.active_token) != 0U);
 }
 
 static void check_product_package_preboot_recovery(void)
@@ -953,6 +1017,7 @@ int main(void)
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
     check_product_uninstall_path();
     check_product_package_guard();
+    check_product_trial_health();
     check_product_package_preboot_recovery();
     const uint8_t business_bytes[] = {1U, 2U, 3U};
     ebase_mqtt_event_view_t business_event = {
@@ -1001,7 +1066,7 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
                 product_uninstall_command ? EBASE_PRODUCT_UNINSTALL_COMMAND : EBASE_OTA_START;
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u",
-             product_package_command && number == 41U ? 40U : number);
+             product_package_command && (number == 41U || number == 46U) ? 40U : number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
     strcpy(out->request.boot_id, "33333333-3333-4333-8333-333333333333");
     out->request.expires_at_ms = 10000;
@@ -1036,6 +1101,8 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
         if (package->previous_package_present)
             memset(package->previous_package_sha256, 0x7a, 32);
         memset(package->package_sha256, 0x7b, 32);
+        memset(package->trial_event_sha256, 0x22, 32);
+        if (number == 46U) memset(package->trial_event_sha256, 0x23, 32);
         strcpy(package->package_url, number == 42U ?
             "https://user@packages.example.test/a.pkg" :
              number == 41U || number == 43U ?
@@ -1121,6 +1188,7 @@ bool esp_base_wifi_ready(void) { return network_ready; }
 bool esp_base_time_ready(void) { return trusted_time_ready; }
 const char *esp_base_wifi_state(void) { return "ready"; }
 const char *esp_base_mqtt_owner_state(void) { return "ready"; }
+bool esp_base_mqtt_owner_ready(void) { return mqtt_ready; }
 esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = fake_frp_state}; }
 uint32_t esp_get_free_heap_size(void) { return fake_free_heap; }
 size_t heap_caps_get_minimum_free_size(unsigned caps) { (void)caps; return 1000; }
@@ -1140,8 +1208,8 @@ esp_base_container_product_event_observation(
 {
     *out = (esp_base_container_event_observation_t){0};
     if (fake_event_observation_state == ESP_BASE_CONTAINER_EVENT_OBSERVED) {
-        memset(out->package_sha256, 0x11, 32);
-        memset(out->event_sha256, 0x22, 32);
+        memset(out->package_sha256, fake_observed_package_byte, 32);
+        memset(out->event_sha256, fake_observed_event_byte, 32);
         out->event_sequence = 2U;
         out->guest_result = fake_event_guest_result;
         out->runtime_ok = fake_event_runtime_ok;
@@ -1390,6 +1458,28 @@ bool esp_base_container_product_abandon_package_trial(
 bool esp_base_container_product_event_accepting(void)
 {
     return package_event_accepting;
+}
+bool esp_base_container_product_trial_quiescent(void)
+{
+    return package_event_accepting;
+}
+
+bool esp_base_container_product_confirm_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
+    const char operation_id[37], uint64_t verified_event_sequence,
+    const uint8_t verified_event_sha256[32], uint32_t *confirmed_sequence)
+{
+    assert(esp_base_storage_claim_active(claim) && trial_sequence == 9U &&
+           !strcmp(operation_id, s_product_operation_id) &&
+           verified_event_sequence == 2U && verified_event_sha256[0] == 0x22U &&
+           confirmed_sequence != NULL);
+    ++package_confirm_calls;
+    if (package_confirm_ok) {
+        *confirmed_sequence = 11U;
+        binding_sequence = 11U;
+        binding_package_present = true;
+    }
+    return package_confirm_ok;
 }
 
 esp_base_container_event_result_t esp_base_container_product_offer_event(

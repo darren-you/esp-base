@@ -77,6 +77,11 @@ static atomic_bool s_product_done;
 static atomic_int s_product_result;
 static atomic_uint_fast32_t s_product_resolved_sequence;
 static uint32_t s_product_trial_sequence;
+static uint8_t s_product_trial_event_sha256[32];
+static uint8_t s_product_trial_package_sha256[32];
+static uint64_t s_product_trial_event_sequence;
+static uint64_t s_product_trial_stable_since_ms;
+static uint64_t s_product_trial_last_poll_ms;
 static size_t s_ota_slot;
 static esp_base_ota_request_t s_ota_request;
 static atomic_bool s_ota_done;
@@ -186,6 +191,8 @@ static bool fingerprint_product_package(const ebase_command_t *command,
                         sizeof request->previous_package_sha256) == PSA_SUCCESS &&
         psa_hash_update(&hash, request->package_sha256,
                         sizeof request->package_sha256) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->trial_event_sha256,
+                        sizeof request->trial_event_sha256) == PSA_SUCCESS &&
         psa_hash_update(&hash, (const uint8_t *)request->package_url,
                         strlen(request->package_url) + 1U) == PSA_SUCCESS &&
         psa_hash_finish(&hash, fingerprint, 32U, &written) == PSA_SUCCESS &&
@@ -1002,6 +1009,12 @@ static void poll_product(void)
                                                     memory_order_relaxed);
     const uint32_t resolved_sequence = (uint32_t)atomic_load_explicit(
         &s_product_resolved_sequence, memory_order_relaxed);
+    if (outcome == PRODUCT_WORK_TRIAL_RUNNING && s_product_request != NULL) {
+        memcpy(s_product_trial_event_sha256, s_product_request->trial_event_sha256,
+               sizeof s_product_trial_event_sha256);
+        memcpy(s_product_trial_package_sha256, s_product_request->package_sha256,
+               sizeof s_product_trial_package_sha256);
+    }
     free(s_product_request);
     s_product_request = NULL;
     if (outcome == PRODUCT_WORK_FAILED && resolved_sequence != 0U) {
@@ -1029,11 +1042,84 @@ static void poll_product(void)
                esp_base_storage_release(&s_product_storage_claim)) {
         s_product_trial_running = true;
         s_product_trial_sequence = resolved_sequence;
+        s_product_trial_event_sequence = 0U;
+        s_product_trial_stable_since_ms = 0U;
+        s_product_trial_last_poll_ms = 0U;
         save_outcome(s_product_slot, "running", NULL, false);
         return;
     }
     /* The ledger or candidate state is not provable. Retain the claim until
      * next-boot reconciliation; no other write may reinterpret this result. */
+    s_config_uncertain = true;
+    save_outcome(s_product_slot, "unknown", "storage_uncertain", false);
+}
+
+#define PRODUCT_TRIAL_STABLE_MS 30000U
+#define PRODUCT_TRIAL_PROGRESS_GAP_MS 1000U
+
+static void poll_product_trial_health(uint64_t now)
+{
+    if (!s_product_active || !s_product_trial_running || s_config_uncertain) return;
+    const bool online = esp_base_wifi_ready() && esp_base_time_ready() &&
+        esp_base_mqtt_owner_ready();
+    esp_base_container_event_observation_t event = {0};
+    const bool observed = esp_base_container_product_event_observation(&event) ==
+        ESP_BASE_CONTAINER_EVENT_OBSERVED;
+    const bool representative = observed && event.event_sequence != 0U &&
+        event.runtime_ok && event.guest_result >= 0 &&
+        memcmp(event.package_sha256, s_product_trial_package_sha256, 32) == 0 &&
+        memcmp(event.event_sha256, s_product_trial_event_sha256, 32) == 0;
+    if (!online || !esp_base_container_product_event_accepting() ||
+        !representative ||
+        (s_product_trial_last_poll_ms != 0U &&
+         (now < s_product_trial_last_poll_ms ||
+          now - s_product_trial_last_poll_ms > PRODUCT_TRIAL_PROGRESS_GAP_MS))) {
+        s_product_trial_event_sequence = 0U;
+        s_product_trial_stable_since_ms = 0U;
+        s_product_trial_last_poll_ms = now;
+        return;
+    }
+    if (s_product_trial_event_sequence != event.event_sequence ||
+        s_product_trial_stable_since_ms == 0U) {
+        s_product_trial_event_sequence = event.event_sequence;
+        s_product_trial_stable_since_ms = now;
+    }
+    s_product_trial_last_poll_ms = now;
+    if (now < s_product_trial_stable_since_ms ||
+        now - s_product_trial_stable_since_ms < PRODUCT_TRIAL_STABLE_MS) return;
+    if (!esp_base_container_product_trial_quiescent()) return;
+
+    esp_base_storage_claim_t claim = {0};
+    if (!esp_base_storage_claim(s_context.storage_owner, &claim)) return;
+    uint32_t confirmed_sequence = 0U;
+    bool confirmed = esp_base_container_product_confirm_package_trial(
+        &claim, s_product_trial_sequence, s_product_operation_id,
+        s_product_trial_event_sequence, s_product_trial_event_sha256,
+        &confirmed_sequence);
+    if (confirmed && confirmed_sequence != s_product_trial_sequence + 2U) confirmed = false;
+    if (confirmed) {
+        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+        if (ledger != NULL) {
+            const ebase_product_ledger_io_t io =
+                ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+            confirmed = ebase_product_ledger_open(ledger, &io) == EBASE_LEDGER_OK &&
+                ebase_product_ledger_finish(ledger, &io,
+                    s_product_operation_sequence, s_product_operation_id,
+                    s_product_fingerprint, EBASE_PRODUCT_SUCCEEDED, 0U,
+                    confirmed_sequence) == EBASE_LEDGER_OK;
+            free(ledger);
+        } else confirmed = false;
+    }
+    if (confirmed && esp_base_storage_release(&claim)) {
+        s_product_trial_running = false;
+        s_product_active = false;
+        save_outcome(s_product_slot, "succeeded", NULL, false);
+        return;
+    }
+    /* A false commit may already have persisted HEALTH_VERIFIED. Keep the
+     * storage claim until next-boot reconciliation proves its final state. */
+    s_product_storage_claim = claim;
+    s_product_trial_running = false;
     s_config_uncertain = true;
     save_outcome(s_product_slot, "unknown", "storage_uncertain", false);
 }
@@ -1753,6 +1839,7 @@ static void control_task(void *argument)
             if (mqtt_can_poll)
                 esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
                                          handle_mqtt_command, handle_mqtt_event, NULL);
+            poll_product_trial_health(now);
             if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
                 /* Revoke the old endpoint before waiting for the old FRP worker
                  * to finish; no stale management key remains reachable. */

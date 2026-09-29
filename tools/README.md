@@ -64,9 +64,9 @@ python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE status
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE product.status
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <原操作UUID> product.result
 # 首次安装要求 product.status 的当前包摘要为 null；本地已签名 .pkg 与 HTTPS URL 必须指向同一组字节：
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> product.install
+python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.install
 # 同 boot 升级另需提供当前已确认包的 SHA-256：
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> product.upgrade
+python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.upgrade
 # 从刚查询的 product.status 精确抄录下一操作序号、Container 序号和当前包摘要；先固定原操作 UUID：
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> product.uninstall
 python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> restart
@@ -76,7 +76,7 @@ python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
 
 默认输出块状摘要，`--json` 输出设备 JSON。重启先读取状态、精确绑定 UUID/boot/deadline，收到 `running` 后再次查询同设备的新启动，才报告成功；超时为 unknown，写命令不自动重试。直接打开 POSIX 串口，使用 `flock` 和 `TIOCEXCL` 独占当前端点，不切换 DTR/RTS，并关闭 HUPCL；串口写入限一秒，以设备回执确认执行。C3 原生 USB 与 ESP32 CH340 UART 均须验证打开端点不改变 boot_id；后者还须实测无 USB 背压时的整帧与超载行为。完整 probe/flash/恢复编排由设备工具负责。
 
-`product.result` 仅按原 operation ID 查询最近固定条数的设备持久账本，不触发产品写入或重放。旧记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。`product.install`／`product.upgrade` 在发送前从本地普通文件计算整包 SHA-256 和长度，并复核 `product.status` 的持久序号与旧绑定；设备从指定 HTTPS URL 下载并自行验签，本工具不上传包或生成签名。写回执之后只按原 ID 读取持久账本，超时也绝不重发写命令。当前候选进入试运行后返回 `unknown/product_operation_unresolved`，其持久记录仍可按原 ID 查询；尚无产品专属业务健康判据和最终成功收尾，不能把未决记录当作安装完成。
+`product.result` 仅按原 operation ID 查询最近固定条数的设备持久账本，不触发产品写入或重放。旧记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。`product.install`／`product.upgrade` 在发送前从本地普通文件计算整包 SHA-256 和长度，并从 `--trial-event-file` 的原始 guest 业务字节计算代表事件 SHA-256；后续帧生成器的 `--event-file` 必须使用同一原始字节。工具复核 `product.status` 的持久序号与旧绑定；设备从指定 HTTPS URL 下载并自行验签，本工具不上传包或生成签名。写回执之后只按原 ID 读取持久账本，超时也绝不重发写命令。候选试运行期间返回 `unknown/product_operation_unresolved`；代表事件完成后须连续在线 30 秒，才可能得到持久成功结果。真实 Broker 和两块实体板仍待端到端验收。
 
 `product.status` 在同一个 Base 存储占用期读取持久高水位、下一操作序号、未决操作 ID 和当前签名固件对应的 ECS2 `container_sequence`／`package_sha256`。无包时摘要为 `null`；它是持久绑定元数据，不证明包字节或 guest 健康。缺失账本返回 `unknown/product_ledger_uninitialized`，不会自动初始化；绑定或签名固件观察不确定时返回 `unknown/storage_uncertain` 并阻断本次启动的后续写入。查询到的序号只是快照，正式写入仍须由设备持久账本与 Container 原子裁决。
 

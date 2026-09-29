@@ -309,9 +309,27 @@ def product_uninstall(port, current, operation_id, operation_sequence,
     return result
 
 
+def trial_event_digest(path):
+    maximum = 4096 - 65 - len(b"esp-base-product-event-v1\n") - 36 - 36 - 32 - 8
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 1 <= before.st_size <= maximum:
+            raise ValueError("代表事件不是设备可接收大小的普通文件；未发送命令")
+        event = os.read(descriptor, maximum + 1)
+        after = os.fstat(descriptor)
+        if (len(event) != before.st_size or before.st_size != after.st_size or
+                before.st_mtime_ns != after.st_mtime_ns):
+            raise ValueError("代表事件读取期间发生变化；未发送命令")
+        return hashlib.sha256(event).hexdigest()
+    finally:
+        os.close(descriptor)
+
+
 def product_package(port, current, command, operation_id, operation_sequence,
                     expected_container_sequence, expected_package_sha256,
-                    package_file, package_url, guest_abi_version, data_schema_version):
+                    package_file, package_url, guest_abi_version, data_schema_version,
+                    trial_event_file):
     canonical_id(operation_id)
     if (command not in {"product.install", "product.upgrade"} or
             type(operation_sequence) is not int or not 1 <= operation_sequence <= 4294967295 or
@@ -352,6 +370,7 @@ def product_package(port, current, command, operation_id, operation_sequence,
     finally:
         os.close(descriptor)
     package_sha256 = digest.hexdigest()
+    trial_event_sha256 = trial_event_digest(trial_event_file)
     snapshot = product_status(port, current)
     if snapshot["state"] != "succeeded":
         raise ValueError("产品绑定不可确认；未发送命令：" + str(snapshot["error_code"]))
@@ -375,6 +394,7 @@ def product_package(port, current, command, operation_id, operation_sequence,
                                "previous_package_sha256": expected_package_sha256,
                                "package_url": package_url,
                                "package_sha256": package_sha256,
+                               "trial_event_sha256": trial_event_sha256,
                                "package_size_bytes": size,
                                "guest_abi_version": guest_abi_version,
                                "data_schema_version": data_schema_version}})
@@ -541,6 +561,7 @@ def main():
                         help="产品写入的当前 ECS2 序号")
     parser.add_argument("--expected-package-sha256", help="卸载或升级的当前包 SHA-256")
     parser.add_argument("--package-file", help="安装／升级时用于计算整包摘要和长度的本地签名包")
+    parser.add_argument("--trial-event-file", help="安装／升级时绑定随后应发布的原始代表业务事件")
     parser.add_argument("--package-url", help="设备下载同一签名包的 HTTPS URL")
     parser.add_argument("--guest-abi-version", type=int, help="签名包声明的 guest ABI 版本")
     parser.add_argument("--data-schema-version", type=int, help="签名包声明的数据 schema 版本")
@@ -569,10 +590,11 @@ def main():
                                              args.expected_package_sha256)):
         parser.error("产品写入前置参数只能用于产品写命令")
     package_options = (args.package_file, args.package_url,
-                       args.guest_abi_version, args.data_schema_version)
+                       args.guest_abi_version, args.data_schema_version,
+                       args.trial_event_file)
     if args.command in package_writes:
         if any(value is None for value in package_options):
-            parser.error("产品安装／升级必须提供本地包、HTTPS URL、guest ABI 和数据 schema")
+            parser.error("产品安装／升级必须提供本地包、HTTPS URL、guest ABI、数据 schema 和代表事件")
     elif any(value is not None for value in package_options):
         parser.error("产品包参数只能用于 product.install／product.upgrade")
     if args.operation_id:
@@ -618,7 +640,7 @@ def main():
                                       args.operation_sequence, args.expected_container_sequence,
                                       args.expected_package_sha256, args.package_file,
                                       args.package_url, args.guest_abi_version,
-                                      args.data_schema_version)
+                                      args.data_schema_version, args.trial_event_file)
         if args.json:
             print(json.dumps(current, ensure_ascii=False))
         else:

@@ -165,7 +165,9 @@ static void product_package_tests(void)
         "\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
         "\"operation_sequence\":%s,\"expected_container_sequence\":%s,"
         "\"previous_package_sha256\":%s,\"package_url\":\"%s\","
-        "\"package_sha256\":\"%s\",\"package_size_bytes\":%s,"
+        "\"package_sha256\":\"%s\","
+        "\"trial_event_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\","
+        "\"package_size_bytes\":%s,"
         "\"guest_abi_version\":%s,\"data_schema_version\":%s}}";
     const char *digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     char json[2300];
@@ -180,7 +182,12 @@ static void product_package_tests(void)
         out.product_package.package_size_bytes == 10240U &&
         out.product_package.guest_abi_version == 2U &&
         out.product_package.data_schema_version == 1U &&
-        out.product_package.package_sha256[0] == 0xaaU);
+        out.product_package.package_sha256[0] == 0xaaU &&
+        out.product_package.trial_event_sha256[0] == 0xccU);
+    char *event_key = strstr(json, "trial_event_sha256");
+    assert(event_key != NULL);
+    event_key[0] = 'X';
+    reject(json);
     assert(snprintf(json, sizeof json, format, "upgrade", "2", "11", "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
         "https://packages.example.test/app-v2.pkg", digest, "10240", "2", "1") > 0);
     assert(!ebase_parse_command(json, strlen(json), &out) &&

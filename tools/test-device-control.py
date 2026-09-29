@@ -245,6 +245,8 @@ class ProductPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "candidate.pkg")
             path.write_bytes(package)
+            event_path = Path(directory, "trial_event.bin")
+            event_path.write_bytes(b"authorized-business-event")
             snapshot = {"state": "succeeded", "result": {
                 "next_operation_sequence": 7, "container_sequence": 12,
                 "package_sha256": None, "pending_operation_id": None}}
@@ -270,7 +272,8 @@ class ProductPackageTests(unittest.TestCase):
                   mock.patch.object(control, "product_result", return_value=unresolved) as query):
                 result = control.product_package(object(), current, "product.install",
                     operation, 7, 12, None, str(path),
-                    "https://packages.example.test/candidate.pkg", 2, 1)
+                    "https://packages.example.test/candidate.pkg", 2, 1,
+                    str(event_path))
             self.assertEqual(result, unresolved)
             query.assert_called_once()
             self.assertEqual(len(seen), 1)
@@ -281,7 +284,9 @@ class ProductPackageTests(unittest.TestCase):
                 "expected_container_sequence": 12,
                 "previous_package_sha256": None,
                 "package_url": "https://packages.example.test/candidate.pkg",
-                "package_sha256": digest, "package_size_bytes": len(package),
+                "package_sha256": digest,
+                "trial_event_sha256": hashlib.sha256(event_path.read_bytes()).hexdigest(),
+                "package_size_bytes": len(package),
                 "guest_abi_version": 2, "data_schema_version": 1})
 
     def test_changed_binding_blocks_write(self):
@@ -291,6 +296,8 @@ class ProductPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "candidate.pkg")
             path.write_bytes(b"signed-package-fixture")
+            event_path = Path(directory, "trial_event.bin")
+            event_path.write_bytes(b"authorized-business-event")
             snapshot = {"state": "succeeded", "result": {
                 "next_operation_sequence": 8, "container_sequence": 12,
                 "package_sha256": None, "pending_operation_id": None}}
@@ -299,7 +306,8 @@ class ProductPackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "预期不符"):
                     control.product_package(object(), current, "product.install",
                         "44444444-4444-4444-8444-444444444444", 7, 12, None,
-                        str(path), "https://packages.example.test/candidate.pkg", 2, 1)
+                        str(path), "https://packages.example.test/candidate.pkg", 2, 1,
+                        str(event_path))
                 send.assert_not_called()
 
 

@@ -157,10 +157,10 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const keys[] = {"operation_id", "operation_sequence",
             "expected_container_sequence", "previous_package_sha256",
-            "package_url", "package_sha256", "package_size_bytes",
+            "package_url", "package_sha256", "trial_event_sha256", "package_size_bytes",
             "guest_abi_version", "data_schema_version"};
         ebase_product_package_request_t *request = &out->product_package;
-        if (!exact_keys(parameters, keys, 9) ||
+        if (!exact_keys(parameters, keys, 10) ||
             !copy_id(parameters, "operation_id", request->operation_id) ||
             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "operation_sequence"),
                           UINT32_MAX, &request->operation_sequence) ||
@@ -173,7 +173,9 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "data_schema_version"),
                           UINT32_MAX, &request->data_schema_version) ||
             !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
-                      request->package_sha256)) goto done;
+                      request->package_sha256) ||
+            !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "trial_event_sha256"),
+                      request->trial_event_sha256)) goto done;
         const cJSON *previous = cJSON_GetObjectItemCaseSensitive(parameters,
                                                                    "previous_package_sha256");
         if (product_install ? !cJSON_IsNull(previous) :

@@ -1800,6 +1800,19 @@ static econtainer_slots_result_t confirm_package_trial(
     return ECONTAINER_SLOTS_OK;
 }
 
+bool esp_base_container_product_trial_quiescent(void)
+{
+    if (s_product.event_lock == NULL ||
+        xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) return false;
+    const bool quiescent = s_product.trial_mode &&
+        s_product.package_trial_mode &&
+        s_product.event_count == 0U && !s_product.guest_call_processing &&
+        !s_product.trial_commit_active &&
+        esp_base_container_product_event_accepting();
+    xSemaphoreGive(s_product.event_lock);
+    return quiescent;
+}
+
 bool esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],

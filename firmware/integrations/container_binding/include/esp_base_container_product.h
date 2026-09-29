@@ -195,6 +195,10 @@ esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
     esp_base_container_event_observation_t *out);
 
+/* A read-only hint for the Base policy. False means a queued event or guest
+ * call is still active; the confirm operation rechecks under the same lock. */
+bool esp_base_container_product_trial_quiescent(void);
+
 /* Internal product-only commit after the Base product policy has independently
  * accepted the exact authorized representative event and its verification
  * window. This checks that the current candidate actually completed that

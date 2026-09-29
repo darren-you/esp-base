@@ -116,6 +116,11 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
     const uint8_t package_sha256[32], uint64_t event_sequence,
     const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes);
 bool esp_base_container_product_event_accepting(void);
+bool esp_base_container_product_trial_quiescent(void);
+bool esp_base_container_product_confirm_package_trial(
+    const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
+    const char operation_id[37], uint64_t verified_event_sequence,
+    const uint8_t verified_event_sha256[32], uint32_t *confirmed_sequence);
 typedef struct {
     uint8_t package_sha256[32];
     uint8_t event_sha256[32];

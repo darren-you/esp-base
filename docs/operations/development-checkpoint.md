@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-29 产品代表事件确认窗口
+
+维护者确定安装／升级请求必须绑定随后业务事件原始 guest 字节的 SHA-256；Base 精确解码并纳入原操作指纹，公开串口客户端从 `--trial-event-file` 计算同一值。候选 guest 完成同包、同摘要的授权事件且返回非负业务结果后，Base 连续 30 秒核对 Wi-Fi、可信时间、MQTT ready、最近完成事件与最多 1 秒的控制循环间隙。离线、错事件或 guest/runtime 失败不会确认；窗口通过后读取 Container 队列空闲快照，持原产品存储 claim 完成 `HEALTH_VERIFIED`、`CONFIRMED` 的独立读回，再将原 operation ID 账本写为成功。确认或账本结果不确定时保留 claim，由下次启动对账；不会自动重放请求。
+
+C3／ESP32 主机 ASan/UBSan 测试覆盖错事件、离线重置 30 秒窗口、最终成功、确认不确定保留 claim 与请求指纹冲突；10 项串口伪设备测试通过。锁定 Container/WAMR 的双目标真实签名 guest 生命周期（含各 100 次重装）通过。固定 SDK 双目标签名 app 完整构建及官方验签通过：C3 RSA v2 `0x111000/0x118000`，ESP32 ECDSA v1 `0xffff4/0x120000`。这轮没有生产 Broker 消息或两块实体板产品事件，也没有五能力容量与掉电恢复验收；P6-04/P7 仍按完整门槛推进。
+
 ## 2026-09-29 Base 启动与配置 NVS 仲裁
 
 正式 Base 启动的默认 NVS 初始化、设备身份读取和 v3 配置读取现各自持有与 FRP scratch／OTA／Container 相同的短时 Flash I/O owner；配置连接证明后的提交和读回也持有该 owner。控制任务发现 owner 忙时保留候选及原截止时间，在下一轮重试，不分配配置工作区或写 NVS；提交后的 owner 释放失败报告 `storage_uncertain`。C3／ESP32 主机 ASan/UBSan 回归覆盖 NVS／身份访问持有、配置忙时不读取、候选延期提交和正常释放。固定 SDK 双目标签名应用构建与官方验签通过：测试键 RSA v2 C3 镜像 `0x111000`，对 `0x118000` 槽余 `0x7000`；ECDSA v1 ESP32 镜像 `0xffff4`，对 `0x120000` 槽余 `0x2000c`。本检查点不代表真实 Flash 时延、磨损或五能力实板并发通过。
