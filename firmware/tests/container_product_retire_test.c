@@ -303,6 +303,8 @@ int main(void)
 
     fixture(false, true);
     assert(!policy_present());
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &snapshot));
     fixture(true, true);
     test_owner_stack_bytes = 8192;
     assert(!configure_policy());
@@ -312,24 +314,75 @@ int main(void)
     assert(configure_policy());
 
     fixture(true, true);
-    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_enabled && snapshot.container_sequence == 7U &&
            memcmp(snapshot.source_sha256, source, 32) == 0 &&
            memcmp(snapshot.inactive_sha256, inactive, 32) == 0 &&
            observe_calls == 2U);
     persisted.bindings[0].package_present = true;
-    assert(!esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == 0U);
+
+    fixture(true, true);
+    atomic_store(&s_product.result, ESP_BASE_CONTAINER_RUNNING);
+    atomic_store(&s_product.instance_active, true);
+    atomic_store(&s_product.event_accepting, true);
+    persisted.bindings[0].package_present = true;
+    persisted.bindings[0].package_size_bytes = 1024U;
+    persisted.bindings[0].guest_abi_version = 2U;
+    persisted.bindings[0].data_schema_version = 1U;
+    fill_sha(persisted.bindings[0].package_sha256, 0xd4);
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &snapshot));
+    assert(snapshot.container_sequence == 7U && snapshot.source_package_present &&
+           snapshot.source_package_size_bytes == 1024U &&
+           snapshot.source_guest_abi_version == 2U &&
+           snapshot.source_data_schema_version == 1U &&
+           snapshot.source_package_sha256[0] == 0xd4);
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &snapshot));
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
+    atomic_store(&s_product.event_accepting, false);
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &snapshot));
+    atomic_store(&s_product.event_accepting, true);
+    persisted.bindings[0].package_size_bytes = 0U;
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &snapshot));
+    persisted.bindings[0].package_size_bytes = 1024U;
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, (esp_base_ota_package_mode_t)-1, &snapshot));
+    persisted.sequence = UINT32_MAX - 6U;
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &snapshot));
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &snapshot));
+    persisted.sequence = UINT32_MAX - 7U;
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &snapshot));
+
+    fixture(true, false);
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &snapshot));
+    assert(!snapshot.source_package_present &&
+           snapshot.source_package_size_bytes == 0U);
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &snapshot));
 
     /* A/B needs retirement plus five candidate/trial/rollback commits. The
      * first rejected sequence must leave the original bindings untouched. */
     fixture(true, true);
     persisted.sequence = UINT32_MAX - 6U;
-    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == UINT32_MAX - 6U &&
            retire_calls == 0U && persisted.bindings[1].present);
     persisted.sequence = UINT32_MAX - 5U;
-    assert(!esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == 0U &&
            persisted.sequence == UINT32_MAX - 5U &&
            retire_calls == 0U && persisted.bindings[1].present);
@@ -338,17 +391,20 @@ int main(void)
      * starting sequence. */
     fixture(true, false);
     persisted.sequence = UINT32_MAX - 5U;
-    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == UINT32_MAX - 5U &&
            retire_calls == 0U && !persisted.bindings[1].present);
     persisted.sequence = UINT32_MAX - 4U;
-    assert(!esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == 0U &&
            persisted.sequence == UINT32_MAX - 4U &&
            retire_calls == 0U && !persisted.bindings[1].present);
 
     fixture(false, true);
-    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(!snapshot.container_enabled && snapshot.container_sequence == 0U &&
            memcmp(snapshot.inactive_sha256, inactive, 32) == 0);
     physical_set(false);
@@ -374,7 +430,8 @@ int main(void)
 
     fixture(true, false);
     uint8_t no_inactive[32] = {0};
-    assert(esp_base_container_product_snapshot_for_ota(&claim, &snapshot));
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == 7U &&
            memcmp(snapshot.inactive_sha256, no_inactive, 32) == 0);
     assert(esp_base_container_product_retire_inactive(&claim, true, 7U,

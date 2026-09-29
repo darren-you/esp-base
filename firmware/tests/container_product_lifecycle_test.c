@@ -607,6 +607,23 @@ static void run_event_failure_trial(const char *directory)
     esp_base_container_binding_snapshot_t old = {0};
     assert(esp_base_container_product_binding_snapshot(&claim, &old) ==
            ESP_BASE_CONTAINER_BINDING_OK && old.package_present);
+    const unsigned snapshot_blob_writes = store.blob_writes;
+    const unsigned snapshot_flash_writes = store.flash_writes;
+    esp_base_ota_receipt_snapshot_t ota_snapshot = {0};
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_REUSE, &ota_snapshot));
+    assert(ota_snapshot.container_sequence == old.container_sequence &&
+           ota_snapshot.source_package_present &&
+           ota_snapshot.source_package_size_bytes == (uint32_t)normal_package.size &&
+           ota_snapshot.source_guest_abi_version == 2U &&
+           ota_snapshot.source_data_schema_version == 1U &&
+           memcmp(ota_snapshot.source_package_sha256, old.package_sha256, 32) == 0);
+    assert(esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_PACKAGE_WRITE, &ota_snapshot));
+    assert(!esp_base_container_product_snapshot_for_ota(
+        &claim, ESP_BASE_OTA_NO_PACKAGE, &ota_snapshot));
+    assert(store.blob_writes == snapshot_blob_writes &&
+           store.flash_writes == snapshot_flash_writes);
     esp_base_container_package_request_t request = {
         .operation_id = "99999999-9999-4999-8999-999999999999",
         .expected_sequence = old.container_sequence,

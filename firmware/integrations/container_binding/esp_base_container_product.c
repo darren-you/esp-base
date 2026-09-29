@@ -158,6 +158,26 @@ bool esp_base_container_product_ota_ready(void)
              ESP_BASE_CONTAINER_EMPTY);
 }
 
+static bool snapshot_mode_ready(esp_base_ota_package_mode_t package_mode)
+{
+    if (package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+        package_mode != ESP_BASE_OTA_PACKAGE_REUSE &&
+        package_mode != ESP_BASE_OTA_PACKAGE_WRITE) return false;
+    if (package_mode == ESP_BASE_OTA_NO_PACKAGE)
+        return esp_base_container_product_ota_ready();
+    if (!policy_present() || !s_product.provider_bound ||
+        !atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire) ||
+        s_product.trial_mode || s_product.package_trial_mode) return false;
+    const int result = atomic_load_explicit(&s_product.result, memory_order_acquire);
+    const bool active = atomic_load_explicit(&s_product.instance_active,
+                                              memory_order_acquire);
+    if (result == ESP_BASE_CONTAINER_EMPTY)
+        return package_mode == ESP_BASE_OTA_PACKAGE_WRITE && !active;
+    return result == ESP_BASE_CONTAINER_RUNNING && active &&
+        atomic_load_explicit(&s_product.event_accepting, memory_order_acquire) &&
+        !atomic_load_explicit(&s_product.stop_requested, memory_order_acquire);
+}
+
 static int hex_digit(char digit)
 {
     if (digit >= '0' && digit <= '9') return digit - '0';
@@ -293,8 +313,8 @@ static econtainer_slots_result_t stage_firmware(
         }
     }
     if (running == NULL) return ECONTAINER_SLOTS_CONFLICT;
-    /* The Base product has no agreed trial-health predicate yet. An authorized
-     * event source exists, but opening a signed reusable package is not proof. */
+    /* The product-only event predicate does not authorize a firmware trial.
+     * REUSE and WRITE need their receipt-bound startup/health path first. */
     if (running->package_present) return ECONTAINER_SLOTS_UNTRUSTED;
 
     const stage_context_t *stage = context;
@@ -985,8 +1005,32 @@ static econtainer_slots_result_t verified_a_only(
 
 typedef struct {
     bool container_enabled;
+    esp_base_ota_package_mode_t package_mode;
+    bool source_package_expected;
     esp_base_ota_receipt_snapshot_t *snapshot;
 } snapshot_context_t;
+
+static const econtainer_slot_binding_t *snapshot_running_binding(
+    const econtainer_slots_state_t *state, const uint8_t source_sha256[32],
+    const uint8_t inactive_sha256[32])
+{
+    const econtainer_slot_binding_t *source = NULL;
+    bool inactive_found = false;
+    const bool has_inactive = !digest_zero(inactive_sha256);
+    for (size_t index = 0; index < ECONTAINER_SLOT_BINDING_COUNT; ++index) {
+        const econtainer_slot_binding_t *binding = &state->bindings[index];
+        if (!binding->present) continue;
+        if (memcmp(binding->firmware_sha256, source_sha256, 32) == 0) {
+            if (source != NULL) return NULL;
+            source = binding;
+        } else if (has_inactive &&
+                   memcmp(binding->firmware_sha256, inactive_sha256, 32) == 0) {
+            if (inactive_found) return NULL;
+            inactive_found = true;
+        } else return NULL;
+    }
+    return inactive_found == has_inactive ? source : NULL;
+}
 
 static econtainer_slots_result_t snapshot_for_ota(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
@@ -1008,18 +1052,43 @@ static econtainer_slots_result_t snapshot_for_ota(
     if (result != ECONTAINER_SLOTS_OK) return result;
     if (state.sequence == 0U ||
         (state.phase != ECONTAINER_SLOT_IDLE && state.phase != ECONTAINER_SLOT_CONFIRMED) ||
-        decision != ECONTAINER_SLOT_BOOT_CONFIRMED ||
-        !state_has_firmware(&state, snapshot->source_sha256,
-                            snapshot->inactive_sha256, false))
+        decision != ECONTAINER_SLOT_BOOT_CONFIRMED)
         return ECONTAINER_SLOTS_CONFLICT;
-    /* A-only after a previous retirement is IDLE. An A-only CONFIRMED blob
-     * would have lost a previous candidate without an explicit transition. */
-    if (firmware_set->bootable_count == 1U && state.phase != ECONTAINER_SLOT_IDLE)
+    if (entry->package_mode == ESP_BASE_OTA_NO_PACKAGE) {
+        if (!state_has_firmware(&state, snapshot->source_sha256,
+                                snapshot->inactive_sha256, false))
+            return ECONTAINER_SLOTS_CONFLICT;
+    } else {
+        const econtainer_slot_binding_t *running = snapshot_running_binding(
+            &state, snapshot->source_sha256, snapshot->inactive_sha256);
+        if (running == NULL ||
+            running->package_present != entry->source_package_expected ||
+            (entry->package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
+             !running->package_present)) return ECONTAINER_SLOTS_CONFLICT;
+        if (running->package_present) {
+            if (running->package_size_bytes == 0U ||
+                running->guest_abi_version == 0U ||
+                running->data_schema_version == 0U ||
+                digest_zero(running->package_sha256))
+                return ECONTAINER_SLOTS_CONFLICT;
+            snapshot->source_package_present = true;
+            snapshot->source_package_size_bytes = running->package_size_bytes;
+            snapshot->source_guest_abi_version = running->guest_abi_version;
+            snapshot->source_data_schema_version = running->data_schema_version;
+            memcpy(snapshot->source_package_sha256, running->package_sha256, 32);
+        }
+    }
+    /* Keep the existing NO_PACKAGE A-only invariant. Package modes rely on
+     * Container reconcile and the exact running binding checked above. */
+    if (entry->package_mode == ESP_BASE_OTA_NO_PACKAGE &&
+        firmware_set->bootable_count == 1U && state.phase != ECONTAINER_SLOT_IDLE)
         return ECONTAINER_SLOTS_CONFLICT;
     const uint32_t retirement_steps =
         firmware_set->bootable_count == 2U ? 1U : 0U;
+    const uint32_t recovery_commits = ESP_BASE_CONTAINER_OTA_RECOVERY_COMMITS +
+        (entry->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ? 1U : 0U);
     if (state.sequence > UINT32_MAX - retirement_steps -
-                             ESP_BASE_CONTAINER_OTA_RECOVERY_COMMITS)
+                             recovery_commits)
         return ECONTAINER_SLOTS_CONFLICT;
     snapshot->container_enabled = true;
     snapshot->container_sequence = state.sequence;
@@ -1027,20 +1096,29 @@ static econtainer_slots_result_t snapshot_for_ota(
 }
 
 bool esp_base_container_product_snapshot_for_ota(
-    const esp_base_storage_claim_t *claim,
+    const esp_base_storage_claim_t *claim, esp_base_ota_package_mode_t package_mode,
     esp_base_ota_receipt_snapshot_t *snapshot)
 {
     if (snapshot == NULL) return false;
     *snapshot = (esp_base_ota_receipt_snapshot_t){0};
     if (!esp_base_storage_claim_active(claim)) return false;
     const bool configured = policy_present();
-    if (configured &&
-        (!s_product.provider_bound || !esp_base_container_product_ota_ready()))
+    if (!snapshot_mode_ready(package_mode) ||
+        (configured && !s_product.provider_bound))
         return false;
-    snapshot_context_t context = {.container_enabled = configured, .snapshot = snapshot};
+    const bool source_package_expected = configured &&
+        atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+            ESP_BASE_CONTAINER_RUNNING;
+    snapshot_context_t context = {.container_enabled = configured,
+                                  .package_mode = package_mode,
+                                  .source_package_expected = source_package_expected,
+                                  .snapshot = snapshot};
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, snapshot_for_ota, &context);
-    if (result == ECONTAINER_SLOTS_OK) return true;
+    if (result == ECONTAINER_SLOTS_OK && snapshot_mode_ready(package_mode) &&
+        (!configured || source_package_expected ==
+            (atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+                ESP_BASE_CONTAINER_RUNNING))) return true;
     *snapshot = (esp_base_ota_receipt_snapshot_t){0};
     ESP_LOGE(TAG, "ESP_BASE_CONTAINER_SNAPSHOT_BLOCKED result=%d", (int)result);
     return false;

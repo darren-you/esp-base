@@ -1362,10 +1362,11 @@ esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
 }
 
 bool esp_base_container_product_snapshot_for_ota(
-    const esp_base_storage_claim_t *claim,
+    const esp_base_storage_claim_t *claim, esp_base_ota_package_mode_t package_mode,
     esp_base_ota_receipt_snapshot_t *snapshot)
 {
-    assert(esp_base_storage_claim_active(claim) && snapshot);
+    assert(esp_base_storage_claim_active(claim) &&
+           package_mode == ESP_BASE_OTA_NO_PACKAGE && snapshot);
     ++snapshot_calls;
     *snapshot = (esp_base_ota_receipt_snapshot_t){
         .container_enabled = product_configured,

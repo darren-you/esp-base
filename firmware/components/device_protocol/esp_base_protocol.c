@@ -1659,7 +1659,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         }
         esp_base_ota_receipt_snapshot_t snapshot = {0};
         if (!esp_base_container_product_snapshot_for_ota(
-                &s_ota_storage_claim, &snapshot)) {
+                &s_ota_storage_claim, command->ota.package_mode, &snapshot)) {
             const bool released = esp_base_storage_release(&s_ota_storage_claim);
             if (!released) s_config_uncertain = true;
             save_outcome(slot, released ? "failed" : "unknown",

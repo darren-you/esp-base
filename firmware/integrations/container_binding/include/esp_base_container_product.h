@@ -282,11 +282,13 @@ bool esp_base_container_product_without_ota_receipt(
 
 /* The caller holds Base's app/otadata claim. A CONFIRMED double observation
  * supplies exact signed source/inactive digests. With a product policy, the
- * existing ECS2 blob must reconcile, the running binding must have no package,
- * and its sequence is copied into the same durable OTA receipt before erase.
- * No policy still supplies the physical hashes with container_enabled=false. */
+ * existing ECS2 blob must reconcile. NO_PACKAGE requires an empty running
+ * binding; REUSE/WRITE capture the verified running package identity and
+ * reserve their worst-case ECS2 sequence budget before any app erase.
+ * No policy permits NO_PACKAGE only. The public write path currently admits
+ * NO_PACKAGE only; the package modes here prepare their read-only snapshot. */
 bool esp_base_container_product_snapshot_for_ota(
-    const esp_base_storage_claim_t *claim,
+    const esp_base_storage_claim_t *claim, esp_base_ota_package_mode_t package_mode,
     esp_base_ota_receipt_snapshot_t *snapshot);
 
 typedef enum {
