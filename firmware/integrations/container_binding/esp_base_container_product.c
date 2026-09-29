@@ -482,11 +482,28 @@ static product_event_t *take_event(void)
 
 static bool finish_guest_work(void)
 {
-    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE)
+    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) {
+        atomic_store_explicit(&s_product.event_accepting, false,
+                              memory_order_release);
         return false;
+    }
     s_product.guest_call_processing = false;
     xSemaphoreGive(s_product.event_lock);
     return true;
+}
+
+static void fail_guest_work(void)
+{
+    atomic_store_explicit(&s_product.event_accepting, false,
+                          memory_order_release);
+    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) return;
+    if (s_product.package_trial_mode) {
+        if (s_product.trial_failure_count != UINT64_MAX)
+            ++s_product.trial_failure_count;
+        s_product.representative_event_sequence = 0U;
+    }
+    s_product.guest_call_processing = false;
+    xSemaphoreGive(s_product.event_lock);
 }
 
 bool esp_base_container_product_event_accepting(void)
@@ -793,7 +810,7 @@ static void *product_thread(void *unused)
             continue;
         }
         if (!drain_log(open.runtime)) {
-            (void)finish_guest_work();
+            fail_guest_work();
             break;
         }
         uint64_t deadline_ms = 0;
@@ -806,11 +823,15 @@ static void *product_thread(void *unused)
                 int32_t guest_result = 0;
                 const econtainer_runtime_result_t fired = econtainer_product_poll_timer(
                     open.runtime, &event, &guest_result);
+                if (fired != ECONTAINER_RUNTIME_OK &&
+                    fired != ECONTAINER_RUNTIME_NO_TIMER) {
+                    fail_guest_work();
+                    ESP_LOGE(TAG, "ESP_BASE_CONTAINER_TIMER_FAILED result=%d",
+                             (int)fired);
+                    break;
+                }
                 if (!finish_guest_work()) break;
-                if (fired == ECONTAINER_RUNTIME_OK || fired == ECONTAINER_RUNTIME_NO_TIMER)
-                    continue;
-                ESP_LOGE(TAG, "ESP_BASE_CONTAINER_TIMER_FAILED result=%d", (int)fired);
-                break;
+                continue;
             }
             const uint64_t wait_ms = deadline_ms - now_ms;
             if (!finish_guest_work()) break;
@@ -819,7 +840,7 @@ static void *product_thread(void *unused)
             if (!finish_guest_work()) break;
             vTaskDelay(pdMS_TO_TICKS(1000U));
         } else {
-            (void)finish_guest_work();
+            fail_guest_work();
             ESP_LOGE(TAG, "ESP_BASE_CONTAINER_TIMER_FAILED result=%d", (int)timer);
             break;
         }
@@ -1853,7 +1874,7 @@ bool esp_base_container_product_trial_quiescent(void)
     return quiescent;
 }
 
-bool esp_base_container_product_confirm_package_trial(
+esp_base_container_trial_confirm_result_t esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint64_t verified_event_sequence, const uint8_t verified_event_sha256[32],
@@ -1874,9 +1895,10 @@ bool esp_base_container_product_confirm_package_trial(
         !s_product.thread_joinable ||
         !atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
         atomic_load_explicit(&s_product.result, memory_order_acquire) !=
-            ESP_BASE_CONTAINER_RUNNING) return false;
+            ESP_BASE_CONTAINER_RUNNING) return ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED;
     if (s_product.event_lock == NULL ||
-        xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) return false;
+        xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE)
+        return ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED;
     const bool settled =
         s_product.representative_event_sequence == verified_event_sequence &&
         memcmp(s_product.trial_event_sha256, verified_event_sha256, 32) == 0 &&
@@ -1895,16 +1917,16 @@ bool esp_base_container_product_confirm_package_trial(
                               memory_order_release);
     }
     xSemaphoreGive(s_product.event_lock);
-    if (!settled) return false;
+    if (!settled) return ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED;
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
         confirm_package_trial, &confirm);
     if (result != ECONTAINER_SLOTS_OK ||
         !atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
         atomic_load_explicit(&s_product.result, memory_order_acquire) !=
-            ESP_BASE_CONTAINER_RUNNING) return false;
+            ESP_BASE_CONTAINER_RUNNING) return ESP_BASE_CONTAINER_CONFIRM_UNCERTAIN;
     if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE)
-        return false;
+        return ESP_BASE_CONTAINER_CONFIRM_UNCERTAIN;
     *confirmed_sequence = confirm.confirmed_sequence;
     s_product.trial_mode = false;
     s_product.package_trial_mode = false;
@@ -1918,7 +1940,7 @@ bool esp_base_container_product_confirm_package_trial(
     atomic_store_explicit(&s_product.event_accepting, true,
                           memory_order_release);
     xSemaphoreGive(s_product.event_lock);
-    return true;
+    return ESP_BASE_CONTAINER_CONFIRM_CONFIRMED;
 }
 
 bool esp_base_container_product_stop_confirmed(

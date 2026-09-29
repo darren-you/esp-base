@@ -1096,11 +1096,15 @@ static void poll_product_trial_health(uint64_t now)
     esp_base_storage_claim_t claim = {0};
     if (!esp_base_storage_claim(s_context.storage_owner, &claim)) return;
     uint32_t confirmed_sequence = 0U;
-    bool confirmed = esp_base_container_product_confirm_package_trial(
+    const esp_base_container_trial_confirm_result_t trial_commit =
+        esp_base_container_product_confirm_package_trial(
         &claim, s_product_trial_sequence, s_product_operation_id,
         s_product_trial_event_sequence, s_product_trial_event_sha256,
         s_product_trial_failure_count,
         &confirmed_sequence);
+    if (trial_commit == ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED &&
+        esp_base_storage_release(&claim)) return;
+    bool confirmed = trial_commit == ESP_BASE_CONTAINER_CONFIRM_CONFIRMED;
     if (confirmed && confirmed_sequence != s_product_trial_sequence + 2U) confirmed = false;
     if (confirmed) {
         ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);

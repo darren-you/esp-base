@@ -118,7 +118,12 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
     const uint8_t event_sha256[32], const uint8_t *event, size_t size_bytes);
 bool esp_base_container_product_event_accepting(void);
 bool esp_base_container_product_trial_quiescent(void);
-bool esp_base_container_product_confirm_package_trial(
+typedef enum {
+    ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED,
+    ESP_BASE_CONTAINER_CONFIRM_CONFIRMED,
+    ESP_BASE_CONTAINER_CONFIRM_UNCERTAIN,
+} esp_base_container_trial_confirm_result_t;
+esp_base_container_trial_confirm_result_t esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[37], uint64_t verified_event_sequence,
     const uint8_t verified_event_sha256[32], uint64_t verified_failure_count,

@@ -215,10 +215,16 @@ bool esp_base_container_product_trial_quiescent(void);
  * window. This checks that the current candidate actually completed that
  * event bytes without a runtime or business failure; it does not define product
  * health. Close event admission only after the queue and current guest call
- * are drained. Under the original storage claim, persist HEALTH_VERIFIED and then
- * CONFIRMED, independently read back both states and the new binding. A false
- * result leaves the caller holding the claim for durable recovery. */
-bool esp_base_container_product_confirm_package_trial(
+ * are drained. NOT_STARTED proves no persistent write was attempted; the caller
+ * may release its short claim and retry on the next control poll. Once the
+ * storage call starts, any unproven result is UNCERTAIN and the long claim must
+ * be retained for next-boot recovery. */
+typedef enum {
+    ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED,
+    ESP_BASE_CONTAINER_CONFIRM_CONFIRMED,
+    ESP_BASE_CONTAINER_CONFIRM_UNCERTAIN,
+} esp_base_container_trial_confirm_result_t;
+esp_base_container_trial_confirm_result_t esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint64_t verified_event_sequence, const uint8_t verified_event_sha256[32],

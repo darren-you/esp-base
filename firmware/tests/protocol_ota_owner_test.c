@@ -37,6 +37,7 @@ static esp_base_container_boot_result_t package_trial_result;
 static bool package_stop_ok, package_abandon_prepared_ok;
 static bool package_event_accepting, package_abandon_trial_ok;
 static bool package_confirm_ok;
+static bool package_confirm_not_started;
 static unsigned package_confirm_calls;
 static uint8_t fake_observed_package_byte, fake_observed_event_byte;
 static unsigned package_prepare_calls, package_trial_calls,
@@ -108,6 +109,7 @@ static void reset_case(void)
     package_stop_ok = package_abandon_prepared_ok = true;
     package_event_accepting = true;
     package_confirm_ok = true;
+    package_confirm_not_started = false;
     package_confirm_calls = 0U;
     fake_observed_package_byte = 0x11U;
     fake_observed_event_byte = 0x22U;
@@ -559,9 +561,15 @@ static void check_product_trial_health(void)
         poll_product_trial_health(now);
     }
     assert(package_confirm_calls == 0U);
+    package_confirm_not_started = true;
     poll_product_trial_health(64000U);
+    assert(package_confirm_calls == 1U && s_product_active &&
+           s_product_trial_running && !s_config_uncertain &&
+           !atomic_load(&owner.active_token));
+    package_confirm_not_started = false;
+    poll_product_trial_health(65000U);
     expect_reply("succeeded", NULL);
-    assert(package_confirm_calls == 1U && !s_product_active &&
+    assert(package_confirm_calls == 2U && !s_product_active &&
            !s_product_trial_running && !atomic_load(&owner.active_token));
     ebase_product_ledger_t ledger = {0};
     const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
@@ -1493,7 +1501,7 @@ bool esp_base_container_product_trial_quiescent(void)
     return package_event_accepting;
 }
 
-bool esp_base_container_product_confirm_package_trial(
+esp_base_container_trial_confirm_result_t esp_base_container_product_confirm_package_trial(
     const esp_base_storage_claim_t *claim, uint32_t trial_sequence,
     const char operation_id[37], uint64_t verified_event_sequence,
     const uint8_t verified_event_sha256[32], uint64_t verified_failure_count,
@@ -1505,12 +1513,15 @@ bool esp_base_container_product_confirm_package_trial(
            verified_failure_count == fake_trial_failure_count &&
            confirmed_sequence != NULL);
     ++package_confirm_calls;
+    if (package_confirm_not_started)
+        return ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED;
     if (package_confirm_ok) {
         *confirmed_sequence = 11U;
         binding_sequence = 11U;
         binding_package_present = true;
     }
-    return package_confirm_ok;
+    return package_confirm_ok ? ESP_BASE_CONTAINER_CONFIRM_CONFIRMED :
+        ESP_BASE_CONTAINER_CONFIRM_UNCERTAIN;
 }
 
 esp_base_container_event_result_t esp_base_container_product_offer_event(
