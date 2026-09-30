@@ -115,7 +115,8 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_failure(
     const char *device_id, const char *operation_id, eota_result_t error);
 /* The caller must first prove OTA VALID and, when Container is configured,
- * persistent Container confirmation. This independently rechecks C's signed
+ * persistent Container confirmation, including original-receipt cold VALID
+ * package recovery. This independently rechecks C's signed
  * identity, then commits and reads back the success marker. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_success(
     const char *device_id);

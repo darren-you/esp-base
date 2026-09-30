@@ -308,11 +308,10 @@ static void evaluate(const receipt_t *receipt, bool worker_active, esp_base_ota_
 {
     view->state = ESP_BASE_OTA_OPERATION_UNKNOWN;
     view->error_code = "ota_result_uncertain";
-    /* A package failure is terminal only after the caller reconciles the
-     * original receipt with physical A-only and its retained ECS2 binding.
-     * Package execution/success remains gated until joint health is wired. */
+    /* Package terminals follow the caller's exact original-receipt ECS2
+     * reconciliation. New pending package execution remains gated. */
     if (receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
-        receipt->status != OTA_STATUS_FAILED) return;
+        receipt->status == OTA_STATUS_PREPARED) return;
     if (worker_active) { view->state = ESP_BASE_OTA_OPERATION_RUNNING; view->error_code = NULL; return; }
     const eota_policy_t policy = esp_base_ota_policy(false);
     eota_slots_t slots;
@@ -548,8 +547,6 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_record_success(
     const esp_base_ota_receipt_result_t loaded = load(&receipt);
     if (loaded != ESP_BASE_OTA_RECEIPT_OK) return loaded;
     if (strcmp(receipt.device_id, device_id)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
-    if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE)
-        return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     if (receipt.status == OTA_STATUS_FAILED) return ESP_BASE_OTA_RECEIPT_CONFLICT;
     const eota_policy_t policy = esp_base_ota_policy(false);
     eota_slots_t slots = {0};

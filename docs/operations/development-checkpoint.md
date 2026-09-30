@@ -1,5 +1,20 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 带包 C 侧 VALID 启动恢复
+
+普通启动在本地存储、身份、安全、配置与控制进展检查通过后，现可消费原 V3 收据恢复已 VALID 的带包 C。Container 核对 A/C 签名集合、原 operation、包摘要／长度／ABI／schema、来源绑定及模式对应的精确 ECS2 序号；只有原 `HEALTH_VERIFIED` 加旧 trial boot 或同操作 `CONFIRMED` 才能通过。持久确认并独立回读后才启动已确认 guest、准备账本，再提交和读回原收据 `SUCCEEDED`。`PREPARED`／`TRIAL_STARTED`、错误收据、包损坏和任一步不确定均保留启动 claim 与写门。历史 `SUCCEEDED` 允许后续合法产品操作推进序号，但仍要核对原 A/C 集合和真实包引用；未决收据不得借此绕过原操作约束。
+
+双目标完整 host ASan/UBSan 通过，覆盖 VALID 恢复接线、基本控制检查失败、成功收据不确定与原操作终态查询。真实锁定 Container/WAMR 双目标签名 guest 生命周期通过：无来源 `WRITE`、有来源 `REUSE`／`WRITE` 的确认恢复，确认读回失败后的只读重试、来源保留、包字节损坏、后续产品操作与各 100 次重装。健康状态在该恢复测试中由 Container 状态原语构造，用于检验跨提交裁决，不证明真实 MQTT 代表事件或 30 秒在线窗口。收据两模式覆盖 NVS 写前、写后、commit、独立读回与错误 selector；终态字段和来源／代表事件摘要保持原值。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c` 检查及现有双目标锁通过，仓外既有测试策略、测试键签名构建与官方 RSA v2／ECDSA v1 验签通过：
+
+| 目标 | 签名 app／槽容量 | app SHA-256 |
+| --- | --- | --- |
+| ESP32-C3 | `0x121000/0x130000` | `cd502a57577145c5f01b6fe1f59c1940919c582a7a89a89892cf856e86f573de` |
+| ESP32-D0WD-V3 | `0xffff4/0x120000` | `7e1183e2be8d1eda296d0a9f975bcc15ef85f76c381bf01ef753c2a8c1d84799` |
+
+本轮没有写实体板。公开带包 worker、新 pending C 的授权代表事件与连续在线联合确认仍未接线，实板掉电及五能力负载未验，P6-10/P7-04 保持进行中。
+
 ## 2026-09-30 联合 OTA 带包 A 侧启动恢复接线
 
 普通 `app_main` 不再一律拒绝带包 V3。A 仍为运行且 boot 指向 A 时，原收据限定目标 app 的物理退役；Container 再核对原来源包和 A/B/C 序号、放弃未完成候选并回读 A-only；最后持久提交并读回 `FAILED`，才进入正常旧包启动、产品账本准备与启动 claim 释放。任一 SDK／Container／收据不确定都阻止 guest 启动并保留写门。失败收据在下一 boot 只做无未决迁移对账，不授权再次擦槽。目标 C 的带包 trial 与成功提交仍明确拒绝，公开带包 worker 尚未开放。

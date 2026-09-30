@@ -68,6 +68,14 @@ static bool scratch_bind_ok, scratch_recover_ok;
 static unsigned scratch_bind_calls, scratch_recover_calls, scratch_erase_calls;
 #endif
 
+static bool storage_available(void)
+{
+    esp_base_storage_claim_t competing = {0};
+    const bool available = esp_base_storage_claim(storage_owner, &competing);
+    if (available) assert(esp_base_storage_release(&competing));
+    return available;
+}
+
 static void reset_case(void)
 {
     image_state = EOTA_STATE_PENDING_VERIFY;
@@ -470,6 +478,7 @@ bool esp_base_container_product_reconcile_selected_ota(
 {
     assert(esp_base_storage_claim_active(claim) && candidate != NULL &&
            !strcmp(candidate->operation_id, receipt.operation_id) &&
+           memcmp(candidate, &receipt, sizeof receipt) == 0 &&
            (running_state == EOTA_STATE_PENDING_VERIFY ||
             running_state == EOTA_STATE_VALID));
     ++container_selected_calls;
@@ -511,7 +520,8 @@ esp_base_container_boot_result_t esp_base_container_product_boot(
     assert(ota_gate_pending);
     if (receipt_load_result == ESP_BASE_OTA_RECEIPT_OK &&
         receipt.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
-        receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) {
+        receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+        receipt_slots.running_subtype == receipt.source_subtype) {
         assert(receipt_retire_calls == 1 && container_recover_calls == 1 &&
                receipt_failure_calls == 1);
     }
@@ -601,14 +611,19 @@ static void interrupted_receipt(bool enabled)
     };
 }
 
-static void selected_receipt(bool enabled, eota_state_t running_state)
+static void select_current_receipt(eota_state_t running_state)
 {
-    interrupted_receipt(enabled);
     receipt_slots.running_subtype = receipt.target_subtype;
     receipt_slots.boot_subtype = receipt.target_subtype;
     receipt_slots.target_subtype = receipt.source_subtype;
     receipt_slots.running_state = running_state;
     image_state = running_state;
+}
+
+static void selected_receipt(bool enabled, eota_state_t running_state)
+{
+    interrupted_receipt(enabled);
+    select_current_receipt(running_state);
 }
 
 static void interrupted_package_receipt(esp_base_ota_package_mode_t mode)
@@ -984,6 +999,44 @@ int main(void)
     assert(!rebooted() && ready_logs == 1 && receipt_sha_calls == 1 &&
            receipt_retire_calls == 0 && receipt_failure_calls == 0 &&
            container_selected_calls == 1 && receipt_success_calls == 1);
+
+    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_PACKAGE_REUSE;
+         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_VALID);
+        assert(!rebooted() && ready_logs == 1 && container_selected_calls == 1 &&
+               container_boot_calls == 1 && receipt_success_calls == 1 &&
+               container_trial_calls == 0 && mark_calls == 0 &&
+               receipt_retire_calls == 0 && container_recover_calls == 0 &&
+               ota_gate_clears == 1 && storage_available());
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_VALID);
+        receipt.status = ESP_BASE_OTA_RECEIPT_SUCCEEDED;
+        assert(!rebooted() && ready_logs == 1 && container_selected_calls == 1 &&
+               container_boot_calls == 1 && receipt_success_calls == 0);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_VALID);
+        container_selected_ok = false;
+        assert(!rebooted() && ready_logs == 0 && container_selected_calls == 1 &&
+               container_boot_calls == 0 && receipt_success_calls == 0 &&
+               ota_gate_pending && !storage_available());
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_VALID);
+        control_never_ready = true;
+        assert(!rebooted() && ready_logs == 0 && container_selected_calls == 0 &&
+               container_boot_calls == 0 && receipt_success_calls == 0 &&
+               ota_gate_pending && !storage_available());
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_VALID);
+        receipt_success_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+        assert(!rebooted() && ready_logs == 0 && container_selected_calls == 1 &&
+               container_boot_calls == 1 && receipt_success_calls == 1 &&
+               ota_gate_pending && !storage_available());
+    }
 
     reset_case();
     container_configured = true;

@@ -14,7 +14,7 @@
 
 Wi-Fi 启动测试编译真实 `wifi_runtime`，逐项注入 netif、事件循环、队列、驱动、事件注册、配置和启动失败，验证明确 `failed` 状态及初始化中途资源释放；事件注入还验证不同 SSID 拒绝、同 SSID 但记录填充字节不同仍可取得关联/IP 证明。它不模拟真实 AP 关联、WPA3、DNS、无线恢复或 pending 槽的整机任务调度。
 
-OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度、HTTPS URL、必需包模式及带包元数据。`protocol_ota_owner_test` 还断言有效 REUSE／WRITE 在收据登记和目标擦写前拒绝，非法 WRITE URL 更早拒绝，且无包 worker 遇带包 V3 收据不擦槽；`ota_startup_test` 检查带包 V3 在 pending／原槽启动时不推进；`ota_receipt_test` 核对合法带包字段的只读恢复和终态写入阻断。公开客户端测试核对包摘要、代表事件摘要、目标包槽上限与 `ota.result` 模式字段。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽，断言直接槽检查持有短 Flash claim、pending 确认期间 FRP scratch 等待到 500 毫秒后失败、释放后可再次获取；`ota_receipt_test` 验证产品约束、持久收据及各次 NVS 调用持有短 Flash claim。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
+OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度、HTTPS URL、必需包模式及带包元数据。`protocol_ota_owner_test` 还断言有效 REUSE／WRITE 在收据登记和目标擦写前拒绝，非法 WRITE URL 更早拒绝，且无包 worker 遇带包 V3 收据不擦槽；`ota_startup_test` 检查新 pending 包 trial 阻断、原槽 A 恢复以及 VALID C 原健康证据确认后的启动；`ota_receipt_test` 核对合法带包字段、成功／失败终态与各次写入读回故障。公开客户端测试核对包摘要、代表事件摘要、目标包槽上限与 `ota.result` 模式字段。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽，断言直接槽检查持有短 Flash claim、pending 确认期间 FRP scratch 等待到 500 毫秒后失败、释放后可再次获取；`ota_receipt_test` 验证产品约束、持久收据及各次 NVS 调用持有短 Flash claim。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
 
 v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 字节显式拒绝且无写入，以及 NVS 查询长度、写前/写后、commit 与读回故障；公开 USB 工具另验证相同 schema 的非法字段和整帧上限。
 
@@ -24,7 +24,7 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
 
-`ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包 A 侧启动恢复已接通，目标 C 试运行仍被阻断；两种模式的失败终态与写前／写后／commit／独立读回故障已覆盖。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
+`ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包 A 侧与已有健康证据的 VALID C 启动恢复已接通，新 pending C 试运行仍被阻断；两种模式的成功／失败终态与写前／写后／commit／独立读回故障已覆盖。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
 `ota_firmware_test` 编译真实固件集合观察逻辑，注入 SDK 与 `esp-ota` 槽/镜像结果，覆盖双 `VALID`、只有当前签名镜像、双槽同摘要、显式 pending trial 与已确认模式隔离、pending 缺失可回滚旧槽、boot 不一致、不可回滚、旧槽虽标无效但仍有可验签镜像、读态改变、错误产品名/芯片/镜像头/分区几何和读回失败。它不模拟真实 bootloader、Flash 并发或物理镜像读取；固定 SDK 普通与测试键签名构建只验证装配。
 

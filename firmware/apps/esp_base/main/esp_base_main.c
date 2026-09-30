@@ -190,9 +190,13 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
         return false;
     }
     if (slots.running_subtype == receipt.target_subtype) {
-        /* Package recovery on A is wired below. C must remain blocked until
-         * its representative-event trial and joint confirmation are wired. */
-        if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) return false;
+        /* A cold VALID C can finish a previously persisted HEALTH_VERIFIED
+         * package operation. A new pending package trial remains gated until
+         * representative-event admission and joint health are wired. */
+        if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+            slots.running_state != EOTA_STATE_VALID) return false;
+        if (slots.running_state == EOTA_STATE_VALID &&
+            wait_for_control_start() != ESP_OK) return false;
         /* A selected C belongs to pending trial or confirmed recovery. Never
          * erase it as though it were an interrupted inactive download. */
         uint8_t digest[EOTA_SHA256_BYTES] = {0};

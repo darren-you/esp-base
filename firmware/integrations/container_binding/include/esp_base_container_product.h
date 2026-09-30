@@ -321,7 +321,9 @@ esp_base_container_retire_result_t esp_base_container_product_recover_retired_fi
  * exact A/C ECS2 transition and sequence. A successful prior receipt requires
  * a durable CONFIRMED phase; a PREPARED receipt permits the exact pending
  * trial, or completes HEALTH_VERIFIED -> CONFIRMED for a VALID C and reads it
- * back. No normal boot path changes a transition without this receipt. */
+ * back for all package modes. A historical SUCCEEDED receipt may coexist
+ * with a later product-only C operation after full reference reconciliation.
+ * No normal boot path changes a transition without this receipt. */
 bool esp_base_container_product_reconcile_selected_ota(
     const esp_base_storage_claim_t *claim,
     const esp_base_ota_receipt_recovery_t *receipt, eota_state_t running_state);

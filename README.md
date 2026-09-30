@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-30 联合 OTA 带包 C 侧 VALID 恢复：普通启动在本地基本检查后，按原 V3 收据核对签名 A/C、来源包、模式序号和原健康证据，持久确认并独立读回后才重开 guest、提交成功收据。错误证据或存储不确定保留写门；两模式及空来源 WRITE 的真实签名 guest、双目标 host、固定 SDK 签名构建和官方验签通过，app 尺寸仍为 `0x121000/0x130000`／`0xffff4/0x120000`。公开带包 worker 和新 pending trial 的真实事件／30 秒在线确认仍未接线，实板及 P6-10/P7-04 未验收。详见[开发检查点](docs/operations/development-checkpoint.md)。
+
 2026-09-30 联合 OTA 带包 A 侧启动恢复接线：普通启动现用原 V3 收据处理 `REUSE`／`WRITE` 的中断或回滚。只有确切 inactive app 退役、来源签名固件与 ECS2／原包对账均通过，失败收据又持久提交并读回后，才重开旧确认包并解除启动事务锁；任何一步不确定均保持写门。带包 `FAILED` 可按原 operation ID 查询，重复启动不重新擦槽。双目标 host ASan/UBSan、固定 SDK 测试键签名构建与官方验签通过，C3／ESP32 app 仍为 `0x121000/0x130000`／`0xffff4/0x120000`。公开带包 worker 和目标 C 的业务试运行／确认仍未接通，实板与 P6-10/P7-04 未验收。
 
 2026-09-30 联合 OTA 带包 A 侧中断恢复续进：内部回退入口硬切为消费原 V3 收据，核对来源包身份与真实引用、A/B 或 A/C 固件绑定、操作参数及模式对应的精确 ECS2 序号。旧 B 尚未退役、`WRITE` 停在 `WRITING`、`REUSE`／`WRITE` 的 `PREPARED` 或旧 boot `HEALTH_VERIFIED` 均可在物理 A-only 证明后放弃并删除不可启动 C 绑定，保留旧包；来源包损坏、收据冲突和同 boot trial 均阻断。双目标 host、真实签名 guest、测试键签名构建与官方验签通过。普通启动的带包执行门仍未开放，A 侧的软件原语不等于公开跨启动恢复已接通。
@@ -179,7 +181,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 
 签名构建的 `esp_base_ota_observe_firmware_set` 在调用方串行化所有 app/otadata 写入时读取运行、下次启动及另一槽状态，再调用锁定 `esp-ota` 验签并计算完整 signed bin 摘要。已确认模式要求当前槽为 `VALID`；显式 pending trial 模式仅允许当前槽为 `PENDING_VERIFY`、另一槽 `VALID` 且经 IDF 证明可回滚。新增 prepared candidate 模式只消费本次 `eota_prepare` 成功返回的收据，要求当前 A 已确认且仍被选为 boot，待选 C 的旧 otadata 已失效，重新验签 A/C 并核对 C 的完整长度与摘要；随后仍须在选 boot 前完成 Container 持久绑定。已确认的 A-only 模式还要求 inactive 槽首字节实际擦除为 `0xff`，不能仅由应用侧验签失败推断 bootloader 不会后备扫描。三种观察均拒绝状态变化与歧义；观察本身不批准业务试运行。C3／ESP32 正式源码均声明独立包分区，现役设备仍须完成迁移。host 假件和编译不证明实板启动/回滚。
 
-启动与 `ota.start` 使用同一本次 boot 的串行 owner；[Container 产品装配](firmware/integrations/container_binding/README.md)使用启动已持有的 claim，将签名固件集合逐字段送入 Container 并复读。无包初始化、写入 C 前的旧 B 退役、准备后 stage、pending trial、确认及 A 仍运行时的中断恢复已接线；guest 线程存活不长期占有 claim。VALID C 与 ECS2 `HEALTH_VERIFIED` 的重启确认必须凭原 V3 收据完成；收据缺失、已失败或 OTA 不可用时，残留固件迁移会阻断产品启动，普通启动不改写 ECS2。启动控制任务在恢复完成前关闭配置写入和 MQTT/FRP owner。带包联合 OTA、真实板卡掉电恢复及五能力并发仍未闭合。
+启动与 `ota.start` 使用同一本次 boot 的串行 owner；[Container 产品装配](firmware/integrations/container_binding/README.md)使用启动已持有的 claim，将签名固件集合逐字段送入 Container 并复读。无包初始化、写入 C 前的旧 B 退役、准备后 stage、pending trial、确认及 A 仍运行时的中断恢复已接线；guest 线程存活不长期占有 claim。VALID C 与 ECS2 `HEALTH_VERIFIED` 的重启确认必须凭原 V3 收据完成；收据缺失、已失败或 OTA 不可用时，残留固件迁移会阻断产品启动，普通启动不改写 ECS2。启动控制任务在恢复完成前关闭配置写入和 MQTT/FRP owner。带包 A 侧回滚与 VALID C 健康证据恢复已消费原 V3；新 pending 包 trial、公开带包 worker、真实板卡掉电及五能力并发仍未闭合。
 
 2026-09-29 产品包未决安装／升级恢复已前移至普通 guest 装载之前：按原持久账本和签名固件集合核对 ECS2，可在候选包损坏时安全放弃未确认 trial，独立读回 `ABORTED` 与旧绑定并记失败后再启动旧包；无法证明或已确认候选保持阻断。[冷启动恢复检查点](docs/operations/product_package_cold_recovery_checkpoint.md)记录双目标签名 guest、双目标宿主和 C3 签名 QEMU 结果。持久确认及实体设备掉电仍待完成。
 
