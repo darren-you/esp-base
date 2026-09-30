@@ -740,6 +740,108 @@ static void run_event_failure_trial(const char *directory)
     puts("container_product_event_failure: signed guest trap, ABORTED and old guest reopen passed");
 }
 
+static void run_confirmed_event_failure(const char *directory, bool prepare_first)
+{
+    file_t key = read_file(directory, "public.der");
+    file_t failed_package = read_file(directory, "event-loop.pkg");
+    file_t candidate_package = read_file(directory, "normal.pkg");
+    const char boot_id[] = "22222222-2222-4222-8222-222222222222";
+    configure(&key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    /* Seed a confirmed binding, then let the real signed guest fail on an
+     * event. This is not a public install or trial-health fixture. */
+    install_context_t install = {.package = &failed_package};
+    assert(esp_base_container_with_firmware_set(&claim,
+        ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
+        ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    esp_base_container_binding_snapshot_t before = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &before) ==
+           ESP_BASE_CONTAINER_BINDING_OK && before.package_present);
+    esp_base_container_package_request_t request = {
+        .operation_id = "99999999-9999-4999-8999-999999999999",
+        .expected_sequence = before.container_sequence,
+        .previous_package_present = true,
+        .package_size_bytes = (uint32_t)candidate_package.size,
+        .guest_abi_version = 2U, .data_schema_version = 1U,
+    };
+    memcpy(request.previous_package_sha256, before.package_sha256, 32);
+    assert(SHA256(candidate_package.bytes, candidate_package.size,
+                  request.package_sha256) != NULL);
+    uint32_t prepared_sequence = 0U;
+    if (prepare_first) {
+        assert(esp_base_container_product_prepare_package(&claim, &request,
+            read_source, &candidate_package, &prepared_sequence) ==
+            ESP_BASE_CONTAINER_PREPARED);
+    }
+    const unsigned blob_writes = store.blob_writes;
+    const unsigned flash_writes = store.flash_writes;
+    const unsigned flash_erases = store.flash_erases;
+    const uint8_t event[] = {1U};
+    assert(offer_event_when_available(before.package_sha256, 1U, event, sizeof event) ==
+           ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0; attempt < 1000U &&
+         atomic_load_explicit(&s_product.result, memory_order_acquire) !=
+             ESP_BASE_CONTAINER_BLOCKED; ++attempt) vTaskDelay(1U);
+    assert(atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+           ESP_BASE_CONTAINER_BLOCKED);
+    assert(!esp_base_container_product_event_accepting());
+    esp_base_container_event_observation_t observation = {0};
+    assert(esp_base_container_product_event_observation(&observation) ==
+           ESP_BASE_CONTAINER_EVENT_OBSERVED && observation.event_sequence == 1U &&
+           !observation.runtime_ok);
+    assert(!esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    uint32_t resolved_sequence = before.container_sequence;
+    if (prepare_first) {
+        /* A trap between prepare and stop must never start the candidate.
+         * The public worker reports unknown and retains its claim here; this
+         * explicit internal abandonment only verifies the storage primitive. */
+        assert(esp_base_container_product_start_package_trial(&claim,
+            prepared_sequence, request.operation_id, boot_id, trial_event_digest) ==
+            ESP_BASE_CONTAINER_BLOCKED);
+    } else {
+        prepared_sequence = UINT32_MAX;
+        assert(esp_base_container_product_prepare_package(&claim, &request,
+            read_source, &candidate_package, &prepared_sequence) ==
+            ESP_BASE_CONTAINER_PREPARE_REJECTED && prepared_sequence == 0U);
+    }
+    assert(store.blob_writes == blob_writes && store.flash_writes == flash_writes &&
+           store.flash_erases == flash_erases);
+    if (prepare_first) {
+        assert(esp_base_container_product_abandon_prepared_package(&claim,
+            prepared_sequence, request.operation_id, request.package_sha256,
+            &resolved_sequence) && resolved_sequence == prepared_sequence + 1U);
+    }
+    esp_base_container_binding_snapshot_t unchanged = {0};
+    esp_base_container_active_product_t active = {0};
+    assert(esp_base_container_product_status_snapshot(&claim, &unchanged, &active) ==
+           ESP_BASE_CONTAINER_BINDING_OK && !active.present &&
+           unchanged.container_sequence == resolved_sequence && unchanged.package_present &&
+           memcmp(unchanged.package_sha256, before.package_sha256, 32) == 0);
+    uint8_t *flash_before = malloc(sizeof store.flash);
+    assert(flash_before != NULL);
+    memcpy(flash_before, store.flash, sizeof store.flash);
+    const char uninstall_id[] = "88888888-8888-4888-8888-888888888888";
+    assert(esp_base_container_product_uninstall(&claim, uninstall_id,
+        resolved_sequence, before.package_sha256) == ESP_BASE_CONTAINER_UNINSTALL_COMPLETE);
+    assert(!s_product.thread_joinable && s_product.native_reclaimed &&
+           !atomic_load_explicit(&s_product.instance_active, memory_order_acquire));
+    assert(memcmp(flash_before, store.flash, sizeof store.flash) == 0);
+    free(flash_before);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+    free(candidate_package.bytes);
+    free(failed_package.bytes);
+    free(key.bytes);
+}
+
 static void run_uninstall_with_fallback(const file_t *key, const file_t *package,
                                         const char boot_id[37])
 {
@@ -2667,6 +2769,9 @@ int main(int argc, char **argv)
     }
     if (argc == 3 && strcmp(argv[2], "event-failure") == 0) {
         run_event_failure_trial(argv[1]);
+        run_confirmed_event_failure(argv[1], false);
+        run_confirmed_event_failure(argv[1], true);
+        puts("container_confirmed_event_failure: real guest failure, replacement rejection and uninstall reclaim passed");
         file_t key = read_file(argv[1], "public.der");
         file_t failed_package = read_file(argv[1], "event-loop.pkg");
         const char boot_id[] = "22222222-2222-4222-8222-222222222222";

@@ -1,5 +1,13 @@
 # 开发检查点
 
+## 2026-10-01 已确认 guest 异常退出的回收边界
+
+真实 RSA-3072/PSS 签名的 `event-loop` guest 在 WAMR 中执行事件并触发预算异常；新增候选准备前／后的两项宿主场景。准备前异常：升级准备拒绝、返回零序号，NVS／Flash 写与擦除计数不变；准备后异常：旧实例不能被普通停止入口当作成功停止，trial 与同 boot 重开均阻断，未运行候选。只读状态无活动实例且原确认包摘要保持；测试以精确原操作显式调用内部放弃候选，读取 ABORTED 序号与旧绑定，再执行精确卸载。卸载等待实际 pthread 退出，证明 native 回收，当前绑定清除后可进入 EMPTY，整个包分区逐字节不变。
+
+Base 仍精确消费 `esp-container@52d94d696d4cb0de3ce6a037c844c16be7edfb54` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`；SDK、生产源码、协议、锁与分区均未改。C3／ESP32 两种目标定义各自执行完整 ASan/UBSan 生命周期入口，已有 deadline、trial 异常、联合 OTA 异常回退及各 100 次重装继续通过；macOS 资源版既有循环也通过。无需因测试变更重新构建或重签未改变的固件。
+
+种子夹具通过真实签名与槽 API 建立确认绑定，未经过公开安装请求、代表事件或 30 秒健康确认。Flash/NVS、调度与固件观察仍为宿主替身。公开 `product_task` 在准备完成后普通停止失败时，当前保持 unknown 与本 boot claim；本用例的内部显式放弃不是公开恢复能力，也不授权发布方重发。公开停止／启动尚未实现，其是否跨重启保持停止等待维护者裁决；没有选择默认值、引入持久启动策略或改写现有重启行为。两块实体板与生产链路未验收，仅 C3 当前连接，没有串口、复位或 Flash/eFuse 操作。
+
 ## 产品事件真实 TLS Broker 宿主续验
 
 公开发布器生产实现保持 `b8e9c791f70440209a6d1a416aad2cf69d1df7e7` 的原内容。本次增加 `firmware/tests/product_event_broker_probe.c`；外部 Broker 消费者的测试显式传入 Base checkout，运行固定 Paho 2.1.0 发布器，并将真实收到的字节交给本仓实际 wire 解析与授权包装源码。PSA 测试接口通过 OpenSSL 计算真实 HMAC，替代 IDF 密码端口；以 ASan/UBSan 编译。Broker 从官方 Mosquitto 2.1.2 精确源码 `99fa50f30e325609394c324c8ff71cfbbe95d8ab` 原生构建，加载同版本认证与 ACL 插件，只绑定本机回环临时端口，使用虚构设备／账户及公开测试管理密钥。
