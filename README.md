@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-30 设备元数据软件续进：`product.status` 同一存储 claim 的双次签名固件观察现同时返回运行固件 SHA-256、实际运行时 guest ABI 与当前确认包的 ABI／schema；公开 CLI 严格核对九字段及空包一致性。活动产品版本和试运行展示、生产与实板验收仍待闭合，导入包元数据不替代设备状态。
+
 2026-09-30 C3 带包恢复诊断续验：`eb41a4a` 的仓外 UART 适配签名镜像完成 REUSE／WRITE 的离线 pending、旧 P0 回退恢复及幂等二启，主栈最低余量均为 2,260 B，二启均为 4,244 B；原 V3 除终态／失败码外逐字节保持，两模式二启整片 Flash 各自相同。该镜像仅在仓外改变控制台／VFS 与串口驱动装配，另跳过 QEMU 缺失的 ADC2 校准；正式 USB 镜像和实体 C3 未改，不能当作 USB／联网／实板验收。精确输入与模拟器 eFuse 前置见[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-09-30 ESP32 带包回退主栈修正：完整产品授权的正式签名 app 在 QEMU 的 REUSE／WRITE 回退启动中复现默认 3,584 B 主栈溢出。两目标普通 Base 主栈现在统一配置 6,144 B 并拒绝更小配置，C3 实际值不变。重签 ESP32 的离线 pending、A 侧旧包恢复、原 ID 失败收据与重复冷启动均通过；恢复主栈最低余 2,324／2,308 B，二启完整 Flash 逐字节一致。双目标签名构建和官方验签通过；ESP32 完整授权 app 为 `0x10fff4/0x120000`，此前 `0xffff4` 属于空授权装配，不能代表完整产品容量。当前实体连接仅 C3，ESP32 已拔除，未写板卡或验收真实网络，详见[开发检查点](docs/operations/development-checkpoint.md)。

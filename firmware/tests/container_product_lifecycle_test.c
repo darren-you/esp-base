@@ -743,7 +743,10 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
     esp_base_container_binding_snapshot_t binding = {0};
     assert(esp_base_container_product_binding_snapshot(&claim, &binding) ==
            ESP_BASE_CONTAINER_BINDING_OK && binding.container_sequence == 1U &&
-           !binding.package_present && digest_zero(binding.package_sha256));
+           !binding.package_present && digest_zero(binding.package_sha256) &&
+           memcmp(binding.firmware_sha256, physical.running_firmware_sha256, 32) == 0 &&
+           binding.runtime_guest_abi_version == ECONTAINER_GUEST_ABI_VERSION &&
+           binding.package_guest_abi_version == 0U && binding.package_data_schema_version == 0U);
     install_context_t install_a = {.package = package, .operation_marker = 0x44};
     assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
         NULL, install_signed, &install_a) == ECONTAINER_SLOTS_OK);
@@ -771,7 +774,10 @@ static void run_uninstall_with_fallback(const file_t *key, const file_t *package
            ESP_BASE_CONTAINER_BINDING_OK &&
            binding.container_sequence == before.sequence && binding.package_present &&
            memcmp(binding.package_sha256,
-                  before.bindings[running_index].package_sha256, 32) == 0);
+                  before.bindings[running_index].package_sha256, 32) == 0 &&
+           memcmp(binding.firmware_sha256, physical.running_firmware_sha256, 32) == 0 &&
+           binding.package_guest_abi_version == before.bindings[running_index].guest_abi_version &&
+           binding.package_data_schema_version == before.bindings[running_index].data_schema_version);
     uint8_t flash_before[FLASH_BYTES];
     memcpy(flash_before, store.flash, sizeof flash_before);
     const unsigned writes_before = store.blob_writes;

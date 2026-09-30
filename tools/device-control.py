@@ -404,7 +404,8 @@ def product_status(port, current):
             return value
         if value["state"] != "succeeded" or not isinstance(result, dict) or set(result) != {
                 "operation_sequence_high_watermark", "next_operation_sequence", "pending_operation_id",
-                "container_sequence", "package_sha256"}:
+                "container_sequence", "package_sha256", "firmware_sha256",
+                "runtime_guest_abi_version", "package_guest_abi_version", "package_data_schema_version"}:
             raise ValueError("设备产品状态字段无效；状态为 unknown")
         watermark = result["operation_sequence_high_watermark"]
         next_sequence = result["next_operation_sequence"]
@@ -421,6 +422,17 @@ def product_status(port, current):
                  (not isinstance(digest, str) or len(digest) != 64 or
                   set(digest) - set("0123456789abcdef") or digest == "0" * 64))):
             raise ValueError("设备产品操作序号无效；状态为 unknown")
+        firmware_digest = result["firmware_sha256"]
+        runtime_abi = result["runtime_guest_abi_version"]
+        package_abi = result["package_guest_abi_version"]
+        schema = result["package_data_schema_version"]
+        if (not isinstance(firmware_digest, str) or len(firmware_digest) != 64 or
+                set(firmware_digest) - set("0123456789abcdef") or firmware_digest == "0" * 64 or
+                type(runtime_abi) is not int or not 1 <= runtime_abi <= 4294967295 or
+                (digest is None and (package_abi is not None or schema is not None)) or
+                (digest is not None and (type(package_abi) is not int or not 1 <= package_abi <= 4294967295 or
+                                        type(schema) is not int or not 1 <= schema <= 4294967295))):
+            raise ValueError("设备固件摘要、运行时或绑定包元数据无效；状态为 unknown")
         return value
 
 
@@ -872,6 +884,10 @@ def main():
             if args.command == "product.status" and current["result"] is not None:
                 print("  高水位  " + str(current["result"]["operation_sequence_high_watermark"]))
                 print("  Container 序号  " + str(current["result"]["container_sequence"]))
+                print("  运行固件 SHA-256  " + current["result"]["firmware_sha256"])
+                print("  运行时 guest ABI  " + str(current["result"]["runtime_guest_abi_version"]))
+                print("  绑定包 guest ABI  " + str(current["result"]["package_guest_abi_version"]))
+                print("  绑定包数据 schema  " + str(current["result"]["package_data_schema_version"]))
                 print("  当前包 SHA-256  " + str(current["result"]["package_sha256"]))
                 print("  下一序号  " + str(current["result"]["next_operation_sequence"]))
                 if current["result"]["pending_operation_id"] is not None:

@@ -543,6 +543,13 @@ static void reply_product_status(const char *request_id,
     } else {
         (void)snprintf(next, sizeof next, "%" PRIu32, ledger->high_watermark + 1U);
     }
+    char firmware_digest[67];
+    package_digest_hex(firmware_digest, binding->firmware_sha256);
+    char package_abi[16] = "null", package_schema[16] = "null";
+    if (binding->package_present) {
+        (void)snprintf(package_abi, sizeof package_abi, "%" PRIu32, binding->package_guest_abi_version);
+        (void)snprintf(package_schema, sizeof package_schema, "%" PRIu32, binding->package_data_schema_version);
+    }
     char digest[67];
     const char *package_sha256 = "null";
     if (binding->package_present) {
@@ -554,10 +561,13 @@ static void reply_product_status(const char *request_id,
         "\"request_id\":\"%s\",\"state\":\"succeeded\",\"error_code\":null,"
         "\"result\":{\"operation_sequence_high_watermark\":%" PRIu32
         ",\"next_operation_sequence\":%s,\"pending_operation_id\":%s%s%s,"
-        "\"container_sequence\":%" PRIu32 ",\"package_sha256\":%s}}",
+        "\"container_sequence\":%" PRIu32 ",\"package_sha256\":%s,"
+        "\"firmware_sha256\":%s,\"runtime_guest_abi_version\":%" PRIu32 ","
+        "\"package_guest_abi_version\":%s,\"package_data_schema_version\":%s}}",
         s_context.device_id, s_boot_id, request_id, ledger->high_watermark, next,
         pending ? "\"" : "null", pending ? pending : "", pending ? "\"" : "",
-        binding->container_sequence, package_sha256);
+        binding->container_sequence, package_sha256, firmware_digest,
+        binding->runtime_guest_abi_version, package_abi, package_schema);
     if (length < 0 || (size_t)length >= sizeof s_response_json) return;
     if (s_reply_mqtt) {
         (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);

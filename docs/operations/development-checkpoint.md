@@ -1,5 +1,22 @@
 # 开发检查点
 
+## 2026-09-30 产品状态的签名固件与绑定包元数据
+
+公开 `product.status` 现严格返回九字段：原账本与绑定五字段，加运行固件完整 SHA-256、实际运行时 guest ABI，以及当前确认包的 guest ABI／数据 schema。固件摘要直接消费既有同一 claim 下双次核对的签名镜像观察，按 SDK 验签确定的完整镜像长度计算，包含 RSA v2／ECDSA v1 各自签名尾部；不是 ELF 或包摘要。运行时 ABI 来自实际编译的 Container 常量；包 ABI／schema 来自当前固件对应的 ECS2 确认绑定。无包时 wire 包摘要／ABI／schema 全部为 null；有包时两项版本均为正 uint32。查询不新增包读取／验签或 guest 健康证明，不把产品 trial 候选当作已确认绑定。
+
+C3／ESP32 完整 host ASan/UBSan 与公开 CLI 15 项通过；严格客户端覆盖九字段、非零摘要、布尔／零／越界版本、缺字段及包元数据与绑定冲突。精确锁定 Container／WAMR 的两目标真实签名 guest 生命周期、deadline／trap、资源版及各 100 次重装通过；新增快照断言逐项对照实际固件观察、运行时常量和同一 ECS2 绑定。宿主 SDK／Flash／NVS／网络仍为假件，宿主资源观察不计为设备峰值容量。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c`、唯一 lwIP 合同、Container／WAMR 和两目标依赖锁未改。独立构建的 208 个已跟踪非文档输入逐项与候选校验一致。在独立仓外源码上使用完整测试产品授权、正式分区和一次性固件测试键完成双目标签名构建，官方 RSA v2／ECDSA v1 验签及 app 槽容量门通过。未使用生产签名键或改变设备信任根。
+
+| 目标 | 签名 app／槽容量 | 完整 app SHA-256 |
+| --- | --- | --- |
+| ESP32-C3 | `0x121000/0x130000` | `aaeb81e8953b0121c7a5d8f2b2ea192e3bc547ae4f3b35ca1be8de33c7384c5b` |
+| ESP32-D0WD-V3 | `0x10fff4/0x120000` | `833abe5aa07f24e976d7ffa67fdbfe78dea974f66089ac6353a3321c22955c96` |
+
+构建输入及签名日志保留在仓外独立临时目录。首轮配置因验证脚本误填包分区标签而被真实 CMake 门拒绝；改回正式 `product_pkgs` 后构建通过，源码合同未放宽。ESP32 初次官方验签调用使用了不支持的私钥格式，随后导出同一测试键的公钥复验通过，镜像字节不变。两次验证输入错误均保留原始日志。
+
+当前实体仅连接 C3，ESP32 已拔除；本轮未打开、复位或写入实体串口。此软件切片不证明正式 USB／MQTT 回读、真实 Broker／FRPS／HTTPS、五能力峰值、掉电或迁移成功。实际活动产品版本、trial 展示和两板联合验收仍待闭合，P6／P7／P8 不因此关闭；C3 旧非空未知持久区保留范围仍待维护者裁决。精确公开字段见[设备协议](../design/device-protocol.md)。
+
 ## 2026-09-30 C3 带包离线 pending／回退 UART 诊断
 
 从 `eb41a4a02a00adb40c9102c2e20f4ae09dfa68d1` 完整 Git 归档建立独立仓外副本，归档 SHA-256 为 `a38159cc8511f4704ef6932bb7085aade0807f20471e955a371ca17018fbc5cb`。逐文件比较仅有两个已跟踪文件差异：`esp_base_protocol.c` 将 C3 的控制台 VFS 分支改接所选 UART，`device_protocol/CMakeLists.txt` 将该诊断的驱动依赖改为 UART。独立 sdkconfig 选择 UART0；正式 USB 源码未改，没有加入测试任务、业务函数调用或健康替身。SDK、精确依赖锁、C3 正式双 `0x130000` app／三份 `0x77000` 包槽／scratch／十一页 Base NVS 均沿用上一检查点。

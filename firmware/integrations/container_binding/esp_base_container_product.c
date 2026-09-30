@@ -2827,9 +2827,14 @@ static econtainer_slots_result_t read_binding_snapshot(
     const econtainer_slot_binding_t *running = &state.bindings[index];
     esp_base_container_binding_snapshot_t *out = context;
     out->container_sequence = state.sequence;
+    memcpy(out->firmware_sha256, firmware_set->running_firmware_sha256, 32);
+    out->runtime_guest_abi_version = ECONTAINER_GUEST_ABI_VERSION;
     out->package_present = running->package_present;
-    if (running->package_present)
+    if (running->package_present) {
         memcpy(out->package_sha256, running->package_sha256, sizeof out->package_sha256);
+        out->package_guest_abi_version = running->guest_abi_version;
+        out->package_data_schema_version = running->data_schema_version;
+    }
     return ECONTAINER_SLOTS_OK;
 }
 

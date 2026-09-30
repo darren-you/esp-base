@@ -187,10 +187,12 @@ class ProductStatusTests(unittest.TestCase):
         pending = "44444444-4444-4444-8444-444444444444"
 
         class Device:
-            def __init__(self, watermark=None, pending_id=None, digest=None):
+            def __init__(self, watermark=None, pending_id=None, digest=None, changes=None, missing=None):
                 self.watermark = watermark
                 self.pending_id = pending_id
                 self.digest = digest
+                self.changes = changes or {}
+                self.missing = missing
                 self.response = bytearray()
 
             def write(self, payload):
@@ -202,7 +204,12 @@ class ProductStatusTests(unittest.TestCase):
                     "next_operation_sequence": self.watermark + 1 if self.watermark < 4294967295 else None,
                     "pending_operation_id": self.pending_id,
                     "container_sequence": 6,
-                    "package_sha256": self.digest}
+                    "package_sha256": self.digest, "firmware_sha256": "f" * 64,
+                    "runtime_guest_abi_version": 2, "package_guest_abi_version": 2 if self.digest else None,
+                    "package_data_schema_version": 1 if self.digest else None}
+                if result is not None:
+                    result.update(self.changes)
+                    if self.missing is not None: result.pop(self.missing)
                 response = {"protocol_version": 1, "device_id": device,
                             "boot_id": boot, "request_id": request["request_id"],
                             "state": "unknown" if result is None else "succeeded",
@@ -232,6 +239,20 @@ class ProductStatusTests(unittest.TestCase):
             control.product_status(Device(7, digest="0" * 64), current)
         self.assertIsNone(control.product_status(Device(4294967295), current)
                           ["result"]["next_operation_sequence"])
+
+        self.assertEqual(result["firmware_sha256"], "f" * 64)
+        self.assertEqual(result["runtime_guest_abi_version"], 2)
+        self.assertIsNone(result["package_guest_abi_version"])
+        for changes in [{"firmware_sha256": "0" * 64}, {"runtime_guest_abi_version": 0},
+                        {"runtime_guest_abi_version": True}, {"package_guest_abi_version": None},
+                        {"package_data_schema_version": 0}, {"package_data_schema_version": 4294967296}]:
+            with self.assertRaises(ValueError):
+                control.product_status(Device(7, digest="ab" * 32, changes=changes), current)
+        for missing in ["firmware_sha256", "runtime_guest_abi_version", "package_guest_abi_version", "package_data_schema_version"]:
+            with self.assertRaises(ValueError):
+                control.product_status(Device(7, missing=missing), current)
+        with self.assertRaises(ValueError):
+            control.product_status(Device(7, changes={"package_guest_abi_version": 2}), current)
 
 
 class ProductPackageTests(unittest.TestCase):
@@ -538,7 +559,9 @@ class ProductUninstallTests(unittest.TestCase):
                               "next_operation_sequence": 1,
                               "pending_operation_id": None,
                               "container_sequence": 6,
-                              "package_sha256": digest}
+                              "package_sha256": digest, "firmware_sha256": "f" * 64,
+                              "runtime_guest_abi_version": 2, "package_guest_abi_version": 2,
+                              "package_data_schema_version": 1}
                 elif command == "product.uninstall":
                     assert request["device_id"] == device
                     assert request["target_boot_id"] == boot

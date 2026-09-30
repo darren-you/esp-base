@@ -58,8 +58,12 @@ bool esp_base_container_product_pristine_baseline(
     const esp_base_storage_claim_t *claim);
 typedef struct {
     uint32_t container_sequence;
+    uint8_t firmware_sha256[32];
+    uint32_t runtime_guest_abi_version;
     bool package_present;
     uint8_t package_sha256[32];
+    uint32_t package_guest_abi_version;
+    uint32_t package_data_schema_version;
 } esp_base_container_binding_snapshot_t;
 typedef enum {
     ESP_BASE_CONTAINER_BINDING_OK = 0,

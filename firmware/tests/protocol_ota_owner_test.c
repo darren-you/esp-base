@@ -964,6 +964,10 @@ int main(void)
            strstr(latest_reply, "\"pending_operation_id\":null") &&
            strstr(latest_reply, "\"container_sequence\":6") &&
            strstr(latest_reply, "\"package_sha256\":null") &&
+           strstr(latest_reply, "\"firmware_sha256\":\"f1f1") &&
+           strstr(latest_reply, "\"runtime_guest_abi_version\":2") &&
+           strstr(latest_reply, "\"package_guest_abi_version\":null") &&
+           strstr(latest_reply, "\"package_data_schema_version\":null") &&
            binding_snapshot_calls == 1U);
     product_intent.sequence = 2U;
     strcpy(product_intent.operation_id, "44444444-4444-4444-8444-000000000002");
@@ -979,6 +983,8 @@ int main(void)
     handle_line("product-status-1", strlen("product-status-1"), NULL);
     s_reply_mqtt = false;
     assert(strstr(latest_reply, "\"package_sha256\":\"7b7b") &&
+           strstr(latest_reply, "\"package_guest_abi_version\":2") &&
+           strstr(latest_reply, "\"package_data_schema_version\":1") &&
            atomic_load(&owner.active_token) == 0U);
     binding_result = ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
     s_reply_mqtt = true;
@@ -1791,6 +1797,10 @@ esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     ++binding_snapshot_calls;
     *out = (esp_base_container_binding_snapshot_t){.container_sequence = binding_sequence,
                                                    .package_present = binding_package_present};
+    memset(out->firmware_sha256, 0xf1, 32);
+    out->runtime_guest_abi_version = 2U;
+    out->package_guest_abi_version = binding_package_present ? 2U : 0U;
+    out->package_data_schema_version = binding_package_present ? 1U : 0U;
     if (binding_package_present) memset(out->package_sha256, 0x7b, 32);
     return binding_result;
 }

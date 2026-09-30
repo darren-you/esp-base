@@ -79,8 +79,12 @@ bool esp_base_container_product_pristine_baseline(
 
 typedef struct {
     uint32_t container_sequence;
+    uint8_t firmware_sha256[32];
+    uint32_t runtime_guest_abi_version;
     bool package_present;
     uint8_t package_sha256[32];
+    uint32_t package_guest_abi_version;
+    uint32_t package_data_schema_version;
 } esp_base_container_binding_snapshot_t;
 
 typedef enum {
@@ -94,7 +98,9 @@ typedef enum {
  * observations of the selected signed firmware. During this boot's exact
  * product-only trial, return the still-confirmed old binding and the current
  * ECS2 sequence; the candidate is not reported as confirmed. This is a
- * read-only status/precondition, not package-byte or guest-health proof. */
+ * read-only status/precondition, not package-byte or guest-health proof. The
+ * running signed image digest and runtime ABI are independent of the bound
+ * package ABI/schema; absent package fields are zero in this C snapshot. */
 esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
     esp_base_container_binding_snapshot_t *out);
