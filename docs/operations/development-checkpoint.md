@@ -1,5 +1,31 @@
 # 开发检查点
 
+## 2026-09-30 ESP32 带包离线 pending／回退启动与主任务栈
+
+在 `85e8e71af21d7fac42c85d78eccc66933e59835c` 源码上补齐完整、合法的仓外 Container 测试授权后，正式 ECDSA v1 签名 ESP32 app 在两种带包回退启动中都复现 `***ERROR*** A stack overflow in task main`。当时主栈仍为 SDK 默认 3,584 B；此前 `0xffff4` B 的 ESP32 构建使用空产品授权，只证明该配置的装配，不能证明完整产品路径容量。故障沿实际 app_main、签名固件观察、Container 放弃／删除迁移和 NVS 持久恢复发生，没有 GDB 业务函数调用。失败输入和原始日志保留在仓外 `third-run-3584-byte-main-overflow/`。
+
+本次最小修正将已有 C3 的 6,144 B 主栈移到两目标共用默认，并将普通 Base 的构建下限扩到 ESP32；C3 实际配置不变。该 SDK 的非 nano 格式还增加 512 B，实际分配 6,656 B，TCB 的对齐后高低地址跨度为 6,645 B。静态帧取证显示 Container 持久化、放弃和删除帧分别为 896、624、624 B，另有 Base 与 SDK 调用链；单帧之和不能代替运行峰值，因此重签应用并完整重跑两种模式。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c` 和唯一 lwIP 合同检查通过；Container `e8a0d0b6384bbba813b955ed08ebc315c134a707`、WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf` 及所有组件锁未改。使用正式分区几何、UART0、回滚和完整 Container 授权，app 源码没有加入探针或网络替身。A 使用产品版本 `0.2.0`；C 仅用 SDK 原生 `CONFIG_APP_PROJECT_VER_FROM_CONFIG` 设置 `0.2.0-qemu-c`，使两个实际签名镜像身份不同。测试授权为 `test-product/test-key`，一页 Wasm、16 KiB owner 栈、事件队列上限 4、最大 guest 入口 100 ms；临时包签名键及固件测试键均不入仓，也不是生产密钥。
+
+| 输入 | 大小／槽容量 | 完整 SHA-256 |
+| --- | --- | --- |
+| ESP32 来源 A | `0x10fff4/0x120000` | `10b701726c9859b0686c952bd901c2d88f03867b559fb222615d2dbe78322143` |
+| ESP32 候选 C | `0x10fff4/0x120000` | `6860d0bebfca0c7b4514e883f5a436f87564a1939ac843be4526c1a0d7dcfe0f` |
+| C3 正式 USB 产品构建 | `0x121000/0x130000` | `35f57204b0b3c26e8cf9ad3b00cd8eb33347a8c8b90e21d212b935691d000aa6` |
+| 来源 P0 counter.pkg | 10,240 B | `2fb57a90a325ec3b09da47e4ddc3792fa72e7f2b1c57fe6e1c98cd89d4eea38c` |
+| WRITE 目标 P1 counter-v2.pkg | 10,240 B | `328092a41690e117ec6a5efbdb7df83491c9a2e36484d0c6450a723b10bb66cb` |
+
+双目标完整授权构建和官方 RSA v2／ECDSA v1 验签通过，ESP32／C3 配置 3,584／6,143 B 的独立实际 reconfigure 均被共同主栈门拒绝。C3 本轮只验证正式 USB 签名构建，没有运行同一带包恢复场景。
+
+仓外 `/private/tmp/esp-base-85e8e71-pending-qemu-20260930/` 保留 `seed.c`、`prepare.py`、`run.py`、`verify.py`、完整配置／ELF／签名 app、包和逐阶段收据。host ASan/UBSan 的 seed 通过真实 Container 验包／槽 API 合成 P0 已确认 sequence 6、原产品账本及原 V3 意图，REUSE／WRITE 分别预置 PREPARED sequence 7／8；代表事件摘要为测试字节摘要，健康前置由 seed 构造。官方 NVS generator 将 ECS2、EOTA V3、EPRD 与固定合成设备 UUID 写入新 4 MiB Flash，A 为 VALID，C 为 NEW。它不证明公开安装、公开下载或代表事件已在设备发生。
+
+每种模式分别运行同片的三次独立 QEMU 进程：候选 pending、复位回到 A、再次启动 A。实际候选 trial 持久推进到 sequence 8／9，跨本地检查窗口和三个相隔 15 秒的查询继续返回原 ID `running`，包模式／摘要正确；无 Wi-Fi／时间／MQTT 就绪事实，固件未被确认，配置写入返回 `ota_verification_pending`。下一次 SDK boot 回退到 A，正式启动退役 C、恢复来源 P0、将原收据持久记为 FAILED 后到 `READY container=running`；再启动仍返回同一失败结果。GDB 仅在实际 app_main 返回且主 TCB 尚未删除时读 RAM 填充值，没有调用函数、伪造时间或注入健康。REUSE／WRITE 回退主栈最低未用分别为 2,324／2,308 B，二启均为 3,780 B；均超过本切片 1 KiB 初始观察门。
+
+官方 NVS parser 的完整页／条目 CRC、ECS2／EPRD 内部 CRC、原 V3 的 308 B 长度及字段读回通过。回退后的 ECS2 sequence 为 10／11、IDLE，来源绑定与产品账本逐字节保持，候选绑定删除；A 仍 VALID，C 的首扇区和 inactive otadata 扇区按真实 SDK 退役，C 其余字节保持。bootloader、分区表、身份 NVS、A、整个包区、旧 AT 保留区和 scratch 均未变。回退与再次启动的整片 Flash 逐字节一致：REUSE 为 `6643f741ec21bd72719e7c08254bfb919516be14afa7cf8565f82eae60932698`，WRITE 为 `1d668b8dcdbdffc3fc78dbe0c95d5e461005ad729cc728970112be9f6f84d5f0`；各模式相对初始片仅 otadata、C、Base NVS 改变 12、4,096、1,426 B。
+
+QEMU 固定为 Espressif `esp_develop_9.2.2_20260417`，禁自动重启并关闭模拟器 timer WDT；没有真实 Wi-Fi、Broker、FRPS 或 HTTPS 会话，没有验证联网成功确认、公开 worker 从下载开始的完整链或物理掉电。普通堆历史最低约 119 KiB 属于离线 UART 场景，不能回填五能力容量。首轮 120 秒启动期限不足和第二轮测试客户端读取错误字段的失败日志也保留；最终采用 360 秒仿真启动期限和实际 `revision` 字段，产品期限未改。维护者已确认当前只有 C3 连接、ESP32 拔除；本轮未打开或重置实体串口、未写板，双板发布范围与 P6-10/P7-04 实板／网络门保持开放。
+
 ## 2026-09-30 公开 REUSE／WRITE 联合 OTA worker
 
 公开 `ota.start` 现消费三种包模式的准入合同。`NO_PACKAGE` 仍要求已准入 EMPTY；`REUSE` 要求已确认且运行的来源 guest；`WRITE` 可由该来源或 EMPTY 开始，任何 trial／blocked 状态均拒绝。worker 重读原 V3，逐项核对固件、包和代表事件字段，在旧 B 首次物理退役前再取得来源完整快照并核对原 A/B、ECS2 序号和来源包。Container 退役入口同步硬切为消费原收据，保留来源包引用并读回。A-only 已确认来源可保持原 CONFIRMED 相位／序号进入 stage 或 prepare 前恢复，不新增虚构持久步骤。

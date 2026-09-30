@@ -1,5 +1,7 @@
 # 固件测试
 
+2026-09-30 完整授权的正式 ESP32 签名 app 已在仓外 QEMU 运行 REUSE／WRITE 的离线 pending、同片回退恢复和再次冷启动；3,584 B 主任务栈复现溢出，统一 6,144 B 后通过。两模式回退主栈最低余 2,324／2,308 B，原收据持久失败，旧 P0 包恢复，二启完整 Flash 相同。前置 ECS2／原 V3 收据由合成 seed 构造，GDB 只在实际 app_main 返回后读取 TCB／栈填充值，没有注入业务调用或健康；未验证公开下载、真实 MQTT／Wi-Fi 或实体板。双目标签名构建、官方验签与欠栈配置拒绝通过，详见[开发检查点](../../docs/operations/development-checkpoint.md)。
+
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
 `product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器并注入 HTTP／单调时钟假件，检查 URL 和证书 bundle 配置、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，见[来源检查点](../../docs/operations/product_package_https_source_checkpoint.md)。
@@ -14,7 +16,7 @@
 
 Wi-Fi 启动测试编译真实 `wifi_runtime`，逐项注入 netif、事件循环、队列、驱动、事件注册、配置和启动失败，验证明确 `failed` 状态及初始化中途资源释放；事件注入还验证不同 SSID 拒绝、同 SSID 但记录填充字节不同仍可取得关联/IP 证明。它不模拟真实 AP 关联、WPA3、DNS、无线恢复或 pending 槽的整机任务调度。
 
-OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度、HTTPS URL、必需包模式及带包元数据。`protocol_ota_owner_test` 还断言有效 REUSE／WRITE 在收据登记和目标擦写前拒绝，非法 WRITE URL 更早拒绝，且无包 worker 遇带包 V3 收据不擦槽；`ota_startup_test` 检查新 pending 包 trial 阻断、原槽 A 恢复以及 VALID C 原健康证据确认后的启动；`ota_receipt_test` 核对合法带包字段、成功／失败终态与各次写入读回故障。公开客户端测试核对包摘要、代表事件摘要、目标包槽上限与 `ota.result` 模式字段。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽，断言直接槽检查持有短 Flash claim、pending 确认期间 FRP scratch 等待到 500 毫秒后失败、释放后可再次获取；`ota_receipt_test` 验证产品约束、持久收据及各次 NVS 调用持有短 Flash claim。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
+OTA 命令解析测试覆盖精确 manifest 字段、target、签名方案、长度、HTTPS URL、必需包模式及带包元数据。`protocol_ota_owner_test` 覆盖 REUSE／WRITE 的原收据复核、来源变化时不擦写、停止与 stage／下载／读回不确定、pending 原 ID 查询及配置写门；非法 WRITE URL 在持久登记前拒绝。`ota_startup_test` 检查原槽 A 恢复、新 pending trial 的本地／连续在线检查、native 回收与失败阻断，以及 VALID C 原健康证据确认后的启动；`ota_receipt_test` 核对合法带包字段、成功／失败终态与各次写入读回故障。公开客户端测试核对包摘要、代表事件摘要、目标包槽上限与 `ota.result` 模式字段。通用 HTTPS/Flash/槽与 SDK 故障矩阵由精确锁定的 `esp-ota` 仓 `tests/update_test.c`、`tests/ota_test.c`、`tests/http_deadline_test.c`、`tests/http_transport_test.c` 和真实 TLS 回环测试维护；Base 不再编译第二份通用实现。Base 的 `ota_startup_test` 仍覆盖本地启动检查、30 秒与跨窗口控制进展、确认失败后的读回和无回退槽，断言直接槽检查持有短 Flash claim、pending 确认期间 FRP scratch 等待到 500 毫秒后失败、释放后可再次获取；`ota_receipt_test` 验证产品约束、持久收据及各次 NVS 调用持有短 Flash claim。Fake 不替代实板 TLS/Flash/bootloader 或断电测试。
 
 v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 字节显式拒绝且无写入，以及 NVS 查询长度、写前/写后、commit 与读回故障；公开 USB 工具另验证相同 schema 的非法字段和整帧上限。
 
@@ -73,9 +75,9 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 `run_container_lifecycle_test.sh` 以精确锁定的公开 Container/WAMR 源和 wasi-sdk 编译真实签名 counter 包，Base 测试二进制启用 ASan/UBSan。卸载测试覆盖运行中 `stop/close/join`、已停止及损坏包启动失败但 native 资源确已回收的实例，调用公开 `econtainer_slots_uninstall` 后核对当前绑定清除、回退固件包引用与整份包 Flash 不变、同 boot 正式 `product_boot` 返回 `EMPTY`。错误 sequence/摘要在 guest 停止前拒绝；运行中失去 ECS2 key、Container 提交读回与 Base 独立读回各自失败、停止超时均返回不确定并禁止同 boot 重开；旧 OTA `SUCCEEDED` 收据在新产品 operation 推进 sequence 后仍核对原 A/C。Flash/NVS 与固件集合是宿主替身，不代表真实签名 Base 镜像或设备断电。
 
-同一真实签名 guest 生命周期还用构造的 V3 固件收据验证带包 selected C 的只读预检：空来源 `WRITE` 在 `WRITING` 时拒绝、完成包写入并读回 `PREPARED` 后通过；有来源包的 `REUSE`／`WRITE` 核对原 operation、来源与目标包身份，目标包字节篡改后拒绝，恢复字节后通过。整个预检不增加 blob、包槽擦除或写入计数；普通启动仍有带包执行门，不代表公开带包 OTA 已启动。
+同一真实签名 guest 生命周期还用构造的 V3 固件收据验证带包 selected C 的只读预检：空来源 `WRITE` 在 `WRITING` 时拒绝、完成包写入并读回 `PREPARED` 后通过；有来源包的 `REUSE`／`WRITE` 核对原 operation、来源与目标包身份，目标包字节篡改后拒绝，恢复字节后通过。整个只读预检不增加 blob、包槽擦除或写入计数；普通启动已消费该预检，但此分层用例不证明公开网络下载。
 
-同一用例还在模拟物理 A-only 后，以原 V3 收据测试带包回退：旧 B 未退役、部分 `WRITING`、`PREPARED`、人为推进的 `HEALTH_VERIFIED` 及已提交 `ABORTED` 后的续进均只清理原候选绑定，保留 A 的签名包与包 Flash；完成后的原收据重复调用不新增提交。错误来源摘要、来源包字节损坏或同 boot 放弃不能写 ECS2。`HEALTH_VERIFIED` 在测试中由 Container 原语人为推进，不代表真实业务事件或 30 秒在线健康通过；普通启动仍阻断带包收据。
+同一用例还在模拟物理 A-only 后，以原 V3 收据测试带包回退：旧 B 未退役、部分 `WRITING`、`PREPARED`、人为推进的 `HEALTH_VERIFIED` 及已提交 `ABORTED` 后的续进均只清理原候选绑定，保留 A 的签名包与包 Flash；完成后的原收据重复调用不新增提交。错误来源摘要、来源包字节损坏或同 boot 放弃不能写 ECS2。`HEALTH_VERIFIED` 在测试中由 Container 原语人为推进，不代表真实业务事件或 30 秒在线健康通过；普通启动已消费原收据恢复，真实 SDK／签名 app 的离线回退另见本页顶部检查点。
 
 同一入口另用临时 RSA 测试键签发真实 ABI 2 guest：`init` 成功写入一条日志、登记一次性定时器后进入纯 Wasm 无限循环。签名包沿真实槽的安装、验签、授权、WAMR 装载和 `econtainer_product_init` 执行；在测试策略的 100,000,000 条指令额度与 20 ms 期限下必须先返回 `ENTRY_EXPIRED`，本次日志不可取、计时器不可投递、失败实例不可 `stop`，`close` 释放原生实例。正式 Base `product_boot` 对同一包须返回 `BLOCKED`，worker 已 join、native 已回收，同 boot 重试仍阻断且槽/包不被失败入口改写。随后在同一测试进程的新启动替身中，普通签名 counter 包仍可 `product_boot → stop_confirmed`。这两个数值不代表当前默认关闭的产品授权。测试使用宿主假 Flash/NVS 与固件摘要；新启动替身会重置其假存储，不证明同一物理 boot 解阻、NVS 持久恢复、设备调度上界或同步原生导入可抢占。
 

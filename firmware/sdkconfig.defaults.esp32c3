@@ -4,9 +4,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/c3-product-partition-table.cs
 CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED=y
 CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET=0x3e5000
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-# app_main 首次建立无包 Container 后仍需连续验证签名固件；仓外 C3 QEMU
-# 用 3584 B 主任务栈在后续验签时溢出，6144 B 的最低空闲为 2440 B。
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 # C3 产品仅作为 Wi-Fi STA 与 TLS 客户端；FRP status 为本地明文 HTTP。
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 # Match the default RX BA window without retaining four unused static RX buffers.

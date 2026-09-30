@@ -4,6 +4,8 @@
 
 当前软件候选分别构建 ESP32-C3 的 USB 与 ESP32-D0WD-V3 的 UART0 命令运行面；两目标都有独立分区、OTA/签名策略和精确组件锁。ESP32 旧 AT 到新布局、双签名 Base 与真实启动链仍待受控迁移和实板验收。两者都不是五能力完成版本。
 
+普通 Base 两目标统一要求 `CONFIG_ESP_MAIN_TASK_STACK_SIZE >= 6144`；默认值为 6,144 B，签名固件观察和 Container 持久恢复都由该任务执行。ESP32 默认 3,584 B 曾在正式签名应用的带包回退恢复中溢出；修后 REUSE／WRITE 的离线 pending、旧包恢复和幂等二启通过，恢复最低栈余量 2,324／2,308 B。该 SDK 的非 nano 格式另加 512 B，不能将 TCB 对齐后的观测跨度当作配置值。C3 保持原有 6,144 B，本轮只重新验证 USB 产品签名构建，未运行同一带包 QEMU 或实板场景。完整测试授权的 C3／ESP32 app 为 `0x121000`／`0x10fff4` B；旧 ESP32 空授权 `0xffff4` B 不代表完整产品容量。输入和边界见[开发检查点](../docs/operations/development-checkpoint.md)。
+
 ## 架构拓扑
 
 ```mermaid
@@ -101,7 +103,7 @@ C3 签名构建要求 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SEC
 
 `ota_operation` 另提供只读固件集合观察：已确认模式要求运行槽 `VALID`；显式 pending trial 模式要求运行槽 `PENDING_VERIFY`、另一槽 `VALID` 且 IDF 证明可回滚。prepared candidate 模式需要本次 `eota_prepare` 的收据，要求 A 仍运行且被选为 boot、otadata 为 `VALID`，C 未选 boot 且旧 inactive otadata 已失效；重新验签 A/C 并核对 C 的完整长度/摘要。三种模式都要求运行槽与当前 boot selector 一致，拒绝过程中变化。已确认模式中若另一槽未受管，镜像校验必须明确无效且目标首字节须擦除为 `0xff`，才输出单固件集合；应用侧验签失败不足以证明 bootloader 不会后备扫描。调用方在观察及消费结果期间独占 app/otadata 写入；prepared 观察现由无包 OTA worker 在选 boot 前持久 stage，pending 观察用于候选 trial。
 
-本次 boot 的启动存储操作和 pending 确认持有 `ota_operation` 串行 owner；完成后释放，已启动 guest 不长期占用。`ota.start` 在持久登记前取得 claim，跨控制任务与 worker 保持到下载、验签和选择完成。worker 凭原 V3 收据先调用 `eota_retire_inactive` 擦除旧 B 首扇区、回读首字节 `0xff` 并使其 otadata 失效，再将 Container 持久绑定退役为 A-only；此后才允许 `eota_prepare` 写 C。重启后的启动 claim 在产品装载之前读取同一收据：仍运行 A 时按原目标清理部分 C，并将 Container 的精确 PREPARED/TRIAL_STARTED/HEALTH_VERIFIED/ABORTED 操作收敛到 A-only，成功后才记失败；运行 C 时验其完整摘要、旧 A 的签名与回退资格；配置 Container 时再核原 operation、A/C 绑定和 ECS2 sequence。VALID C 的 `HEALTH_VERIFIED` 状态只凭该收据确认并读回；收据缺失、已失败或 OTA 不可用时，残留固件迁移只读阻断，普通产品启动不改写 ECS2。控制任务在恢复完成前保持配置写入与 MQTT/FRP owner 关闭。任一步不能核实就保持阻断；`ota.result` 不从 target otadata 单独推断失败。未知选择或存储结果保留本 boot claim；可证明失败并记账后释放。[Container 产品装配](integrations/container_binding/README.md)复用启动已持有的 claim，不二次争抢。策略完整且持久无包绑定时，首次确认启动可初始化，后续固件 OTA 依精确 prepared 收据 stage、pending trial 和 OTA VALID 回读确认；现有 confirmed 包仍可验签启动。带包联合升级在写 inactive app 前拒绝，因为联合操作的授权、收据和启动恢复尚未接通；无板的编译与 host 测试不证明电源中断、bootloader 回退或 guest 与五能力并发。
+本次 boot 的启动存储操作和 pending 确认持有 `ota_operation` 串行 owner；完成后释放，已启动 guest 不长期占用。`ota.start` 在持久登记前取得 claim，跨控制任务与 worker 保持到下载、验签和选择完成。worker 凭原 V3 收据先调用 `eota_retire_inactive` 擦除旧 B 首扇区、回读首字节 `0xff` 并使其 otadata 失效，再将 Container 持久绑定退役为 A-only；此后才允许 `eota_prepare` 写 C。重启后的启动 claim 在产品装载之前读取同一收据：仍运行 A 时按原目标清理部分 C，并将 Container 的精确 PREPARED/TRIAL_STARTED/HEALTH_VERIFIED/ABORTED 操作收敛到 A-only，成功后才记失败；运行 C 时验其完整摘要、旧 A 的签名与回退资格；配置 Container 时再核原 operation、A/C 绑定和 ECS2 sequence。VALID C 的 `HEALTH_VERIFIED` 状态只凭该收据确认并读回；收据缺失、已失败或 OTA 不可用时，残留固件迁移只读阻断，普通产品启动不改写 ECS2。控制任务在恢复完成前保持配置写入与 MQTT/FRP owner 关闭。任一步不能核实就保持阻断；`ota.result` 不从 target otadata 单独推断失败。未知选择或存储结果保留本 boot claim；可证明失败并记账后释放。[Container 产品装配](integrations/container_binding/README.md)复用启动已持有的 claim，不二次争抢。策略完整且持久无包绑定时，首次确认启动可初始化，后续固件 OTA 依精确 prepared 收据 stage、pending trial 和 OTA VALID 回读确认；现有 confirmed 包仍可验签启动。带包联合升级现按原 V3、已确认来源与目标包合同执行；新 pending 的代表事件和连续在线健康完成后才联合确认。离线签名 QEMU 已验证 pending 与回退恢复，编译／host 测试及该切片仍不证明实体电源中断或 guest 与五能力网络并发。
 
 MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELETED_MESSAGES=y`。新 sdkconfig 从 defaults 得到这些值；已有 sdkconfig 若显式关闭，需在 menuconfig 启用，编译器会拒绝缺少日期验证或消息过期通知的配置。
 

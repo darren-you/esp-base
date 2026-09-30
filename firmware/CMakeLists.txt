@@ -69,9 +69,8 @@ if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     NOT CONFIG_ESP_WIFI_RX_BA_WIN EQUAL 6))
     message(FATAL_ERROR "ESP Base C3 requires six static Wi-Fi RX buffers, BA window six and both Wi-Fi IRAM optimizations disabled")
 endif()
-if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
-    CONFIG_ESP_MAIN_TASK_STACK_SIZE LESS 6144)
-    message(FATAL_ERROR "ESP Base C3 requires a 6144-byte main task stack for signed no-package startup")
+if(ESP_BASE_APP STREQUAL "esp_base" AND CONFIG_ESP_MAIN_TASK_STACK_SIZE LESS 6144)
+    message(FATAL_ERROR "ESP Base requires a 6144-byte main task stack for signed firmware and Container startup/recovery")
 endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     (NOT CONFIG_PARTITION_TABLE_CUSTOM OR

@@ -1,1 +1,1 @@
-- 接通公开 REUSE 与 WRITE 联合 OTA worker、严格包 HTTPS 来源、来源 guest 停止和原 ID 未决查询
+- 修复 ESP32 带包回退启动主栈溢出，统一双目标主栈下限并记录签名仿真恢复证据
