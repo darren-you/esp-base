@@ -477,19 +477,19 @@ bool esp_base_container_product_reconcile_selected_ota(
 }
 
 esp_base_container_retire_result_t esp_base_container_product_recover_retired_firmware(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32], const uint8_t candidate_sha256[32],
-    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *recovery,
     const char boot_id[37])
 {
     assert(esp_base_storage_claim_active(claim) &&
-           container_enabled == receipt.container_enabled &&
-           expected_sequence == receipt.container_sequence &&
-           memcmp(source_sha256, receipt.source_sha256, 32) == 0 &&
-           memcmp(inactive_sha256, receipt.inactive_sha256, 32) == 0 &&
-           memcmp(candidate_sha256, receipt.candidate_sha256, 32) == 0 &&
-           !strcmp(operation_id, receipt.operation_id) && boot_id && boot_id[0] == '3');
+           recovery != NULL &&
+           recovery->container_enabled == receipt.container_enabled &&
+           recovery->container_sequence == receipt.container_sequence &&
+           memcmp(recovery->source_sha256, receipt.source_sha256, 32) == 0 &&
+           memcmp(recovery->inactive_sha256, receipt.inactive_sha256, 32) == 0 &&
+           memcmp(recovery->candidate_sha256, receipt.candidate_sha256, 32) == 0 &&
+           !strcmp(recovery->operation_id, receipt.operation_id) &&
+           boot_id && boot_id[0] == '3');
     ++container_recover_calls;
     return container_recover_result;
 }

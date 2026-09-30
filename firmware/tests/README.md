@@ -71,6 +71,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 同一真实签名 guest 生命周期还用构造的 V3 固件收据验证带包 selected C 的只读预检：空来源 `WRITE` 在 `WRITING` 时拒绝、完成包写入并读回 `PREPARED` 后通过；有来源包的 `REUSE`／`WRITE` 核对原 operation、来源与目标包身份，目标包字节篡改后拒绝，恢复字节后通过。整个预检不增加 blob、包槽擦除或写入计数；普通启动仍有带包执行门，不代表公开带包 OTA 已启动。
 
+同一用例还在模拟物理 A-only 后，以原 V3 收据测试带包回退：旧 B 未退役、部分 `WRITING`、`PREPARED`、人为推进的 `HEALTH_VERIFIED` 及已提交 `ABORTED` 后的续进均只清理原候选绑定，保留 A 的签名包与包 Flash；完成后的原收据重复调用不新增提交。错误来源摘要、来源包字节损坏或同 boot 放弃不能写 ECS2。`HEALTH_VERIFIED` 在测试中由 Container 原语人为推进，不代表真实业务事件或 30 秒在线健康通过；普通启动仍阻断带包收据。
+
 同一入口另用临时 RSA 测试键签发真实 ABI 2 guest：`init` 成功写入一条日志、登记一次性定时器后进入纯 Wasm 无限循环。签名包沿真实槽的安装、验签、授权、WAMR 装载和 `econtainer_product_init` 执行；在测试策略的 100,000,000 条指令额度与 20 ms 期限下必须先返回 `ENTRY_EXPIRED`，本次日志不可取、计时器不可投递、失败实例不可 `stop`，`close` 释放原生实例。正式 Base `product_boot` 对同一包须返回 `BLOCKED`，worker 已 join、native 已回收，同 boot 重试仍阻断且槽/包不被失败入口改写。随后在同一测试进程的新启动替身中，普通签名 counter 包仍可 `product_boot → stop_confirmed`。这两个数值不代表当前默认关闭的产品授权。测试使用宿主假 Flash/NVS 与固件摘要；新启动替身会重置其假存储，不证明同一物理 boot 解阻、NVS 持久恢复、设备调度上界或同步原生导入可抢占。
 
 同一测试进程还重复 100 次真实签名包安装、正式 Base `product_boot`、产品卸载、同 boot `EMPTY`，每轮保持唯一 storage claim，读取正式 ECS2 状态并核对每次安装 5 次、卸载 1 次提交。guest 实际执行 `init` 与 `stop`；循环不调用 `on_event`。另在同 boot 的 P1/P2 换包用例中，测试通过 Base 有界 FIFO 投递事件、等待唯一 guest 线程完成，核对完成序号、当前包摘要与真实 guest 返回值，并验证换包后观察清空、错误摘要、空事件、停止后旧事件均被拒绝。该测试没有真实 MQTT 授权入口。运行中卸载必须证明 `stop/close/join`、native 已回收，并确认卸载不擦写包 Flash。macOS 另编译非 sanitizer 二进制，先校准 64 KiB 堆与 VM 映射能被采样，再比较第 10／50／100 次后的默认 malloc zone 已用字节、`TASK_VM_INFO` 虚拟字节与 region 数；ASan/UBSan 二进制也执行同一循环。这是宿主分配和线程回收检查，不代表 ESP 堆、Flash 耐久、公开安装或实板 100 次运行。

@@ -308,15 +308,13 @@ esp_base_container_retire_result_t esp_base_container_product_retire_inactive(
     const uint8_t inactive_sha256[32]);
 
 /* Fresh-boot recovery after physical eota_retire_inactive, before product_boot
- * creates any guest thread. In addition to A/B and A-only it recognizes only
- * the same receipt's exact A/C operation, abandons its candidate, then drops
- * the unbootable C binding. The current boot ID must differ from any recorded
- * trial boot ID; no live guest may be silently canceled. */
+ * creates any guest thread. The original V3 receipt binds the source package
+ * and exact A/C operation. WRITING, PREPARED and old-boot trials are abandoned
+ * before the unbootable C binding is dropped. The current boot ID must differ
+ * from any recorded trial boot ID; no live guest may be silently canceled. */
 esp_base_container_retire_result_t esp_base_container_product_recover_retired_firmware(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32], const uint8_t candidate_sha256[32],
-    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt,
     const char boot_id[37]);
 
 /* Before starting a guest on selected C, bind the original V3 receipt to the

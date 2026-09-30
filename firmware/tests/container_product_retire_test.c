@@ -284,17 +284,31 @@ static void staged_candidate(uint32_t sequence)
     assert(decode_uuid(operation_id, persisted.operation.operation_id));
 }
 
+static esp_base_ota_receipt_recovery_t recovery_receipt(
+    bool enabled, uint32_t sequence, uint8_t candidate_value,
+    const char *operation, bool old_inactive)
+{
+    esp_base_ota_receipt_recovery_t receipt = {
+        .status = ESP_BASE_OTA_RECEIPT_PREPARED,
+        .container_enabled = enabled,
+        .container_sequence = sequence,
+        .package_mode = ESP_BASE_OTA_NO_PACKAGE,
+    };
+    strcpy(receipt.operation_id, operation);
+    fill_sha(receipt.source_sha256, 0xa1);
+    if (old_inactive) fill_sha(receipt.inactive_sha256, 0xb2);
+    fill_sha(receipt.candidate_sha256, candidate_value);
+    return receipt;
+}
+
 static esp_base_container_retire_result_t recover(bool enabled, uint32_t sequence,
                                                    uint8_t candidate_value,
                                                    const char *operation)
 {
-    uint8_t source[32], inactive[32], candidate[32];
-    fill_sha(source, 0xa1);
-    fill_sha(inactive, 0xb2);
-    fill_sha(candidate, candidate_value);
+    esp_base_ota_receipt_recovery_t receipt = recovery_receipt(
+        enabled, sequence, candidate_value, operation, true);
     return esp_base_container_product_recover_retired_firmware(
-        &claim, enabled, sequence, source, inactive, candidate,
-        operation, boot_id);
+        &claim, &receipt, boot_id);
 }
 
 static esp_base_ota_receipt_recovery_t selected_receipt(void)
@@ -518,11 +532,10 @@ int main(void)
     fixture(true, false);
     s_product.provider_bound = false;
     staged_candidate(8U); /* Original A-only S=7, stage=8. */
-    uint8_t candidate[32];
-    fill_sha(candidate, 0xc3);
+    esp_base_ota_receipt_recovery_t no_inactive_receipt = recovery_receipt(
+        true, 7U, 0xc3, operation_id, false);
     assert(esp_base_container_product_recover_retired_firmware(
-        &claim, true, 7U, source, no_inactive, candidate,
-        operation_id, boot_id) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+        &claim, &no_inactive_receipt, boot_id) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
     assert(persisted.sequence == 10U && abandon_calls == 1U && drop_calls == 1U);
 
     /* The admitted boundary leaves exactly enough sequence for rollback
@@ -539,9 +552,10 @@ int main(void)
     fixture(true, false);
     staged_candidate(UINT32_MAX - 2U); /* S=max-5, stage/trial/health. */
     persisted.phase = ECONTAINER_SLOT_HEALTH_VERIFIED;
+    no_inactive_receipt = recovery_receipt(
+        true, UINT32_MAX - 5U, 0xc3, operation_id, false);
     assert(esp_base_container_product_recover_retired_firmware(
-        &claim, true, UINT32_MAX - 5U, source, no_inactive, candidate,
-        operation_id, boot_id) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+        &claim, &no_inactive_receipt, boot_id) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
     assert(persisted.sequence == UINT32_MAX &&
            abandon_calls == 1U && drop_calls == 1U);
 

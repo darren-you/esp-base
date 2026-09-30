@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 带包 A 侧中断恢复原语
+
+内部 `esp_base_container_product_recover_retired_firmware` 现在接收原 V3 收据而非分散的固件摘要。物理层已证明 A 为唯一可启动运行槽后，Container 层核对来源包摘要、长度、ABI、schema 与真实引用，再按原 operation ID、A/C 身份、模式和序号处理：旧 B 尚未在 ECS2 退役时先安全退役；`WRITE` 的 `WRITING` 或两种带包模式的 `PREPARED`／旧 boot trial／`HEALTH_VERIFIED` 经持久 `ABORTED→IDLE` 丢弃 C 绑定。`WRITE` 目标槽可保留部分或损坏字节，但旧 A 包必须完整；同 boot 的已启动 trial 不允许无 guest 停止证明直接放弃。每次提交由 Container 独立读回，最终 A-only 再做真实包引用对账。错误收据或来源包损坏阻断，不将其报告为已恢复。
+
+C3／ESP32 host ASan/UBSan、锁定 Container/WAMR 的双目标真实签名 guest 生命周期各 100 次重装、固定 SDK 双目标签名构建和官方 RSA v2／ECDSA v1 验签通过；app 分别为 `0x121000/0x130000`、`0xffff4/0x120000`。测试覆盖空来源 `WRITE`、有包来源 `REUSE`／`WRITE`，B 退役前、部分 `WRITING`、`PREPARED` 和 `HEALTH_VERIFIED` 后的 A 回滚，来源损坏、错误收据、同 boot 阻断及旧包槽无额外擦写。普通 Base 启动仍在带包 V3 执行门前停止；该原语尚未被公开带包 OTA worker 或启动流程消费，物理 app 擦除前的联合预检、真实掉电和两板验收仍缺，P6-10/P7-04 不验收。
+
 ## 2026-09-30 联合 OTA 带包 selected C 只读预检
 
 内部 `esp_base_container_product_reconcile_selected_ota` 在签名 `PENDING_VERIFY` C 与可回退 A 的双次物理观察后，按原 V3 收据只读核对 ECS2：必须为原操作的固件迁移 `PREPARED`，序号须精确包含旧 B 退役、stage，以及 `WRITE` 多一次的包写入提交。来源固件包身份须逐项等于收据；候选固件尚未绑定包，`REUSE` 指向来源包槽，`WRITE` 指向非来源槽。Container `reconcile` 同时复核真实包字节，只有决策为 `BOOT_START_TRIAL` 才通过。`WRITING`、错误操作或包参数、来源包不符与目标槽字节损坏均阻断，不写 NVS 或 Flash。

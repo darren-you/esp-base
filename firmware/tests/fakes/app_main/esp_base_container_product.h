@@ -34,8 +34,6 @@ typedef enum {
     ESP_BASE_CONTAINER_RETIRE_UNCERTAIN,
 } esp_base_container_retire_result_t;
 esp_base_container_retire_result_t esp_base_container_product_recover_retired_firmware(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32], const uint8_t candidate_sha256[32],
-    const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt,
     const char boot_id[37]);

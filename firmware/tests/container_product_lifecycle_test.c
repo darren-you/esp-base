@@ -1867,6 +1867,28 @@ static void run_firmware_empty_stage(const file_t *key, const file_t *package,
         assert(store.blob_writes == selected_blob_writes &&
                store.flash_erases == selected_flash_erases &&
                store.flash_writes == selected_flash_writes);
+        physical.bootable_count = 1U;
+        memcpy(physical.running_firmware_sha256, receipt.source_sha256, 32);
+        memcpy(physical.bootable_firmware_sha256[0], receipt.source_sha256, 32);
+        memset(physical.bootable_firmware_sha256[1], 0, 32);
+        dispose_product();
+        configure_product(key);
+        uint8_t recovery_boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
+        assert(decode_uuid("88888888-8888-4888-8888-888888888888",
+                           recovery_boot_id));
+        assert(econtainer_slots_abandon(&io, &geometry, state.sequence,
+                   recovery_boot_id, NULL, NULL, &state) == ECONTAINER_SLOTS_OK &&
+               state.phase == ECONTAINER_SLOT_ABORTED);
+        const unsigned recovery_flash_erases = store.flash_erases;
+        const unsigned recovery_flash_writes = store.flash_writes;
+        assert(esp_base_container_product_recover_retired_firmware(
+            &claim, &receipt, "88888888-8888-4888-8888-888888888888") ==
+            ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+        assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+               state.phase == ECONTAINER_SLOT_IDLE &&
+               state.sequence == original_sequence + 5U &&
+               store.flash_erases == recovery_flash_erases &&
+               store.flash_writes == recovery_flash_writes);
     }
     assert(esp_base_storage_release(&claim));
     dispose_product();
@@ -1876,7 +1898,7 @@ static void run_firmware_empty_stage(const file_t *key, const file_t *package,
 static void run_firmware_package_stage(const file_t *key, const file_t *package,
                                        const char boot_id[37],
                                        esp_base_ota_package_mode_t mode,
-                                       bool corrupt_write)
+                                       bool corrupt_write, bool recover_before_stage)
 {
     configure(key);
     esp_base_storage_owner_t owner;
@@ -1928,6 +1950,26 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
     assert(esp_base_container_product_stop_confirmed(&claim));
     physical.bootable_count = 1U;
     memset(physical.bootable_firmware_sha256[1], 0, 32);
+    if (recover_before_stage) {
+        dispose_product();
+        configure_product(key);
+        const unsigned recovery_flash_erases = store.flash_erases;
+        const unsigned recovery_flash_writes = store.flash_writes;
+        assert(esp_base_container_product_recover_retired_firmware(
+            &claim, &receipt, "88888888-8888-4888-8888-888888888888") ==
+            ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+        assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+               state.phase == ECONTAINER_SLOT_IDLE &&
+               state.sequence == original_sequence + 1U &&
+               store.flash_erases == recovery_flash_erases &&
+               store.flash_writes == recovery_flash_writes);
+        const int recovered_index = binding_index(&state, receipt.source_sha256);
+        assert(recovered_index >= 0 &&
+               state.bindings[recovered_index].package_present &&
+               memcmp(state.bindings[recovered_index].package_sha256,
+                      receipt.source_package_sha256, 32) == 0);
+        goto finished;
+    }
     econtainer_slot_firmware_set_t a_only = {.bootable_count = 1U};
     memcpy(a_only.running_firmware_sha256,
            physical.running_firmware_sha256, 32);
@@ -2007,6 +2049,20 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
                    store.flash_writes > before_write_flash_writes &&
                    memcmp(store.flash + source_offset, package->bytes,
                           package->size) == 0);
+            dispose_product();
+            configure_product(key);
+            const unsigned recovery_flash_erases = store.flash_erases;
+            const unsigned recovery_flash_writes = store.flash_writes;
+            assert(esp_base_container_product_recover_retired_firmware(
+                &claim, &receipt, "88888888-8888-4888-8888-888888888888") ==
+                ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+            assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+                   state.phase == ECONTAINER_SLOT_IDLE &&
+                   state.sequence == original_sequence + 4U &&
+                   store.flash_erases == recovery_flash_erases &&
+                   store.flash_writes == recovery_flash_writes &&
+                   memcmp(store.flash + source_offset, package->bytes,
+                          package->size) == 0);
             goto finished;
         }
         assert(esp_base_container_product_write_staged_firmware_package(
@@ -2064,6 +2120,59 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
     assert(store.blob_writes == selected_blob_writes &&
            store.flash_erases == selected_flash_erases &&
            store.flash_writes == selected_flash_writes);
+    if (mode == ESP_BASE_OTA_PACKAGE_REUSE) {
+        uint8_t trial_boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
+        assert(decode_uuid(boot_id, trial_boot_id));
+        assert(econtainer_slots_begin_trial(&io, &geometry, state.sequence,
+                   candidate, trial_boot_id, &state) == ECONTAINER_SLOTS_OK);
+        assert(econtainer_slots_mark_healthy(&io, &geometry, state.sequence,
+                   trial_boot_id, &state) == ECONTAINER_SLOTS_OK &&
+               state.phase == ECONTAINER_SLOT_HEALTH_VERIFIED);
+    }
+    physical.bootable_count = 1U;
+    memcpy(physical.running_firmware_sha256, receipt.source_sha256, 32);
+    memcpy(physical.bootable_firmware_sha256[0], receipt.source_sha256, 32);
+    memset(physical.bootable_firmware_sha256[1], 0, 32);
+    dispose_product();
+    configure_product(key);
+    const unsigned recovery_blob_writes = store.blob_writes;
+    esp_base_ota_receipt_recovery_t wrong_recovery = receipt;
+    wrong_recovery.source_package_sha256[0] ^= 1U;
+    assert(esp_base_container_product_recover_retired_firmware(
+        &claim, &wrong_recovery, "88888888-8888-4888-8888-888888888888") ==
+        ESP_BASE_CONTAINER_RETIRE_BLOCKED);
+    assert(store.blob_writes == recovery_blob_writes);
+    store.flash[source_offset] ^= 1U;
+    assert(esp_base_container_product_recover_retired_firmware(
+        &claim, &receipt, "88888888-8888-4888-8888-888888888888") ==
+        ESP_BASE_CONTAINER_RETIRE_BLOCKED);
+    store.flash[source_offset] ^= 1U;
+    assert(store.blob_writes == recovery_blob_writes);
+    if (mode == ESP_BASE_OTA_PACKAGE_REUSE) {
+        assert(esp_base_container_product_recover_retired_firmware(
+            &claim, &receipt, boot_id) == ESP_BASE_CONTAINER_RETIRE_BLOCKED);
+        assert(store.blob_writes == recovery_blob_writes);
+    }
+    if (mode == ESP_BASE_OTA_PACKAGE_WRITE)
+        store.flash[selected_offset] ^= 1U;
+    const unsigned recovery_flash_erases = store.flash_erases;
+    const unsigned recovery_flash_writes = store.flash_writes;
+    assert(esp_base_container_product_recover_retired_firmware(
+        &claim, &receipt, "88888888-8888-4888-8888-888888888888") ==
+        ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+    assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+           state.phase == ECONTAINER_SLOT_IDLE &&
+           state.sequence == original_sequence +
+                             (mode == ESP_BASE_OTA_PACKAGE_WRITE ? 5U : 6U) &&
+           store.flash_erases == recovery_flash_erases &&
+           store.flash_writes == recovery_flash_writes &&
+           memcmp(store.flash + source_offset, package->bytes,
+                  package->size) == 0);
+    const unsigned recovered_blob_writes = store.blob_writes;
+    assert(esp_base_container_product_recover_retired_firmware(
+        &claim, &receipt, "88888888-8888-4888-8888-888888888888") ==
+        ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+    assert(store.blob_writes == recovered_blob_writes);
 finished:
     assert(esp_base_storage_release(&claim));
     dispose_product();
@@ -2272,11 +2381,15 @@ int main(int argc, char **argv)
     run_firmware_empty_stage(&key, NULL, boot_id, ESP_BASE_OTA_NO_PACKAGE);
     run_firmware_empty_stage(&key, &package, boot_id, ESP_BASE_OTA_PACKAGE_WRITE);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_REUSE, false);
+                               ESP_BASE_OTA_PACKAGE_REUSE, false, true);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_WRITE, false);
+                               ESP_BASE_OTA_PACKAGE_WRITE, false, true);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_WRITE, true);
+                               ESP_BASE_OTA_PACKAGE_REUSE, false, false);
+    run_firmware_package_stage(&key, &package, boot_id,
+                               ESP_BASE_OTA_PACKAGE_WRITE, false, false);
+    run_firmware_package_stage(&key, &package, boot_id,
+                               ESP_BASE_OTA_PACKAGE_WRITE, true, false);
     run_success_receipt_replay(&key, &package, boot_id);
     free(package_v1.bytes);
     free(package_v2.bytes);

@@ -218,10 +218,8 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
         return false;
     }
     if (esp_base_container_product_recover_retired_firmware(
-            &s_boot_storage_claim, receipt.container_enabled,
-            receipt.container_sequence, receipt.source_sha256,
-            receipt.inactive_sha256, receipt.candidate_sha256,
-            receipt.operation_id, boot_id) != ESP_BASE_CONTAINER_RETIRE_COMPLETE) {
+            &s_boot_storage_claim, &receipt, boot_id) !=
+        ESP_BASE_CONTAINER_RETIRE_COMPLETE) {
         return false;
     }
     return esp_base_ota_receipt_record_failure(
