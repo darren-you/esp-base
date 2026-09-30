@@ -44,7 +44,7 @@ OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下�
 
 ## 网络授权与首配
 
-物理 USB 首配绑定真实 device_id；设备管理凭据由维护者的受控材料注入。网络命令使用 HMAC-SHA256，对整个精确 UTF-8 请求字节签名，使用独立管理密钥；先验证身份、签名、boot、deadline 和 request_id 再入队。只在受认证 TLS 路径传递。FRP Token、UUID 或 CORS 都不是管理授权。公开主机调用不依赖工作区 Auth；私有网关另负责维护者/installation 授权与精确目标绑定。
+物理 USB 首配绑定真实 device_id；设备管理凭据由维护者的受控材料注入。网络写命令使用 HMAC-SHA256，对整个精确 UTF-8 请求字节签名，使用独立管理密钥；先验证身份、签名、boot、deadline 和 request_id 再入队。只在受认证 TLS 路径传递。FRP Token、UUID 或 CORS 都不是管理授权。公开主机调用不依赖工作区 Auth；私有网关另负责维护者/installation 授权与精确目标绑定。
 
 TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelope 的 timestamp 是 Unix 毫秒，两者不得混用。
 
@@ -86,10 +86,12 @@ OTA pending 新槽完成本地确认前，`config.set` 在身份、期限与去�
 
 ## FRP Base 软件接线边界
 
-普通 Base 精确锁定公开 `esp-frp@9158b7f2e2c555a14636aed26b5189902152d19e`。FRP owner 在单一 USB 控制任务中持有一个客户端句柄；配置变更、网络或时间门失效时用非阻塞 destroy 持续收敛，未完成时保留句柄。`ready` 只来自库完成代理注册与首轮认证 Pong 的状态快照，status 与 reported 不含 Token、CA、管理 key。受控 listener 与 owner 共用该控制任务，只在配置的 `127.0.0.1:local_port` 绑定；绑定失败保持 `endpoint_unavailable`，不会向 FRPS 建连。配置 revision 变化时先关闭旧 listener 与半帧，旧 FRP worker 销毁后才装配新独立 key。FRP Token、TLS 和 UUID 不能代替管理端点授权。
+普通 Base 精确锁定公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`。FRP owner 在单一 USB 控制任务中持有一个客户端句柄；配置变更、网络或时间门失效时用非阻塞 destroy 持续收敛，未完成时保留句柄。`ready` 只来自库完成代理注册与首轮认证 Pong 的状态快照，status 与 reported 不含 Token、CA、管理 key。受控 listener 与 owner 共用该控制任务，只在配置的 `127.0.0.1:local_port` 绑定；绑定失败保持 `endpoint_unavailable`，不会向 FRPS 建连。配置 revision 变化时先关闭旧 listener 与半帧，旧 FRP worker 销毁后才装配新独立 key。FRP Token、TLS 和 UUID 不能代替管理端点授权。
 
 当前设备端点仅有只读软件候选：HTTP/1.1 `POST /api/v1/commands/status`，请求必须含一个非空 `Host`、精确 `Content-Type: application/json`、十进制 `Content-Length` 和 `X-ESP-Management-Tag`。Tag 为 `frp.management_key` 对**原始 JSON body 字节**计算的 HMAC-SHA256，以 64 个小写十六进制字符发送；先完整读取并验证 HMAC，之后才解析或回显 request ID。header 最多 512 字节，body 为 1–384 字节，不接受重复安全/长度头、`Transfer-Encoding`、`Expect`、HTTP 管线化或无效帧；单连接从 accept 起的读取与写回总期限为 2 秒，随后关闭。未认证请求返回空 body 的 HTTP 401，错误 HTTP 帧返回空 body 的 400；两者均不泄露设备状态。listener 同时只处理一个连接。
 
-body 精确包含 `protocol_version:1`、`device_id`、`target_boot_id`、`request_id`、`command:"status"`、`expires_at_uptime_ms` 六项；三个 ID 都是规范 UUIDv4。设备在同一控制任务核对持久设备 ID、当前 boot ID 与单调 uptime，期限必须晚于本轮 uptime 且不超过 30 秒；8 槽有界表保存未过期 request ID、期限与首次脱敏快照。同 ID 同一规范请求在期限内返回首次结果，同 ID 不同目标/期限返回 `request_conflict`，过期请求按 `expired` 拒绝后释放槽位；表满时拒绝新请求。已认证但非法的请求返回现有结果 envelope、HTTP 400；错设备/错 boot/过期/冲突返回相同 envelope、HTTP 409；成功返回 HTTP 200、`succeeded` 与 USB/MQTT 共用序列化的脱敏 status `result`。该端点不接受 restart、OTA、配置写入或任意命令；HTTP 状态码与 body 的 `state` 分别表示本次请求的传输/业务裁决。
+body 精确包含 `protocol_version:1`、`device_id`、`request_id`、`command:"status"` 四项；两个 ID 都是规范 UUIDv4，不接受旧六字段、boot、期限或额外参数。只读查询从目标设备自身取得当前 boot 与 uptime，不需要 USB／MQTT 先提供状态。设备在同一控制任务先核对持久设备 ID；8 槽 RAM 表以设备当前 uptime 加 30000 ms 保存首次脱敏快照。同 ID 在该窗口内返回首次快照，调用方每次新查询必须使用新的 request UUID；窗口结束后原槽可复用，缓存不跨启动、没有 NVS 写入。表满时新 ID 返回 `capacity_exceeded`。已认证但非法的请求返回现有结果 envelope、HTTP 400；错设备返回相同 envelope、HTTP 409；成功返回 HTTP 200、`succeeded` 与 USB/MQTT 共用序列化的脱敏 status `result`。写命令的当前 boot、30 秒期限和幂等约束不变；该端点不接受 restart、OTA、配置写入或任意命令。
 
-FRP status 要求调用方先从**本轮** USB 或 MQTT 新鲜状态取得 boot ID 与 uptime，不能从 FRP 单一路径首次自举；这是当前受限切片的明确边界。设备本地 loopback 为明文 HTTP，外侧调用方仍须经受控 HTTPS 入口和 FRPS 的严格 TLS/路由授权验证；该软件编译没有验证外侧路径、真实 FRPS、同板 MQTT/OTA 并行、资源门槛或硬件运行，因此 P4-05 尚未验收。
+所有已认证且有 body 的响应均包含唯一 `X-ESP-Management-Tag`，为同一独立 FRP 管理 key 对**实际发出的完整原始 JSON body 字节**计算的 HMAC-SHA256，使用 64 个小写十六进制字符。响应 body 包含设备 UUID、当前 boot UUID；严格解析通过时回显本次 request UUID，非法请求仍返回 `request_id:null`。客户端必须先验证原始字节的 tag，再严格检查七字段 envelope、设备／请求身份、HTTP 与业务状态。认证前的空 400／401 不含响应 tag，也不能作为状态证据。请求四字段与响应七字段严格分离，响应 tag 不能作为有效请求使用。PSA import、compute、精确 32 字节长度或 destroy 任一步失败，设备关闭连接且不发送未认证结果。现有输出缓冲仍为 1024 字节，其中最多 256 字节预留响应头，handler 的 body 容量为 768 字节；序列化超限拒绝，不截断。
+
+FRP status 的新请求 UUID 与经验证的响应提供独立设备身份和本次查询证据。设备本地 loopback 仍为明文 HTTP，外侧调用方必须经受控 HTTPS 入口和 FRPS 的严格 TLS／路由授权验证；HMAC 不提供机密性，不能替代这两段加密。当前软件尚未接入私有网关，也未验证外侧路径、真实 FRPS、同板 MQTT/OTA 并行、资源门槛或硬件运行，因此 P4-05 和产品 FRP 路径尚未验收。

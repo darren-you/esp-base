@@ -376,38 +376,24 @@ static int handle_frp_status(const uint8_t *json, size_t json_length,
     int http_status = 400;
     size_t empty = FRP_STATUS_REPLAY_SLOTS;
     const status_snapshot_t *cached = NULL;
+    if (!error && strcmp(request.device_id, s_context.device_id)) {
+        error = "wrong_device";
+        http_status = 409;
+    }
     if (!error) {
         for (size_t i = 0; i < FRP_STATUS_REPLAY_SLOTS; ++i) {
             if (s_frp_status_seen[i].expires_at_ms <= now) {
                 if (empty == FRP_STATUS_REPLAY_SLOTS) empty = i;
             } else if (!strcmp(s_frp_status_seen[i].request_id, request.request_id)) {
-                if (strcmp(request.device_id, s_context.device_id) ||
-                    strcmp(request.boot_id, s_boot_id) ||
-                    request.expires_at_ms != s_frp_status_seen[i].expires_at_ms) {
-                    error = "request_conflict";
-                    http_status = 409;
-                } else cached = &s_frp_status_seen[i].status;
+                cached = &s_frp_status_seen[i].status;
                 break;
             }
         }
     }
-    if (!error && strcmp(request.device_id, s_context.device_id)) {
-        error = "wrong_device";
-        http_status = 409;
-    } else if (!error && strcmp(request.boot_id, s_boot_id)) {
-        error = "wrong_boot";
-        http_status = 409;
-    } else if (!error && request.expires_at_ms <= now) {
-        error = "expired";
-        state = "expired";
-        http_status = 409;
-    } else if (!error && request.expires_at_ms - now > EBASE_REQUEST_WINDOW_MS) {
-        error = "invalid_deadline";
-    }
     if (!error && !cached && empty == FRP_STATUS_REPLAY_SLOTS) error = "capacity_exceeded";
     if (!error && !cached) {
         memcpy(s_frp_status_seen[empty].request_id, request.request_id, EBASE_ID_BYTES);
-        s_frp_status_seen[empty].expires_at_ms = request.expires_at_ms;
+        s_frp_status_seen[empty].expires_at_ms = now + EBASE_REQUEST_WINDOW_MS;
         s_frp_status_seen[empty].status = snapshot();
         cached = &s_frp_status_seen[empty].status;
     }

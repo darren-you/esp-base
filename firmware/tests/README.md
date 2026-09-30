@@ -30,7 +30,9 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `protocol_ota_owner_test` 使用真实 reported 格式器验证已入队序号与最近完成事件的包摘要及事件字节 SHA-256、非负 guest 结果、负数业务失败、runtime 失败时 null 结果及超限状态不发布；它的 Container 观察是假件。签名 guest 的真实结果与同 boot 换包清空由 `run_container_lifecycle_test.sh` 验证，仍没有真实 Broker 投递。
 
-`frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
+`frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销、2 秒总时限，以及所有非空认证响应的 tag 和签发失败关闭。`command_decoder_test` 验证 FRP status 四字段、规范 UUID 和旧六字段拒绝；`protocol_ota_owner_test` 用真实 serializer 的 768 字节容量核对设备目标、服务端 30 秒首次快照缓存、新 ID 新状态、表满、TTL 释放及无写入。`network_auth_test` 核对 PSA 签发／验证用途、import/compute/长度/destroy 失败时的清理和输出清零。
+
+显式运行 `bash firmware/tests/run_frp_status_crypto_tests.sh`（ESP32 加 `ESP_BASE_TEST_TARGET=esp32`）执行实际 listener、decoder 与 auth wrapper 的回环 HTTP 测试；需 OpenSSL 开发文件及 `pkg-config`，不自动跳过。PSA 测试端口共享 `fakes/network_auth_openssl.inc`，使用公开 `00..1f` key；Python 独立冻结的请求／响应 HMAC 向量、签名 400／409、错误 key、tag／body 篡改与旧请求拒绝均检查。该测试与外部产品事件 probe 不验证 IDF 密码端口、FRPS、外侧 HTTPS、同板并行、内存或实板运行。
 
 `ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包 A 侧与已有健康证据的 VALID C 启动恢复已接通，新 pending C 已接原 V3 trial、MQTT 准入与健康快照；两种模式的成功／失败终态与写前／写后／commit／独立读回故障已覆盖。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 

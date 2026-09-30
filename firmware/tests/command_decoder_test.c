@@ -267,23 +267,33 @@ static void frp_status_tests(void)
 {
     static const char valid[] =
         "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\","
-        "\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\","
-        "\"command\":\"status\",\"expires_at_uptime_ms\":31000}";
+        "\"request_id\":\"" REQUEST "\",\"command\":\"status\"}";
     ebase_request_t request;
     assert(!ebase_parse_frp_status(valid, sizeof valid - 1, &request));
-    assert(!strcmp(request.device_id, DEVICE) && !strcmp(request.boot_id, BOOT) &&
-           !strcmp(request.request_id, REQUEST) && request.expires_at_ms == 31000);
+    assert(!strcmp(request.device_id, DEVICE) && request.boot_id[0] == 0 &&
+           !strcmp(request.request_id, REQUEST) && request.expires_at_ms == 0);
     assert(ebase_parse_frp_status(status, sizeof status - 1, &request));
     assert(request.request_id[0] == 0);
     static const char *invalid[] = {
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"request_id\":\"" REQUEST "\",\"command\":\"restart\"}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"parameters\":{}}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"request_id\":\"" REQUEST "\"}",
+        "{\"protocol_version\":1,\"device_id\":\"bad-id\",\"request_id\":\"" REQUEST "\",\"command\":\"status\"}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"request_id\":\"bad-id\",\"command\":\"status\"}",
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\"}tail",
+        /* The previous six-field contract is removed, even when valid. */
+        "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000}",
         "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"restart\",\"expires_at_uptime_ms\":31000}",
         "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000,\"parameters\":{}}",
         "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000,\"request_id\":\"" REQUEST "\"}",
         "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":3.1}",
         "{\"protocol_version\":1,\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"request_id\":\"" REQUEST "\",\"command\":\"status\",\"expires_at_uptime_ms\":31000}tail"
     };
-    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; ++i)
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; ++i) {
         assert(ebase_parse_frp_status(invalid[i], strlen(invalid[i]), &request));
+        const ebase_request_t empty = {0};
+        assert(!memcmp(&request, &empty, sizeof request));
+    }
     assert(ebase_parse_frp_status(valid, 513, &request));
 }
 int main(void)

@@ -46,9 +46,9 @@ typedef struct {
  * the transport owner must hash canonical values before admission. */
 const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out);
 
-/* Authenticated FRP status uses the write-command identity and uptime window
- * even though it cannot mutate device state. The listener authenticates the
- * exact bytes before calling this parser. */
+/* Read-only FRP status bootstraps current boot/uptime using device/request UUIDs.
+ * It leaves boot/deadline zero. The listener authenticates the exact request
+ * bytes before parsing and signs the response; write admission is unchanged. */
 const char *ebase_parse_frp_status(const char *json, size_t length,
                                   ebase_request_t *out);
 

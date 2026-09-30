@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-01 FRP 只读状态认证软件续进：请求硬切为设备／请求 UUID 等四字段，可独立取得当前 boot／uptime；非空认证响应现由设备签发原始 JSON 的 HMAC，失败关闭。双目标 host、真实 OpenSSL 回环 HTTP、固定 SDK 测试签名构建与官方验签通过。私有网关、外侧 HTTPS、真实 FRPS 与两板仍未验收，见[认证状态检查点](docs/operations/frp_authenticated_status_checkpoint.md)。
+
 2026-10-01 已确认 guest 异常退出宿主续验：真实签名 Wasm 在候选准备前／后失败时，替换与重开均拒绝，已确认绑定保持；精确卸载可等待线程退出、证明 native 回收并保留包字节。测试不覆盖公开 worker 的 unknown 恢复，停止／启动的公开语义仍待裁决，范围见[开发检查点](docs/operations/development-checkpoint.md)。
 
 产品事件宿主发布器现有 16 项隔离真实 TLS Broker 软件验证：一次发布、目标权限、陈旧序号、最大 wire 帧及 unknown 行为通过；Broker 实收字节经本仓实际 C 帧解析器核对。设备 reported、guest 与健康仍为假件，IDF 密码端口与两板结果未据此验收；范围见[开发检查点](docs/operations/development-checkpoint.md)。

@@ -19,7 +19,7 @@
 #define FRP_HTTP_HEADER_BYTES 512u
 #define FRP_HTTP_BODY_BYTES 384u
 #define FRP_HTTP_OUTPUT_BYTES 1024u
-#define FRP_HTTP_RESPONSE_OFFSET 128u
+#define FRP_HTTP_RESPONSE_OFFSET 256u
 #define FRP_HTTP_TOTAL_MS 2000u
 
 static int s_listener = -1, s_client = -1;
@@ -181,11 +181,29 @@ static bool parse_headers(request_fields_t *out)
 
 static void prepare_response(int status, const char *body, size_t body_length)
 {
+    char tag_header[90] = {0};
+    if (body_length) {
+        uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES];
+        if (!ebase_management_sign(s_key, (const uint8_t *)body, body_length, tag)) {
+            close_client();
+            return;
+        }
+        static const char hex[] = "0123456789abcdef";
+        static const char prefix[] = "X-ESP-Management-Tag: ";
+        memcpy(tag_header, prefix, sizeof prefix - 1);
+        for (size_t i = 0; i < sizeof tag; ++i) {
+            tag_header[sizeof prefix - 1 + i * 2] = hex[tag[i] >> 4];
+            tag_header[sizeof prefix + i * 2] = hex[tag[i] & 15];
+        }
+        memcpy(tag_header + sizeof prefix - 1 + sizeof tag * 2, "\r\n", 2);
+        wipe(tag, sizeof tag);
+    }
     const char *reason = status == 200 ? "OK" : status == 400 ? "Bad Request" :
         status == 401 ? "Unauthorized" : status == 409 ? "Conflict" : "Internal Server Error";
     const int header = snprintf(s_output, FRP_HTTP_RESPONSE_OFFSET,
         "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n"
-        "Content-Length: %zu\r\nConnection: close\r\n\r\n", status, reason, body_length);
+        "Content-Length: %zu\r\nConnection: close\r\n%s\r\n", status, reason, body_length,
+        tag_header);
     if (header < 0 || (size_t)header >= FRP_HTTP_RESPONSE_OFFSET ||
         (size_t)header + body_length >= sizeof s_output) {
         close_client();
@@ -232,7 +250,7 @@ static void receive_request(esp_base_frp_status_handler_t handler, void *context
                                sizeof s_output - FRP_HTTP_RESPONSE_OFFSET,
                                &response_length, context);
     if ((status != 200 && status != 400 && status != 409) ||
-        response_length > sizeof s_output - FRP_HTTP_RESPONSE_OFFSET) {
+        !response_length || response_length >= sizeof s_output - FRP_HTTP_RESPONSE_OFFSET) {
         prepare_response(500, NULL, 0);
         return;
     }

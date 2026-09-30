@@ -33,8 +33,9 @@ static const uint8_t event_tag[32] = {
 static uint8_t event_body[141];
 static const char boot_id[] = "33333333-3333-4333-8333-333333333333";
 
-static unsigned imports, verifies, destroys, resets;
-static bool fail_import, fail_destroy;
+static unsigned imports, verifies, computes, destroys, resets;
+static uint32_t imported_usage;
+static bool fail_import, fail_destroy, fail_compute, short_tag;
 static const char device_id[] = "22222222-2222-4222-8222-222222222222";
 
 void psa_set_key_type(psa_key_attributes_t *a, uint32_t v) { a->type = v; }
@@ -47,10 +48,11 @@ psa_status_t psa_import_key(const psa_key_attributes_t *a, const uint8_t *data,
 {
     ++imports;
     assert(a->type == PSA_KEY_TYPE_HMAC && a->bits == 256 &&
-           a->usage == PSA_KEY_USAGE_VERIFY_MESSAGE &&
+           (a->usage == PSA_KEY_USAGE_VERIFY_MESSAGE || a->usage == PSA_KEY_USAGE_SIGN_MESSAGE) &&
            a->algorithm == PSA_ALG_HMAC(PSA_ALG_SHA_256));
     assert(length == sizeof key && !memcmp(data, key, sizeof key));
     if (fail_import) return PSA_ERROR_INSUFFICIENT_MEMORY;
+    imported_usage = a->usage;
     *key_id = 42;
     return PSA_SUCCESS;
 }
@@ -59,7 +61,8 @@ psa_status_t psa_mac_verify(psa_key_id_t key_id, uint32_t algorithm,
                             const uint8_t *mac, size_t mac_length)
 {
     ++verifies;
-    assert(key_id == 42 && algorithm == PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    assert(key_id == 42 && algorithm == PSA_ALG_HMAC(PSA_ALG_SHA_256) &&
+           imported_usage == PSA_KEY_USAGE_VERIFY_MESSAGE);
     if (input_length == sizeof request - 1 &&
         !memcmp(input, request, input_length) &&
         mac_length == sizeof tag && !memcmp(mac, tag, sizeof tag)) return PSA_SUCCESS;
@@ -68,6 +71,19 @@ psa_status_t psa_mac_verify(psa_key_id_t key_id, uint32_t algorithm,
         mac_length == sizeof event_tag &&
         !memcmp(mac, event_tag, sizeof event_tag)) return PSA_SUCCESS;
     return PSA_ERROR_INVALID_SIGNATURE;
+}
+psa_status_t psa_mac_compute(psa_key_id_t key_id, uint32_t algorithm,
+                            const uint8_t *input, size_t input_length,
+                            uint8_t *mac, size_t mac_capacity, size_t *mac_length)
+{
+    ++computes;
+    assert(key_id == 42 && algorithm == PSA_ALG_HMAC(PSA_ALG_SHA_256) &&
+           imported_usage == PSA_KEY_USAGE_SIGN_MESSAGE);
+    assert(input_length == sizeof request - 1 && !memcmp(input, request, input_length));
+    assert(mac && mac_capacity == sizeof tag && mac_length);
+    memcpy(mac, tag, sizeof tag); /* Deliberately populate output even on failure. */
+    *mac_length = short_tag ? sizeof tag - 1 : sizeof tag;
+    return fail_compute ? PSA_ERROR_INSUFFICIENT_MEMORY : PSA_SUCCESS;
 }
 psa_status_t psa_destroy_key(psa_key_id_t key_id)
 {
@@ -214,6 +230,39 @@ int main(void)
     assert(!ebase_mqtt_verified_event(key, device_id, boot_id, topic, 1, false,
                                        event_frame, sizeof event_frame, &event_view));
     assert(event_view.event == NULL && event_view.event_size_bytes == 0U);
+    const unsigned imported_before = imports, destroyed_before = destroys, reset_before = resets;
+    uint8_t signed_tag[32], zero_tag[32] = {0};
+    assert(ebase_management_sign(key, request, sizeof request - 1, signed_tag));
+    assert(!memcmp(signed_tag, tag, sizeof tag) && computes == 1);
+    fail_compute = true;
+    assert(!ebase_management_sign(key, request, sizeof request - 1, signed_tag));
+    assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
+    fail_compute = false;
+    short_tag = true;
+    assert(!ebase_management_sign(key, request, sizeof request - 1, signed_tag));
+    assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
+    short_tag = false;
+    fail_destroy = true;
+    assert(!ebase_management_sign(key, request, sizeof request - 1, signed_tag));
+    assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
+    fail_destroy = false;
+    fail_import = true;
+    memset(signed_tag, 0xaa, sizeof signed_tag);
+    assert(!ebase_management_sign(key, request, sizeof request - 1, signed_tag));
+    assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
+    fail_import = false;
+    assert(imports == imported_before + 5 && destroys == destroyed_before + 4 &&
+           resets == reset_before + 5 && computes == 4);
+    memset(signed_tag, 0xaa, sizeof signed_tag);
+    assert(!ebase_management_sign(NULL, request, sizeof request - 1, signed_tag));
+    assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
+    assert(!ebase_management_sign(key, NULL, sizeof request - 1, signed_tag));
+    assert(!ebase_management_sign(key, request, 0, signed_tag));
+    assert(!ebase_management_sign(key, request, 4097, signed_tag));
+    assert(!ebase_management_sign(key, request, sizeof request - 1, NULL));
+    assert(imports == imported_before + 5 && destroys == destroyed_before + 4 &&
+           resets == reset_before + 5 && computes == 4);
+    assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
     puts("  network_auth     passed (exact request bytes, PSA failure cleanup)");
     puts("  mqtt_command     passed (Topic, QoS1, retained and frame rejection)");
     puts("  mqtt_event       passed (signed boot/package/sequence and payload boundary)");

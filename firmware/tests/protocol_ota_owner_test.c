@@ -881,9 +881,10 @@ static void check_product_package_preboot_recovery(void)
 }
 
 static void check_frp_status(const char *request, int expected_http,
-                             const char *expected_error)
+                             const char *expected_error, unsigned expected_heap)
 {
-    char response[1024] = {0};
+    /* Actual listener body capacity after reserving the authenticated header. */
+    char response[768] = {0};
     size_t length = 0;
     const int http = handle_frp_status((const uint8_t *)request, strlen(request),
                                        response, sizeof response, &length, NULL);
@@ -891,9 +892,11 @@ static void check_frp_status(const char *request, int expected_http,
     if (expected_error) assert(strstr(response, expected_error));
     else {
         char heap_field[48];
-        snprintf(heap_field, sizeof heap_field, "\"free_heap\":%u", !strcmp(request, "status-1") ? 1000u : fake_free_heap);
+        snprintf(heap_field, sizeof heap_field, "\"free_heap\":%u", expected_heap);
         assert(strstr(response, "\"state\":\"succeeded\"") &&
-               strstr(response, "\"frp\":\"stopped\"") && strstr(response, heap_field));
+               strstr(response, "\"frp\":\"stopped\"") && strstr(response, heap_field) &&
+               strstr(response, "\"device_id\":\"22222222-2222-4222-8222-222222222222\"") &&
+               strstr(response, "\"boot_id\":\"33333333-3333-4333-8333-333333333333\""));
     }
 }
 
@@ -1101,17 +1104,26 @@ int main(void)
            atomic_load(&owner.active_token) == 0U);
 
     reset_case();
-    check_frp_status("status-1", 200, NULL);
+    check_frp_status("status-1", 200, NULL, 1000U);
     fake_free_heap = 500;
-    check_frp_status("status-1", 200, NULL);
-    check_frp_status("changed-deadline", 409, "request_conflict");
-    check_frp_status("changed-boot", 409, "request_conflict");
-    check_frp_status("status-2", 200, NULL);
-    check_frp_status("wrong-boot", 409, "wrong_boot");
-    check_frp_status("wrong-device", 409, "wrong_device");
-    check_frp_status("expired", 409, "expired");
-    check_frp_status("far", 400, "invalid_deadline");
-    check_frp_status("invalid", 400, "invalid_request");
+    fake_now_ms = 2000U;
+    check_frp_status("status-1", 200, NULL, 1000U);
+    check_frp_status("same-id-wrong-device", 409, "wrong_device", 0U);
+    check_frp_status("status-2", 200, NULL, 500U);
+    check_frp_status("wrong-device", 409, "wrong_device", 0U);
+    check_frp_status("invalid", 400, "invalid_request", 0U);
+    for (unsigned i = 3; i <= FRP_STATUS_REPLAY_SLOTS; ++i) {
+        char request[16];
+        snprintf(request, sizeof request, "status-%u", i);
+        check_frp_status(request, 200, NULL, 500U);
+    }
+    check_frp_status("status-9", 400, "capacity_exceeded", 0U);
+    fake_now_ms = 31000U; /* First snapshot's server-owned TTL has expired. */
+    check_frp_status("status-1", 200, NULL, 500U);
+    fake_now_ms = 32000U;
+    check_frp_status("status-9", 200, NULL, 500U);
+    assert(config_commit_calls == 0U && register_calls == 0U && task_calls == 0U &&
+           atomic_load(&owner.active_token) == 0U);
     reset_case();
     validate_result = EOTA_UPDATE_INVALID_REQUEST;
     start(19);
@@ -1480,18 +1492,9 @@ const char *ebase_parse_frp_status(const char *json, size_t length, ebase_reques
     memset(out, 0, sizeof *out);
     if (!strcmp(json, "invalid")) return "invalid_request";
     strcpy(out->request_id, "11111111-1111-4111-8111-111111111111");
-    out->request_id[35] = !strcmp(json, "status-2") ? '2' :
-        !strcmp(json, "wrong-boot") ? '3' :
-        !strcmp(json, "wrong-device") ? '4' :
-        !strcmp(json, "expired") ? '5' :
-        !strcmp(json, "far") ? '6' : '1';
-    strcpy(out->device_id, !strcmp(json, "wrong-device") ?
+    if (!strncmp(json, "status-", 7)) out->request_id[35] = json[7];
+    strcpy(out->device_id, (!strcmp(json, "wrong-device") || !strcmp(json, "same-id-wrong-device")) ?
         "99999999-9999-4999-8999-999999999999" : "22222222-2222-4222-8222-222222222222");
-    strcpy(out->boot_id, (!strcmp(json, "wrong-boot") || !strcmp(json, "changed-boot")) ?
-        "88888888-8888-4888-8888-888888888888" : "33333333-3333-4333-8333-333333333333");
-    out->expires_at_ms = !strcmp(json, "expired") ? 1000 :
-        !strcmp(json, "far") ? 32000 :
-        !strcmp(json, "changed-deadline") ? 10001 : 10000;
     return NULL;
 }
 

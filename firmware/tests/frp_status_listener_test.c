@@ -14,10 +14,23 @@
 
 static const char body[] =
     "{\"protocol_version\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\","
-    "\"target_boot_id\":\"33333333-3333-4333-8333-333333333333\","
     "\"request_id\":\"11111111-1111-4111-8111-111111111111\","
-    "\"command\":\"status\",\"expires_at_uptime_ms\":30000}";
-static unsigned authenticated, handled;
+    "\"command\":\"status\"}";
+static const char result[] = "{\"state\":\"succeeded\"}";
+static unsigned authenticated, handled, signed_responses;
+static bool fail_sign;
+static int handler_status = 200;
+static bool empty_result, oversized_result;
+
+bool ebase_management_sign(const uint8_t key[EBASE_MANAGEMENT_KEY_BYTES],
+                           const uint8_t *message, size_t length,
+                           uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES])
+{
+    ++signed_responses;
+    assert(length == sizeof result - 1 && !memcmp(message, result, length));
+    memset(tag, key[0], EBASE_MANAGEMENT_TAG_BYTES);
+    return !fail_sign;
+}
 
 bool ebase_management_authenticate(const uint8_t key[EBASE_MANAGEMENT_KEY_BYTES],
                                    const uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES],
@@ -36,11 +49,10 @@ static int status_handler(const uint8_t *request, size_t length, char *response,
     (void)context;
     assert(length == sizeof body - 1 && !memcmp(request, body, length));
     ++handled;
-    const char result[] = "{\"state\":\"succeeded\"}";
     assert(capacity >= sizeof result);
     memcpy(response, result, sizeof result - 1);
-    *written = sizeof result - 1;
-    return 200;
+    *written = empty_result ? 0 : oversized_result ? capacity : sizeof result - 1;
+    return handler_status;
 }
 
 static uint16_t unused_port(void)
@@ -119,6 +131,17 @@ static void response(int fd, uint64_t start, int status, bool has_result)
     snprintf(prefix, sizeof prefix, "HTTP/1.1 %d ", status);
     assert(strstr(text, prefix) == text);
     assert((strstr(text, "\"succeeded\"") != NULL) == has_result);
+    const char *tag = strstr(text, "X-ESP-Management-Tag: ");
+    assert((tag != NULL) == has_result);
+    if (tag) {
+        tag += strlen("X-ESP-Management-Tag: ");
+        const char digit = start < 7600 ? 'a' : 'b';
+        for (unsigned i = 0; i < 64; ++i) assert(tag[i] == digit);
+        assert(tag[64] == '\r' && tag[65] == '\n');
+        assert(!strstr(tag + 66, "X-ESP-Management-Tag: "));
+        const char *response_body = strstr(text, "\r\n\r\n") + 4;
+        assert(!strcmp(response_body, result));
+    }
     if (status == 401) assert(strstr(text, "Content-Length: 0\r\n") != NULL);
     close(fd);
 }
@@ -194,6 +217,36 @@ int main(void)
     write_all(fd, frame, length);
     response(fd, 8800, 200, true);
     assert(authenticated == 4 && handled == 2);
+
+    handler_status = 400;
+    fd = connect_client(config.local_port);
+    write_all(fd, frame, length);
+    response(fd, 9000, 400, true);
+    handler_status = 409;
+    fd = connect_client(config.local_port);
+    write_all(fd, frame, length);
+    response(fd, 9200, 409, true);
+    handler_status = 200;
+    empty_result = true;
+    fd = connect_client(config.local_port);
+    write_all(fd, frame, length);
+    response(fd, 9300, 500, false);
+    empty_result = false;
+    oversized_result = true;
+    fd = connect_client(config.local_port);
+    write_all(fd, frame, length);
+    response(fd, 9350, 500, false);
+    oversized_result = false;
+    fail_sign = true;
+    fd = connect_client(config.local_port);
+    write_all(fd, frame, length);
+    for (unsigned i = 0; i < 1000 && signed_responses < 5; ++i) {
+        esp_base_frp_status_listener_poll(9400 + i, status_handler, NULL);
+        nanosleep(&(struct timespec){.tv_nsec = 1000000}, NULL);
+    }
+    assert_closed(fd);
+    close(fd);
+    assert(authenticated == 9 && handled == 7 && signed_responses == 5);
 
     esp_base_frp_status_listener_configure(NULL);
     assert(!esp_base_frp_status_listener_ready());

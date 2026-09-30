@@ -18,6 +18,7 @@ typedef struct {
 #define PSA_ERROR_INSUFFICIENT_MEMORY (-141)
 #define PSA_KEY_ATTRIBUTES_INIT {0}
 #define PSA_KEY_TYPE_HMAC 0x1100u
+#define PSA_KEY_USAGE_SIGN_MESSAGE 0x0400u
 #define PSA_KEY_USAGE_VERIFY_MESSAGE 0x1000u
 #define PSA_ALG_SHA_256 0x02000009u
 #define PSA_ALG_HMAC(algorithm) (0x03800000u | (algorithm))
@@ -32,4 +33,7 @@ psa_status_t psa_import_key(const psa_key_attributes_t *attributes, const uint8_
 psa_status_t psa_mac_verify(psa_key_id_t key_id, uint32_t algorithm,
                             const uint8_t *input, size_t input_length,
                             const uint8_t *tag, size_t tag_length);
+psa_status_t psa_mac_compute(psa_key_id_t key_id, uint32_t algorithm,
+                            const uint8_t *input, size_t input_length,
+                            uint8_t *tag, size_t tag_capacity, size_t *tag_length);
 psa_status_t psa_destroy_key(psa_key_id_t key_id);

@@ -434,21 +434,14 @@ const char *ebase_parse_frp_status(const char *json, size_t length,
     while (end < json + length && (*end == ' ' || *end == '\t' ||
                                    *end == '\r' || *end == '\n')) ++end;
     const char *error = "invalid_request";
-    const char *const keys[] = {"protocol_version", "device_id", "target_boot_id",
-                                "request_id", "command", "expires_at_uptime_ms"};
+    const char *const keys[] = {"protocol_version", "device_id", "request_id", "command"};
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
-    const cJSON *deadline = cJSON_GetObjectItemCaseSensitive(root, "expires_at_uptime_ms");
-    if (end == json + length && exact_keys(root, keys, 6) &&
+    if (end == json + length && exact_keys(root, keys, 4) &&
         cJSON_IsNumber(version) && version->valuedouble == 1 &&
         cJSON_IsString(command) && !strcmp(command->valuestring, "status") &&
         copy_id(root, "device_id", out->device_id) &&
-        copy_id(root, "target_boot_id", out->boot_id) &&
-        copy_id(root, "request_id", out->request_id) &&
-        cJSON_IsNumber(deadline) && isfinite(deadline->valuedouble) &&
-        deadline->valuedouble >= 0 && deadline->valuedouble <= 9007199254740991.0 &&
-        floor(deadline->valuedouble) == deadline->valuedouble) {
-        out->expires_at_ms = (uint64_t)deadline->valuedouble;
+        copy_id(root, "request_id", out->request_id)) {
         error = NULL;
     }
     if (error) memset(out, 0, sizeof *out);
