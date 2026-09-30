@@ -85,7 +85,9 @@ python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
 
 `product.status` 在同一个 Base 存储占用期读取持久高水位、下一操作序号、未决操作 ID 和当前签名固件对应的 ECS2 `container_sequence`／`package_sha256`。无包时摘要为 `null`；它是持久绑定元数据，不证明包字节或 guest 健康。缺失账本返回 `unknown/product_ledger_uninitialized`，不会自动初始化；绑定或签名固件观察不确定时返回 `unknown/storage_uncertain` 并阻断本次启动的后续写入。查询到的序号只是快照，正式写入仍须由设备持久账本与 Container 原子裁决。
 
-只读产品状态现硬切为九个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 与 `package_data_schema_version`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。此查询没有新增包 Flash 验签、guest 健康或活动产品版本证明；实际产品版本与 trial 界面仍待后续闭合。
+只读产品状态现硬切为十个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 、`package_data_schema_version` 与 `active_product`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。活动版本复制本次验签装载结果；状态查询没有新增包 Flash 读取或验签，不证明 guest 健康。
+
+`product.status` 现硬切为十个 required 字段，新增 required nullable 的 `active_product`。非 null 对象精确包含 `product_id`、完整 `product_version`、非零 `package_sha256`、正 uint32 `guest_abi_version`／`data_schema_version`、布尔 `is_trial` 和 required nullable `operation_id`。ID／版本沿用 Container 的小写连字符 ASCII 合同，两者合计不超过 v1 manifest 的 4096 字节边界，不截为 64 字节。确认实例的摘要／ABI／schema 与根确认绑定一致且 operation ID 为 null；候选来自本 boot 的实际验签装载，操作 ID 必须匹配未决账本，确认绑定仍保留旧包。活动 ABI 必须等于实际运行时 ABI。null 只表示未取得可确认的活动实例，不能证明 guest 健康或所有 native 资源已回收。
 
 `product.uninstall` 仅接受已经确认的当前包绑定：操作者显式给出原 operation UUID、下一持久序号和从本轮 `product.status` 读到的 ECS2 序号／包摘要；工具在发送前重新读状态并逐项比较。设备验证目标 UUID、boot 和期限，先把意图持久提交并读回，再停止、卸载、读回空绑定与写入结果。命令超时或返回 unknown 时只用原 ID 查询 `product.result`，不自动重发或生成新 ID。包 Flash、产品数据和回退固件仍引用的包保持原位；此入口不能安装或升级包。
 

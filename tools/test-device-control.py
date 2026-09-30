@@ -206,7 +206,7 @@ class ProductStatusTests(unittest.TestCase):
                     "container_sequence": 6,
                     "package_sha256": self.digest, "firmware_sha256": "f" * 64,
                     "runtime_guest_abi_version": 2, "package_guest_abi_version": 2 if self.digest else None,
-                    "package_data_schema_version": 1 if self.digest else None}
+                    "package_data_schema_version": 1 if self.digest else None, "active_product": None}
                 if result is not None:
                     result.update(self.changes)
                     if self.missing is not None: result.pop(self.missing)
@@ -253,6 +253,23 @@ class ProductStatusTests(unittest.TestCase):
                 control.product_status(Device(7, missing=missing), current)
         with self.assertRaises(ValueError):
             control.product_status(Device(7, changes={"package_guest_abi_version": 2}), current)
+
+        active = {"product_id": "counter", "product_version": "v" * 3000, "package_sha256": "ab" * 32,
+                  "guest_abi_version": 2, "data_schema_version": 1, "is_trial": False, "operation_id": None}
+        self.assertEqual(control.product_status(Device(7, digest="ab" * 32, changes={"active_product": active}), current)
+                         ["result"]["active_product"]["product_version"], active["product_version"])
+        trial = {**active, "is_trial": True, "operation_id": pending, "package_sha256": "cd" * 32}
+        self.assertTrue(control.product_status(Device(7, pending, changes={"active_product": trial}), current)
+                        ["result"]["active_product"]["is_trial"])
+        for bad in [{**active, "is_trial": 1}, {**active, "product_version": "v.1"},
+                    {**active, "product_version": "v" * 4096}, {**active, "guest_abi_version": 3},
+                    {**active, "package_sha256": "cd" * 32}, {**trial, "operation_id": None},
+                    {**active, "operation_id": pending}, {**active, "data_schema_version": 0},
+                    {**active, "extra": 1}, *[{k: v for k, v in active.items() if k != missing} for missing in active]]:
+            with self.assertRaises(ValueError):
+                control.product_status(Device(7, pending, "ab" * 32, {"active_product": bad}), current)
+        with self.assertRaises(ValueError):
+            control.product_status(Device(7, missing="active_product"), current)
 
 
 class ProductPackageTests(unittest.TestCase):
@@ -561,7 +578,7 @@ class ProductUninstallTests(unittest.TestCase):
                               "container_sequence": 6,
                               "package_sha256": digest, "firmware_sha256": "f" * 64,
                               "runtime_guest_abi_version": 2, "package_guest_abi_version": 2,
-                              "package_data_schema_version": 1}
+                              "package_data_schema_version": 1, "active_product": None}
                 elif command == "product.uninstall":
                     assert request["device_id"] == device
                     assert request["target_boot_id"] == boot

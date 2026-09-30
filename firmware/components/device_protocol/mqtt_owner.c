@@ -208,7 +208,7 @@ bool esp_base_mqtt_owner_ready(void)
 
 static bool publish(ebase_mqtt_channel_t channel, const char *json, size_t length)
 {
-    if (!esp_base_mqtt_owner_ready() || !json || !length || length > EMQTT_PAYLOAD_MAX) return false;
+    if (!esp_base_mqtt_owner_ready() || !json || !length || length > EMQTT_PUBLISH_PAYLOAD_MAX_BYTES) return false;
     int message_id = -1;
     return emqtt_enqueue(s_runtime, s_topics[channel], json, length, 1, false, &message_id) == ESP_OK;
 }

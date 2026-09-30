@@ -530,9 +530,12 @@ static void reply_product_result(const char *request_id,
     funlockfile(stdout);
 }
 
+static void *protocol_work_alloc(size_t size);
+
 static void reply_product_status(const char *request_id,
                                  const ebase_product_ledger_t *ledger,
-                                 const esp_base_container_binding_snapshot_t *binding)
+                                 const esp_base_container_binding_snapshot_t *binding,
+                                 const esp_base_container_active_product_t *active)
 {
     const char *pending = NULL;
     if (ledger->count && ledger->records[ledger->count - 1U].state == EBASE_PRODUCT_PREPARED)
@@ -556,29 +559,51 @@ static void reply_product_status(const char *request_id,
         package_digest_hex(digest, binding->package_sha256);
         package_sha256 = digest;
     }
-    const int length = snprintf(s_response_json, sizeof s_response_json,
+    const size_t capacity = 1024U + (active->present ?
+        strlen(active->product_id) + active->product_version_size_bytes : 0U);
+    char *response = protocol_work_alloc(capacity);
+    if (response == NULL) {
+        reply(request_id, "unknown", "resource_failure", NULL);
+        return;
+    }
+    int length = snprintf(response, capacity,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"request_id\":\"%s\",\"state\":\"succeeded\",\"error_code\":null,"
         "\"result\":{\"operation_sequence_high_watermark\":%" PRIu32
         ",\"next_operation_sequence\":%s,\"pending_operation_id\":%s%s%s,"
         "\"container_sequence\":%" PRIu32 ",\"package_sha256\":%s,"
         "\"firmware_sha256\":%s,\"runtime_guest_abi_version\":%" PRIu32 ","
-        "\"package_guest_abi_version\":%s,\"package_data_schema_version\":%s}}",
+        "\"package_guest_abi_version\":%s,\"package_data_schema_version\":%s,\"active_product\":",
         s_context.device_id, s_boot_id, request_id, ledger->high_watermark, next,
         pending ? "\"" : "null", pending ? pending : "", pending ? "\"" : "",
         binding->container_sequence, package_sha256, firmware_digest,
         binding->runtime_guest_abi_version, package_abi, package_schema);
-    if (length < 0 || (size_t)length >= sizeof s_response_json) return;
-    if (s_reply_mqtt) {
-        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
-        return;
+    if (length >= 0 && (size_t)length < capacity) {
+        char active_digest[67];
+        package_digest_hex(active_digest, active->package_sha256);
+        const int tail = active->present ? snprintf(response + length, capacity - (size_t)length,
+            "{\"product_id\":\"%s\",\"product_version\":\"%s\",\"package_sha256\":%s,"
+            "\"guest_abi_version\":%" PRIu32 ",\"data_schema_version\":%" PRIu32 ","
+            "\"is_trial\":%s,\"operation_id\":%s%s%s}}}",
+            active->product_id, active->product_version, active_digest,
+            active->guest_abi_version, active->data_schema_version, active->is_trial ? "true" : "false",
+            active->is_trial ? "\"" : "null", active->is_trial ? active->operation_id : "",
+            active->is_trial ? "\"" : "") :
+            snprintf(response + length, capacity - (size_t)length, "null}}");
+        if (tail < 0 || (size_t)tail >= capacity - (size_t)length) length = -1;
+        else length += tail;
+    } else length = -1;
+    if (length < 0) reply(request_id, "unknown", "resource_failure", NULL);
+    else if (s_reply_mqtt) (void)esp_base_mqtt_owner_result(response, (size_t)length);
+    else {
+        flockfile(stdout);
+        fputc('\n', stdout);
+        (void)fwrite(response, 1, (size_t)length, stdout);
+        fputc('\n', stdout);
+        fflush(stdout);
+        funlockfile(stdout);
     }
-    flockfile(stdout);
-    fputc('\n', stdout);
-    (void)fwrite(s_response_json, 1, (size_t)length, stdout);
-    fputc('\n', stdout);
-    fflush(stdout);
-    funlockfile(stdout);
+    free(response);
 }
 
 static void emit_outcome(size_t slot, bool via_mqtt)
@@ -1654,22 +1679,31 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             ebase_product_ledger_nvs_io(s_context.flash_io_owner);
         const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
         esp_base_container_binding_snapshot_t binding = {0};
-        const esp_base_container_binding_result_t bound = opened == EBASE_LEDGER_OK ?
-            esp_base_container_product_binding_snapshot(&claim, &binding) :
+        esp_base_container_active_product_t active = {0};
+        esp_base_container_binding_result_t bound = opened == EBASE_LEDGER_OK ?
+            esp_base_container_product_status_snapshot(&claim, &binding, &active) :
             ESP_BASE_CONTAINER_BINDING_OK;
+        if (bound == ESP_BASE_CONTAINER_BINDING_OK && active.present && active.is_trial &&
+            (!ledger->count || ledger->records[ledger->count - 1U].state != EBASE_PRODUCT_PREPARED ||
+             strcmp(active.operation_id, ledger->records[ledger->count - 1U].operation_id) ||
+             ledger->records[ledger->count - 1U].kind == EBASE_PRODUCT_UNINSTALL ||
+             memcmp(active.package_sha256, ledger->records[ledger->count - 1U].package_sha256, 32)))
+            bound = ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
         const bool released = bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN ? false :
             esp_base_storage_release(&claim);
         if (bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN || !released)
             s_config_uncertain = true;
         if (opened == EBASE_LEDGER_OK && bound == ESP_BASE_CONTAINER_BINDING_OK && released)
-            reply_product_status(command->request.request_id, ledger, &binding);
+            reply_product_status(command->request.request_id, ledger, &binding, &active);
+        free(active.product_version);
         free(ledger);
         if (opened != EBASE_LEDGER_OK || bound != ESP_BASE_CONTAINER_BINDING_OK || !released)
             reply(command->request.request_id, "unknown",
                   !released ? "storage_uncertain" :
                   opened == EBASE_LEDGER_UNINITIALIZED ? "product_ledger_uninitialized" :
                   opened == EBASE_LEDGER_BUSY || bound == ESP_BASE_CONTAINER_BINDING_BUSY ?
-                  "operation_busy" : "storage_uncertain", NULL);
+                  "operation_busy" : bound == ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE ?
+                  "resource_failure" : "storage_uncertain", NULL);
         return;
     }
     if (command->kind == EBASE_OTA_RESULT) {

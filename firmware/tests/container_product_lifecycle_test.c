@@ -8,6 +8,7 @@
 #include <openssl/sha.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,8 +20,15 @@
 #include <sys/mman.h>
 #endif
 
+static atomic_bool fail_metadata_allocation;
+static void *test_product_malloc(size_t size_bytes)
+{
+    return atomic_exchange(&fail_metadata_allocation, false) ? NULL : malloc(size_bytes);
+}
 bool test_policy_enabled = true;
+#define malloc test_product_malloc
 #include "esp_base_container_product.c"
+#undef malloc
 
 static bool wait_trial_snapshot(esp_base_container_trial_event_snapshot_t *snapshot)
 {
@@ -74,6 +82,7 @@ typedef struct {
 
 typedef struct { uint8_t *bytes; size_t size; } file_t;
 
+static file_t expected_confirmed_version, expected_candidate_version, expected_second_version;
 static store_t store;
 static esp_base_storage_owner_t flash_io_owner;
 static econtainer_package_workspace_t test_package_workspace;
@@ -923,7 +932,11 @@ static void run_uninstall_reclaimed_guest(const file_t *key, const file_t *packa
         configure_product(key);
         assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
         assert(!s_product.thread_joinable && s_product.native_reclaimed &&
-               !atomic_load(&s_product.instance_active));
+               !atomic_load(&s_product.instance_active) && s_product.product_version == NULL);
+        esp_base_container_binding_snapshot_t empty_binding = {0};
+        esp_base_container_active_product_t inactive = {0};
+        assert(esp_base_container_product_status_snapshot(&claim, &empty_binding, &inactive) ==
+               ESP_BASE_CONTAINER_BINDING_OK && !inactive.present && inactive.product_version == NULL);
     } else {
         assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
         assert(esp_base_container_product_stop_confirmed(&claim));
@@ -977,6 +990,24 @@ static void run_uninstall_stop_timeout(const file_t *key, const file_t *package,
     assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
 
+static void check_active_product(const esp_base_storage_claim_t *claim,
+                                 const file_t *version, bool trial, const char *operation_id)
+{
+    esp_base_container_binding_snapshot_t binding = {0};
+    esp_base_container_active_product_t active = {0};
+    assert(esp_base_container_product_status_snapshot(claim, &binding, &active) ==
+           ESP_BASE_CONTAINER_BINDING_OK);
+    assert(active.present && !strcmp(active.product_id, "counter") &&
+           active.product_version_size_bytes == version->size &&
+           !memcmp(active.product_version, version->bytes, version->size) &&
+           active.product_version[version->size] == '\0' && active.is_trial == trial &&
+           active.guest_abi_version == 2U && active.data_schema_version == 1U &&
+           memcmp(active.package_sha256, s_product.event_package_sha256, 32) == 0);
+    assert(trial ? !strcmp(active.operation_id, operation_id) : active.operation_id[0] == '\0');
+    if (!trial) assert(binding.package_present && !memcmp(active.package_sha256, binding.package_sha256, 32));
+    free(active.product_version);
+}
+
 static void run_signed_reinstall_cycles(const file_t *key, const file_t *package,
                                         const char boot_id[37])
 {
@@ -1007,6 +1038,16 @@ static void run_signed_reinstall_cycles(const file_t *key, const file_t *package
         assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
         assert(s_product.thread_joinable &&
                atomic_load(&s_product.instance_active));
+        if (cycle == 0U) {
+            esp_base_container_binding_snapshot_t failed_binding = {0};
+            esp_base_container_active_product_t failed_active = {0};
+            atomic_store(&fail_metadata_allocation, true);
+            assert(esp_base_container_product_status_snapshot(&claim, &failed_binding, &failed_active) ==
+                   ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE && !failed_active.present &&
+                   failed_active.product_version == NULL && failed_binding.container_sequence == 0U &&
+                   atomic_load(&s_product.instance_active));
+        }
+        check_active_product(&claim, &expected_confirmed_version, false, NULL);
 
         uint8_t flash_before[FLASH_BYTES];
         memcpy(flash_before, store.flash, sizeof flash_before);
@@ -1065,6 +1106,7 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
     econtainer_slots_state_t first_state = {0};
     assert(econtainer_slots_load(&io, &geometry, &first_state) == ECONTAINER_SLOTS_OK);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    check_active_product(&claim, &expected_candidate_version, false, NULL);
     const int first_index = binding_index(&first_state,
         physical.running_firmware_sha256);
     assert(first_index >= 0 && esp_base_container_product_event_accepting());
@@ -1129,6 +1171,7 @@ static void run_source_change_same_boot(const file_t *key, const file_t *first,
                   second_state.bindings[second_index].package_sha256, 32) != 0);
     assert(memcmp(&physical, &original_firmware, sizeof physical) == 0);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    check_active_product(&claim, &expected_second_version, false, NULL);
     assert(esp_base_container_product_event_progress_count() == 0U);
     assert(esp_base_container_product_event_observation(&observed_event) ==
            ESP_BASE_CONTAINER_EVENT_NO_OBSERVATION);
@@ -1272,6 +1315,12 @@ static void run_prepare_preserves_confirmed(const file_t *key,
            pending_binding.package_present &&
            memcmp(pending_binding.package_sha256,
                   original.bindings[index].package_sha256, 32) == 0);
+    check_active_product(&claim, &expected_candidate_version, true, request.operation_id);
+    s_product.event_package_sha256[0] ^= 1U;
+    esp_base_container_active_product_t invalid_active = {0};
+    assert(esp_base_container_product_status_snapshot(&claim, &pending_binding, &invalid_active) ==
+           ESP_BASE_CONTAINER_BINDING_UNCERTAIN && !invalid_active.present && invalid_active.product_version == NULL);
+    s_product.event_package_sha256[0] ^= 1U;
     s_product.package_trial_operation_id[0] ^= 1U;
     assert(esp_base_container_product_binding_snapshot(&claim, &pending_binding) ==
            ESP_BASE_CONTAINER_BINDING_UNCERTAIN);
@@ -1307,6 +1356,7 @@ static void run_prepare_preserves_confirmed(const file_t *key,
            abandoned.sequence == trial.sequence + 1U &&
            abandoned.bindings[index].slot == original_slot);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    check_active_product(&claim, &expected_confirmed_version, false, NULL);
 
     memcpy(request.operation_id,
            "99999999-9999-4999-8999-999999999993", sizeof request.operation_id);
@@ -1370,6 +1420,7 @@ static void run_package_trial_confirmation(const file_t *key,
     assert(econtainer_slots_load(&io, &geometry, &trial) == ECONTAINER_SLOTS_OK &&
            trial.phase == ECONTAINER_SLOT_TRIAL_STARTED &&
            trial.sequence == prepared_sequence + 1U);
+    check_active_product(&claim, &expected_candidate_version, true, request.operation_id);
     esp_base_container_binding_snapshot_t pending_binding = {0};
     assert(esp_base_container_product_binding_snapshot(&claim, &pending_binding) ==
            ESP_BASE_CONTAINER_BINDING_OK &&
@@ -1455,6 +1506,7 @@ static void run_package_trial_confirmation(const file_t *key,
             &confirmed_sequence);
     }
     assert(confirmation == ESP_BASE_CONTAINER_CONFIRM_CONFIRMED);
+    check_active_product(&claim, &expected_candidate_version, false, NULL);
     econtainer_slots_state_t confirmed = {0};
     assert(econtainer_slots_load(&io, &geometry, &confirmed) == ECONTAINER_SLOTS_OK &&
            confirmed.sequence == trial.sequence + 2U &&
@@ -2631,6 +2683,9 @@ int main(int argc, char **argv)
     file_t key = read_file(argv[1], "public.der");
     file_t package = read_file(argv[1], "p0.pkg");
     file_t package_v1 = read_file(argv[1], "p1.pkg");
+    expected_confirmed_version = read_file(argv[1], "p0-version.txt");
+    expected_candidate_version = read_file(argv[1], "p1-version.txt");
+    expected_second_version = read_file(argv[1], "p2-version.txt");
     file_t package_v2 = read_file(argv[1], "p2.pkg");
     configure(&key);
     esp_base_storage_owner_t owner;
@@ -2726,6 +2781,9 @@ int main(int argc, char **argv)
             ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, live_trial, false);
     }
     run_success_receipt_replay(&key, &package, boot_id);
+    free(expected_confirmed_version.bytes);
+    free(expected_candidate_version.bytes);
+    free(expected_second_version.bytes);
     free(package_v1.bytes);
     free(package_v2.bytes);
     free(package.bytes);

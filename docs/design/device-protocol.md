@@ -14,7 +14,9 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 只读 `product.status` 精确包含 `protocol_version:1`、`request_id`、`command:"product.status"`，没有 `parameters`。在同一 Base 存储占用期内核对签名固件对应的 ECS2 绑定并读取账本，返回 `operation_sequence_high_watermark`、`next_operation_sequence`、`pending_operation_id`、`container_sequence` 与可为 null 的 `package_sha256`；高水位耗尽时下一序号为 null，末条为未决 PREPARED 时返回其原 ID，否则未决 ID 为 null。键缺失返回 `unknown/product_ledger_uninitialized` 且 result 为 null，忙或绑定／存储不确定同样不输出序号。查询不初始化账本，不验证包字节或 guest 健康，也不保证后来写入时序号仍未被另一请求占用；写命令在持久账本上核对连续序号。
 
-只读产品状态现硬切为九个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 与 `package_data_schema_version`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。此查询没有新增包 Flash 验签、guest 健康或活动产品版本证明；实际产品版本与 trial 界面仍待后续闭合。
+只读产品状态现硬切为十个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 、`package_data_schema_version` 与 `active_product`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。活动版本复制本次验签装载结果；状态查询没有新增包 Flash 读取或验签，不证明 guest 健康。
+
+`product.status` 现硬切为十个 required 字段，新增 required nullable 的 `active_product`。非 null 对象精确包含 `product_id`、完整 `product_version`、非零 `package_sha256`、正 uint32 `guest_abi_version`／`data_schema_version`、布尔 `is_trial` 和 required nullable `operation_id`。ID／版本沿用 Container 的小写连字符 ASCII 合同，两者合计不超过 v1 manifest 的 4096 字节边界，不截为 64 字节。确认实例的摘要／ABI／schema 与根确认绑定一致且 operation ID 为 null；候选来自本 boot 的实际验签装载，操作 ID 必须匹配未决账本，确认绑定仍保留旧包。活动 ABI 必须等于实际运行时 ABI。null 只表示未取得可确认的活动实例，不能证明 guest 健康或所有 native 资源已回收。
 
 写命令必须且仅包含 `protocol_version`、`device_id`、`target_boot_id`、`request_id`、`command`、`expires_at_uptime_ms`、`parameters`。request_id 为规范 UUID v4；target_boot_id 必须精确等于当前启动值，受理期限为当前设备 uptime 后不超过 30000 ms；在出队执行前再次验证。过期拒绝，不跨启动重放。
 

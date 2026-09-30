@@ -70,6 +70,7 @@ typedef enum {
     ESP_BASE_CONTAINER_BINDING_NOT_CONFIGURED,
     ESP_BASE_CONTAINER_BINDING_BUSY,
     ESP_BASE_CONTAINER_BINDING_UNCERTAIN,
+    ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE,
 } esp_base_container_binding_result_t;
 esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
@@ -80,6 +81,23 @@ esp_base_container_stage_result_t esp_base_container_product_write_staged_firmwa
     const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
     const esp_base_ota_receipt_recovery_t *receipt,
     econtainer_slot_source_fn source_fn, void *source_context);
+typedef struct {
+    bool present;
+    const char *product_id; /* Immutable build authorization, verified on open. */
+    char *product_version; /* Owned copy; caller frees after a successful query. */
+    size_t product_version_size_bytes;
+    uint8_t package_sha256[32];
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
+    bool is_trial;
+    char operation_id[37]; /* Empty unless is_trial. */
+} esp_base_container_active_product_t;
+
+esp_base_container_binding_result_t esp_base_container_product_status_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *binding,
+    esp_base_container_active_product_t *active);
+
 typedef struct {
     char operation_id[37];
     uint32_t expected_sequence;

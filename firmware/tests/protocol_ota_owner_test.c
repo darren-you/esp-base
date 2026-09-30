@@ -16,6 +16,7 @@ static bool product_present;
 static bool pristine_product_baseline;
 static unsigned pristine_product_calls;
 static esp_base_container_binding_result_t binding_result;
+static unsigned active_fixture_mode;
 static bool binding_package_present;
 static unsigned binding_snapshot_calls;
 static esp_base_container_uninstall_result_t product_uninstall_result;
@@ -56,7 +57,7 @@ static unsigned register_calls, failure_record_calls, task_calls, prepare_calls,
 static unsigned snapshot_calls, load_receipt_calls, retire_calls,
     product_retire_calls, validate_calls, query_calls;
 static esp_base_ota_package_mode_t loaded_package_mode;
-static char latest_reply[1200];
+static char latest_reply[5121];
 static char latest_reported[768];
 static unsigned reported_calls;
 static unsigned wifi_apply_calls, config_commit_calls, config_load_calls;
@@ -97,6 +98,7 @@ static void reset_case(void)
     pristine_product_baseline = false;
     pristine_product_calls = 0;
     binding_result = ESP_BASE_CONTAINER_BINDING_OK;
+    active_fixture_mode = 0U;
     binding_package_present = false;
     binding_snapshot_calls = 0;
     product_uninstall_result = ESP_BASE_CONTAINER_UNINSTALL_COMPLETE;
@@ -968,6 +970,7 @@ int main(void)
            strstr(latest_reply, "\"runtime_guest_abi_version\":2") &&
            strstr(latest_reply, "\"package_guest_abi_version\":null") &&
            strstr(latest_reply, "\"package_data_schema_version\":null") &&
+           strstr(latest_reply, "\"active_product\":null") &&
            binding_snapshot_calls == 1U);
     product_intent.sequence = 2U;
     strcpy(product_intent.operation_id, "44444444-4444-4444-8444-000000000002");
@@ -986,6 +989,16 @@ int main(void)
            strstr(latest_reply, "\"package_guest_abi_version\":2") &&
            strstr(latest_reply, "\"package_data_schema_version\":1") &&
            atomic_load(&owner.active_token) == 0U);
+    for (active_fixture_mode = 1U; active_fixture_mode <= 2U; ++active_fixture_mode) {
+        s_reply_mqtt = true;
+        handle_line("product-status-1", strlen("product-status-1"), NULL);
+        s_reply_mqtt = false;
+        expect_reply("succeeded", NULL);
+        assert(strlen(latest_reply) > 4096U && strlen(latest_reply) <= 5120U &&
+               strstr(latest_reply, "\"product_id\":\"counter\"") &&
+               strstr(latest_reply, active_fixture_mode == 2U ? "\"is_trial\":true" : "\"is_trial\":false"));
+    }
+    active_fixture_mode = 0U;
     binding_result = ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
     s_reply_mqtt = true;
     handle_line("product-status-1", strlen("product-status-1"), NULL);
@@ -1803,6 +1816,33 @@ esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     out->package_data_schema_version = binding_package_present ? 1U : 0U;
     if (binding_package_present) memset(out->package_sha256, 0x7b, 32);
     return binding_result;
+}
+
+esp_base_container_binding_result_t esp_base_container_product_status_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *binding,
+    esp_base_container_active_product_t *active)
+{
+    *active = (esp_base_container_active_product_t){0};
+    const esp_base_container_binding_result_t result = esp_base_container_product_binding_snapshot(claim, binding);
+    if (result == ESP_BASE_CONTAINER_BINDING_OK && active_fixture_mode != 0U) {
+        active->present = true;
+        active->product_id = "counter";
+        active->product_version_size_bytes = 3900U;
+        active->product_version = malloc(3901U);
+        assert(active->product_version != NULL);
+        memset(active->product_version, 'v', 3900U);
+        active->product_version[3900U] = '\0';
+        memcpy(active->package_sha256, binding->package_sha256, 32);
+        active->guest_abi_version = 2U;
+        active->data_schema_version = 1U;
+        active->is_trial = active_fixture_mode == 2U;
+        if (active->is_trial) {
+            strcpy(active->operation_id, "44444444-4444-4444-8444-000000000002");
+            memset(active->package_sha256, 0xab, 32);
+        }
+    }
+    return result;
 }
 
 esp_base_container_prepare_result_t esp_base_container_product_prepare_package(

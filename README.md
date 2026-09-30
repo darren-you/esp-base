@@ -1,6 +1,6 @@
 # ESP Base
 
-2026-09-30 设备元数据软件续进：`product.status` 同一存储 claim 的双次签名固件观察现同时返回运行固件 SHA-256、实际运行时 guest ABI 与当前确认包的 ABI／schema；公开 CLI 严格核对九字段及空包一致性。活动产品版本和试运行展示、生产与实板验收仍待闭合，导入包元数据不替代设备状态。
+2026-09-30 活动产品元数据软件续进：`product.status` 的十字段链新增设备当前实际实例的完整版本、摘要、ABI／schema 和真实试运行状态。确认绑定与候选分别返回，停止后清除活动视图；公开 CLI 和 Tool 严格消费。正式发布、两板回读及峰值验收仍待闭合。
 
 2026-09-30 C3 带包恢复诊断续验：`eb41a4a` 的仓外 UART 适配签名镜像完成 REUSE／WRITE 的离线 pending、旧 P0 回退恢复及幂等二启，主栈最低余量均为 2,260 B，二启均为 4,244 B；原 V3 除终态／失败码外逐字节保持，两模式二启整片 Flash 各自相同。该镜像仅在仓外改变控制台／VFS 与串口驱动装配，另跳过 QEMU 缺失的 ADC2 校准；正式 USB 镜像和实体 C3 未改，不能当作 USB／联网／实板验收。精确输入与模拟器 eFuse 前置见[开发检查点](docs/operations/development-checkpoint.md)。
 
@@ -179,7 +179,7 @@ idf.py -C firmware build
 
 C3 `base_store` 后 31 页的脱敏逐页字节计数和旧 `ota_1` 同字节映射见[异常页只读分类](docs/operations/c3-base-store-page-forensics.md)；来源与处置仍未确认，迁移预检继续阻断。
 
-`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `578cf89c343e388db43ba1f4ddcd602fedcb763c`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@bebde3971c2f4b4ee99e150348213222bfd9e27e`、`esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`、`esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`、`esp-container@e8a0d0b6384bbba813b955ed08ebc315c134a707`，不读取工作区相邻仓库。普通基座的软件候选使用 v3 配置；MQTT 的 HMAC、Topic 和 ClientID 合同未变，无凭据时不创建客户端。FRP 有独立 Token、CA、代理名和管理 key，loopback `status` listener 未绑定时不创建连接；完整请求合同见[设备协议](docs/design/device-protocol.md#frp-base-软件接线边界)。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)为准；编译不写设备。
+`IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `578cf89c343e388db43ba1f4ddcd602fedcb763c`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@a46e209cc98c7b910774dbb77d11b34f79492720`、`esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`、`esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`、`esp-container@52d94d696d4cb0de3ce6a037c844c16be7edfb54`，不读取工作区相邻仓库。普通基座的软件候选使用 v3 配置；MQTT 的 HMAC、Topic 和 ClientID 合同未变，无凭据时不创建客户端。FRP 有独立 Token、CA、代理名和管理 key，loopback `status` listener 未绑定时不创建连接；完整请求合同见[设备协议](docs/design/device-protocol.md#frp-base-软件接线边界)。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)为准；编译不写设备。
 
 NVS 初始化失败时保留原分区并停止初始化，不自动擦除。Base 身份使用 `nvs/base_identity/device_uuid`；C3 旧分区表保留为离线迁移预检输入；正式源码已切换到新分区，旧 ESP-AT 的 ESP32 没有可沿用的 Base UUID，须在新布局首次启动时建立独立身份。配置 `base_store/base_config/committed` 只接受 v3，旧 v1/v2 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。只读预检和候选见[离线迁移](docs/operations/base-v3-offline-migration.md)。C3 与 ESP32-D0WD-V3 均按各自 4 MiB 布局独立构建，无 GPIO 动作。ESP32 的 UART0/CH340 控制入口、产品分区与 ECDSA v1 OTA 约束已有软件候选，但旧 ESP-AT 启动链、身份、持久区和新 Base 不能直接混用；需保留完整旧 Flash、仓外旧持久区归档、双签名 Base 与恢复步骤，再另行受控实板迁移。[旧 AT 配置只读检查点](docs/operations/esp32-at-nvs-readonly-checkpoint.md)说明现物 Wi-Fi 空值、MAC 与新 UUID 的边界，以及原始归档与活动配置迁移的区别。
 

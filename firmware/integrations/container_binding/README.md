@@ -2,6 +2,10 @@
 
 主应用编译本组件，并在启动时沿唯一 `ota_operation` claim 调用它。默认产品授权输入全部为空，Base 保持无包运行；任一输入出现但合同不全，启动明确阻断并保留 claim。C3 源码表已包含三份 `0x77000` 包槽、独立 FRP scratch 与 11 页 Base NVS；ESP32 源码表包含三份 `0x82000` 包槽、独立 FRP scratch 与六页 Base NVS。两目标布局迁移和实体负载尚未验收，不可据此写板。
 
+
+活动状态在新 `econtainer_product_open` 成功后，从本次复验 manifest 的完整 slice 复制版本，并与实例一同发布。ID 与不可变编译授权逐字节核对；版本只持有实际长度加终止字节，不新增固定 4 KiB 常驻区。队列同一锁保护发布、查询副本和停止清理，查询再按同一个签名固件观察／ECS2 读回核对确认绑定或精确本 boot 候选。版本副本分配失败返回资源失败并清空快照，其他不确定保持阻断。绑定预检入口继续不分配版本，联合固件 pending trial 沿既有 claim／观察合同保持忙或未知。
+
+`product.status` 现硬切为十个 required 字段，新增 required nullable 的 `active_product`。非 null 对象精确包含 `product_id`、完整 `product_version`、非零 `package_sha256`、正 uint32 `guest_abi_version`／`data_schema_version`、布尔 `is_trial` 和 required nullable `operation_id`。ID／版本沿用 Container 的小写连字符 ASCII 合同，两者合计不超过 v1 manifest 的 4096 字节边界，不截为 64 字节。确认实例的摘要／ABI／schema 与根确认绑定一致且 operation ID 为 null；候选来自本 boot 的实际验签装载，操作 ID 必须匹配未决账本，确认绑定仍保留旧包。活动 ABI 必须等于实际运行时 ABI。null 只表示未取得可确认的活动实例，不能证明 guest 健康或所有 native 资源已回收。
 ## 架构拓扑
 
 ```mermaid
@@ -12,6 +16,8 @@ flowchart LR
     slots --> guest["confirmed 包验签、授权和唯一 pthread"]
     ingress["独立 MQTT event：ACL / 设备 HMAC"] --> queue["Base：签名上限 FIFO / 包摘要核对"]
     queue --> guest
+    guest --> active["本次验签版本 / 生命周期缓存"]
+    active --> status["同 claim 的确认绑定 / 精确试运行回读"]
     slots --> release["完成启动存储操作后释放 claim"]
     release --> uninstall["产品专属卸载：确认停止 / 清当前绑定 / 独立读回"]
     uninstall --> slots
@@ -66,7 +72,7 @@ Container 成功 open 返回本次重新验签包的 SHA-256 与签名 `event_qu
 
 联合固件包内部 trial 入口现消费原 V3 并先持久本 boot trial，再验签启动包，沿唯一 pthread 跟踪代表事件和失败。调用方仍须完成在线窗口；内部健康入口只复核事件依据、空队列与无在途调用，随后冻结 guest、提交并独立读回 HEALTH_VERIFIED。固件 VALID 后确认引用成功才取消 trial 和冻结；持久读回不确定继续阻断。真实 trap 已结束且 native 回收、线程 join 时才允许回滚。主应用已消费此链，原候选准入后控制任务才开放 MQTT 并采集连续 30 秒 Wi-Fi／时间／MQTT 与代表事件健康，主应用依次提交健康、固件 VALID、包绑定与原成功收据。离线保持未决；FRP 和破坏性写门保持关闭。双目标签名 app 已实际链接此链与 WRITE 续写；静态容量不代表真实五能力峰值。
 
-当前清单精确锁定 `esp-container@e8a0d0b6384bbba813b955ed08ebc315c134a707` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 未配置产品授权，不运行 guest；两目标正式源码均有包分区，但现役设备尚未完成布局迁移。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
+当前清单精确锁定 `esp-container@52d94d696d4cb0de3ce6a037c844c16be7edfb54` 与 WAMR `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 未配置产品授权，不运行 guest；两目标正式源码均有包分区，但现役设备尚未完成布局迁移。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
 
 历史 Base `3df1c33` 与当时的精确锁曾以仓外测试产品策略完成两目标深链接核验，两个 ELF 都确实包含 `econtainer_product_open` 与 WAMR load/instantiate/call。ESP32 测试键 ECDSA v1 签名镜像为 `0x10fff4`，官方验签通过，双 `0x120000` app 各余 `0x1000c`。C3 仅在隔离副本使用三 `0x82000` 包槽与双 `0x118000` app 的候选表，测试键 RSA v2 签名中间镜像为 `0x121000`，官方容量门判每槽溢出 `0x9000`，所以该布局没有可用构建。证据与隔离改动见[开发检查点](../../../docs/operations/development-checkpoint.md)；没有把测试策略、候选 C3 表或密钥写入本仓。
 

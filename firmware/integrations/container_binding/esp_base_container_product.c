@@ -76,6 +76,10 @@ typedef struct {
     bool guest_call_processing;
     bool trial_commit_active;
     uint8_t event_package_sha256[32];
+    char *product_version;
+    size_t product_version_size_bytes;
+    uint32_t product_guest_abi_version;
+    uint32_t product_data_schema_version;
     uint8_t trial_event_sha256[32];
     uint64_t representative_event_sequence;
     uint64_t trial_failure_count;
@@ -631,6 +635,10 @@ typedef struct {
     econtainer_runtime_result_t runtime_result;
     uint32_t event_queue_limit;
     uint8_t package_sha256[32];
+    char *product_version;
+    size_t product_version_size_bytes;
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
 } open_context_t;
 
 static econtainer_slots_result_t open_selected(
@@ -663,6 +671,31 @@ static econtainer_slots_result_t open_selected(
         open->event_queue_limit = result.event_queue_limit;
         memcpy(open->package_sha256, result.package_sha256,
                sizeof open->package_sha256);
+        const size_t id_size = strlen(s_product.validation.expected_product_id);
+        if (result.product_id_size_bytes != id_size ||
+            result.product_id_offset_bytes > sizeof package_workspace.manifest ||
+            id_size > sizeof package_workspace.manifest - result.product_id_offset_bytes ||
+            memcmp(package_workspace.manifest + result.product_id_offset_bytes,
+                   s_product.validation.expected_product_id, id_size) != 0 ||
+            result.product_version_size_bytes == 0U ||
+            result.product_version_offset_bytes > sizeof package_workspace.manifest ||
+            result.product_version_size_bytes > sizeof package_workspace.manifest -
+                result.product_version_offset_bytes) {
+            open->runtime_result = ECONTAINER_RUNTIME_INVALID_INPUT;
+            return ECONTAINER_SLOTS_UNTRUSTED;
+        }
+        open->product_version = malloc(result.product_version_size_bytes + 1U);
+        if (open->product_version == NULL) {
+            open->runtime_result = ECONTAINER_RUNTIME_NO_MEMORY;
+            return ECONTAINER_SLOTS_NO_SPACE;
+        }
+        memcpy(open->product_version,
+               package_workspace.manifest + result.product_version_offset_bytes,
+               result.product_version_size_bytes);
+        open->product_version[result.product_version_size_bytes] = '\0';
+        open->product_version_size_bytes = result.product_version_size_bytes;
+        open->guest_abi_version = result.guest_abi_version;
+        open->data_schema_version = result.data_schema_version;
     }
     return result.slots;
 }
@@ -726,11 +759,17 @@ static bool drain_log(econtainer_runtime_t *runtime)
 static void release_event_queue(void)
 {
     product_event_t **queue = NULL;
+    char *version = NULL;
     size_t capacity = 0;
     if (s_product.event_lock != NULL &&
         xSemaphoreTake(s_product.event_lock, portMAX_DELAY) == pdTRUE) {
         atomic_store_explicit(&s_product.event_accepting, false,
                               memory_order_release);
+        version = s_product.product_version;
+        s_product.product_version = NULL;
+        s_product.product_version_size_bytes = 0;
+        s_product.product_guest_abi_version = 0;
+        s_product.product_data_schema_version = 0;
         queue = s_product.event_queue;
         capacity = s_product.event_capacity;
         s_product.event_queue = NULL;
@@ -750,6 +789,7 @@ static void release_event_queue(void)
         }
     }
     free(queue);
+    free(version);
 }
 
 static product_event_t *take_event(void)
@@ -996,6 +1036,7 @@ static void *product_thread(void *unused)
         }
         report_result(slots == ECONTAINER_SLOTS_EMPTY ? ESP_BASE_CONTAINER_EMPTY :
                       ESP_BASE_CONTAINER_BLOCKED);
+        free(open.product_version);
         return NULL;
     }
     const econtainer_runtime_result_t initialized = econtainer_product_init(open.runtime);
@@ -1006,6 +1047,7 @@ static void *product_thread(void *unused)
         s_product.stop_succeeded = s_product.native_reclaimed;
         xSemaphoreGive(s_product.stopped);
         report_result(ESP_BASE_CONTAINER_BLOCKED);
+        free(open.product_version);
         return NULL;
     }
     if (open.event_queue_limit == 0U ||
@@ -1019,6 +1061,7 @@ static void *product_thread(void *unused)
         s_product.stop_succeeded = s_product.native_reclaimed;
         xSemaphoreGive(s_product.stopped);
         report_result(ESP_BASE_CONTAINER_BLOCKED);
+        free(open.product_version);
         return NULL;
     }
     s_product.event_queue = calloc(open.event_queue_limit,
@@ -1032,8 +1075,27 @@ static void *product_thread(void *unused)
         s_product.stop_succeeded = s_product.native_reclaimed;
         xSemaphoreGive(s_product.stopped);
         report_result(ESP_BASE_CONTAINER_BLOCKED);
+        free(open.product_version);
         return NULL;
     }
+    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) {
+        free(s_product.event_queue);
+        s_product.event_queue = NULL;
+        free(open.product_version);
+        const econtainer_runtime_result_t stopped = econtainer_product_stop(open.runtime);
+        const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
+        s_product.native_reclaimed = stopped == ECONTAINER_RUNTIME_OK &&
+            closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
+        s_product.stop_succeeded = s_product.native_reclaimed;
+        xSemaphoreGive(s_product.stopped);
+        report_result(ESP_BASE_CONTAINER_BLOCKED);
+        return NULL;
+    }
+    s_product.product_version = open.product_version;
+    s_product.product_version_size_bytes = open.product_version_size_bytes;
+    s_product.product_guest_abi_version = open.guest_abi_version;
+    s_product.product_data_schema_version = open.data_schema_version;
+    open.product_version = NULL;
     s_product.event_capacity = open.event_queue_limit;
     s_product.event_head = 0;
     s_product.event_count = 0;
@@ -1045,6 +1107,7 @@ static void *product_thread(void *unused)
     atomic_store_explicit(&s_product.instance_active, true, memory_order_release);
     atomic_store_explicit(&s_product.event_accepting, true, memory_order_release);
     report_result(ESP_BASE_CONTAINER_RUNNING);
+    xSemaphoreGive(s_product.event_lock);
 
     bool requested_stop = false;
     for (;;) {
@@ -2789,6 +2852,24 @@ static bool bindings_match_firmware_set(
     return matched == (1U << firmware_set->bootable_count) - 1U;
 }
 
+typedef struct {
+    esp_base_container_binding_snapshot_t *binding;
+    esp_base_container_active_product_t *active;
+    bool allocation_failed;
+} binding_snapshot_context_t;
+
+static void format_operation_id(char out[37], const uint8_t bytes[16])
+{
+    const char digits[] = "0123456789abcdef";
+    size_t at = 0;
+    for (size_t index = 0; index < 16U; ++index) {
+        if (index == 4U || index == 6U || index == 8U || index == 10U) out[at++] = '-';
+        out[at++] = digits[bytes[index] >> 4];
+        out[at++] = digits[bytes[index] & 15U];
+    }
+    out[at] = '\0';
+}
+
 static econtainer_slots_result_t read_binding_snapshot(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
 {
@@ -2825,7 +2906,8 @@ static econtainer_slots_result_t read_binding_snapshot(
     const int index = binding_index(&state, firmware_set->running_firmware_sha256);
     if (index < 0) return ECONTAINER_SLOTS_CONFLICT;
     const econtainer_slot_binding_t *running = &state.bindings[index];
-    esp_base_container_binding_snapshot_t *out = context;
+    binding_snapshot_context_t *snapshot = context;
+    esp_base_container_binding_snapshot_t *out = snapshot->binding;
     out->container_sequence = state.sequence;
     memcpy(out->firmware_sha256, firmware_set->running_firmware_sha256, 32);
     out->runtime_guest_abi_version = ECONTAINER_GUEST_ABI_VERSION;
@@ -2835,25 +2917,91 @@ static econtainer_slots_result_t read_binding_snapshot(
         out->package_guest_abi_version = running->guest_abi_version;
         out->package_data_schema_version = running->data_schema_version;
     }
-    return ECONTAINER_SLOTS_OK;
+    if (snapshot->active == NULL) return ECONTAINER_SLOTS_OK;
+    if (s_product.event_lock == NULL) return ECONTAINER_SLOTS_OK;
+    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE)
+        return ECONTAINER_SLOTS_BUSY;
+    econtainer_slots_result_t result = ECONTAINER_SLOTS_OK;
+    const bool observed = atomic_load_explicit(&s_product.instance_active, memory_order_acquire) &&
+        atomic_load_explicit(&s_product.result, memory_order_acquire) == ESP_BASE_CONTAINER_RUNNING &&
+        !atomic_load_explicit(&s_product.stop_requested, memory_order_acquire);
+    if (observed) {
+        const bool trial = business_trial();
+        const uint8_t *digest = trial ? state.operation.package_sha256 : running->package_sha256;
+        const uint32_t abi = trial ? state.operation.guest_abi_version : running->guest_abi_version;
+        const uint32_t schema = trial ? state.operation.data_schema_version : running->data_schema_version;
+        if ((trial ? !live_package_trial : !running->package_present) ||
+            s_product.product_version == NULL || s_product.product_version_size_bytes == 0U ||
+            s_product.product_version_size_bytes > ECONTAINER_PACKAGE_MANIFEST_MAX_BYTES ||
+            memcmp(s_product.event_package_sha256, digest, 32) != 0 ||
+            s_product.product_guest_abi_version != abi || abi != ECONTAINER_GUEST_ABI_VERSION ||
+            s_product.product_data_schema_version != schema) {
+            result = ECONTAINER_SLOTS_CONFLICT;
+        } else {
+            esp_base_container_active_product_t *active = snapshot->active;
+            active->product_version = malloc(s_product.product_version_size_bytes + 1U);
+            if (active->product_version == NULL) {
+                snapshot->allocation_failed = true;
+                result = ECONTAINER_SLOTS_BUSY;
+            } else {
+                active->present = true;
+                active->product_id = s_product.validation.expected_product_id;
+                active->product_version_size_bytes = s_product.product_version_size_bytes;
+                memcpy(active->product_version, s_product.product_version,
+                       active->product_version_size_bytes + 1U);
+                memcpy(active->package_sha256, digest, 32);
+                active->guest_abi_version = abi;
+                active->data_schema_version = schema;
+                active->is_trial = trial;
+                if (trial) format_operation_id(active->operation_id, state.operation.operation_id);
+            }
+        }
+    }
+    xSemaphoreGive(s_product.event_lock);
+    return result;
 }
 
-esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
+static esp_base_container_binding_result_t binding_snapshot(
     const esp_base_storage_claim_t *claim,
-    esp_base_container_binding_snapshot_t *out)
+    esp_base_container_binding_snapshot_t *out,
+    esp_base_container_active_product_t *active)
 {
+    if (active != NULL) *active = (esp_base_container_active_product_t){0};
     if (out == NULL) return ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
     *out = (esp_base_container_binding_snapshot_t){0};
     if (!policy_present()) return ESP_BASE_CONTAINER_BINDING_NOT_CONFIGURED;
     if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_BINDING_BUSY;
     if (!s_product.provider_bound || s_product.uninstall_uncertain)
         return ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+    binding_snapshot_context_t snapshot = {.binding = out, .active = active};
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
-        claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, read_binding_snapshot, out);
+        claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, read_binding_snapshot, &snapshot);
     if (result == ECONTAINER_SLOTS_OK) return ESP_BASE_CONTAINER_BINDING_OK;
+    if (active != NULL) {
+        free(active->product_version);
+        *active = (esp_base_container_active_product_t){0};
+    }
     *out = (esp_base_container_binding_snapshot_t){0};
+    if (snapshot.allocation_failed && result == ECONTAINER_SLOTS_BUSY)
+        return ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE;
     return result == ECONTAINER_SLOTS_BUSY ? ESP_BASE_CONTAINER_BINDING_BUSY :
            ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+}
+
+esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *out)
+{
+    return binding_snapshot(claim, out, NULL);
+}
+
+esp_base_container_binding_result_t esp_base_container_product_status_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *binding,
+    esp_base_container_active_product_t *active)
+{
+    if (active == NULL) return ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
+    return binding_snapshot(claim, binding, active);
 }
 
 typedef struct {

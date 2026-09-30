@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import select
 import stat
 import sys
@@ -405,7 +406,7 @@ def product_status(port, current):
         if value["state"] != "succeeded" or not isinstance(result, dict) or set(result) != {
                 "operation_sequence_high_watermark", "next_operation_sequence", "pending_operation_id",
                 "container_sequence", "package_sha256", "firmware_sha256",
-                "runtime_guest_abi_version", "package_guest_abi_version", "package_data_schema_version"}:
+                "runtime_guest_abi_version", "package_guest_abi_version", "package_data_schema_version", "active_product"}:
             raise ValueError("设备产品状态字段无效；状态为 unknown")
         watermark = result["operation_sequence_high_watermark"]
         next_sequence = result["next_operation_sequence"]
@@ -433,6 +434,28 @@ def product_status(port, current):
                 (digest is not None and (type(package_abi) is not int or not 1 <= package_abi <= 4294967295 or
                                         type(schema) is not int or not 1 <= schema <= 4294967295))):
             raise ValueError("设备固件摘要、运行时或绑定包元数据无效；状态为 unknown")
+        active = result["active_product"]
+        if active is not None:
+            if not isinstance(active, dict) or set(active) != {
+                    "product_id", "product_version", "package_sha256", "guest_abi_version",
+                    "data_schema_version", "is_trial", "operation_id"}:
+                raise ValueError("活动产品字段无效；状态为 unknown")
+            identifiers = [active["product_id"], active["product_version"]]
+            if (any(not isinstance(text, str) or re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", text) is None
+                    for text in identifiers) or sum(map(len, identifiers)) > 4096 or
+                    not isinstance(active["package_sha256"], str) or
+                    re.fullmatch(r"[0-9a-f]{64}", active["package_sha256"]) is None or
+                    active["package_sha256"] == "0" * 64 or
+                    type(active["guest_abi_version"]) is not int or active["guest_abi_version"] != runtime_abi or
+                    type(active["data_schema_version"]) is not int or
+                    not 1 <= active["data_schema_version"] <= 4294967295 or type(active["is_trial"]) is not bool):
+                raise ValueError("活动产品元数据无效；状态为 unknown")
+            if active["is_trial"]:
+                if pending is None or active["operation_id"] != pending:
+                    raise ValueError("活动候选与待确认操作不一致；状态为 unknown")
+            elif (active["operation_id"] is not None or active["package_sha256"] != digest or
+                    active["guest_abi_version"] != package_abi or active["data_schema_version"] != schema):
+                raise ValueError("活动产品与确认绑定不一致；状态为 unknown")
         return value
 
 
@@ -888,6 +911,15 @@ def main():
                 print("  运行时 guest ABI  " + str(current["result"]["runtime_guest_abi_version"]))
                 print("  绑定包 guest ABI  " + str(current["result"]["package_guest_abi_version"]))
                 print("  绑定包数据 schema  " + str(current["result"]["package_data_schema_version"]))
+                active = current["result"]["active_product"]
+                if active is None:
+                    print("  活动实例          未取得可确认的活动实例")
+                else:
+                    print("  活动产品 ID       " + active["product_id"])
+                    print("  活动产品版本      " + active["product_version"])
+                    print("  活动包 SHA-256    " + active["package_sha256"])
+                    print("  活动状态          " + ("候选试运行" if active["is_trial"] else "已确认绑定"))
+                    print("  试运行原操作 ID   " + (active["operation_id"] or "无"))
                 print("  当前包 SHA-256  " + str(current["result"]["package_sha256"]))
                 print("  下一序号  " + str(current["result"]["next_operation_sequence"]))
                 if current["result"]["pending_operation_id"] is not None:

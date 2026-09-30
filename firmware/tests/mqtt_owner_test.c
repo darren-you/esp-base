@@ -33,7 +33,7 @@ static unsigned event_head, event_tail, creates, starts, stops, destroys, destro
 static bool accept_event = true;
 static emqtt_state_t state = EMQTT_STOPPED;
 static bool fail_stop, fail_publish;
-static char last_topic[EMQTT_TOPIC_MAX + 1], last_payload[EMQTT_PAYLOAD_MAX + 1];
+static char last_topic[EMQTT_TOPIC_MAX + 1], last_payload[EMQTT_PUBLISH_PAYLOAD_MAX_BYTES + 1];
 static uint8_t last_qos;
 static bool last_retain;
 
@@ -111,7 +111,7 @@ emqtt_state_t emqtt_state(const emqtt_runtime_t *instance)
 esp_err_t emqtt_enqueue(emqtt_runtime_t *instance, const char *topic,
     const void *payload, size_t length, uint8_t qos, bool retain, int *message_id)
 {
-    assert(instance == &runtime && topic && payload && length <= EMQTT_PAYLOAD_MAX && message_id);
+    assert(instance == &runtime && topic && payload && length <= EMQTT_PUBLISH_PAYLOAD_MAX_BYTES && message_id);
     ++sends;
     strcpy(last_topic, topic);
     memcpy(last_payload, payload, length);
@@ -275,6 +275,12 @@ int main(void)
     esp_base_mqtt_owner_poll(2, true, true, received, received_event, &runtime);
     assert(commands == 1);
     assert(esp_base_mqtt_owner_result("{\"state\":\"succeeded\"}", strlen("{\"state\":\"succeeded\"}")));
+    char maximum_result[EMQTT_PUBLISH_PAYLOAD_MAX_BYTES];
+    memset(maximum_result, 'v', sizeof maximum_result);
+    assert(esp_base_mqtt_owner_result(maximum_result, sizeof maximum_result));
+    assert(strlen(last_payload) == sizeof maximum_result &&
+           memcmp(last_payload, maximum_result, sizeof maximum_result) == 0);
+    assert(!esp_base_mqtt_owner_result(maximum_result, sizeof maximum_result + 1U));
     assert(!strcmp(last_topic, "esp-base/22222222-2222-4222-8222-222222222222/result"));
     assert(last_qos == 1 && !last_retain);
     assert(esp_base_mqtt_owner_reported("{}", 2));

@@ -92,6 +92,7 @@ typedef enum {
     ESP_BASE_CONTAINER_BINDING_NOT_CONFIGURED,
     ESP_BASE_CONTAINER_BINDING_BUSY,
     ESP_BASE_CONTAINER_BINDING_UNCERTAIN,
+    ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE,
 } esp_base_container_binding_result_t;
 
 /* Under Base's app/otadata claim, read the durable ECS2 metadata against two
@@ -104,6 +105,29 @@ typedef enum {
 esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
     esp_base_container_binding_snapshot_t *out);
+
+typedef struct {
+    bool present;
+    const char *product_id; /* Immutable build authorization, verified on open. */
+    char *product_version; /* Owned copy; caller frees after a successful query. */
+    size_t product_version_size_bytes;
+    uint8_t package_sha256[32];
+    uint32_t guest_abi_version;
+    uint32_t data_schema_version;
+    bool is_trial;
+    char operation_id[37]; /* Empty unless is_trial. */
+} esp_base_container_active_product_t;
+
+/* Same firmware observations and ECS2 load as the binding-only precondition.
+ * Copy the actual open's full version under the event lock, then match runtime
+ * metadata to either the confirmed binding or this exact boot's package trial.
+ * Fresh output only: success owns product_version; caller must free it. Failure
+ * clears both views and frees any copy. No observed instance yields present=false;
+ * that is not a proof of guest health or absence of an unreclaimed native VM. */
+esp_base_container_binding_result_t esp_base_container_product_status_snapshot(
+    const esp_base_storage_claim_t *claim,
+    esp_base_container_binding_snapshot_t *binding,
+    esp_base_container_active_product_t *active);
 
 typedef struct {
     char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
