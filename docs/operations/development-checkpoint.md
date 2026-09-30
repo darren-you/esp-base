@@ -1,5 +1,17 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 内部带包 trial 与健康持久提交
+
+内部 `start_firmware_package_trial` 现只消费原 `PREPARED` V3 收据，双次观察 pending C 与回退 A 并精确核对原操作／模式序号后，先持久 `TRIAL_STARTED` 和本 boot，再验签、授权和启动候选 guest。产品专用与联合固件包 trial 共享执行器事件跟踪：错误事件不建立代表完成序号；业务、运行时、定时器或日志失败撤销代表证据并计数。`verify_firmware_package_health` 要求调用方先取得连续在线健康窗口，再在事件锁下复核原代表事件、包摘要、失败次数及空队列／无在途调用，冻结事件和定时器，持久记下健康并独立读回。`NOT_STARTED` 证明未尝试持久写入，可等待下一控制轮；任何已进入提交的未知结果均保留冻结及长 claim。
+
+固件须随后由 Base 确认并观察为 VALID，内部 `confirm_firmware` 才提交包绑定并再做完整引用对账，成功后撤销 trial 和冻结、恢复事件入口。确认不确定保持冻结；真实 trap 已结束且 native 回收、线程 join 的联合 trial 可安全进入固件回滚，无回收证明仍拒绝。无包成功确认也清理临时 trial 状态并允许同 boot 后续产品操作。
+
+真实精确锁 Container/WAMR 的双目标 ASan/UBSan 和资源版签名 guest 回归通过，覆盖空来源 WRITE、有来源 REUSE／WRITE、错事件、错序号／失败次数／事件摘要、提交期间拒绝事件、健康读回不确定后 A 回滚、最终确认读回不确定后的 VALID C 只读恢复、真实 guest trap 的 native 回收及两种模式 A 回滚，以及各 100 次重装。测试对暂时繁忙的非阻塞事件快照做有界重试，保持原预期字段断言。宿主固件身份／otadata 与 Flash/NVS 是假件；测试直调健康入口，不模拟在线 30 秒或真实 MQTT 授权。
+
+固定 SDK 检查、C3／ESP32 完整 host ASan/UBSan、既有测试键签名构建和官方 RSA v2／ECDSA v1 验签通过。当前 app 为 `0x121000/0x130000`、`0xffff4/0x120000`，SHA-256 分别为 `106026307612ed39094626e149ec147e77bb91176dc6e70daede855e2af3f6c2`、`97d92ea1b2221fb7bca5f61a6d0bb3933b20a19a63539ceb4d76df81fc93022e`；SDK、Container/WAMR 与两目标锁未变。新内部入口尚未被主应用消费，可能被链接器移除，这组尺寸不证明公开联合成功链的最终容量。
+
+普通启动仍阻断新 pending 包 trial，公开带包 worker、pending MQTT owner 与在线健康窗口仍待接线。本轮未写实体板，P6-10/P7-04 不验收。
+
 ## 2026-09-30 联合 OTA 带包 C 侧 VALID 启动恢复
 
 普通启动在本地存储、身份、安全、配置与控制进展检查通过后，现可消费原 V3 收据恢复已 VALID 的带包 C。Container 核对 A/C 签名集合、原 operation、包摘要／长度／ABI／schema、来源绑定及模式对应的精确 ECS2 序号；只有原 `HEALTH_VERIFIED` 加旧 trial boot 或同操作 `CONFIRMED` 才能通过。持久确认并独立回读后才启动已确认 guest、准备账本，再提交和读回原收据 `SUCCEEDED`。`PREPARED`／`TRIAL_STARTED`、错误收据、包损坏和任一步不确定均保留启动 claim 与写门。历史 `SUCCEEDED` 允许后续合法产品操作推进序号，但仍要核对原 A/C 集合和真实包引用；未决收据不得借此绕过原操作约束。

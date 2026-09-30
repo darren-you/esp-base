@@ -36,6 +36,27 @@ esp_base_container_boot_result_t esp_base_container_product_boot(
  * this boot's protocol UUID. A no-package trial still advances durable state. */
 esp_base_container_boot_result_t esp_base_container_product_start_trial(
     const esp_base_storage_claim_t *claim, const char boot_id[37]);
+/* Joint firmware/package trial requires the original PREPARED V3 receipt.
+ * Reconcile exact pending C, persist its trial boot, then open/init the package.
+ * Base must separately establish authorized event and continuous online health. */
+esp_base_container_boot_result_t esp_base_container_product_start_firmware_package_trial(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt, const char boot_id[37]);
+
+typedef enum {
+    ESP_BASE_CONTAINER_HEALTH_NOT_STARTED,
+    ESP_BASE_CONTAINER_HEALTH_VERIFIED,
+    ESP_BASE_CONTAINER_HEALTH_UNCERTAIN,
+} esp_base_container_trial_health_result_t;
+/* After Base's online window, recheck the exact completed event and failure
+ * count under the event lock. Freeze events/timers, persist HEALTH_VERIFIED
+ * and independently read back. NOT_STARTED permits retry without a write;
+ * VERIFIED leaves the guest frozen until OTA VALID and confirm_firmware.
+ * UNCERTAIN retains the claim and requires stop/recovery before further work. */
+esp_base_container_trial_health_result_t esp_base_container_product_verify_firmware_package_health(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    uint64_t verified_event_sequence, uint64_t verified_failure_count);
 bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t *claim);
 /* Synchronize with the unique guest pthread before rejecting a pending app.
@@ -195,7 +216,7 @@ esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
     esp_base_container_event_observation_t *out);
 
-/* Accumulated within this exact package trial. The representative sequence
+/* Accumulated within this exact product-only or firmware/package trial. The representative sequence
  * remains visible after later successful events; any guest/runtime failure
  * clears it and increments failure_count. A busy lock returns false. */
 typedef struct {

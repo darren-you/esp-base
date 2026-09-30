@@ -60,6 +60,7 @@ typedef struct {
     atomic_int result;
     bool trial_mode;
     bool package_trial_mode;
+    bool firmware_package_trial_mode;
     uint32_t package_trial_sequence;
     uint8_t package_trial_operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
     uint8_t boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
@@ -87,6 +88,12 @@ typedef struct {
 } product_context_t;
 
 static product_context_t s_product;
+
+static bool business_trial(void)
+{
+    return s_product.trial_mode &&
+        (s_product.package_trial_mode || s_product.firmware_package_trial_mode);
+}
 
 void esp_base_container_product_set_flash_io_owner(esp_base_storage_owner_t *owner)
 {
@@ -778,7 +785,7 @@ static void fail_guest_work(void)
     atomic_store_explicit(&s_product.event_accepting, false,
                           memory_order_release);
     if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) return;
-    if (s_product.package_trial_mode) {
+    if (business_trial()) {
         if (s_product.trial_failure_count != UINT64_MAX)
             ++s_product.trial_failure_count;
         s_product.representative_event_sequence = 0U;
@@ -823,7 +830,7 @@ bool esp_base_container_product_trial_event_snapshot(
     *out = (esp_base_container_trial_event_snapshot_t){0};
     if (s_product.event_lock == NULL ||
         xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) return false;
-    const bool active = s_product.trial_mode && s_product.package_trial_mode &&
+    const bool active = business_trial() &&
         atomic_load_explicit(&s_product.instance_active, memory_order_acquire);
     if (active) {
         out->representative_event_sequence = s_product.representative_event_sequence;
@@ -917,7 +924,16 @@ static void *product_thread(void *unused)
         !state.operation.firmware_transition &&
         memcmp(state.operation.operation_id, s_product.package_trial_operation_id,
                sizeof state.operation.operation_id) == 0;
-    if (reconcile != ECONTAINER_SLOTS_OK ||
+    const bool firmware_package_trial_ready = !s_product.firmware_package_trial_mode ||
+        (decision == ECONTAINER_SLOT_BOOT_START_TRIAL &&
+         state.phase == ECONTAINER_SLOT_PREPARED &&
+         state.sequence == s_product.package_trial_sequence &&
+         state.operation.firmware_transition &&
+         (state.operation.kind == ECONTAINER_SLOT_PACKAGE_REUSE ||
+          state.operation.kind == ECONTAINER_SLOT_PACKAGE_WRITE) &&
+         memcmp(state.operation.operation_id, s_product.package_trial_operation_id,
+                sizeof state.operation.operation_id) == 0);
+    if (reconcile != ECONTAINER_SLOTS_OK || !firmware_package_trial_ready ||
         (s_product.package_trial_mode ? !package_trial_ready :
          s_product.trial_mode ? decision != ECONTAINER_SLOT_BOOT_START_TRIAL :
          (decision != ECONTAINER_SLOT_BOOT_CONFIRMED &&
@@ -931,6 +947,7 @@ static void *product_thread(void *unused)
         return NULL;
     }
     if (s_product.trial_mode && !s_product.package_trial_mode &&
+        !s_product.firmware_package_trial_mode &&
         state.operation.kind != ECONTAINER_SLOT_NO_PACKAGE) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED package trial lacks business event source");
         s_product.stop_succeeded = true;
@@ -1059,7 +1076,7 @@ static void *product_thread(void *unused)
                 delivered == ECONTAINER_RUNTIME_OK;
             s_product.last_event_observation.guest_result =
                 delivered == ECONTAINER_RUNTIME_OK ? guest_result : 0;
-            if (s_product.package_trial_mode) {
+            if (business_trial()) {
                 if (delivered != ECONTAINER_RUNTIME_OK || guest_result < 0) {
                     if (s_product.trial_failure_count != UINT64_MAX)
                         ++s_product.trial_failure_count;
@@ -2009,13 +2026,15 @@ bool esp_base_container_product_reconcile_selected_ota(
 
 static esp_base_container_boot_result_t start_product(
     const esp_base_storage_claim_t *claim, bool trial_mode, bool package_trial_mode,
-    uint32_t package_trial_sequence,
+    bool firmware_package_trial_mode, uint32_t package_trial_sequence,
     const uint8_t package_trial_operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES],
     const char boot_id[37], const uint8_t trial_event_sha256[32])
 {
     if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_BLOCKED;
     if (!policy_present()) return ESP_BASE_CONTAINER_NOT_CONFIGURED;
-    if (package_trial_mode && trial_event_sha256 == NULL)
+    if ((package_trial_mode || firmware_package_trial_mode) &&
+        (trial_event_sha256 == NULL || package_trial_operation_id == NULL ||
+         digest_zero(trial_event_sha256)))
         return ESP_BASE_CONTAINER_BLOCKED;
     if (s_product.thread_joinable ||
         (s_product.start_attempted && !s_product.reopen_allowed)) {
@@ -2028,8 +2047,9 @@ static esp_base_container_boot_result_t start_product(
     if (!ensure_provider(claim)) return ESP_BASE_CONTAINER_BLOCKED;
     s_product.trial_mode = trial_mode;
     s_product.package_trial_mode = package_trial_mode;
+    s_product.firmware_package_trial_mode = firmware_package_trial_mode;
     s_product.package_trial_sequence = package_trial_sequence;
-    if (package_trial_mode) {
+    if (package_trial_mode || firmware_package_trial_mode) {
         memcpy(s_product.package_trial_operation_id, package_trial_operation_id,
                sizeof s_product.package_trial_operation_id);
     } else {
@@ -2059,7 +2079,7 @@ static esp_base_container_boot_result_t start_product(
     s_product.trial_commit_active = false;
     s_product.representative_event_sequence = 0U;
     s_product.trial_failure_count = 0U;
-    if (package_trial_mode)
+    if (package_trial_mode || firmware_package_trial_mode)
         memcpy(s_product.trial_event_sha256, trial_event_sha256, 32);
     else
         memset(s_product.trial_event_sha256, 0, 32);
@@ -2106,7 +2126,7 @@ static esp_base_container_boot_result_t start_product(
 esp_base_container_boot_result_t esp_base_container_product_boot(
     const esp_base_storage_claim_t *claim, const char boot_id[37])
 {
-    return start_product(claim, false, false, 0U, NULL, boot_id, NULL);
+    return start_product(claim, false, false, false, 0U, NULL, boot_id, NULL);
 }
 
 static econtainer_slots_result_t pristine_baseline(
@@ -2136,7 +2156,25 @@ bool esp_base_container_product_pristine_baseline(
 esp_base_container_boot_result_t esp_base_container_product_start_trial(
     const esp_base_storage_claim_t *claim, const char boot_id[37])
 {
-    return start_product(claim, true, false, 0U, NULL, boot_id, NULL);
+    return start_product(claim, true, false, false, 0U, NULL, boot_id, NULL);
+}
+
+esp_base_container_boot_result_t esp_base_container_product_start_firmware_package_trial(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt, const char boot_id[37])
+{
+    uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
+    if (receipt == NULL || receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED ||
+        receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE ||
+        !esp_base_container_product_reconcile_selected_ota(
+            claim, receipt, EOTA_STATE_PENDING_VERIFY) ||
+        !decode_uuid(receipt->operation_id, operation_id))
+        return ESP_BASE_CONTAINER_BLOCKED;
+    const uint32_t prepared_sequence = receipt->container_sequence +
+        (digest_zero(receipt->inactive_sha256) ? 0U : 1U) +
+        (receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ? 2U : 1U);
+    return start_product(claim, true, false, true, prepared_sequence,
+                         operation_id, boot_id, receipt->trial_event_sha256);
 }
 
 typedef struct {
@@ -2188,7 +2226,7 @@ esp_base_container_boot_result_t esp_base_container_product_start_package_trial(
             preflight_package_trial, &preflight) != ECONTAINER_SLOTS_OK) {
         return ESP_BASE_CONTAINER_BLOCKED;
     }
-    return start_product(claim, true, true, prepared_sequence, decoded_id, boot_id,
+    return start_product(claim, true, true, false, prepared_sequence, decoded_id, boot_id,
                          trial_event_sha256);
 }
 
@@ -2210,8 +2248,8 @@ static econtainer_slots_result_t mark_trial_healthy(
 bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *claim)
 {
     const int result = atomic_load_explicit(&s_product.result, memory_order_acquire);
-    if (!s_product.trial_mode || !esp_base_storage_claim_active(claim) ||
-        result != ESP_BASE_CONTAINER_EMPTY) {
+    if (!s_product.trial_mode || business_trial() ||
+        !esp_base_storage_claim_active(claim) || result != ESP_BASE_CONTAINER_EMPTY) {
         return false;
     }
     const econtainer_slots_result_t marked = esp_base_container_with_firmware_set(
@@ -2221,6 +2259,82 @@ bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *cla
         return false;
     }
     return true;
+}
+
+static econtainer_slots_result_t mark_firmware_package_healthy(
+    const econtainer_slot_firmware_set_t *firmware_set, void *context)
+{
+    const selected_ota_context_t *selected = context;
+    if (verify_selected_firmware(firmware_set, context) != ECONTAINER_SLOTS_OK)
+        return ECONTAINER_SLOTS_CONFLICT;
+    econtainer_slots_state_t state = {0};
+    econtainer_slots_result_t result = econtainer_slots_load(
+        &s_product.provider.io, &s_product.provider.geometry, &state);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    if (state.phase != ECONTAINER_SLOT_TRIAL_STARTED ||
+        state.sequence != s_product.package_trial_sequence + 1U ||
+        !selected_package_matches(&state, selected, false) ||
+        memcmp(state.operation.trial_boot_id, s_product.boot_id,
+               sizeof s_product.boot_id) != 0 ||
+        memcmp(state.operation.package_sha256, s_product.event_package_sha256, 32) != 0)
+        return ECONTAINER_SLOTS_CONFLICT;
+    result = econtainer_slots_mark_healthy(&s_product.provider.io,
+        &s_product.provider.geometry, state.sequence, s_product.boot_id, &state);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    result = econtainer_slots_load(&s_product.provider.io,
+                                   &s_product.provider.geometry, &state);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    return state.phase == ECONTAINER_SLOT_HEALTH_VERIFIED &&
+        state.sequence == s_product.package_trial_sequence + 2U &&
+        selected_package_matches(&state, selected, false) &&
+        memcmp(state.operation.trial_boot_id, s_product.boot_id,
+               sizeof s_product.boot_id) == 0 ?
+        ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_UNCERTAIN;
+}
+
+esp_base_container_trial_health_result_t esp_base_container_product_verify_firmware_package_health(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    uint64_t verified_event_sequence, uint64_t verified_failure_count)
+{
+    selected_ota_context_t selected = {.receipt = receipt,
+                                      .running_state = EOTA_STATE_PENDING_VERIFY};
+    if (!esp_base_storage_claim_active(claim) || receipt == NULL ||
+        receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED ||
+        receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE ||
+        !stage_receipt_valid(receipt) || !receipt->container_enabled ||
+        !decode_uuid(receipt->operation_id, selected.operation_id) ||
+        !s_product.trial_mode || !s_product.firmware_package_trial_mode ||
+        s_product.package_trial_sequence != receipt->container_sequence +
+            (digest_zero(receipt->inactive_sha256) ? 0U : 1U) +
+            (receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ? 2U : 1U) ||
+        memcmp(selected.operation_id, s_product.package_trial_operation_id,
+               sizeof selected.operation_id) != 0 ||
+        !s_product.thread_joinable || verified_event_sequence == 0U ||
+        verified_failure_count == UINT64_MAX || s_product.event_lock == NULL ||
+        xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE)
+        return ESP_BASE_CONTAINER_HEALTH_NOT_STARTED;
+    const bool settled =
+        s_product.representative_event_sequence == verified_event_sequence &&
+        memcmp(s_product.trial_event_sha256, receipt->trial_event_sha256, 32) == 0 &&
+        memcmp(s_product.event_package_sha256, receipt->package_sha256, 32) == 0 &&
+        s_product.trial_failure_count == verified_failure_count &&
+        s_product.event_count == 0U && !s_product.guest_call_processing &&
+        !s_product.trial_commit_active && esp_base_container_product_event_accepting();
+    if (settled) {
+        s_product.trial_commit_active = true;
+        atomic_store_explicit(&s_product.event_accepting, false, memory_order_release);
+    }
+    xSemaphoreGive(s_product.event_lock);
+    if (!settled) return ESP_BASE_CONTAINER_HEALTH_NOT_STARTED;
+    const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
+        claim, ESP_BASE_OTA_FIRMWARE_PENDING_TRIAL, NULL,
+        mark_firmware_package_healthy, &selected);
+    return result == ECONTAINER_SLOTS_OK &&
+        atomic_load_explicit(&s_product.instance_active, memory_order_acquire) &&
+        atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+            ESP_BASE_CONTAINER_RUNNING ?
+        ESP_BASE_CONTAINER_HEALTH_VERIFIED : ESP_BASE_CONTAINER_HEALTH_UNCERTAIN;
 }
 
 typedef struct {
@@ -2236,15 +2350,43 @@ static econtainer_slots_result_t confirm_firmware(
         &s_product.provider.io, &s_product.provider.geometry, &state);
     if (result != ECONTAINER_SLOTS_OK) return result;
     if (!state.operation.firmware_transition) return ECONTAINER_SLOTS_CONFLICT;
-    return econtainer_slots_confirm(
-        &s_product.provider.io, &s_product.provider.geometry, state.sequence,
+    if (s_product.firmware_package_trial_mode &&
+        (state.phase != ECONTAINER_SLOT_HEALTH_VERIFIED ||
+         state.sequence != s_product.package_trial_sequence + 2U ||
+         memcmp(state.operation.operation_id, s_product.package_trial_operation_id,
+                sizeof state.operation.operation_id) != 0 ||
+         memcmp(state.operation.package_sha256, s_product.event_package_sha256, 32) != 0))
+        return ECONTAINER_SLOTS_CONFLICT;
+    result = econtainer_slots_confirm(&s_product.provider.io,
+        &s_product.provider.geometry, state.sequence,
         firmware_set->running_firmware_sha256, confirm->boot_id, &state);
+    if (result != ECONTAINER_SLOTS_OK || !s_product.firmware_package_trial_mode)
+        return result;
+    econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
+    result = econtainer_slots_reconcile(&s_product.provider.io,
+        &s_product.provider.geometry, firmware_set, &state, &decision);
+    if (result != ECONTAINER_SLOTS_OK) return result;
+    return state.phase == ECONTAINER_SLOT_CONFIRMED &&
+        state.sequence == s_product.package_trial_sequence + 3U &&
+        decision == ECONTAINER_SLOT_BOOT_CONFIRMED &&
+        state.operation.firmware_transition &&
+        memcmp(state.operation.operation_id, s_product.package_trial_operation_id,
+               sizeof state.operation.operation_id) == 0 &&
+        memcmp(state.operation.trial_boot_id, s_product.boot_id,
+               sizeof s_product.boot_id) == 0 &&
+        memcmp(state.operation.package_sha256, s_product.event_package_sha256, 32) == 0 ?
+        ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_UNCERTAIN;
 }
 
 bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t *claim)
 {
     if (!s_product.trial_mode || s_product.package_trial_mode ||
         !esp_base_storage_claim_active(claim)) return false;
+    if (s_product.firmware_package_trial_mode &&
+        (!s_product.trial_commit_active ||
+         !atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
+         atomic_load_explicit(&s_product.result, memory_order_acquire) !=
+             ESP_BASE_CONTAINER_RUNNING)) return false;
     const confirm_context_t confirm = {.boot_id = s_product.boot_id};
     /* This observation independently requires signed C and otadata VALID,
      * after eota_confirm_pending returned and Base inspected the selector. */
@@ -2255,6 +2397,24 @@ bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t 
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_CONFIRM_BLOCKED result=%d", (int)committed);
         return false;
     }
+    if (s_product.event_lock == NULL ||
+        xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) return false;
+    const bool package = s_product.firmware_package_trial_mode;
+    s_product.trial_mode = false;
+    s_product.firmware_package_trial_mode = false;
+    s_product.package_trial_sequence = 0U;
+    memset(s_product.package_trial_operation_id, 0,
+           sizeof s_product.package_trial_operation_id);
+    memset(s_product.trial_event_sha256, 0, sizeof s_product.trial_event_sha256);
+    s_product.representative_event_sequence = 0U;
+    s_product.trial_failure_count = 0U;
+    s_product.trial_commit_active = false;
+    if (package)
+        atomic_store_explicit(&s_product.event_accepting, true, memory_order_release);
+    else if (atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+                 ESP_BASE_CONTAINER_EMPTY)
+        s_product.reopen_allowed = true;
+    xSemaphoreGive(s_product.event_lock);
     return true;
 }
 
@@ -2263,7 +2423,10 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
     if (!s_product.trial_mode) return true;
     if (!esp_base_storage_claim_active(claim) || s_product.stopped == NULL) return false;
     if (!s_product.thread_joinable) {
-        return s_product.stop_succeeded &&
+        return (s_product.stop_succeeded ||
+                (s_product.firmware_package_trial_mode && s_product.native_reclaimed &&
+                 atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+                     ESP_BASE_CONTAINER_BLOCKED)) &&
             !atomic_load_explicit(&s_product.instance_active, memory_order_acquire);
     }
     atomic_store_explicit(&s_product.stop_requested, true, memory_order_release);
@@ -2274,8 +2437,11 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
     if (pthread_join(s_product.thread, NULL) != 0) return false;
     s_product.thread_joinable = false;
     s_product.claim = NULL;
-    if (!s_product.stop_succeeded ||
-        atomic_load_explicit(&s_product.instance_active, memory_order_acquire)) {
+    if (atomic_load_explicit(&s_product.instance_active, memory_order_acquire) ||
+        (!s_product.stop_succeeded &&
+         !(s_product.firmware_package_trial_mode && s_product.native_reclaimed &&
+           atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+               ESP_BASE_CONTAINER_BLOCKED))) {
         ESP_LOGE(TAG, "ESP_BASE_CONTAINER_STOP_UNPROVEN native cleanup");
         return false;
     }
@@ -2465,8 +2631,7 @@ bool esp_base_container_product_trial_quiescent(void)
 {
     if (s_product.event_lock == NULL ||
         xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) return false;
-    const bool quiescent = s_product.trial_mode &&
-        s_product.package_trial_mode &&
+    const bool quiescent = business_trial() &&
         s_product.event_count == 0U && !s_product.guest_call_processing &&
         !s_product.trial_commit_active &&
         esp_base_container_product_event_accepting();

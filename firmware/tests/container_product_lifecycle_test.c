@@ -22,6 +22,15 @@
 bool test_policy_enabled = true;
 #include "esp_base_container_product.c"
 
+static bool wait_trial_snapshot(esp_base_container_trial_event_snapshot_t *snapshot)
+{
+    for (unsigned attempt = 0; attempt < 200U; ++attempt) {
+        if (esp_base_container_product_trial_event_snapshot(snapshot)) return true;
+        vTaskDelay(1U);
+    }
+    return false;
+}
+
 static esp_base_container_event_result_t offer_event(
     const uint8_t package_sha256[32], uint64_t event_sequence,
     const uint8_t *event, size_t size_bytes)
@@ -56,6 +65,7 @@ static econtainer_package_workspace_t test_package_workspace;
 static econtainer_wasm_workspace_t test_wasm_workspace;
 static econtainer_package_info_t test_verified_info;
 static uint8_t trial_event_digest[32];
+static bool reject_confirmed_observation;
 static const econtainer_slots_geometry_t geometry = {
     .partition_offset_bytes = FLASH_BASE, .partition_size_bytes = FLASH_BYTES,
     .erase_unit_bytes = 4096, .write_unit_bytes = 4,
@@ -274,6 +284,8 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
             prepared == NULL) ||
            (observation == ESP_BASE_OTA_FIRMWARE_PREPARED_CANDIDATE &&
             prepared != NULL));
+    if (observation == ESP_BASE_OTA_FIRMWARE_CONFIRMED && reject_confirmed_observation)
+        return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
     *firmware_set = physical;
     if (prepared != NULL) {
         assert(physical.bootable_count == 1U);
@@ -432,6 +444,7 @@ static void dispose_product(void)
 static void configure(const file_t *public_key)
 {
     memset(&store, 0, sizeof store);
+    reject_confirmed_observation = false;
     assert(pthread_mutex_init(&store.mutex, NULL) == 0);
     memset(store.flash, 0xff, sizeof store.flash);
     physical = (esp_base_ota_firmware_set_t){.bootable_count = 2};
@@ -1372,7 +1385,7 @@ static void run_package_trial_confirmation(const file_t *key,
            observation.event_sequence == 1U && observation.runtime_ok &&
            observation.guest_result == 3);
     esp_base_container_trial_event_snapshot_t trial_events = {0};
-    assert(esp_base_container_product_trial_event_snapshot(&trial_events) &&
+    assert(wait_trial_snapshot(&trial_events) &&
            trial_events.representative_event_sequence == 1U &&
            trial_events.failure_count == 0U &&
            memcmp(trial_events.package_sha256, request.package_sha256, 32) == 0);
@@ -1392,7 +1405,7 @@ static void run_package_trial_confirmation(const file_t *key,
     assert(observed == ESP_BASE_CONTAINER_EVENT_OBSERVED &&
            observation.event_sequence == 2U && observation.runtime_ok &&
            observation.guest_result >= 0);
-    assert(esp_base_container_product_trial_event_snapshot(&trial_events) &&
+    assert(wait_trial_snapshot(&trial_events) &&
            trial_events.representative_event_sequence == 1U &&
            trial_events.failure_count == 0U);
     const unsigned before_wrong_id = store.blob_writes;
@@ -1767,7 +1780,7 @@ static void run_package_intent_without_reservation(const file_t *key,
 static void run_firmware_empty_stage(const file_t *key, const file_t *package,
                                      const char boot_id[37],
                                      esp_base_ota_package_mode_t mode,
-                                     bool recover_valid)
+                                     unsigned trial_case)
 {
     configure(key);
     esp_base_storage_owner_t owner;
@@ -1868,7 +1881,35 @@ static void run_firmware_empty_stage(const file_t *key, const file_t *package,
         assert(store.blob_writes == selected_blob_writes &&
                store.flash_erases == selected_flash_erases &&
                store.flash_writes == selected_flash_writes);
-        if (recover_valid) {
+        if (trial_case == 2U) {
+            const uint8_t event[] = {1U, 2U, 3U};
+            memcpy(receipt.trial_event_sha256, trial_event_digest, 32);
+            assert(esp_base_container_product_start_firmware_package_trial(
+                &claim, &receipt, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+            assert(offer_event(receipt.package_sha256, 1U, event, sizeof event) ==
+                   ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+            for (unsigned attempt = 0;
+                 attempt < 200U && esp_base_container_product_event_progress_count() == 0U;
+                 ++attempt) vTaskDelay(1U);
+            esp_base_container_trial_health_result_t health = ESP_BASE_CONTAINER_HEALTH_NOT_STARTED;
+            for (unsigned attempt = 0;
+                 attempt < 200U && health == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED;
+                 ++attempt) {
+                vTaskDelay(1U);
+                health = esp_base_container_product_verify_firmware_package_health(
+                    &claim, &receipt, 1U, 0U);
+            }
+            assert(health == ESP_BASE_CONTAINER_HEALTH_VERIFIED);
+            assert(esp_base_container_product_confirm_firmware(&claim));
+            assert(esp_base_container_product_stop_confirmed(&claim));
+            assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+                   state.phase == ECONTAINER_SLOT_CONFIRMED &&
+                   state.sequence == original_sequence + 6U);
+            const int empty_source = binding_index(&state, receipt.source_sha256);
+            assert(empty_source >= 0 && !state.bindings[empty_source].package_present);
+            goto empty_finished;
+        }
+        if (trial_case == 1U) {
             uint8_t trial_boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
             assert(decode_uuid(boot_id, trial_boot_id));
             assert(econtainer_slots_begin_trial(&io, &geometry, state.sequence,
@@ -1913,6 +1954,22 @@ static void run_firmware_empty_stage(const file_t *key, const file_t *package,
                state.sequence == original_sequence + 5U &&
                store.flash_erases == recovery_flash_erases &&
                store.flash_writes == recovery_flash_writes);
+    } else if (trial_case == 2U) {
+        physical.bootable_count = 2U;
+        memcpy(physical.bootable_firmware_sha256[0], prepared.sha256, 32);
+        memcpy(physical.bootable_firmware_sha256[1], receipt.source_sha256, 32);
+        memcpy(physical.running_firmware_sha256, prepared.sha256, 32);
+        dispose_product();
+        configure_product(key);
+        assert(esp_base_container_product_start_trial(&claim, boot_id) ==
+               ESP_BASE_CONTAINER_EMPTY);
+        assert(esp_base_container_product_mark_healthy(&claim));
+        assert(esp_base_container_product_confirm_firmware(&claim));
+        assert(!s_product.trial_mode && s_product.reopen_allowed &&
+               !s_product.thread_joinable && s_product.native_reclaimed);
+        const unsigned confirmed_writes = store.blob_writes;
+        assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+        assert(store.blob_writes == confirmed_writes);
     }
 empty_finished:
     assert(esp_base_storage_release(&claim));
@@ -1924,7 +1981,7 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
                                        const char boot_id[37],
                                        esp_base_ota_package_mode_t mode,
                                        bool corrupt_write, bool recover_before_stage,
-                                       bool recover_valid)
+                                       bool recover_valid, unsigned live_trial)
 {
     configure(key);
     esp_base_storage_owner_t owner;
@@ -1968,7 +2025,7 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
     memcpy(receipt.candidate_sha256, candidate, 32);
     memcpy(receipt.source_package_sha256, source.package_sha256, 32);
     memcpy(receipt.package_sha256, source.package_sha256, 32);
-    memset(receipt.trial_event_sha256, 0xe5, 32);
+    memcpy(receipt.trial_event_sha256, trial_event_digest, 32);
     const unsigned before_stop_writes = store.blob_writes;
     assert(esp_base_container_product_stage_firmware(&claim, &prepared, &receipt) ==
            ESP_BASE_CONTAINER_STAGE_REJECTED &&
@@ -2146,7 +2203,118 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
     assert(store.blob_writes == selected_blob_writes &&
            store.flash_erases == selected_flash_erases &&
            store.flash_writes == selected_flash_writes);
-    if (mode == ESP_BASE_OTA_PACKAGE_REUSE || recover_valid) {
+    if (live_trial != 0U) {
+        reject_confirmed_observation = true; /* Fake otadata is still pending C. */
+        assert(esp_base_container_product_start_firmware_package_trial(
+            &claim, &wrong_selected, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+        assert(store.blob_writes == selected_blob_writes);
+        assert(esp_base_container_product_start_firmware_package_trial(
+            &claim, &receipt, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+        assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+               state.phase == ECONTAINER_SLOT_TRIAL_STARTED &&
+               state.sequence == original_sequence +
+                   (mode == ESP_BASE_OTA_PACKAGE_WRITE ? 4U : 3U));
+        assert(!esp_base_container_product_mark_healthy(&claim));
+        assert(!esp_base_container_product_confirm_firmware(&claim));
+        const unsigned before_health = store.blob_writes;
+        if (live_trial == 4U) {
+            const uint8_t trapped_event[] = {1U};
+            assert(offer_event(receipt.package_sha256, 1U, trapped_event,
+                sizeof trapped_event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+            for (unsigned attempt = 0;
+                 attempt < 500U && esp_base_container_product_event_accepting();
+                 ++attempt) vTaskDelay(1U);
+            assert(!esp_base_container_product_event_accepting());
+            assert(esp_base_container_product_verify_firmware_package_health(
+                &claim, &receipt, 1U, 0U) == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED);
+            assert(esp_base_container_product_stop_trial(&claim) &&
+                   s_product.native_reclaimed && !s_product.thread_joinable &&
+                   s_product.trial_failure_count == 1U &&
+                   s_product.representative_event_sequence == 0U);
+            assert(store.blob_writes == before_health);
+            reject_confirmed_observation = false;
+            goto rollback_live_trial;
+        }
+        assert(esp_base_container_product_verify_firmware_package_health(
+            &claim, &receipt, 1U, 0U) == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED);
+        const uint8_t wrong_event[] = {4U, 5U, 6U};
+        const uint8_t representative[] = {1U, 2U, 3U};
+        assert(offer_event(receipt.package_sha256, 1U, wrong_event, sizeof wrong_event) ==
+               ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+        for (unsigned attempt = 0;
+             attempt < 200U && esp_base_container_product_event_progress_count() < 1U;
+             ++attempt) vTaskDelay(1U);
+        esp_base_container_trial_event_snapshot_t snapshot = {0};
+        assert(wait_trial_snapshot(&snapshot) &&
+               snapshot.representative_event_sequence == 0U);
+        assert(esp_base_container_product_verify_firmware_package_health(
+            &claim, &receipt, 1U, 0U) == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED);
+        assert(offer_event(receipt.package_sha256, 2U, representative, sizeof representative) ==
+               ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+        for (unsigned attempt = 0;
+             attempt < 200U && esp_base_container_product_event_progress_count() < 2U;
+             ++attempt) vTaskDelay(1U);
+        assert(wait_trial_snapshot(&snapshot) &&
+               snapshot.representative_event_sequence == 2U && snapshot.failure_count == 0U);
+        assert(esp_base_container_product_verify_firmware_package_health(
+            &claim, &receipt, 1U, 0U) == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED);
+        assert(esp_base_container_product_verify_firmware_package_health(
+            &claim, &receipt, 2U, 1U) == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED);
+        wrong_selected = receipt;
+        wrong_selected.trial_event_sha256[0] ^= 1U;
+        assert(esp_base_container_product_verify_firmware_package_health(
+            &claim, &wrong_selected, 2U, 0U) == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED);
+        assert(store.blob_writes == before_health);
+        if (live_trial == 2U) store.fail_read_after_next_write = 1U;
+        esp_base_container_trial_health_result_t health = ESP_BASE_CONTAINER_HEALTH_NOT_STARTED;
+        for (unsigned attempt = 0;
+             attempt < 200U && health == ESP_BASE_CONTAINER_HEALTH_NOT_STARTED; ++attempt) {
+            vTaskDelay(1U);
+            health = esp_base_container_product_verify_firmware_package_health(
+                &claim, &receipt, 2U, 0U);
+        }
+        assert(health == (live_trial == 2U ? ESP_BASE_CONTAINER_HEALTH_UNCERTAIN :
+                                          ESP_BASE_CONTAINER_HEALTH_VERIFIED));
+        assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+               state.phase == ECONTAINER_SLOT_HEALTH_VERIFIED &&
+               store.blob_writes == before_health + 1U &&
+               !esp_base_container_product_event_accepting());
+        assert(offer_event(receipt.package_sha256, 3U, representative, sizeof representative) ==
+               ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
+        assert(store.flash_erases == selected_flash_erases &&
+               store.flash_writes == selected_flash_writes);
+        reject_confirmed_observation = false; /* Base observes OTA VALID before confirm. */
+        if (live_trial != 2U) {
+            if (live_trial == 3U) store.fail_read_after_next_write = 1U;
+            assert(esp_base_container_product_confirm_firmware(&claim) == (live_trial != 3U));
+            assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
+                   state.phase == ECONTAINER_SLOT_CONFIRMED &&
+                   store.blob_writes == before_health + 2U);
+            if (live_trial == 3U) {
+                assert(!esp_base_container_product_event_accepting());
+                assert(esp_base_container_product_stop_trial(&claim));
+                dispose_product();
+                configure_product(key);
+                const unsigned committed_writes = store.blob_writes;
+                assert(esp_base_container_product_reconcile_selected_ota(
+                    &claim, &receipt, EOTA_STATE_VALID) &&
+                    store.blob_writes == committed_writes);
+                assert(esp_base_container_product_boot(
+                    &claim, "88888888-8888-4888-8888-888888888888") == ESP_BASE_CONTAINER_RUNNING);
+            } else {
+                assert(esp_base_container_product_event_accepting() &&
+                       !esp_base_container_product_trial_event_snapshot(&snapshot));
+                assert(offer_event(receipt.package_sha256, 3U, representative,
+                    sizeof representative) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+            }
+            assert(esp_base_container_product_stop_confirmed(&claim));
+            goto finished;
+        }
+        assert(esp_base_container_product_stop_trial(&claim));
+        /* HEALTH_VERIFIED readback was uncertain: remain pending and return
+         * to A, never call firmware confirm with unproved health. */
+    }
+    if (live_trial == 0U && (mode == ESP_BASE_OTA_PACKAGE_REUSE || recover_valid)) {
         uint8_t trial_boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
         assert(decode_uuid(boot_id, trial_boot_id));
         assert(econtainer_slots_begin_trial(&io, &geometry, state.sequence,
@@ -2235,6 +2403,7 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
         store.flash[later_offset] ^= 1U;
         goto finished;
     }
+rollback_live_trial:
     physical.bootable_count = 1U;
     memcpy(physical.running_firmware_sha256, receipt.source_sha256, 32);
     memcpy(physical.bootable_firmware_sha256[0], receipt.source_sha256, 32);
@@ -2269,7 +2438,9 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
     assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
            state.phase == ECONTAINER_SLOT_IDLE &&
            state.sequence == original_sequence +
-                             (mode == ESP_BASE_OTA_PACKAGE_WRITE ? 5U : 6U) &&
+                             (mode == ESP_BASE_OTA_PACKAGE_WRITE ?
+                              (live_trial == 4U ? 6U : live_trial != 0U ? 7U : 5U) :
+                              (live_trial == 4U ? 5U : 6U)) &&
            store.flash_erases == recovery_flash_erases &&
            store.flash_writes == recovery_flash_writes &&
            memcmp(store.flash + source_offset, package->bytes,
@@ -2418,6 +2589,16 @@ int main(int argc, char **argv)
     }
     if (argc == 3 && strcmp(argv[2], "event-failure") == 0) {
         run_event_failure_trial(argv[1]);
+        file_t key = read_file(argv[1], "public.der");
+        file_t failed_package = read_file(argv[1], "event-loop.pkg");
+        const char boot_id[] = "22222222-2222-4222-8222-222222222222";
+        run_firmware_package_stage(&key, &failed_package, boot_id,
+            ESP_BASE_OTA_PACKAGE_REUSE, false, false, false, 4U);
+        run_firmware_package_stage(&key, &failed_package, boot_id,
+            ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, 4U);
+        free(failed_package.bytes);
+        free(key.bytes);
+        puts("container_firmware_package_failure: real guest trap, native reclaim and A rollback passed");
         return 0;
     }
     assert(argc == 2);
@@ -2484,23 +2665,31 @@ int main(int argc, char **argv)
     run_package_trial_cold_recovery(&key, &package, &package_v1, boot_id);
     run_package_intent_without_reservation(&key, &package, boot_id);
     run_source_change_same_boot(&key, &package_v1, &package_v2, boot_id);
-    run_firmware_empty_stage(&key, NULL, boot_id, ESP_BASE_OTA_NO_PACKAGE, false);
-    run_firmware_empty_stage(&key, &package, boot_id, ESP_BASE_OTA_PACKAGE_WRITE, false);
-    run_firmware_empty_stage(&key, &package, boot_id, ESP_BASE_OTA_PACKAGE_WRITE, true);
+    run_firmware_empty_stage(&key, NULL, boot_id, ESP_BASE_OTA_NO_PACKAGE, 0U);
+    run_firmware_empty_stage(&key, NULL, boot_id, ESP_BASE_OTA_NO_PACKAGE, 2U);
+    run_firmware_empty_stage(&key, &package, boot_id, ESP_BASE_OTA_PACKAGE_WRITE, 0U);
+    run_firmware_empty_stage(&key, &package, boot_id, ESP_BASE_OTA_PACKAGE_WRITE, 1U);
+    run_firmware_empty_stage(&key, &package, boot_id, ESP_BASE_OTA_PACKAGE_WRITE, 2U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_REUSE, false, true, false);
+                               ESP_BASE_OTA_PACKAGE_REUSE, false, true, false, 0U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_WRITE, false, true, false);
+                               ESP_BASE_OTA_PACKAGE_WRITE, false, true, false, 0U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_REUSE, false, false, false);
+                               ESP_BASE_OTA_PACKAGE_REUSE, false, false, false, 0U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_WRITE, false, false, false);
+                               ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, 0U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_WRITE, true, false, false);
+                               ESP_BASE_OTA_PACKAGE_WRITE, true, false, false, 0U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_REUSE, false, false, true);
+                               ESP_BASE_OTA_PACKAGE_REUSE, false, false, true, 0U);
     run_firmware_package_stage(&key, &package, boot_id,
-                               ESP_BASE_OTA_PACKAGE_WRITE, false, false, true);
+                               ESP_BASE_OTA_PACKAGE_WRITE, false, false, true, 0U);
+    for (unsigned live_trial = 1U; live_trial <= 3U; ++live_trial) {
+        run_firmware_package_stage(&key, &package, boot_id,
+            ESP_BASE_OTA_PACKAGE_REUSE, false, false, false, live_trial);
+        run_firmware_package_stage(&key, &package, boot_id,
+            ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, live_trial);
+    }
     run_success_receipt_replay(&key, &package, boot_id);
     free(package_v1.bytes);
     free(package_v2.bytes);

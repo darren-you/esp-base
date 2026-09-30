@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-30 联合 OTA 内部带包 trial 续进：原 V3 与签名 pending C／回退 A 约束候选启动，先持久 trial boot，再执行请求绑定的代表事件；内部健康提交复核事件和失败计数，冻结 guest 调用并独立读回，固件 VALID 后才确认包绑定并恢复事件。双目标真实签名 guest 覆盖空来源 WRITE、两模式读回故障、真实 trap 与 A 回滚；host、固定 SDK 签名构建和官方验签通过。主应用尚未消费新入口，pending MQTT 与连续 30 秒在线窗口、公开带包 worker、实板均未完成，当前镜像尺寸不代表新成功链已深链接。详见[开发检查点](docs/operations/development-checkpoint.md)。
+
 2026-09-30 联合 OTA 带包 C 侧 VALID 恢复：普通启动在本地基本检查后，按原 V3 收据核对签名 A/C、来源包、模式序号和原健康证据，持久确认并独立读回后才重开 guest、提交成功收据。错误证据或存储不确定保留写门；两模式及空来源 WRITE 的真实签名 guest、双目标 host、固定 SDK 签名构建和官方验签通过，app 尺寸仍为 `0x121000/0x130000`／`0xffff4/0x120000`。公开带包 worker 和新 pending trial 的真实事件／30 秒在线确认仍未接线，实板及 P6-10/P7-04 未验收。详见[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-09-30 联合 OTA 带包 A 侧启动恢复接线：普通启动现用原 V3 收据处理 `REUSE`／`WRITE` 的中断或回滚。只有确切 inactive app 退役、来源签名固件与 ECS2／原包对账均通过，失败收据又持久提交并读回后，才重开旧确认包并解除启动事务锁；任何一步不确定均保持写门。带包 `FAILED` 可按原 operation ID 查询，重复启动不重新擦槽。双目标 host ASan/UBSan、固定 SDK 测试键签名构建与官方验签通过，C3／ESP32 app 仍为 `0x121000/0x130000`／`0xffff4/0x120000`。公开带包 worker 和目标 C 的业务试运行／确认仍未接通，实板与 P6-10/P7-04 未验收。
