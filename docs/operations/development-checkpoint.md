@@ -1,5 +1,13 @@
 # 开发检查点
 
+## 产品事件真实 TLS Broker 宿主续验
+
+公开发布器生产实现保持 `b8e9c791f70440209a6d1a416aad2cf69d1df7e7` 的原内容。本次增加 `firmware/tests/product_event_broker_probe.c`；外部 Broker 消费者的测试显式传入 Base checkout，运行固定 Paho 2.1.0 发布器，并将真实收到的字节交给本仓实际 wire 解析与授权包装源码。PSA 测试接口通过 OpenSSL 计算真实 HMAC，替代 IDF 密码端口；以 ASan/UBSan 编译。Broker 从官方 Mosquitto 2.1.2 精确源码 `99fa50f30e325609394c324c8ff71cfbbe95d8ab` 原生构建，加载同版本认证与 ACL 插件，只绑定本机回环临时端口，使用虚构设备／账户及公开测试管理密钥。
+
+16 项通过：合法事件及完整 4096 字节帧逐字节一致，只发布一次 QoS 1 非 retained；陈旧序号、错误密码、跨设备控制方、仅 retained reported、错误 TLS hostname 在发布前拒绝；PUBACK 后无执行结果、断线、换 boot 或摘要不符均 unknown，不重发；通过 Broker ACL 的坏 MAC、旧 boot 和 QoS 0 被真实 C 解析器拒绝。业务失败和 runtime 失败分别保留负结果与 null，未当作成功。增加解析器后的首轮断线测试在子进程完成前断言，发生测试同步竞态；改为解析完成后断线，保留失败与最终结果。
+
+reported／guest 结果和在线状态仍是明确假件。没有运行 MCU MQTT 传输、Base owner、高水位准入、Container 队列、真实 guest、30 秒在线或持久产品确认；最大帧只证明 wire 上限，不代表签名 guest 的事件配额。新 probe 不进入固件镜像，不改 SDK／五仓锁、分区、生产凭据或任何实体设备。生产事件源与两板链路、P6-04/P7/P8 继续未验收。
+
 ## 2026-09-30 活动产品完整版本与试运行回读
 
 `product.status` 现硬切为十个 required 字段，新增 required nullable 的七字段 `active_product`。实际实例从本次 `econtainer_product_open` 成功后的复验 manifest slice 复制完整版本；产品 ID 与不可变编译授权逐字节核对，版本按实际长度申请。发布、查询副本与停止清理由原事件锁保护；停止、trap、回退和卸载不保留活动版本。查询复用原同一 claim、双次签名固件观察和一次 ECS2 读取，确认实例匹配确认绑定，产品 trial 匹配本 boot 的精确候选；协议再核对原未决账本 ID／包摘要／操作类型。确认包根字段在 trial 期间保持旧绑定。联合固件 pending trial 的占用和观察限制保持，不能据元数据宣称健康或原操作成功。

@@ -1,5 +1,7 @@
 # ESP Base
 
+产品事件宿主发布器现有 16 项隔离真实 TLS Broker 软件验证：一次发布、目标权限、陈旧序号、最大 wire 帧及 unknown 行为通过；Broker 实收字节经本仓实际 C 帧解析器核对。设备 reported、guest 与健康仍为假件，IDF 密码端口与两板结果未据此验收；范围见[开发检查点](docs/operations/development-checkpoint.md)。
+
 2026-09-30 活动产品元数据软件续进：`product.status` 的十字段链新增设备当前实际实例的完整版本、摘要、ABI／schema 和真实试运行状态。确认绑定与候选分别返回，停止后清除活动视图；公开 CLI 和 Tool 严格消费。正式发布、两板回读及峰值验收仍待闭合。
 
 2026-09-30 C3 带包恢复诊断续验：`eb41a4a` 的仓外 UART 适配签名镜像完成 REUSE／WRITE 的离线 pending、旧 P0 回退恢复及幂等二启，主栈最低余量均为 2,260 B，二启均为 4,244 B；原 V3 除终态／失败码外逐字节保持，两模式二启整片 Flash 各自相同。该镜像仅在仓外改变控制台／VFS 与串口驱动装配，另跳过 QEMU 缺失的 ADC2 校准；正式 USB 镜像和实体 C3 未改，不能当作 USB／联网／实板验收。精确输入与模拟器 eFuse 前置见[开发检查点](docs/operations/development-checkpoint.md)。

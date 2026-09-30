@@ -1,5 +1,7 @@
 # 固件测试
 
+`product_event_broker_probe.c` 是可供明确外部 TLS Broker 测试使用的宿主二进制入口。它编译实际 `mqtt_event.c`、`mqtt_command.c`、`command_guard.c` 与 `network_auth.c`，PSA 接口用 OpenSSL 实际 HMAC 替代 IDF 端口；只消费公开 `00..1f` 测试密钥，不使用设备凭据。输入为 device UUID、boot UUID、Topic、QoS、retain 和收到的原始帧文件，输出授权解析结果及原始事件摘要；不运行 MQTT owner、序号准入、队列、guest 或健康确认。16 项真实 Broker 软件验证与原测试竞态边界见[开发检查点](../../docs/operations/development-checkpoint.md)，不新增普通 host 测试的私有仓依赖。
+
 2026-09-30 完整授权的正式 ESP32 签名 app 已在仓外 QEMU 运行 REUSE／WRITE 的离线 pending、同片回退恢复和再次冷启动；3,584 B 主任务栈复现溢出，统一 6,144 B 后通过。两模式回退主栈最低余 2,324／2,308 B，原收据持久失败，旧 P0 包恢复，二启完整 Flash 相同。前置 ECS2／原 V3 收据由合成 seed 构造，GDB 只在实际 app_main 返回后读取 TCB／栈填充值，没有注入业务调用或健康；未验证公开下载、真实 MQTT／Wi-Fi 或实体板。双目标签名构建、官方验签与欠栈配置拒绝通过，详见[开发检查点](../../docs/operations/development-checkpoint.md)。
 
 同日 C3 从 `eb41a4a` 归档，仅在仓外适配 UART 控制台／驱动并跳过 QEMU ADC2 校准，完成同样的两模式三次启动。原 V3 字段、旧 P0／账本、官方 NVS CRC 与二启完整 Flash 一致；回退主栈最低余量均 2,260 B。模拟器 eFuse 前置修正及输入见同一开发检查点；该诊断不替代正式 USB 或实板。
