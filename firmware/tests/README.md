@@ -2,6 +2,8 @@
 
 2026-09-30 完整授权的正式 ESP32 签名 app 已在仓外 QEMU 运行 REUSE／WRITE 的离线 pending、同片回退恢复和再次冷启动；3,584 B 主任务栈复现溢出，统一 6,144 B 后通过。两模式回退主栈最低余 2,324／2,308 B，原收据持久失败，旧 P0 包恢复，二启完整 Flash 相同。前置 ECS2／原 V3 收据由合成 seed 构造，GDB 只在实际 app_main 返回后读取 TCB／栈填充值，没有注入业务调用或健康；未验证公开下载、真实 MQTT／Wi-Fi 或实体板。双目标签名构建、官方验签与欠栈配置拒绝通过，详见[开发检查点](../../docs/operations/development-checkpoint.md)。
 
+同日 C3 从 `eb41a4a` 归档，仅在仓外适配 UART 控制台／驱动并跳过 QEMU ADC2 校准，完成同样的两模式三次启动。原 V3 字段、旧 P0／账本、官方 NVS CRC 与二启完整 Flash 一致；回退主栈最低余量均 2,260 B。模拟器 eFuse 前置修正及输入见同一开发检查点；该诊断不替代正式 USB 或实板。
+
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
 `product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器并注入 HTTP／单调时钟假件，检查 URL 和证书 bundle 配置、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，见[来源检查点](../../docs/operations/product_package_https_source_checkpoint.md)。

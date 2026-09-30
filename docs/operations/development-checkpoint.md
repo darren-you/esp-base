@@ -1,5 +1,30 @@
 # 开发检查点
 
+## 2026-09-30 C3 带包离线 pending／回退 UART 诊断
+
+从 `eb41a4a02a00adb40c9102c2e20f4ae09dfa68d1` 完整 Git 归档建立独立仓外副本，归档 SHA-256 为 `a38159cc8511f4704ef6932bb7085aade0807f20471e955a371ca17018fbc5cb`。逐文件比较仅有两个已跟踪文件差异：`esp_base_protocol.c` 将 C3 的控制台 VFS 分支改接所选 UART，`device_protocol/CMakeLists.txt` 将该诊断的驱动依赖改为 UART。独立 sdkconfig 选择 UART0；正式 USB 源码未改，没有加入测试任务、业务函数调用或健康替身。SDK、精确依赖锁、C3 正式双 `0x130000` app／三份 `0x77000` 包槽／scratch／十一页 Base NVS 均沿用上一检查点。
+
+第一次诊断遗漏仓外 UART 驱动依赖而编译失败，修正后日志单独保留。首次 QEMU 又因附加全零 eFuse 文件报告芯片 v0.0，与签名镜像最小 v0.3 要求不符，在应用前退出；没有降低镜像版本门。根据[该固定 QEMU 的官方 eFuse 实现](https://github.com/espressif/qemu/blob/esp-develop-9.2.2-20260417/hw/nvram/esp32c3_efuse.c)，最终不附加 eFuse drive，使用模型原生 v0.3／eFuse block v1.3；全零输入失败保留在 `first-zero-efuse-startup/`。官方 espefuse 的虚拟模式另生成的诊断文件未被 QEMU 消费，也未连接任何实体端口。
+
+C3 QEMU 仍缺 ADC2 校准外设，GDB 在 `*adc2_init_code_calibration` 的第一条指令前跳转至调用方返回地址，避免执行函数序言、保持 SP；除此之外只在真实 app_main 返回后读取主 TCB／填充字节。此差异使结果只属于 UART／模拟器诊断，不是正式 USB 镜像或物理外设证据。签名 app 字节没有被 GDB 改写，未注入网络就绪、时间、代表事件或健康提交。
+
+| 输入 | 大小／槽容量 | 完整 SHA-256 |
+| --- | --- | --- |
+| UART 来源 A | `0x121000/0x130000` | `9a153f15ffc7ccfcc3b0b5f9df862040ab9faef0ff4f7da7d26938c354b81631` |
+| UART 候选 C | `0x121000/0x130000` | `1c18c12bae04a97202537b495e63a3f3b92647f64850e3a5b29b0280cca7750a` |
+| A sdkconfig | 88,112 B | `6cfcdc904819e1ef4da6425e475b5515293beaf45d5486e3bc234c2bfb4a9b0b` |
+| C sdkconfig | 88,139 B | `e28d62cb504b970bc26998112dab303252fa1cd3767c932a84051448419ab7bb` |
+
+A／C 分别采用 SDK 原生产品版本 `0.2.0`／`0.2.0-qemu-c`，两镜像官方 RSA v2 验签及 app 尺寸门通过。完整合法测试授权、真实签名 P0／P1、合成原 V3／ECS2／EPRD 和三阶段执行方法与下节 ESP32 一致；seed 改为 C3 正式几何，以 host ASan/UBSan 验包并构造来源 sequence 6、REUSE／WRITE 的 PREPARED 7／8。代表事件和安装健康前置仍是合成事实，不能认定公开安装、下载或 MQTT 交付通过。
+
+两种模式的正式业务路径均完成：候选启动持久 trial sequence 8／9，跨本地稳定窗口的三个 15 秒间隔查询继续返回原 ID running、原包模式和摘要；Wi-Fi／可信时间／MQTT 均未就绪，配置写入持续拒绝。以该 Flash 新启 QEMU，由 SDK 回到 A，Base 退役 C、恢复旧 P0，原 ID 返回持久 FAILED，然后到 READY；再次冷启动仍 READY、P0 与原失败结果不变。REUSE／WRITE 回退主栈最低未用均为 2,260 B，二启均为 4,244 B；配置值 6,144 B、SDK 实际分配 6,656 B、TCB 对齐跨度 6,641 B 分别记录，不混为一项。
+
+官方 NVS parser 校验身份 NVS 与 Base NVS 全页／条目 CRC，ECS2／EPRD 内部 CRC 通过；回退后 sequence 10／11、IDLE，来源绑定和原产品账本逐字节保持。原 V3 除 state／失败码两个字节外所有字段与前置收据一致；同样的完整原字段断言也补核了下节 ESP32 读回。C 首个 4 KiB 扇区被擦除、其余 app 字节保持，inactive otadata 全扇区退役。bootloader、分区表、身份 NVS、phy／coredump、A、包区和 scratch 逐字节不变。两模式相对初始片分别只有 otadata、C、Base NVS 的 12、4,093、1,419 个字节变化；4,093 是原 C 首扇区非 `0xff` 字节数，不是擦除长度。
+
+回退与二启的完整 4 MiB Flash 逐字节相等，REUSE SHA-256 为 `d8e9a42efed019a78ca2b9aa9d409f6f94255eb59587ab2016244b3cd832ed01`，WRITE 为 `e1ce1bb8faad77052a4a77c07607dfa7f1964b1e4f41631395fb83d880b99cb8`。这证明内容幂等，未测物理擦写次数或寿命。已有 status 采样中的普通堆历史最低为 98,556／98,508 B，属于离线 UART 仿真，不计为五能力资源验收。
+
+全部输入、源码差异摘要、构建／官方验签日志、`seed.c`／准备与运行脚本、GDB／UART、完整 Flash 与 `verified-results.json` 位于 `/private/tmp/esp-base-eb41a4a-c3-pending-qemu-20260930/`。QEMU 版本与下节相同，禁自动重启、关闭模拟 timer WDT。当前实体只连接 C3，本轮未打开、重置或写入实体串口；正式 USB／真实 Wi-Fi／Broker／FRPS／HTTPS、联网成功确认、迁移与物理掉电均未验收，P6-03/P6-10/P7-04 保持开放。
+
 ## 2026-09-30 ESP32 带包离线 pending／回退启动与主任务栈
 
 在 `85e8e71af21d7fac42c85d78eccc66933e59835c` 源码上补齐完整、合法的仓外 Container 测试授权后，正式 ECDSA v1 签名 ESP32 app 在两种带包回退启动中都复现 `***ERROR*** A stack overflow in task main`。当时主栈仍为 SDK 默认 3,584 B；此前 `0xffff4` B 的 ESP32 构建使用空产品授权，只证明该配置的装配，不能证明完整产品路径容量。故障沿实际 app_main、签名固件观察、Container 放弃／删除迁移和 NVS 持久恢复发生，没有 GDB 业务函数调用。失败输入和原始日志保留在仓外 `third-run-3584-byte-main-overflow/`。

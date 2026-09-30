@@ -4,7 +4,7 @@
 
 当前软件候选分别构建 ESP32-C3 的 USB 与 ESP32-D0WD-V3 的 UART0 命令运行面；两目标都有独立分区、OTA/签名策略和精确组件锁。ESP32 旧 AT 到新布局、双签名 Base 与真实启动链仍待受控迁移和实板验收。两者都不是五能力完成版本。
 
-普通 Base 两目标统一要求 `CONFIG_ESP_MAIN_TASK_STACK_SIZE >= 6144`；默认值为 6,144 B，签名固件观察和 Container 持久恢复都由该任务执行。ESP32 默认 3,584 B 曾在正式签名应用的带包回退恢复中溢出；修后 REUSE／WRITE 的离线 pending、旧包恢复和幂等二启通过，恢复最低栈余量 2,324／2,308 B。该 SDK 的非 nano 格式另加 512 B，不能将 TCB 对齐后的观测跨度当作配置值。C3 保持原有 6,144 B，本轮只重新验证 USB 产品签名构建，未运行同一带包 QEMU 或实板场景。完整测试授权的 C3／ESP32 app 为 `0x121000`／`0x10fff4` B；旧 ESP32 空授权 `0xffff4` B 不代表完整产品容量。输入和边界见[开发检查点](../docs/operations/development-checkpoint.md)。
+普通 Base 两目标统一要求 `CONFIG_ESP_MAIN_TASK_STACK_SIZE >= 6144`；默认值为 6,144 B，签名固件观察和 Container 持久恢复都由该任务执行。ESP32 默认 3,584 B 曾在正式签名应用的带包回退恢复中溢出；修后 REUSE／WRITE 的离线 pending、旧包恢复和幂等二启通过，恢复最低栈余量 2,324／2,308 B。该 SDK 的非 nano 格式另加 512 B，不能将 TCB 对齐后的观测跨度当作配置值。C3 保持原有 6,144 B；后续独立 UART／ADC2 适配诊断也通过两模式离线 pending、恢复与二启，回退主栈最低余 2,260 B。正式 USB 产品已签名构建，USB 实体通路和同一实板场景仍未验。完整测试授权的 C3／ESP32 app 为 `0x121000`／`0x10fff4` B；旧 ESP32 空授权 `0xffff4` B 不代表完整产品容量。输入和边界见[开发检查点](../docs/operations/development-checkpoint.md)。
 
 ## 架构拓扑
 
