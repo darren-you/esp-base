@@ -24,7 +24,7 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
 
-`ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包启动恢复仍被阻断。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
+`ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包 A 侧启动恢复已接通，目标 C 试运行仍被阻断；两种模式的失败终态与写前／写后／commit／独立读回故障已覆盖。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
 `ota_firmware_test` 编译真实固件集合观察逻辑，注入 SDK 与 `esp-ota` 槽/镜像结果，覆盖双 `VALID`、只有当前签名镜像、双槽同摘要、显式 pending trial 与已确认模式隔离、pending 缺失可回滚旧槽、boot 不一致、不可回滚、旧槽虽标无效但仍有可验签镜像、读态改变、错误产品名/芯片/镜像头/分区几何和读回失败。它不模拟真实 bootloader、Flash 并发或物理镜像读取；固定 SDK 普通与测试键签名构建只验证装配。
 
@@ -92,3 +92,5 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 [nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。
 
 [nvs-capacity-probe](nvs-capacity-probe/README.md) 只用合成数据验证最大 v3 配置、OTA 收据形态、精确 Container ECS2 产品键和最近八条产品操作账本的反复提交、页回收与重启读回；它不修改产品分区表或实板。当前 V3 长度已在正式 C3 十一页与 ESP32 六页布局复测，见[C3 产品布局容量记录](../../docs/operations/c3_eleven_page_nvs_capacity.md)和[ESP32 容量记录](../../docs/operations/esp32-six-page-nvs-capacity.md)。历史 C3 六／八页结果使用当时的 V2 长度，见[C3 容量记录](../../docs/operations/c3-eight-page-nvs-capacity.md)。
+
+带包 A 侧启动恢复的 `ota_startup_test` 同时覆盖 `REUSE`／`WRITE`：原 V3 全字段进入 Container 对账，物理退役、包引用恢复和失败收据精确读回必须先于旧 guest 启动；失败收据再次启动不擦槽，终态下若 ECS2 仍未决则拒启。SDK 退役、Container 对账与收据提交或读回失败均保留 startup claim，目标 C 带包 trial 继续拒绝。两目标同源 ASan/UBSan 与测试键签名构建是软件证据，未模拟实板断电。

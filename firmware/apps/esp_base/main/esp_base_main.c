@@ -172,9 +172,8 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
     if (loaded == ESP_BASE_OTA_RECEIPT_NOT_FOUND)
         return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     if (loaded != ESP_BASE_OTA_RECEIPT_OK) return false;
-    /* The receipt is readable, but package trial and rollback recovery must
-     * be proven before a package transition may advance this boot. */
-    if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) return false;
+    if (receipt.container_enabled != esp_base_container_product_configured())
+        return false;
     if (receipt.status == ESP_BASE_OTA_RECEIPT_FAILED)
         return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
     if ((receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED &&
@@ -191,6 +190,9 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
         return false;
     }
     if (slots.running_subtype == receipt.target_subtype) {
+        /* Package recovery on A is wired below. C must remain blocked until
+         * its representative-event trial and joint confirmation are wired. */
+        if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) return false;
         /* A selected C belongs to pending trial or confirmed recovery. Never
          * erase it as though it were an interrupted inactive download. */
         uint8_t digest[EOTA_SHA256_BYTES] = {0};

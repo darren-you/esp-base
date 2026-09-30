@@ -500,8 +500,6 @@ int main(void)
            !memcmp(recovery.package_sha256, ota.package_sha256, 32) &&
            !memcmp(recovery.source_package_sha256, ota.package_sha256, 32) &&
            !memcmp(recovery.trial_event_sha256, ota.trial_event_sha256, 32));
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
-           EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
     assert(esp_base_ota_receipt_record_success(DEVICE) ==
            ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
     assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
@@ -509,6 +507,21 @@ int main(void)
     ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
     assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
            ESP_BASE_OTA_RECEIPT_CONFLICT && writes == 1);
+
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
+           EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK);
+    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
+           ESP_BASE_OTA_RECEIPT_OK && recovery.status == ESP_BASE_OTA_RECEIPT_FAILED &&
+           recovery.package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
+           !memcmp(recovery.source_package_sha256, package_snapshot.source_package_sha256, 32));
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_FAILED &&
+           view.package_mode == ESP_BASE_OTA_PACKAGE_REUSE && writes == 2 && commits == 2);
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
+           EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK && writes == 2);
+    boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
 
     reset(); ota = request(OP);
     ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
@@ -637,6 +650,46 @@ int main(void)
            ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
     assert(writes == previous_writes && flash_io_acquires == flash_io_releases + 1 &&
            !flash_io_active);
+    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_PACKAGE_REUSE;
+         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
+        for (int scenario = NO_FAULT; scenario <= READBACK_MISMATCH; ++scenario) {
+            reset(); ota = request(OP);
+            ota.package_mode = mode;
+            memset(ota.package_sha256, mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x42 : 0x52, 32);
+            memset(ota.trial_event_sha256, 0x24, 32);
+            ota.package_size_bytes = 1024;
+            ota.guest_abi_version = 2;
+            ota.data_schema_version = 1;
+            package_snapshot = snapshot();
+            package_snapshot.source_package_present = true;
+            memset(package_snapshot.source_package_sha256, 0x42, 32);
+            package_snapshot.source_package_size_bytes = 1024;
+            package_snapshot.source_guest_abi_version = 2;
+            package_snapshot.source_data_schema_version = 1;
+            assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
+                   ESP_BASE_OTA_RECEIPT_OK);
+            /* Slot observation cannot certify a different boot selector. */
+            boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+            assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
+                   EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN &&
+                   writes == 1);
+            boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
+            after_write = false;
+            fault = scenario;
+            const esp_base_ota_receipt_result_t terminal =
+                esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE);
+            assert(terminal == (scenario == NO_FAULT ? ESP_BASE_OTA_RECEIPT_OK :
+                   scenario == OPEN_WRITE_FAULT ? ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE :
+                   ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
+            assert(handles == 0 && !flash_io_active && flash_io_acquires == flash_io_releases);
+            fault = NO_FAULT;
+            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
+            assert(view.package_mode == mode && !memcmp(view.package_sha256, ota.package_sha256, 32));
+            assert(view.state == ((scenario == NO_FAULT || scenario == SET_AFTER_FAULT ||
+                                  scenario == READBACK_FAULT || scenario == READBACK_MISMATCH) ?
+                                 ESP_BASE_OTA_OPERATION_FAILED : ESP_BASE_OTA_OPERATION_UNKNOWN));
+        }
+    }
     reset(); signed_enabled = false; ota = request(OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && writes == 0);
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && reads == 0);

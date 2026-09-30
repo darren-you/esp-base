@@ -488,6 +488,7 @@ esp_base_container_retire_result_t esp_base_container_product_recover_retired_fi
            memcmp(recovery->source_sha256, receipt.source_sha256, 32) == 0 &&
            memcmp(recovery->inactive_sha256, receipt.inactive_sha256, 32) == 0 &&
            memcmp(recovery->candidate_sha256, receipt.candidate_sha256, 32) == 0 &&
+           memcmp(recovery, &receipt, sizeof receipt) == 0 &&
            !strcmp(recovery->operation_id, receipt.operation_id) &&
            boot_id && boot_id[0] == '3');
     ++container_recover_calls;
@@ -508,6 +509,12 @@ esp_base_container_boot_result_t esp_base_container_product_boot(
     assert(boot_id != NULL && boot_id[0] == '3');
     assert(esp_base_storage_claim_active(claim));
     assert(ota_gate_pending);
+    if (receipt_load_result == ESP_BASE_OTA_RECEIPT_OK &&
+        receipt.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
+        receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) {
+        assert(receipt_retire_calls == 1 && container_recover_calls == 1 &&
+               receipt_failure_calls == 1);
+    }
     esp_base_storage_claim_t competing = {0};
     assert(!esp_base_storage_claim(storage_owner, &competing));
     return container_boot_result;
@@ -602,6 +609,23 @@ static void selected_receipt(bool enabled, eota_state_t running_state)
     receipt_slots.target_subtype = receipt.source_subtype;
     receipt_slots.running_state = running_state;
     image_state = running_state;
+}
+
+static void interrupted_package_receipt(esp_base_ota_package_mode_t mode)
+{
+    reset_case();
+    container_configured = true;
+    container_boot_result = ESP_BASE_CONTAINER_RUNNING;
+    interrupted_receipt(true);
+    image_state = EOTA_STATE_VALID;
+    receipt.package_mode = mode;
+    receipt.source_package_present = true;
+    memset(receipt.source_package_sha256, 0x41, 32);
+    memset(receipt.package_sha256, mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x41 : 0x42, 32);
+    memset(receipt.trial_event_sha256, 0x43, 32);
+    receipt.source_package_size_bytes = receipt.package_size_bytes = 1024;
+    receipt.source_guest_abi_version = receipt.guest_abi_version = 2;
+    receipt.source_data_schema_version = receipt.data_schema_version = 1;
 }
 
 int main(void)
@@ -713,18 +737,58 @@ int main(void)
     container_configured = true;
     selected_receipt(true, EOTA_STATE_PENDING_VERIFY);
     receipt.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
-    assert(rebooted() && rollback_calls == 1 && receipt_observe_calls == 0 &&
+    assert(rebooted() && rollback_calls == 1 && receipt_observe_calls == 1 &&
            container_selected_calls == 0 && container_trial_calls == 0 &&
            mark_calls == 0 && ready_logs == 0);
 
-    reset_case();
-    container_configured = true;
-    interrupted_receipt(true);
-    image_state = EOTA_STATE_VALID;
-    receipt.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
-    assert(!rebooted() && receipt_observe_calls == 0 &&
-           receipt_retire_calls == 0 && container_recover_calls == 0 &&
-           container_boot_calls == 0 && ready_logs == 0 && ota_gate_pending);
+    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_PACKAGE_REUSE;
+         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
+        interrupted_package_receipt(mode);
+        assert(!rebooted() && receipt_retire_calls == 1 &&
+               container_recover_calls == 1 && receipt_failure_calls == 1 &&
+               container_boot_calls == 1 && ready_logs == 1 &&
+               mark_calls == 0 && !ota_gate_pending);
+        esp_base_storage_claim_t recovered = {0};
+        assert(esp_base_storage_claim(storage_owner, &recovered));
+        assert(esp_base_storage_release(&recovered));
+
+        interrupted_package_receipt(mode);
+        receipt_retire_result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
+        assert(!rebooted() && receipt_retire_calls == 1 &&
+               container_recover_calls == 0 && receipt_failure_calls == 0 &&
+               container_boot_calls == 0 && ota_gate_pending);
+
+        interrupted_package_receipt(mode);
+        container_recover_result = ESP_BASE_CONTAINER_RETIRE_UNCERTAIN;
+        assert(!rebooted() && container_recover_calls == 1 &&
+               receipt_failure_calls == 0 && container_boot_calls == 0 &&
+               ota_gate_pending);
+
+        interrupted_package_receipt(mode);
+        receipt_failure_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+        assert(!rebooted() && receipt_failure_calls == 1 &&
+               container_boot_calls == 0 && ota_gate_pending);
+        esp_base_storage_claim_t uncertain = {0};
+        assert(!esp_base_storage_claim(storage_owner, &uncertain));
+
+        interrupted_package_receipt(mode);
+        container_configured = false;
+        assert(!rebooted() && receipt_retire_calls == 0 &&
+               container_recover_calls == 0 && receipt_failure_calls == 0 &&
+               container_boot_calls == 0 && ota_gate_pending);
+
+        interrupted_package_receipt(mode);
+        receipt.status = ESP_BASE_OTA_RECEIPT_FAILED;
+        assert(!rebooted() && without_receipt_calls == 1 &&
+               receipt_retire_calls == 0 && receipt_failure_calls == 0 &&
+               ready_logs == 1);
+
+        interrupted_package_receipt(mode);
+        receipt.status = ESP_BASE_OTA_RECEIPT_FAILED;
+        without_receipt_ok = false;
+        assert(!rebooted() && receipt_retire_calls == 0 &&
+               container_boot_calls == 0 && ready_logs == 0 && ota_gate_pending);
+    }
 
     reset_case();
     container_configured = true;
@@ -835,6 +899,7 @@ int main(void)
     without_receipt_ok = false;
     receipt_load_result = ESP_BASE_OTA_RECEIPT_OK;
     receipt.status = ESP_BASE_OTA_RECEIPT_FAILED;
+    receipt.container_enabled = true;
     assert(!rebooted() && without_receipt_calls == 1 &&
            container_boot_calls == 0 && ready_logs == 0);
 

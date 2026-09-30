@@ -1,5 +1,20 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA 带包 A 侧启动恢复接线
+
+普通 `app_main` 不再一律拒绝带包 V3。A 仍为运行且 boot 指向 A 时，原收据限定目标 app 的物理退役；Container 再核对原来源包和 A/B/C 序号、放弃未完成候选并回读 A-only；最后持久提交并读回 `FAILED`，才进入正常旧包启动、产品账本准备与启动 claim 释放。任一 SDK／Container／收据不确定都阻止 guest 启动并保留写门。失败收据在下一 boot 只做无未决迁移对账，不授权再次擦槽。目标 C 的带包 trial 与成功提交仍明确拒绝，公开带包 worker 尚未开放。
+
+双目标完整 host ASan/UBSan 通过。启动假件核对两种模式的原 V3 全字段传递及调用顺序，覆盖物理退役失败、ECS2 不确定、失败收据提交或读回失败、Container 策略不匹配、终态重复启动和未决绑定阻断；收据假件对两种模式覆盖写前、写后、commit、独立读回故障及错误 boot selector，逐项核对终态／unknown 和 Flash I/O claim 释放。真实 Container A-only 恢复与旧包完整性仍使用上一节已验证原语；本轮未新增其实现。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c` 及现有双目标锁检查通过，仓外既有测试策略和测试键下的 C3 RSA v2／ESP32 ECDSA v1 构建、官方验签及 app 尺寸门通过：
+
+| 目标 | 签名 app／槽容量 | app SHA-256 |
+| --- | --- | --- |
+| ESP32-C3 | `0x121000/0x130000` | `1b317cae709f08c3802a12234d1af41376b18bc48468637c616f408af9c821bf` |
+| ESP32-D0WD-V3 | `0xffff4/0x120000` | `839d3e3d2219695892f7883f7ad11de2af42948d839f47532477fe6b3ffd7899` |
+
+本轮未写实体板、未重做 Flash/NVS 掉电试验或五能力并发，未验证公开带包 OTA 成功路径；P6-10/P7-04 保持进行中。
+
 ## 2026-09-30 联合 OTA 带包 A 侧中断恢复原语
 
 内部 `esp_base_container_product_recover_retired_firmware` 现在接收原 V3 收据而非分散的固件摘要。物理层已证明 A 为唯一可启动运行槽后，Container 层核对来源包摘要、长度、ABI、schema 与真实引用，再按原 operation ID、A/C 身份、模式和序号处理：旧 B 尚未在 ECS2 退役时先安全退役；`WRITE` 的 `WRITING` 或两种带包模式的 `PREPARED`／旧 boot trial／`HEALTH_VERIFIED` 经持久 `ABORTED→IDLE` 丢弃 C 绑定。`WRITE` 目标槽可保留部分或损坏字节，但旧 A 包必须完整；同 boot 的已启动 trial 不允许无 guest 停止证明直接放弃。每次提交由 Container 独立读回，最终 A-only 再做真实包引用对账。错误收据或来源包损坏阻断，不将其报告为已恢复。
