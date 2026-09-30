@@ -31,4 +31,4 @@ FRP 大记录的 Flash scratch 在 C3／ESP32 产品构建中固定启用，两�
 
 控制任务启动后以编译期 `CONFIG_ESP_BASE_TIME_SERVER` 初始化 SNTP，默认 `pool.ntp.org`；初始化失败只报告 `ESP_BASE_TIME_UNAVAILABLE`，不影响 pending 本地确认。心跳 `time_ready` 只有本次 boot 收到有效同步后才为 true。签名构建的 `ota.start` 要求 Wi-Fi IP 与该同步事实，随后在独立 worker 下载；普通未签名构建明确拒绝。服务器名称不写持久配置。
 
-签名构建的 `ota.start` 先登记最近一次 `base_store/base_ota/operation` 收据并核对持久读回，再启动独立下载任务；只读 `ota.result` 在旧/新 boot 按 operation ID 查询。下载任务活跃及新槽 pending 为 running，只有本地确认 VALID 且运行镜像完整摘要匹配才 succeeded。旧回滚镜像若未包含查询实现则不能消费新收据，工具只可报告 unknown。
+签名构建的 `ota.start` 先登记最近一次 `base_store/base_ota/operation` 收据并核对持久读回，再启动独立下载任务；只读 `ota.result` 在旧/新 boot 按 operation ID 查询。下载任务活跃及新槽 pending 为 running，只有固件 VALID、Container 模式对应的健康和包确认、运行镜像完整摘要相符，并持久提交读回成功收据才 succeeded。旧回滚镜像若未包含查询实现则不能消费新收据，工具只可报告 unknown。

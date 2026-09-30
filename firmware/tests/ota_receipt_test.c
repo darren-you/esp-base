@@ -668,6 +668,16 @@ int main(void)
             package_snapshot.source_data_schema_version = 1;
             assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
                    ESP_BASE_OTA_RECEIPT_OK);
+            assert(esp_base_ota_receipt_query(DEVICE, OP, true, &view) ==
+                   ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_RUNNING);
+            running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+            source_state = EOTA_STATE_PENDING_VERIFY;
+            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+                   ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_RUNNING);
+            source_state = EOTA_STATE_VALID;
+            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
+                   ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
+            running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
             /* Slot observation cannot certify a different boot selector. */
             boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
             assert(esp_base_ota_receipt_record_failure(DEVICE, OP,

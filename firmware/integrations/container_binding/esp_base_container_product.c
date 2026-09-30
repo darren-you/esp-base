@@ -157,24 +157,20 @@ bool esp_base_container_product_configured(void)
     return policy_present();
 }
 
-bool esp_base_container_product_ota_ready(void)
-{
-    return !policy_present() ||
-        (atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire) &&
-         atomic_load_explicit(&s_product.result, memory_order_acquire) ==
-             ESP_BASE_CONTAINER_EMPTY);
-}
-
-static bool snapshot_mode_ready(esp_base_ota_package_mode_t package_mode)
+bool esp_base_container_product_ota_ready(esp_base_ota_package_mode_t package_mode)
 {
     if (package_mode != ESP_BASE_OTA_NO_PACKAGE &&
         package_mode != ESP_BASE_OTA_PACKAGE_REUSE &&
         package_mode != ESP_BASE_OTA_PACKAGE_WRITE) return false;
+    if (s_product.trial_mode || s_product.package_trial_mode ||
+        s_product.firmware_package_trial_mode) return false;
     if (package_mode == ESP_BASE_OTA_NO_PACKAGE)
-        return esp_base_container_product_ota_ready();
+        return !policy_present() ||
+            (atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire) &&
+             atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+                 ESP_BASE_CONTAINER_EMPTY);
     if (!policy_present() || !s_product.provider_bound ||
-        !atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire) ||
-        s_product.trial_mode || s_product.package_trial_mode) return false;
+        !atomic_load_explicit(&s_product.boot_admitted, memory_order_acquire)) return false;
     const int result = atomic_load_explicit(&s_product.result, memory_order_acquire);
     const bool active = atomic_load_explicit(&s_product.instance_active,
                                               memory_order_acquire);
@@ -322,7 +318,10 @@ static econtainer_slots_result_t stage_firmware(
     const uint32_t retired_sequence = receipt->container_sequence +
         (digest_zero(receipt->inactive_sha256) ? 0U : 1U);
     if (current.sequence != retired_sequence ||
-        current.phase != ECONTAINER_SLOT_IDLE)
+        (current.phase != ECONTAINER_SLOT_IDLE &&
+         !(digest_zero(receipt->inactive_sha256) &&
+           receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+           current.phase == ECONTAINER_SLOT_CONFIRMED)))
         return ECONTAINER_SLOTS_CONFLICT;
 
     const econtainer_slot_binding_t *running = NULL;
@@ -1265,22 +1264,6 @@ static bool state_has_firmware(const econtainer_slots_state_t *state,
     return source_found && other_found == has_other;
 }
 
-static econtainer_slots_result_t verified_a_only(
-    const econtainer_slot_firmware_set_t *firmware_set)
-{
-    econtainer_slots_state_t state = {0};
-    econtainer_slot_boot_decision_t decision = ECONTAINER_SLOT_BOOT_BLOCKED;
-    const econtainer_slots_result_t result = econtainer_slots_reconcile(
-        &s_product.provider.io, &s_product.provider.geometry,
-        firmware_set, &state, &decision);
-    if (result != ECONTAINER_SLOTS_OK) return result;
-    return state.phase == ECONTAINER_SLOT_IDLE &&
-           decision == ECONTAINER_SLOT_BOOT_CONFIRMED &&
-           state_has_firmware(&state, firmware_set->running_firmware_sha256,
-                              (const uint8_t[32]){0}, false) ?
-           ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_CONFLICT;
-}
-
 typedef struct {
     bool container_enabled;
     const esp_base_ota_request_t *request;
@@ -1422,7 +1405,7 @@ bool esp_base_container_product_snapshot_for_ota(
     if (!esp_base_storage_claim_active(claim)) return false;
     const bool configured = policy_present();
     if (!snapshot_request_valid(request) ||
-        !snapshot_mode_ready(request->package_mode) ||
+        !esp_base_container_product_ota_ready(request->package_mode) ||
         (configured && !s_product.provider_bound))
         return false;
     const bool source_package_expected = configured &&
@@ -1435,7 +1418,7 @@ bool esp_base_container_product_snapshot_for_ota(
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, snapshot_for_ota, &context);
     if (result == ECONTAINER_SLOTS_OK &&
-        snapshot_mode_ready(request->package_mode) &&
+        esp_base_container_product_ota_ready(request->package_mode) &&
         (!configured || source_package_expected ==
             (atomic_load_explicit(&s_product.result, memory_order_acquire) ==
                 ESP_BASE_CONTAINER_RUNNING))) return true;
@@ -1469,10 +1452,25 @@ static econtainer_slots_result_t verify_source_only(
            ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_CONFLICT;
 }
 
+typedef struct {
+    retire_context_t retire;
+    const esp_base_ota_receipt_recovery_t *receipt;
+    uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
+    uint8_t boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
+} recovery_context_t;
+
+static bool recovery_bindings_match(const econtainer_slots_state_t *state,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    const uint8_t other_sha256[32], bool other_must_be_unpacked, uint8_t *source_slot);
+static econtainer_slots_result_t verified_recovery_a_only(
+    const econtainer_slot_firmware_set_t *firmware_set,
+    const esp_base_ota_receipt_recovery_t *receipt);
+
 static econtainer_slots_result_t retire_inactive(
     const econtainer_slot_firmware_set_t *firmware_set, void *context)
 {
-    const retire_context_t *retire = context;
+    const recovery_context_t *operation = context;
+    const retire_context_t *retire = &operation->retire;
     if (firmware_set->bootable_count != 1U ||
         memcmp(firmware_set->running_firmware_sha256, retire->source_sha256, 32) != 0)
         return ECONTAINER_SLOTS_CONFLICT;
@@ -1483,51 +1481,52 @@ static econtainer_slots_result_t retire_inactive(
     const bool old_inactive = !digest_zero(retire->inactive_sha256);
     if (old_inactive && state.sequence == retire->expected_sequence &&
         (state.phase == ECONTAINER_SLOT_IDLE || state.phase == ECONTAINER_SLOT_CONFIRMED) &&
-        state_has_firmware(&state, retire->source_sha256,
-                            retire->inactive_sha256, false)) {
+        recovery_bindings_match(&state, operation->receipt,
+                                retire->inactive_sha256, false, NULL)) {
         result = econtainer_slots_retire_inactive_firmware(
             &s_product.provider.io, &s_product.provider.geometry,
             state.sequence, firmware_set, retire->inactive_sha256, &state);
         if (result != ECONTAINER_SLOTS_OK) return result;
     } else if (state.sequence != retire->expected_sequence + (old_inactive ? 1U : 0U) ||
-               state.phase != ECONTAINER_SLOT_IDLE ||
-               !state_has_firmware(&state, retire->source_sha256,
-                                   (const uint8_t[32]){0}, false)) {
+               (state.phase != ECONTAINER_SLOT_IDLE &&
+                !(!old_inactive && operation->receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+                   state.phase == ECONTAINER_SLOT_CONFIRMED)) ||
+               !recovery_bindings_match(&state, operation->receipt,
+                                        (const uint8_t[32]){0}, false, NULL)) {
         return ECONTAINER_SLOTS_CONFLICT;
     }
-    return verified_a_only(firmware_set);
+    return verified_recovery_a_only(firmware_set, operation->receipt);
 }
 
 esp_base_container_retire_result_t esp_base_container_product_retire_inactive(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32])
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt)
 {
-    if (!esp_base_storage_claim_active(claim) || source_sha256 == NULL ||
-        inactive_sha256 == NULL || digest_zero(source_sha256) ||
-        (!digest_zero(inactive_sha256) &&
-         memcmp(source_sha256, inactive_sha256, 32) == 0) ||
-        policy_present() != container_enabled ||
-        (container_enabled ? expected_sequence == 0U : expected_sequence != 0U))
+    if (!esp_base_storage_claim_active(claim) || receipt == NULL ||
+        receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED ||
+        !stage_receipt_valid(receipt) || digest_zero(receipt->source_sha256) ||
+        (!digest_zero(receipt->inactive_sha256) &&
+         memcmp(receipt->source_sha256, receipt->inactive_sha256, 32) == 0) ||
+        policy_present() != receipt->container_enabled ||
+        (receipt->container_enabled ? receipt->container_sequence == 0U :
+         receipt->container_sequence != 0U || receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE))
         return ESP_BASE_CONTAINER_RETIRE_BLOCKED;
-    if (container_enabled &&
-        (!s_product.provider_bound || !esp_base_container_product_ota_ready()))
+    if (receipt->container_enabled &&
+        (!s_product.provider_bound ||
+         !esp_base_container_product_ota_ready(receipt->package_mode)))
         return ESP_BASE_CONTAINER_RETIRE_BLOCKED;
-    retire_context_t context = {expected_sequence, source_sha256, inactive_sha256};
+    recovery_context_t context = {
+        .retire = {receipt->container_sequence, receipt->source_sha256,
+                   receipt->inactive_sha256}, .receipt = receipt,
+    };
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
-        container_enabled ? retire_inactive :
+        receipt->container_enabled ? retire_inactive :
             /* With no Container policy, still prove the physical A-only set. */
-            verify_source_only, &context);
+            verify_source_only, receipt->container_enabled ?
+                (void *)&context : (void *)&context.retire);
     return retire_result(result);
 }
-
-typedef struct {
-    retire_context_t retire;
-    const esp_base_ota_receipt_recovery_t *receipt;
-    uint8_t operation_id[ECONTAINER_SLOT_OPERATION_ID_BYTES];
-    uint8_t boot_id[ECONTAINER_SLOT_BOOT_ID_BYTES];
-} recovery_context_t;
 
 static bool recovery_bindings_match(
     const econtainer_slots_state_t *state,
@@ -1574,7 +1573,10 @@ static econtainer_slots_result_t verified_recovery_a_only(
         &s_product.provider.io, &s_product.provider.geometry,
         firmware_set, &state, &decision);
     if (result != ECONTAINER_SLOTS_OK) return result;
-    return state.phase == ECONTAINER_SLOT_IDLE &&
+    return (state.phase == ECONTAINER_SLOT_IDLE ||
+            (digest_zero(receipt->inactive_sha256) &&
+             receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+             state.phase == ECONTAINER_SLOT_CONFIRMED)) &&
            decision == ECONTAINER_SLOT_BOOT_CONFIRMED &&
            recovery_bindings_match(&state, receipt, (const uint8_t[32]){0},
                                    false, NULL) ?
@@ -1640,6 +1642,12 @@ static econtainer_slots_result_t recover_retired_firmware(
         if (result != ECONTAINER_SLOTS_OK) return result;
         return verified_recovery_a_only(firmware_set, recovery->receipt);
     }
+    if (!old_inactive && state.sequence == retired_sequence &&
+        state.phase == ECONTAINER_SLOT_CONFIRMED &&
+        recovery->receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+        recovery_bindings_match(&state, recovery->receipt,
+                                (const uint8_t[32]){0}, false, NULL))
+        return verified_recovery_a_only(firmware_set, recovery->receipt);
     if (state.phase == ECONTAINER_SLOT_IDLE &&
         recovery_bindings_match(&state, recovery->receipt,
                                 (const uint8_t[32]){0}, false, NULL)) {

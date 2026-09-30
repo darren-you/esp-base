@@ -1,5 +1,22 @@
 # 开发检查点
 
+## 2026-09-30 公开 REUSE／WRITE 联合 OTA worker
+
+公开 `ota.start` 现消费三种包模式的准入合同。`NO_PACKAGE` 仍要求已准入 EMPTY；`REUSE` 要求已确认且运行的来源 guest；`WRITE` 可由该来源或 EMPTY 开始，任何 trial／blocked 状态均拒绝。worker 重读原 V3，逐项核对固件、包和代表事件字段，在旧 B 首次物理退役前再取得来源完整快照并核对原 A/B、ECS2 序号和来源包。Container 退役入口同步硬切为消费原收据，保留来源包引用并读回。A-only 已确认来源可保持原 CONFIRMED 相位／序号进入 stage 或 prepare 前恢复，不新增虚构持久步骤。
+
+准备新固件成功后，来源有包时先停止 guest，证明 native 回收和线程 join，才进行包 stage。REUSE 重验原包并提交 PREPARED，无包 HTTPS 下载；WRITE 持久预约 WRITING 后使用既有严格 TLS、固定长度、无重定向、连续 offset、有界期限来源，完成写槽、完整摘要／签名／授权及 PREPARED 独立读回，SDK 完整传输也通过后才选择新 boot。HTTP/TLS 客户端在传输末尾释放。来源、停止、stage、下载尾部或 selector 不确定均保留原 claim 和 unknown，禁止新操作，后续由原 V3 启动恢复裁决；不把 partial C 或已完整包当作成功。活跃 worker 或 pending C 的原 ID 查询为 running，VALID 尚未持久成功仍为 unknown。
+
+双目标完整 host ASan/UBSan 通过，覆盖原收据字段冲突与来源改变的无擦写拒绝、单／双来源就绪、来源停止失败、stage／传输／读回不确定、同请求不重执行、worker 创建失败、pending 写门与原 ID running/unknown。公开串口客户端 15 项通过。锁定 Container/WAMR 的双目标真实签名 guest ASan/UBSan、资源版、deadline／trap 与各 100 次重装通过；带包测试改用 Base 正式退役入口，覆盖 REUSE／WRITE 单固件和双固件来源、精确错误来源无提交、prepare 前恢复、候选健康与最终绑定。正向入队测试仅对未入队的 BUSY 做最多 200 次毫秒等待，负例仍一次裁决；生产队列和重发语义未改。
+
+固定 SDK 与两目标精确依赖锁未变，双目标签名构建、官方 RSA v2／ECDSA v1 验签和槽容量门通过。链接映射确认 WRITE 续写已进入真实 app。签名 app／槽容量与 SHA-256：
+
+| 目标 | app／槽容量 | app SHA-256 |
+| --- | --- | --- |
+| ESP32-C3 | `0x121000/0x130000` | `b3c66ae80123348bcae7b675974b51599cdb6e853f60ca420b0e734a3e9a021b` |
+| ESP32-D0WD-V3 | `0xffff4/0x120000` | `dffc1c10da37f2ca0115130f3b1583bc6e2d33cd814504a197c89fcc0083202e` |
+
+资源版 native malloc 在 10／50／100 轮均为 382016 B；macOS VM region 观察 C3 为 68／68／68、ESP32 为 66／66／68，属于宿主观察，不据此认定设备资源门通过。测试的 SDK、固件集合、Flash／NVS 和 HTTPS 传输仍为假件，MQTT owner 单测与签名 guest 分层验证；未在同一实际产品设备执行完整网络升级。正式串口／MQTT 全链、真实 HTTPS／Broker、P0→P3 连续更新、五能力资源、实体掉电和两板迁移仍未验收。本轮未写实体板，P6-10/P7-04 保持进行中。
+
 ## 2026-09-30 联合 OTA pending MQTT 与连续在线健康接线
 
 普通主应用现保留原 V3 收据，在 selected C 双次固件／ECS2 预检通过后，持久本 boot trial 并启动候选 guest。仅此准入允许控制任务在 pending 写门内启用既有 MQTT owner；FRP 仍等待全部确认。控制任务复用产品 trial 健康谓词，采集请求绑定代表事件、包摘要及失败数，要求 Wi-Fi、本 boot 可信时间、MQTT 连续 ready 30 秒、采样间隔不超过 1 秒、提交时空队列／无在途调用。RAM 快照使用非阻塞原子锁，不在锁内做 Flash／TLS。失联、无代表事件、错包、失败数变化／溢出、时钟逆行或采样中断重算窗口；离线保持 pending，不提前确认。

@@ -205,8 +205,8 @@ econtainer_slots_result_t econtainer_slots_retire_inactive_firmware(
     ++retire_calls;
     if (persisted.sequence != expected_sequence ||
         actual_set->bootable_count != 1U ||
-        !state_has_firmware(&persisted, actual_set->running_firmware_sha256,
-                            retired_sha256, false)) return ECONTAINER_SLOTS_CONFLICT;
+        snapshot_running_binding(&persisted, actual_set->running_firmware_sha256,
+                                 retired_sha256) == NULL) return ECONTAINER_SLOTS_CONFLICT;
     persisted.bindings[1] = (econtainer_slot_binding_t){0};
     persisted.phase = ECONTAINER_SLOT_IDLE;
     persisted.operation = (econtainer_slot_operation_t){0};
@@ -311,6 +311,30 @@ static esp_base_container_retire_result_t recover(bool enabled, uint32_t sequenc
         &claim, &receipt, boot_id);
 }
 
+static esp_base_container_retire_result_t retire_firmware(
+    const esp_base_storage_claim_t *active_claim, bool enabled, uint32_t sequence,
+    const uint8_t source[32], const uint8_t inactive[32])
+{
+    esp_base_ota_receipt_recovery_t receipt = {
+        .status = ESP_BASE_OTA_RECEIPT_PREPARED,
+        .container_enabled = enabled, .container_sequence = sequence,
+    };
+    memcpy(receipt.source_sha256, source, 32);
+    memcpy(receipt.inactive_sha256, inactive, 32);
+    if (enabled && persisted.bindings[0].package_present) {
+        const econtainer_slot_binding_t *binding = &persisted.bindings[0];
+        receipt.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
+        receipt.source_package_present = true;
+        receipt.source_package_size_bytes = receipt.package_size_bytes = binding->package_size_bytes;
+        receipt.source_guest_abi_version = receipt.guest_abi_version = binding->guest_abi_version;
+        receipt.source_data_schema_version = receipt.data_schema_version = binding->data_schema_version;
+        memcpy(receipt.source_package_sha256, binding->package_sha256, 32);
+        memcpy(receipt.package_sha256, binding->package_sha256, 32);
+        fill_sha(receipt.trial_event_sha256, 0xe5);
+    }
+    return esp_base_container_product_retire_inactive(active_claim, &receipt);
+}
+
 static esp_base_ota_receipt_recovery_t selected_receipt(void)
 {
     esp_base_ota_receipt_recovery_t receipt = {
@@ -360,6 +384,13 @@ int main(void)
     atomic_store(&s_product.result, ESP_BASE_CONTAINER_RUNNING);
     atomic_store(&s_product.instance_active, true);
     atomic_store(&s_product.event_accepting, true);
+    assert(!esp_base_container_product_ota_ready(ESP_BASE_OTA_NO_PACKAGE) &&
+           esp_base_container_product_ota_ready(ESP_BASE_OTA_PACKAGE_REUSE) &&
+           esp_base_container_product_ota_ready(ESP_BASE_OTA_PACKAGE_WRITE) &&
+           !esp_base_container_product_ota_ready((esp_base_ota_package_mode_t)99));
+    s_product.firmware_package_trial_mode = true;
+    assert(!esp_base_container_product_ota_ready(ESP_BASE_OTA_PACKAGE_WRITE));
+    s_product.firmware_package_trial_mode = false;
     persisted.bindings[0].package_present = true;
     persisted.bindings[0].package_size_bytes = 1024U;
     persisted.bindings[0].guest_abi_version = 2U;
@@ -479,25 +510,43 @@ int main(void)
     assert(!snapshot.container_enabled && snapshot.container_sequence == 0U &&
            memcmp(snapshot.inactive_sha256, inactive, 32) == 0);
     physical_set(false);
-    assert(esp_base_container_product_retire_inactive(&claim, false, 0U,
+    assert(retire_firmware(&claim, false, 0U,
         source, inactive) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
-    assert(esp_base_container_product_retire_inactive(&claim, true, 7U,
+    assert(retire_firmware(&claim, true, 7U,
         source, inactive) == ESP_BASE_CONTAINER_RETIRE_BLOCKED);
 
     fixture(true, true);
     physical_set(false); /* eota_retire proved first sector erased. */
-    assert(esp_base_container_product_retire_inactive(&claim, true, 7U,
+    assert(retire_firmware(&claim, true, 7U,
         source, inactive) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
     assert(persisted.sequence == 8U && retire_calls == 1U && observe_calls == 2U);
-    assert(esp_base_container_product_retire_inactive(&claim, true, 7U,
+    assert(retire_firmware(&claim, true, 7U,
         source, inactive) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
     assert(retire_calls == 1U);
-    assert(esp_base_container_product_retire_inactive(&claim, true, 6U,
+    assert(retire_firmware(&claim, true, 6U,
         source, inactive) == ESP_BASE_CONTAINER_RETIRE_BLOCKED);
     observation_changes = true;
-    assert(esp_base_container_product_retire_inactive(&claim, true, 7U,
+    assert(retire_firmware(&claim, true, 7U,
         source, inactive) == ESP_BASE_CONTAINER_RETIRE_UNCERTAIN);
     observation_changes = false;
+
+    fixture(true, true);
+    atomic_store(&s_product.result, ESP_BASE_CONTAINER_RUNNING);
+    atomic_store(&s_product.instance_active, true);
+    atomic_store(&s_product.event_accepting, true);
+    persisted.phase = ECONTAINER_SLOT_CONFIRMED;
+    persisted.bindings[0].package_present = true;
+    persisted.bindings[0].package_size_bytes = 1024U;
+    persisted.bindings[0].guest_abi_version = 2U;
+    persisted.bindings[0].data_schema_version = 1U;
+    fill_sha(persisted.bindings[0].package_sha256, 0xd4);
+    physical_set(false);
+    assert(retire_firmware(&claim, true, 7U,
+        source, inactive) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
+    assert(retire_calls == 1U && persisted.sequence == 8U &&
+           persisted.bindings[0].package_present &&
+           persisted.bindings[0].package_sha256[0] == 0xd4 &&
+           atomic_load(&s_product.instance_active));
 
     fixture(true, false);
     uint8_t no_inactive[32] = {0};
@@ -505,7 +554,7 @@ int main(void)
         &claim, ESP_BASE_OTA_NO_PACKAGE, &snapshot));
     assert(snapshot.container_sequence == 7U &&
            memcmp(snapshot.inactive_sha256, no_inactive, 32) == 0);
-    assert(esp_base_container_product_retire_inactive(&claim, true, 7U,
+    assert(retire_firmware(&claim, true, 7U,
         source, no_inactive) == ESP_BASE_CONTAINER_RETIRE_COMPLETE);
     assert(persisted.sequence == 7U && retire_calls == 0U);
 

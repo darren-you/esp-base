@@ -308,10 +308,8 @@ static void evaluate(const receipt_t *receipt, bool worker_active, esp_base_ota_
 {
     view->state = ESP_BASE_OTA_OPERATION_UNKNOWN;
     view->error_code = "ota_result_uncertain";
-    /* Package terminals follow the caller's exact original-receipt ECS2
-     * reconciliation. New pending package execution remains gated. */
-    if (receipt->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
-        receipt->status == OTA_STATUS_PREPARED) return;
+    /* RUNNING is transport/trial progress only. Package success still needs
+     * the caller's exact ECS2 health/confirmation and durable success marker. */
     if (worker_active) { view->state = ESP_BASE_OTA_OPERATION_RUNNING; view->error_code = NULL; return; }
     const eota_policy_t policy = esp_base_ota_policy(false);
     eota_slots_t slots;

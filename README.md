@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-09-30 公开带包联合 OTA worker 接线：`ota.start` 现执行 `REUSE`／`WRITE` 的原 V3 事务，重核来源后退役旧 B、准备新固件，停止并回收来源 guest，再重验复用包或经严格 HTTPS 写入新包；持久 `PREPARED` 和完整传输均读回后才选新 boot。退役也按原收据保留来源包，单固件已确认来源可原相位进入 stage／恢复；原 ID 的活跃 worker 或 pending C 查询为 running，VALID 未持久成功仍 unknown。双目标 host、真实签名 guest 的单／双固件来源与各 100 次重装、固定 SDK 签名构建、官方验签及客户端 15 项通过。真实 Broker／HTTPS、实体板与五能力资源未验收，详见[开发检查点](docs/operations/development-checkpoint.md)。
+
 2026-09-30 联合 OTA pending 带包启动接线：主应用现消费原 V3 启动候选 guest，控制任务在准入后启动 MQTT、采集请求绑定代表事件及连续 30 秒 Wi-Fi／时间／MQTT 在线证据，主应用依次提交健康、确认固件 VALID、确认包并读回成功收据。离线保持未决，配置／升级写门和 FRP 启动门持续关闭；失败先停止并证明 native 回收，不确定保留 claim。双目标 host ASan/UBSan、固定 SDK 签名构建与官方验签通过，链接映射证明新成功链已进入 app，镜像仍为 `0x121000/0x130000`／`0xffff4/0x120000`。公开带包下载 worker、真实 Broker／设备事件和实板验收仍待完成，详见[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-09-30 联合 OTA 内部带包 trial 续进：原 V3 与签名 pending C／回退 A 约束候选启动，先持久 trial boot，再执行请求绑定的代表事件；内部健康提交复核事件和失败计数，冻结 guest 调用并独立读回，固件 VALID 后才确认包绑定并恢复事件。双目标真实签名 guest 覆盖空来源 WRITE、两模式读回故障、真实 trap 与 A 回滚；host、固定 SDK 签名构建和官方验签通过。主应用尚未消费新入口，pending MQTT 与连续 30 秒在线窗口、公开带包 worker、实板均未完成，当前镜像尺寸不代表新成功链已深链接。详见[开发检查点](docs/operations/development-checkpoint.md)。

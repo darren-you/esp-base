@@ -4,6 +4,8 @@
 
 单一控制任务拥有 8192 字节 JSON 行缓冲、命令裁决与设备回执；每 5 秒报告 UUID 启动身份和设备心跳。当前实现 status、restart、config.set、只读 product.status／product.result、公开 product.uninstall 与受控签名构建中的 ota.start/ota.result；product.install／product.upgrade 已接严格解码、完整请求指纹、持久意图、异步 HTTPS 包来源与同 boot 候选试运行；试运行未决时按原 operation ID 查询仍为 unknown，不自动确认成功。Wi-Fi 由单一控制任务调度，SNTP 同步结果每秒非阻塞轮询。每轮完成后记录原子进展时刻和轮次，供 pending OTA 启动门核对；pending 和下载期间拒绝配置写入。
 
+公开带包 `ota.start` 的 worker 重读原 V3 并逐项核对固件、包与代表事件字段，退役旧 B 前再核对来源完整快照；新固件 prepare 成功后停止来源 guest 并证明 native 回收，再 stage。`REUSE` 不打开包下载；`WRITE` 只从精确 WRITING 预约进入严格 HTTPS 顺序来源、验包及 PREPARED 读回，SDK 完整传输判定成功后才选 boot。source／包操作／selector 不确定保留原 claim 与 unknown，交由新 boot 按原收据恢复。`ota.result` 的活跃 worker 与新 pending 槽为 running，不代表持久成功。
+
 产品包 HTTPS 来源已有独立的顺序读取原语：要求可信时间和精确已授权长度、证书 bundle TLS、HTTP 200、非 chunked、禁止重定向，按 Container 候选槽连续 offset 供字节；正文末尾必须由 SDK 判为完整，单次读、无进展和总期限均有单调时钟检查。公开安装／升级 worker 已调用此来源；传输完成后释放 HTTP/TLS 客户端，再启动候选试运行。真实 HTTPS 设备下载仍待验证；原语的早期边界见[来源检查点](../../../docs/operations/product_package_https_source_checkpoint.md)。
 
 候选准备在预留槽前返回 `BUSY` 时，安装／升级 worker 只在独立读回旧绑定与原 ECS2 序号完全一致后，把原操作记为失败并释放长存储占用；读回不确定则保留未决和占用，交由新 boot 对账。已预留候选的失败由 Container 返回精确 `ABORTED` 或不确定，不套用这个预留前规则。

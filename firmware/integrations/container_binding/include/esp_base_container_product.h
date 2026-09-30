@@ -289,12 +289,12 @@ esp_base_container_uninstall_recovery_t esp_base_container_product_reconcile_uni
     const char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES],
     uint32_t expected_sequence, const uint8_t expected_package_sha256[32]);
 
-/* A complete product policy is required for the persistent binding path.
- * NO_PACKAGE can enter firmware trial; package trials need a real authorized
- * business event source and are rejected before inactive-app writing. */
+/* A complete product policy is required for the persistent binding path. */
 bool esp_base_container_product_configured(void);
-/* Reject a blocked or uninitialized product before any inactive-app write. */
-bool esp_base_container_product_ota_ready(void);
+/* Before any inactive-app write: NO_PACKAGE requires EMPTY, REUSE requires an
+ * active confirmed guest, WRITE permits that guest or an admitted EMPTY.
+ * Any product/firmware trial or blocked/uninitialized instance is rejected. */
+bool esp_base_container_product_ota_ready(esp_base_ota_package_mode_t package_mode);
 /* Before normal boot without an active V3 receipt, read the real ECS2 key
  * under Base's claim. A genuinely absent key permits first initialization;
  * any persisted firmware transition requires its original receipt. */
@@ -321,12 +321,13 @@ typedef enum {
 
 /* Called only after eota_retire_inactive has physically erased and read back
  * the exact inactive app under this claim. It accepts the receipt's A/B -> A
- * sequence or an already durable A-only state; PREPARED is never consumed on
+ * sequence or an already durable A-only state; the original V3 also binds all
+ * source package metadata. A-only confirmed source remains unchanged before
+ * stage. PREPARED is never consumed on
  * the OTA worker's same boot. A mismatch retains the claim. */
 esp_base_container_retire_result_t esp_base_container_product_retire_inactive(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32]);
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt);
 
 /* Fresh-boot recovery after physical eota_retire_inactive, before product_boot
  * creates any guest thread. The original V3 receipt binds the source package

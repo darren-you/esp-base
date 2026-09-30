@@ -76,6 +76,9 @@ static bool fake_trial_quiescent;
 static unsigned mqtt_configures, mqtt_polls, mqtt_revokes;
 static unsigned frp_configures, frp_polls, listener_configures, listener_polls;
 static esp_err_t mqtt_revoke_result;
+static bool ota_source_package_present, ota_source_snapshot_changed, ota_package_receipt_changed;
+static esp_base_container_stage_result_t ota_package_write_result;
+static unsigned ota_package_write_calls;
 #if defined(CONFIG_IDF_TARGET_ESP32)
 static unsigned iram_work_allocations;
 #endif
@@ -173,6 +176,9 @@ static void reset_case(void)
     register_calls = failure_record_calls = task_calls = prepare_calls = stage_calls = select_calls = restart_calls = 0;
     snapshot_calls = load_receipt_calls = retire_calls = product_retire_calls = 0;
     loaded_package_mode = ESP_BASE_OTA_NO_PACKAGE;
+    ota_source_package_present = ota_source_snapshot_changed = ota_package_receipt_changed = false;
+    ota_package_write_result = ESP_BASE_CONTAINER_STAGE_PREPARED;
+    ota_package_write_calls = 0U;
     validate_calls = query_calls = 0;
     latest_reply[0] = '\0';
     latest_reported[0] = '\0';
@@ -732,6 +738,94 @@ static void check_firmware_package_health(void)
     assert(esp_base_storage_release(&claim));
 }
 
+static void start_package_ota(unsigned number, bool source_present)
+{
+    reset_case();
+    product_configured = true;
+    ota_source_package_present = source_present;
+    loaded_package_mode = number == 85U ? ESP_BASE_OTA_PACKAGE_REUSE : ESP_BASE_OTA_PACKAGE_WRITE;
+    stage_result = number == 85U ? ESP_BASE_CONTAINER_STAGE_PREPARED : ESP_BASE_CONTAINER_STAGE_WRITING;
+}
+
+static void check_package_ota_worker(void)
+{
+    for (unsigned number = 85U; number <= 86U; ++number) {
+        start_package_ota(number, true);
+        start(number);
+        assert(register_calls == 1U && snapshot_calls == 2U && retire_calls == 1U &&
+               product_retire_calls == 1U && prepare_calls == 1U && package_stop_calls == 1U &&
+               stage_calls == 1U && select_calls == 1U &&
+               ota_package_write_calls == (number == 86U ? 1U : 0U) &&
+               package_source_opens == (number == 86U ? 1U : 0U) &&
+               package_source_closes == package_source_opens);
+        poll_ota();
+        assert(restart_calls == 1U && failure_record_calls == 0U &&
+               esp_base_storage_claim_active(&s_ota_storage_claim));
+        start(number); /* Same admitted request does not prepare again. */
+        assert(register_calls == 1U && prepare_calls == 1U && select_calls == 1U);
+
+        start_package_ota(number, true);
+        ota_package_receipt_changed = true;
+        start(number);
+        poll_ota();
+        expect_reply("unknown", "storage_uncertain");
+        assert(retire_calls == 0U && stage_calls == 0U && select_calls == 0U &&
+               failure_record_calls == 0U && esp_base_storage_claim_active(&s_ota_storage_claim));
+
+        start_package_ota(number, true);
+        ota_source_snapshot_changed = true;
+        start(number);
+        poll_ota();
+        expect_reply("unknown", "storage_uncertain");
+        assert(snapshot_calls == 2U && retire_calls == 0U && select_calls == 0U);
+
+        start_package_ota(number, true);
+        package_stop_ok = false;
+        start(number);
+        poll_ota();
+        expect_reply("unknown", "storage_uncertain");
+        assert(prepare_calls == 1U && package_stop_calls == 1U && stage_calls == 0U &&
+               select_calls == 0U && failure_record_calls == 0U &&
+               esp_base_storage_claim_active(&s_ota_storage_claim));
+
+        start_package_ota(number, true);
+        stage_result = ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
+        start(number);
+        poll_ota();
+        expect_reply("unknown", "storage_uncertain");
+        assert(stage_calls == 1U && ota_package_write_calls == 0U && select_calls == 0U);
+
+        start_package_ota(number, true);
+        worker_created = false;
+        start(number);
+        expect_reply("failed", "resource_failure");
+        assert(failure_record_calls == 1U && retire_calls == 0U && package_stop_calls == 0U &&
+               !atomic_load(&owner.active_token));
+
+        start_package_ota(number, true);
+        esp_base_protocol_set_ota_verification_pending(true);
+        start(number);
+        expect_reply("failed", "ota_verification_pending");
+        assert(register_calls == 0U && prepare_calls == 0U && retire_calls == 0U);
+    }
+    start_package_ota(86U, false);
+    start(86U);
+    poll_ota();
+    assert(restart_calls == 1U && package_stop_calls == 0U && ota_package_write_calls == 1U);
+    for (unsigned fault = 0U; fault < 3U; ++fault) {
+        start_package_ota(86U, true);
+        if (fault == 0U) package_source_open_ok = false;
+        if (fault == 1U) package_source_complete_ok = false;
+        if (fault == 2U) ota_package_write_result = ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
+        start(86U);
+        poll_ota();
+        expect_reply("unknown", "storage_uncertain");
+        assert(select_calls == 0U && restart_calls == 0U && failure_record_calls == 0U &&
+               package_source_closes == (fault == 0U ? 0U : 1U) &&
+               esp_base_storage_claim_active(&s_ota_storage_claim));
+    }
+}
+
 static void check_product_package_preboot_recovery(void)
 {
     reset_case();
@@ -804,6 +898,7 @@ static void check_frp_status(const char *request, int expected_http,
 int main(void)
 {
     check_firmware_package_health();
+    check_package_ota_worker();
     reset_case();
     allow_config_load = true;
     uint32_t config_revision = 0U;
@@ -1534,6 +1629,20 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
            (uint8_t[32]){0xa0}, sizeof receipt->source_sha256);
     memcpy(receipt->candidate_sha256, s_ota_request.sha256,
            sizeof receipt->candidate_sha256);
+    memcpy(receipt->package_sha256, s_ota_request.package_sha256, 32);
+    memcpy(receipt->trial_event_sha256, s_ota_request.trial_event_sha256, 32);
+    receipt->package_size_bytes = s_ota_request.package_size_bytes;
+    receipt->guest_abi_version = s_ota_request.guest_abi_version;
+    receipt->data_schema_version = s_ota_request.data_schema_version;
+    if (ota_package_receipt_changed) receipt->trial_event_sha256[0] ^= 1U;
+    receipt->source_package_present = ota_source_package_present;
+    if (ota_source_package_present) {
+        memset(receipt->source_package_sha256,
+               s_ota_request.package_mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x7b : 0x7a, 32);
+        receipt->source_package_size_bytes = 10240U;
+        receipt->source_guest_abi_version = 2U;
+        receipt->source_data_schema_version = 1U;
+    }
     return ESP_BASE_OTA_RECEIPT_OK;
 }
 
@@ -1596,7 +1705,7 @@ esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
 {
     assert(esp_base_storage_claim_active(claim) && prepared != NULL &&
            receipt != NULL && receipt->operation_id[0] == '4' &&
-           receipt->package_mode == ESP_BASE_OTA_NO_PACKAGE);
+           (!receipt->source_package_present || package_stop_calls == 1U));
     ++stage_calls;
     return stage_result;
 }
@@ -1606,31 +1715,58 @@ bool esp_base_container_product_snapshot_for_ota(
     esp_base_ota_receipt_snapshot_t *snapshot)
 {
     assert(esp_base_storage_claim_active(claim) &&
-           request && request->package_mode == ESP_BASE_OTA_NO_PACKAGE && snapshot);
+           request && snapshot);
     ++snapshot_calls;
     *snapshot = (esp_base_ota_receipt_snapshot_t){
         .container_enabled = product_configured,
         .container_sequence = 7,
     };
     snapshot->source_sha256[0] = 0xa0;
+    snapshot->source_package_present = ota_source_package_present;
+    if (ota_source_package_present) {
+        memset(snapshot->source_package_sha256,
+               request->package_mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x7b : 0x7a, 32);
+        snapshot->source_package_size_bytes = 10240U;
+        snapshot->source_guest_abi_version = 2U;
+        snapshot->source_data_schema_version = 1U;
+    }
+    if (ota_source_snapshot_changed && snapshot_calls > 1U)
+        ++snapshot->container_sequence;
     return snapshot_ok;
 }
 
+esp_base_container_stage_result_t esp_base_container_product_write_staged_firmware_package(
+    const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    econtainer_slot_source_fn source_fn, void *source_context)
+{
+    assert(esp_base_storage_claim_active(claim) && prepared && receipt &&
+           receipt->package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+           stage_calls == 1U && stage_result == ESP_BASE_CONTAINER_STAGE_WRITING &&
+           (!receipt->source_package_present || package_stop_calls == 1U));
+    uint8_t byte = 0;
+    assert(source_fn && source_context && source_fn(source_context, 0U, &byte, 1U) && byte == 0x7bU);
+    ++ota_package_write_calls;
+    return ota_package_write_result;
+}
+
 esp_base_container_retire_result_t esp_base_container_product_retire_inactive(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32])
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt)
 {
     assert(esp_base_storage_claim_active(claim) &&
-           container_enabled == product_configured && expected_sequence == 7 &&
-           source_sha256[0] == 0xa0 && inactive_sha256 != NULL);
+           receipt && receipt->container_enabled == product_configured &&
+           receipt->container_sequence == 7U && receipt->source_sha256[0] == 0xa0 &&
+           receipt->package_mode == s_ota_request.package_mode);
     ++product_retire_calls;
     return product_retire_result;
 }
 
-bool esp_base_container_product_ota_ready(void)
+bool esp_base_container_product_ota_ready(esp_base_ota_package_mode_t mode)
 {
     ++ota_ready_calls;
+    if (mode != ESP_BASE_OTA_NO_PACKAGE && (!product_configured ||
+        (mode == ESP_BASE_OTA_PACKAGE_REUSE && !ota_source_package_present))) return false;
     return product_ota_ready && (ota_ready_calls == 1 || ota_ready_after_first);
 }
 
@@ -1704,6 +1840,7 @@ bool esp_base_container_product_stop_confirmed(
     const esp_base_storage_claim_t *claim)
 {
     assert(esp_base_storage_claim_active(claim));
+    if (s_ota_active) assert(prepare_calls == 1U && stage_calls == 0U);
     ++package_stop_calls;
     return package_stop_ok;
 }

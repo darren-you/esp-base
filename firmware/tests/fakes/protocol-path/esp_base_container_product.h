@@ -52,7 +52,7 @@ typedef enum {
 esp_base_container_stage_result_t esp_base_container_product_stage_firmware(
     const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
     const esp_base_ota_receipt_recovery_t *receipt);
-bool esp_base_container_product_ota_ready(void);
+bool esp_base_container_product_ota_ready(esp_base_ota_package_mode_t package_mode);
 bool esp_base_container_product_configured(void);
 bool esp_base_container_product_pristine_baseline(
     const esp_base_storage_claim_t *claim);
@@ -71,7 +71,11 @@ esp_base_container_binding_result_t esp_base_container_product_binding_snapshot(
     const esp_base_storage_claim_t *claim,
     esp_base_container_binding_snapshot_t *out);
 typedef bool (*econtainer_slot_source_fn)(void *context, size_t offset_bytes,
-    uint8_t *destination, size_t size_bytes);
+                                           uint8_t *destination, size_t size_bytes);
+esp_base_container_stage_result_t esp_base_container_product_write_staged_firmware_package(
+    const esp_base_storage_claim_t *claim, const eota_prepared_t *prepared,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    econtainer_slot_source_fn source_fn, void *source_context);
 typedef struct {
     char operation_id[37];
     uint32_t expected_sequence;
@@ -160,6 +164,5 @@ typedef enum {
     ESP_BASE_CONTAINER_RETIRE_UNCERTAIN,
 } esp_base_container_retire_result_t;
 esp_base_container_retire_result_t esp_base_container_product_retire_inactive(
-    const esp_base_storage_claim_t *claim, bool container_enabled,
-    uint32_t expected_sequence, const uint8_t source_sha256[32],
-    const uint8_t inactive_sha256[32]);
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt);

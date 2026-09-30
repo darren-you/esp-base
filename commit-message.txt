@@ -1,1 +1,1 @@
-- 接入 pending 固件包 MQTT owner 与控制任务连续在线健康证据，保留破坏性写门
+- 接通公开 REUSE 与 WRITE 联合 OTA worker、严格包 HTTPS 来源、来源 guest 停止和原 ID 未决查询
