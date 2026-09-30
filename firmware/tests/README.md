@@ -24,7 +24,7 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 
 `frp_status_listener_test` 在主机真实 loopback TCP 上执行受限 HTTP 协议，覆盖分片请求、header/body 上限、重复 Content-Length、错误 HMAC、旧 key 重配撤销和 2 秒总时限；`command_decoder_test` 验证 FRP status 六字段的严格解析，`protocol_ota_owner_test` 同时验证 status 的目标 boot、单调期限、同 ID 首次快照复用和不同内容冲突。HMAC 的 PSA 调用与失败清理仍由 `network_auth_test` 核对；主机回环不证明设备 FRP/TLS、内存、并行或实板运行。
 
-`ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包 A 侧与已有健康证据的 VALID C 启动恢复已接通，新 pending C 试运行仍被阻断；两种模式的成功／失败终态与写前／写后／commit／独立读回故障已覆盖。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
+`ota_receipt_test` 编译真实 NVS 收据实现，注入写前/写后/commit/读回错误，验证写槽前持久登记、同 ID 不重执行、活跃 worker 不误判 failed、pending/VALID 加整镜像摘要、显式下载失败与 ABORTED 回滚裁决、未决收据拒绝覆盖、目标 NEW/PENDING/读态异常拒绝、与运行 A 相同的 C 在写收据前拒绝且原收据和查询结果不变、普通构建无 NVS 写入。新增内部带包 REUSE／WRITE 登记、来源和目标身份、data schema、代表事件摘要、V3 读回及同 ID 包参数冲突用例；带包 A 侧与已有健康证据的 VALID C 启动恢复已接通，新 pending C 已接原 V3 trial、MQTT 准入与健康快照；两种模式的成功／失败终态与写前／写后／commit／独立读回故障已覆盖。它不模拟真实 NVS 掉电原子性、跨版本旧镜像或板上 SHA 时长。
 
 联合固件包内部 trial 的真实签名 guest 回归覆盖空来源 WRITE、REUSE／WRITE 的原 V3 启动、错误事件和健康依据拒绝、事件／定时器提交冻结、健康读回不确定后 A 回滚、最终确认读回不确定后的 VALID C 恢复与真实 guest trap 回收。无包确认测试核对同 boot trial 状态清理和空绑定重开。非阻塞事件快照繁忙时测试有界重试，仍核对原序号和失败数；不将一次暂时忙视为最终错误。这些测试不验证真实 Broker 授权、在线窗口、实体 Flash 或 otadata。
 
@@ -40,6 +40,8 @@ v2 配置测试覆盖 MQTT 六字段、最大 4885 字节规范 blob、v1 112 �
 联合 OTA 内部 `WRITE` 续写用例在锁定 Container/WAMR 的签名 guest 生命周期中覆盖空来源和已确认包来源、错误 operation 在擦写前拒绝、真实签名包写入及 `PREPARED` 独立读回、来源槽字节不变、重复续写拒绝，以及篡改下载字节后保留 `WRITING` 与旧包。C3／ESP32 host ASan/UBSan 与固定 SDK 签名构建通过；本用例直接调用内部入口，公开带包 worker、HTTPS 下载与新 boot 联合健康确认尚未接通。
 
 2026-09-27 序号预算修复使用固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c` 与锁定组件，在独立副本运行上述完整 ASan/UBSan 入口：默认 C3 20 项、`ESP_BASE_TEST_TARGET=esp32` 19 项均通过。边界用例只验证软件调用和假持久状态，不能证明实板掉电后的 Flash/NVS 行为。
+
+`protocol_ota_owner_test` 另直接运行真实网络 owner 调度与 RAM 健康快照：pending 准入前无 MQTT／FRP，准入后仅启动 MQTT；逐项覆盖缺代表事件、错包、Wi-Fi／时间／MQTT 失联、guest 停止、失败数改变／溢出、时钟逆行、采样过期／忙和完整 30 秒重算，退出时 MQTT 撤销重试，成功转换保留会话。`ota_startup_test` 的两种带包模式覆盖晚于本地窗口的健康就绪、未尝试提交重试、离线等待后 guest 失败、健康不确定、native 停止失败、包确认／账本／成功收据故障及顺序门；SDK、guest 与网络仍是假件，不能替代真实 Broker 或实体板。
 
 ## 架构拓扑
 

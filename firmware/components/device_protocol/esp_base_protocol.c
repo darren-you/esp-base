@@ -86,6 +86,19 @@ static uint64_t s_product_trial_event_sequence;
 static uint64_t s_product_trial_failure_count;
 static uint64_t s_product_trial_stable_since_ms;
 static uint64_t s_product_trial_last_poll_ms;
+/* The control task owns network observations; app_main reads only a bounded
+ * snapshot under this nonblocking lock. Never hold it for Flash or TLS. */
+static atomic_bool s_firmware_package_verifying;
+static atomic_flag s_firmware_health_lock = ATOMIC_FLAG_INIT;
+static struct {
+    uint8_t package_sha256[32];
+    uint64_t event_sequence;
+    uint64_t failure_count;
+    uint64_t stable_since_ms;
+    uint64_t last_poll_ms;
+    bool ready;
+} s_firmware_health;
+static bool s_pending_mqtt_active;
 static size_t s_ota_slot;
 static esp_base_ota_request_t s_ota_request;
 static atomic_bool s_ota_done;
@@ -1113,39 +1126,60 @@ static void poll_product(void)
 #define PRODUCT_TRIAL_STABLE_MS 30000U
 #define PRODUCT_TRIAL_PROGRESS_GAP_MS 1000U
 
-static void poll_product_trial_health(uint64_t now)
+static bool observe_business_trial_window(uint64_t now,
+    const uint8_t package_sha256[32], uint64_t *event_sequence,
+    uint64_t *failure_count, uint64_t *stable_since_ms, uint64_t *last_poll_ms)
 {
-    if (!s_product_active || !s_product_trial_running || s_config_uncertain) return;
     const bool online = esp_base_wifi_ready() && esp_base_time_ready() &&
         esp_base_mqtt_owner_ready();
     esp_base_container_trial_event_snapshot_t snapshot = {0};
     const bool observed = esp_base_container_product_trial_event_snapshot(&snapshot);
     const bool representative = observed &&
         snapshot.representative_event_sequence != 0U &&
-        memcmp(snapshot.package_sha256, s_product_trial_package_sha256, 32) == 0;
+        memcmp(snapshot.package_sha256, package_sha256, 32) == 0;
     const bool failure_changed = observed &&
-        snapshot.failure_count != s_product_trial_failure_count;
+        snapshot.failure_count != *failure_count;
     if (!online || !esp_base_container_product_event_accepting() ||
         !representative || failure_changed ||
         (observed && snapshot.failure_count == UINT64_MAX) ||
-        (s_product_trial_last_poll_ms != 0U &&
-         (now < s_product_trial_last_poll_ms ||
-          now - s_product_trial_last_poll_ms > PRODUCT_TRIAL_PROGRESS_GAP_MS))) {
-        s_product_trial_event_sequence = 0U;
-        s_product_trial_stable_since_ms = 0U;
-        s_product_trial_last_poll_ms = now;
-        if (observed) s_product_trial_failure_count = snapshot.failure_count;
+        (*last_poll_ms != 0U &&
+         (now < *last_poll_ms ||
+          now - *last_poll_ms > PRODUCT_TRIAL_PROGRESS_GAP_MS))) {
+        *event_sequence = 0U;
+        *stable_since_ms = 0U;
+        *last_poll_ms = now;
+        if (observed) *failure_count = snapshot.failure_count;
+        return false;
+    }
+    if (*event_sequence != snapshot.representative_event_sequence ||
+        *stable_since_ms == 0U) {
+        *event_sequence = snapshot.representative_event_sequence;
+        *stable_since_ms = now;
+    }
+    *last_poll_ms = now;
+    if (now < *stable_since_ms ||
+        now - *stable_since_ms < PRODUCT_TRIAL_STABLE_MS) return false;
+    return esp_base_container_product_trial_quiescent();
+}
+
+static void poll_firmware_package_health(uint64_t now)
+{
+    if (!atomic_load_explicit(&s_firmware_package_verifying, memory_order_acquire) ||
+        atomic_flag_test_and_set_explicit(&s_firmware_health_lock, memory_order_acquire))
         return;
-    }
-    if (s_product_trial_event_sequence != snapshot.representative_event_sequence ||
-        s_product_trial_stable_since_ms == 0U) {
-        s_product_trial_event_sequence = snapshot.representative_event_sequence;
-        s_product_trial_stable_since_ms = now;
-    }
-    s_product_trial_last_poll_ms = now;
-    if (now < s_product_trial_stable_since_ms ||
-        now - s_product_trial_stable_since_ms < PRODUCT_TRIAL_STABLE_MS) return;
-    if (!esp_base_container_product_trial_quiescent()) return;
+    s_firmware_health.ready = observe_business_trial_window(now,
+        s_firmware_health.package_sha256, &s_firmware_health.event_sequence,
+        &s_firmware_health.failure_count, &s_firmware_health.stable_since_ms,
+        &s_firmware_health.last_poll_ms);
+    atomic_flag_clear_explicit(&s_firmware_health_lock, memory_order_release);
+}
+
+static void poll_product_trial_health(uint64_t now)
+{
+    if (!s_product_active || !s_product_trial_running || s_config_uncertain ||
+        !observe_business_trial_window(now, s_product_trial_package_sha256,
+            &s_product_trial_event_sequence, &s_product_trial_failure_count,
+            &s_product_trial_stable_since_ms, &s_product_trial_last_poll_ms)) return;
 
     esp_base_storage_claim_t claim = {0};
     if (!esp_base_storage_claim(s_context.storage_owner, &claim)) return;
@@ -1865,6 +1899,63 @@ static void feed_serial(const unsigned char *bytes, size_t count)
     }
 }
 
+static void poll_network_owners(uint64_t now)
+{
+    const bool pending = esp_base_control_state_ota_pending(&s_control_state);
+    const bool business_verification = pending &&
+        atomic_load_explicit(&s_firmware_package_verifying, memory_order_acquire);
+    if (!pending || business_verification) {
+        bool mqtt_can_poll = true;
+        if (!s_mqtt_revision_set || s_mqtt_revision != s_context.config.revision) {
+            emqtt_config_t *mqtt_work = malloc(sizeof *mqtt_work);
+            if (mqtt_work == NULL) {
+                /* Revoke the previous revision before retrying setup. Never
+                 * poll an old endpoint with the new configuration active. */
+                (void)esp_base_mqtt_owner_revoke();
+                mqtt_can_poll = false;
+            } else {
+                (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id,
+                                                    s_boot_id, mqtt_work);
+                memset(mqtt_work, 0, sizeof *mqtt_work);
+                free(mqtt_work);
+                s_mqtt_revision = s_context.config.revision;
+                s_mqtt_revision_set = true;
+            }
+        }
+        if (mqtt_can_poll)
+            esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
+                                     handle_mqtt_command, handle_mqtt_event, NULL);
+        s_pending_mqtt_active = business_verification;
+        if (business_verification) poll_firmware_package_health(now);
+        else poll_product_trial_health(now);
+    } else if (s_pending_mqtt_active && esp_base_mqtt_owner_revoke() == ESP_OK) {
+        s_pending_mqtt_active = false;
+        s_mqtt_revision_set = false;
+    }
+    if (!pending) {
+        if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
+            /* Revoke the old endpoint before waiting for the old FRP worker
+             * to finish; no stale management key remains reachable. */
+            esp_base_frp_status_listener_configure(NULL);
+            const esp_err_t frp_configured = esp_base_frp_owner_configure(
+                &s_context.config.frp, s_context.device_id, s_context.frp_flash_store);
+            if (frp_configured == ESP_OK) {
+                esp_base_frp_status_listener_configure(&s_context.config.frp);
+                s_frp_revision = s_context.config.revision;
+                s_frp_revision_set = true;
+            } else if (frp_configured == ESP_ERR_INVALID_STATE) {
+                /* No recovered scratch exists for this boot. No endpoint or
+                 * FRP client can start; retry only after a new revision. */
+                s_frp_revision = s_context.config.revision;
+                s_frp_revision_set = true;
+            }
+        }
+        esp_base_frp_status_listener_poll(now, handle_frp_status, NULL);
+        esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
+                                esp_base_frp_status_listener_ready());
+    }
+}
+
 static void control_task(void *argument)
 {
     (void)argument;
@@ -1881,49 +1972,7 @@ static void control_task(void *argument)
             esp_base_time_poll();
             next_time_poll = now + 1000;
         }
-        if (!esp_base_control_state_ota_pending(&s_control_state)) {
-            bool mqtt_can_poll = true;
-            if (!s_mqtt_revision_set || s_mqtt_revision != s_context.config.revision) {
-                emqtt_config_t *mqtt_work = malloc(sizeof *mqtt_work);
-                if (mqtt_work == NULL) {
-                    /* Revoke the previous revision before retrying setup. Never
-                     * poll an old endpoint with the new configuration active. */
-                    (void)esp_base_mqtt_owner_revoke();
-                    mqtt_can_poll = false;
-                } else {
-                    (void)esp_base_mqtt_owner_configure(&s_context.config.mqtt, s_context.device_id,
-                                                        s_boot_id, mqtt_work);
-                    memset(mqtt_work, 0, sizeof *mqtt_work);
-                    free(mqtt_work);
-                    s_mqtt_revision = s_context.config.revision;
-                    s_mqtt_revision_set = true;
-                }
-            }
-            if (mqtt_can_poll)
-                esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
-                                         handle_mqtt_command, handle_mqtt_event, NULL);
-            poll_product_trial_health(now);
-            if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
-                /* Revoke the old endpoint before waiting for the old FRP worker
-                 * to finish; no stale management key remains reachable. */
-                esp_base_frp_status_listener_configure(NULL);
-                const esp_err_t frp_configured = esp_base_frp_owner_configure(
-                    &s_context.config.frp, s_context.device_id, s_context.frp_flash_store);
-                if (frp_configured == ESP_OK) {
-                    esp_base_frp_status_listener_configure(&s_context.config.frp);
-                    s_frp_revision = s_context.config.revision;
-                    s_frp_revision_set = true;
-                } else if (frp_configured == ESP_ERR_INVALID_STATE) {
-                    /* No recovered scratch exists for this boot. No endpoint or
-                     * FRP client can start; retry only after a new revision. */
-                    s_frp_revision = s_context.config.revision;
-                    s_frp_revision_set = true;
-                }
-            }
-            esp_base_frp_status_listener_poll(now, handle_frp_status, NULL);
-            esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
-                                    esp_base_frp_status_listener_ready());
-        }
+        poll_network_owners(now);
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader != NULL && s_reader->length && now - last_input >= 2000) {
             free(s_reader);
@@ -2019,6 +2068,50 @@ bool esp_base_protocol_control_healthy(void)
 uint32_t esp_base_protocol_control_progress_count(void)
 {
     return esp_base_control_state_progress_count(&s_control_state);
+}
+
+bool esp_base_protocol_begin_firmware_package_verification(
+    const esp_base_storage_claim_t *claim, const uint8_t package_sha256[32])
+{
+    if (!s_started || !esp_base_storage_claim_active(claim) ||
+        claim->owner != s_context.storage_owner || package_sha256 == NULL ||
+        !esp_base_control_state_ota_pending(&s_control_state) ||
+        !esp_base_container_product_event_accepting() ||
+        atomic_load_explicit(&s_firmware_package_verifying, memory_order_acquire) ||
+        atomic_flag_test_and_set_explicit(&s_firmware_health_lock, memory_order_acquire))
+        return false;
+    memset(&s_firmware_health, 0, sizeof s_firmware_health);
+    memcpy(s_firmware_health.package_sha256, package_sha256, 32);
+    atomic_store_explicit(&s_firmware_package_verifying, true, memory_order_release);
+    atomic_flag_clear_explicit(&s_firmware_health_lock, memory_order_release);
+    return true;
+}
+
+bool esp_base_protocol_firmware_package_health_snapshot(
+    esp_base_protocol_firmware_package_health_t *out)
+{
+    if (out == NULL) return false;
+    *out = (esp_base_protocol_firmware_package_health_t){0};
+    if (!atomic_load_explicit(&s_firmware_package_verifying, memory_order_acquire) ||
+        !esp_base_control_state_ota_pending(&s_control_state) ||
+        !esp_base_protocol_control_healthy() ||
+        atomic_flag_test_and_set_explicit(&s_firmware_health_lock, memory_order_acquire))
+        return false;
+    const uint64_t now = uptime_ms();
+    const bool ready = s_firmware_health.ready &&
+        now >= s_firmware_health.last_poll_ms &&
+        now - s_firmware_health.last_poll_ms <= PRODUCT_TRIAL_PROGRESS_GAP_MS;
+    if (ready) {
+        out->event_sequence = s_firmware_health.event_sequence;
+        out->failure_count = s_firmware_health.failure_count;
+    }
+    atomic_flag_clear_explicit(&s_firmware_health_lock, memory_order_release);
+    return ready;
+}
+
+void esp_base_protocol_end_firmware_package_verification(void)
+{
+    atomic_store_explicit(&s_firmware_package_verifying, false, memory_order_release);
 }
 
 void esp_base_protocol_set_ota_verification_pending(bool pending)

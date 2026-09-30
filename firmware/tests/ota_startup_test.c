@@ -55,6 +55,10 @@ static esp_base_container_boot_result_t container_boot_result;
 static unsigned container_boot_calls, container_trial_calls, container_health_calls;
 static unsigned container_confirm_calls, container_stop_calls;
 static unsigned confirmed_stop_calls;
+static bool package_verification_active, package_begin_ok, package_candidate_alive;
+static uint64_t package_health_ready_ms, package_event_failure_ms;
+static unsigned package_begin_calls, package_health_attempts, package_health_retries;
+static esp_base_container_trial_health_result_t package_health_result;
 static esp_base_storage_owner_t *storage_owner;
 static esp_base_storage_owner_t *container_flash_io_owner;
 static eota_flash_io_t bound_flash_io;
@@ -110,6 +114,12 @@ static void reset_case(void)
     container_boot_calls = container_trial_calls = container_health_calls = 0;
     container_confirm_calls = container_stop_calls = 0;
     confirmed_stop_calls = 0;
+    package_verification_active = false;
+    package_begin_ok = package_candidate_alive = true;
+    package_health_ready_ms = 70000U;
+    package_event_failure_ms = UINT64_MAX;
+    package_begin_calls = package_health_attempts = package_health_retries = 0U;
+    package_health_result = ESP_BASE_CONTAINER_HEALTH_VERIFIED;
     control_exits_late = control_pauses_cross_window = false;
     ota_gate_clears = 0;
     storage_owner = NULL;
@@ -447,6 +457,31 @@ bool esp_base_protocol_control_healthy(void)
            now_ms - last_control_progress_ms <= 5000;
 }
 
+bool esp_base_protocol_begin_firmware_package_verification(
+    const esp_base_storage_claim_t *claim, const uint8_t package_sha256[32])
+{
+    assert(esp_base_storage_claim_active(claim) && container_trial_calls == 1 &&
+           ota_gate_pending && memcmp(package_sha256, receipt.package_sha256, 32) == 0);
+    ++package_begin_calls;
+    package_verification_active = package_begin_ok;
+    return package_begin_ok;
+}
+
+bool esp_base_protocol_firmware_package_health_snapshot(
+    esp_base_protocol_firmware_package_health_t *out)
+{
+    assert(out && package_verification_active && ota_gate_pending && mark_calls == 0);
+    *out = (esp_base_protocol_firmware_package_health_t){0};
+    if (now_ms < package_health_ready_ms) return false;
+    out->event_sequence = 5U;
+    return true;
+}
+
+void esp_base_protocol_end_firmware_package_verification(void)
+{
+    package_verification_active = false;
+}
+
 uint32_t esp_base_protocol_control_progress_count(void)
 {
     return control_progress_count;
@@ -544,6 +579,43 @@ esp_base_container_boot_result_t esp_base_container_product_start_trial(
     assert(mark_calls == 0);
     ++container_trial_calls;
     return container_boot_result;
+}
+
+esp_base_container_boot_result_t esp_base_container_product_start_firmware_package_trial(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *candidate, const char boot_id[37])
+{
+    assert(container_configured && esp_base_storage_claim_active(claim) &&
+           candidate && memcmp(candidate, &receipt, sizeof receipt) == 0 &&
+           candidate->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+           container_selected_calls == 1 && ota_gate_pending && mark_calls == 0 &&
+           boot_id && boot_id[0] == '3');
+    ++container_trial_calls;
+    return container_boot_result;
+}
+
+bool esp_base_container_product_event_accepting(void)
+{
+    return package_candidate_alive && now_ms < package_event_failure_ms;
+}
+
+esp_base_container_trial_health_result_t
+esp_base_container_product_verify_firmware_package_health(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *candidate,
+    uint64_t verified_event_sequence, uint64_t verified_failure_count)
+{
+    assert(esp_base_storage_claim_active(claim) && candidate &&
+           memcmp(candidate, &receipt, sizeof receipt) == 0 &&
+           package_verification_active && verified_event_sequence == 5U &&
+           verified_failure_count == 0U && now_ms >= package_health_ready_ms &&
+           mark_calls == 0 && ota_gate_pending);
+    ++package_health_attempts;
+    if (package_health_attempts <= package_health_retries)
+        return ESP_BASE_CONTAINER_HEALTH_NOT_STARTED;
+    package_candidate_alive = false;
+    ++container_health_calls;
+    return package_health_result;
 }
 
 bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *claim)
@@ -753,11 +825,80 @@ int main(void)
     selected_receipt(true, EOTA_STATE_PENDING_VERIFY);
     receipt.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
     assert(rebooted() && rollback_calls == 1 && receipt_observe_calls == 1 &&
-           container_selected_calls == 0 && container_trial_calls == 0 &&
+           container_selected_calls == 1 && container_trial_calls == 1 &&
            mark_calls == 0 && ready_logs == 0);
 
     for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_PACKAGE_REUSE;
          mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        package_health_retries = 2U;
+        assert(!rebooted() && package_begin_calls == 1U &&
+               package_health_attempts == 3U && now_ms >= 70200U &&
+               container_trial_calls == 1U && container_health_calls == 1U &&
+               mark_calls == 1U && container_confirm_calls == 1U &&
+               product_ledger_prepare_calls == 1U && receipt_success_calls == 1U &&
+               ready_logs == 1U && !package_verification_active && !ota_gate_pending);
+        assert(storage_available());
+
+        /* Waiting for an external event/online window never confirms firmware.
+         * A later explicit guest failure still stops native execution first. */
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        package_health_ready_ms = UINT64_MAX;
+        package_event_failure_ms = 90000U;
+        assert(rebooted() && now_ms >= 90000U && mark_calls == 0U &&
+               package_health_attempts == 0U && container_stop_calls == 1U &&
+               rollback_calls == 1U && !package_verification_active);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        package_begin_ok = false;
+        assert(rebooted() && package_begin_calls == 1U && mark_calls == 0U &&
+               container_stop_calls == 1U && rollback_calls == 1U);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        container_boot_result = ESP_BASE_CONTAINER_EMPTY;
+        assert(rebooted() && package_begin_calls == 0U && mark_calls == 0U &&
+               container_stop_calls == 1U && rollback_calls == 1U);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        package_health_result = ESP_BASE_CONTAINER_HEALTH_UNCERTAIN;
+        assert(rebooted() && package_health_attempts == 1U && mark_calls == 0U &&
+               container_stop_calls == 1U && rollback_calls == 1U &&
+               !package_verification_active);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        package_health_result = ESP_BASE_CONTAINER_HEALTH_UNCERTAIN;
+        container_stop_ok = false;
+        assert(!rebooted() && mark_calls == 0U && container_stop_calls == 1U &&
+               rollback_calls == 0U && ota_gate_pending && !storage_available());
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        container_confirm_ok = false;
+        assert(!rebooted() && mark_calls == 1U && container_confirm_calls == 1U &&
+               container_stop_calls == 1U && receipt_success_calls == 0U &&
+               rollback_calls == 0U && ota_gate_pending && !storage_available() &&
+               !package_verification_active);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        product_ledger_ready = false;
+        assert(!rebooted() && mark_calls == 1U && container_confirm_calls == 1U &&
+               confirmed_stop_calls == 1U && receipt_success_calls == 0U &&
+               ota_gate_pending && !storage_available() && !package_verification_active);
+
+        interrupted_package_receipt(mode);
+        select_current_receipt(EOTA_STATE_PENDING_VERIFY);
+        receipt_success_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+        assert(!rebooted() && mark_calls == 1U && receipt_success_calls == 1U &&
+               confirmed_stop_calls == 1U && ready_logs == 0U &&
+               ota_gate_pending && !storage_available() && !package_verification_active);
+
         interrupted_package_receipt(mode);
         assert(!rebooted() && receipt_retire_calls == 1 &&
                container_recover_calls == 1 && receipt_failure_calls == 1 &&

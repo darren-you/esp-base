@@ -92,8 +92,9 @@ typedef struct {
  * the source, old distinct inactive and requested candidate identities plus
  * the current ECS2 sequence and package metadata in that same blob. The
  * internal register and read-only recovery load validate all three package
- * modes; public execution and selected-C recovery currently permit NO_PACKAGE
- * only. Interrupted package transitions can recover on their source A.
+ * modes; selected-C startup admits receipt-bound package trials and VALID
+ * recovery. Public worker execution still permits NO_PACKAGE only.
+ * Interrupted package transitions can recover on their source A.
  * The caller holds the storage claim and supplies a reconciled Container
  * snapshot; register independently rechecks the signed Base firmware set
  * before commit/readback. A candidate with the running firmware's signed

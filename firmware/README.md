@@ -1,6 +1,6 @@
 # ESP Base 固件
 
-当前 OTA 收据为 V3、308 字节；来源和目标包字段已编码，内部登记已校验带包目标与来源身份，Container 内部 stage 已能将 `REUSE` 提交为 `PREPARED`、将 `WRITE` 预约为 `WRITING`，独立内部续写入口可在原收据约束下写包、验签授权并读回 `PREPARED`。收据的只读恢复入口可完整返回有效带包 V3 字段。启动现按原收据接通 A 侧回滚和已有健康证据的 VALID C 确认恢复；新 pending 包 trial 与公开 worker 仍有显式执行门。公开 `ota.start` 已严格解析三种包模式并由客户端生成对应参数；带包模式仍在收据登记和 Flash 擦写前拒绝。旧 V2 长度与不合法带包 V3 均视为存储事实不确定；有效带包 V3 不能仅据只读结果重放或确认，必须完成模式对应的物理／ECS2 对账和终态读回。带包联合升级须在 HTTPS 来源、启动恢复、代表事件和回滚对账完整接通后再开放。
+当前 OTA 收据为 V3、308 字节；来源和目标包字段已编码，内部登记已校验带包目标与来源身份，Container 内部 stage 已能将 `REUSE` 提交为 `PREPARED`、将 `WRITE` 预约为 `WRITING`，独立内部续写入口可在原收据约束下写包、验签授权并读回 `PREPARED`。收据的只读恢复入口可完整返回有效带包 V3 字段。启动现按原收据接通 A 侧回滚、pending C 的带包 trial 与连续在线健康验证，以及已有健康证据的 VALID C 确认恢复；公开带包 worker 仍有显式执行门。公开 `ota.start` 已严格解析三种包模式并由客户端生成对应参数；带包模式仍在收据登记和 Flash 擦写前拒绝。旧 V2 长度与不合法带包 V3 均视为存储事实不确定；有效带包 V3 不能仅据只读结果重放或确认，必须完成模式对应的物理／ECS2 对账和终态读回。带包联合升级须在 HTTPS 来源、启动恢复、代表事件和回滚对账完整接通后再开放。
 
 当前软件候选分别构建 ESP32-C3 的 USB 与 ESP32-D0WD-V3 的 UART0 命令运行面；两目标都有独立分区、OTA/签名策略和精确组件锁。ESP32 旧 AT 到新布局、双签名 Base 与真实启动链仍待受控迁移和实板验收。两者都不是五能力完成版本。
 
@@ -89,7 +89,7 @@ ESP32 静态 Wi-Fi RX 缓冲后续与 BA 窗口一同收敛为 6；[六缓冲 OT
 
 默认 `ESP_BASE_APP=esp_base` 保留普通 USB/Wi-Fi 基座，并只读装载 v3 持久配置，经物理 USB `config.set` 写入完整 Wi-Fi/MQTT/FRP 凭据；未配置时不创建相应客户端。MQTT 已配置时只在 Wi-Fi IP 和本次启动可信时间齐备后启动严格 TLS，会在 command SUBACK 后报告 ready，并通过同一控制任务执行已认证命令、发布 QoS 1 结果和脱敏 reported；远端 config.set 被拒绝。显式 `ESP_BASE_APP=mqtt_integration` 构建[隔离 MQTT 测试应用](apps/mqtt_integration/README.md)，要求仓外私有输入与独立 build/sdkconfig，沿用同一分区。普通应用拒绝实验输入和明文选项；测试应用具有实验标记。现有实板仍为 v1 存储，未完成双槽与 NVS 离线迁移前不得启动 v3-only 镜像；正式 Broker/Tool 和实板网络 ACK 闭环尚待联调。FRP owner 只有独立 HMAC 鉴权的只读 HTTP listener 成功绑定配置中的 `127.0.0.1:local_port` 后才允许启动；端点失败仍报告 `endpoint_unavailable`。当前只完成软件装配，不表示 P4-05 或真实 FRPS 闭环完成。
 
-普通应用仅在本地启动检查成功、控制循环已实际运行且持续 30 秒报告进展，并跨过窗口终点再完成一轮后确认 pending OTA 槽；构建要求 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`。pending 窗口内拒绝 `config.set`，确认后恢复。SDK 确认失败后读回持久槽状态，若已 VALID 则清门。无可回退镜像时当前执行虽保留，下次复位仍有失去可启动槽风险。控制循环进展的 5 秒阈值是策略值，复杂负载、真实新槽和回滚仍待实板验收。
+无包 pending 场景下，普通应用仅在本地启动检查成功、控制循环已实际运行且持续 30 秒报告进展，并跨过窗口终点再完成一轮后确认 pending OTA 槽；构建要求 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`。pending 窗口内拒绝 `config.set`，确认后恢复。SDK 确认失败后读回持久槽状态，若已 VALID 则清门。无可回退镜像时当前执行虽保留，下次复位仍有失去可启动槽风险。控制循环进展的 5 秒阈值是策略值，复杂负载、真实新槽和回滚仍待实板验收。
 
 普通应用从编译期 `CONFIG_ESP_BASE_TIME_SERVER` 初始化 SNTP，默认 `pool.ntp.org`；控制任务每秒非阻塞查询一次同步结果。`time_ready` 只在本次 boot 收到有效同步事件后为 true。时间失败不阻塞 USB 控制或 pending 本地确认；签名构建的 HTTPS OTA 在无可信时间时拒绝启动。服务器不写 NVS；时间同步与 Wi-Fi 重连仍待实板验收。
 

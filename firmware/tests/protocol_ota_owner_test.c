@@ -71,6 +71,11 @@ static uint64_t fake_trial_representative_sequence, fake_trial_failure_count;
 static unsigned offered_event_calls;
 static uint8_t offered_event_digest[32];
 static esp_base_container_event_result_t offered_event_result;
+static uint64_t fake_now_ms;
+static bool fake_trial_quiescent;
+static unsigned mqtt_configures, mqtt_polls, mqtt_revokes;
+static unsigned frp_configures, frp_polls, listener_configures, listener_polls;
+static esp_err_t mqtt_revoke_result;
 #if defined(CONFIG_IDF_TARGET_ESP32)
 static unsigned iram_work_allocations;
 #endif
@@ -135,6 +140,16 @@ static void reset_case(void)
         s_product_trial_last_poll_ms = 0U;
     s_product_trial_failure_count = 0U;
     s_product_active = s_product_trial_running = false;
+    s_started = false;
+    s_pending_mqtt_active = s_mqtt_revision_set = s_frp_revision_set = false;
+    atomic_store(&s_firmware_package_verifying, false);
+    atomic_flag_clear(&s_firmware_health_lock);
+    memset(&s_firmware_health, 0, sizeof s_firmware_health);
+    fake_now_ms = 1000U;
+    fake_trial_quiescent = true;
+    mqtt_configures = mqtt_polls = mqtt_revokes = 0U;
+    frp_configures = frp_polls = listener_configures = listener_polls = 0U;
+    mqtt_revoke_result = ESP_OK;
     atomic_store(&s_product_done, false);
     atomic_store(&s_product_result, PRODUCT_WORK_UNCERTAIN);
     atomic_store(&s_product_resolved_sequence, 0U);
@@ -603,6 +618,120 @@ static void check_product_trial_health(void)
            atomic_load(&owner.active_token) != 0U);
 }
 
+static void firmware_health_poll(uint64_t now)
+{
+    fake_now_ms = now;
+    poll_network_owners(now);
+    esp_base_control_state_note_progress(&s_control_state);
+}
+
+static void firmware_health_window(uint64_t first_ms)
+{
+    esp_base_protocol_firmware_package_health_t health = {0};
+    for (uint64_t now = first_ms; now < first_ms + 30000U; now += 1000U) {
+        firmware_health_poll(now);
+        assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    }
+    firmware_health_poll(first_ms + 30000U);
+    assert(esp_base_protocol_firmware_package_health_snapshot(&health) &&
+           health.event_sequence == fake_trial_representative_sequence &&
+           health.failure_count == fake_trial_failure_count);
+}
+
+static void check_firmware_package_health(void)
+{
+    reset_case();
+    uint8_t digest[32];
+    memset(digest, fake_observed_package_byte, sizeof digest);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    s_started = true;
+    esp_base_protocol_set_ota_verification_pending(true);
+    firmware_health_poll(1000U);
+    assert(mqtt_configures == 0U && mqtt_polls == 0U && frp_polls == 0U);
+    assert(!esp_base_protocol_begin_firmware_package_verification(NULL, digest));
+    assert(esp_base_protocol_begin_firmware_package_verification(&claim, digest));
+    assert(!esp_base_protocol_begin_firmware_package_verification(&claim, digest));
+    firmware_health_poll(2000U);
+    assert(mqtt_configures == 1U && mqtt_polls == 1U && frp_configures == 0U &&
+           frp_polls == 0U && listener_polls == 0U);
+    esp_base_protocol_firmware_package_health_t health = {0};
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    fake_trial_snapshot_ready = true;
+    fake_trial_representative_sequence = 5U;
+    firmware_health_window(3000U);
+    assert(esp_base_control_state_config_write_error(&s_control_state) &&
+           !strcmp(esp_base_control_state_config_write_error(&s_control_state),
+                   "ota_verification_pending"));
+    fake_now_ms += 1001U;
+    esp_base_control_state_note_progress(&s_control_state);
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    firmware_health_poll(fake_now_ms); /* excessive poll gap restarts the window */
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    firmware_health_window(fake_now_ms + 1000U);
+    assert(!atomic_flag_test_and_set(&s_firmware_health_lock));
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    atomic_flag_clear(&s_firmware_health_lock);
+    assert(esp_base_protocol_firmware_package_health_snapshot(&health));
+
+    /* Each external predicate and a failed event resets the full window. */
+    bool *predicates[] = {&network_ready, &trusted_time_ready, &mqtt_ready,
+                         &package_event_accepting, &fake_trial_snapshot_ready};
+    for (size_t index = 0; index < sizeof predicates / sizeof predicates[0]; ++index) {
+        *predicates[index] = false;
+        firmware_health_poll(fake_now_ms + 1000U);
+        assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+        *predicates[index] = true;
+        firmware_health_window(fake_now_ms + 1000U);
+    }
+    fake_observed_package_byte = 0x7fU;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    fake_observed_package_byte = digest[0];
+    firmware_health_window(fake_now_ms + 1000U);
+    ++fake_trial_failure_count;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    firmware_health_window(fake_now_ms + 1000U);
+    fake_trial_failure_count = UINT64_MAX;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    fake_trial_failure_count = 2U;
+    firmware_health_poll(fake_now_ms + 1000U);
+    firmware_health_window(fake_now_ms + 1000U);
+    fake_trial_quiescent = false;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    fake_trial_quiescent = true;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(esp_base_protocol_firmware_package_health_snapshot(&health));
+    firmware_health_poll(fake_now_ms - 1000U);
+    assert(!esp_base_protocol_firmware_package_health_snapshot(&health));
+    firmware_health_window(fake_now_ms + 1000U);
+
+    /* Aborting keeps the write gate and revokes MQTT in its owning task;
+     * incomplete cleanup is retried, with no FRP admission. */
+    esp_base_protocol_end_firmware_package_verification();
+    mqtt_revoke_result = ESP_ERR_TIMEOUT;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(mqtt_revokes == 1U && s_pending_mqtt_active && frp_polls == 0U);
+    mqtt_revoke_result = ESP_OK;
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(mqtt_revokes == 2U && !s_pending_mqtt_active && !s_mqtt_revision_set &&
+           frp_polls == 0U && !esp_base_protocol_firmware_package_health_snapshot(&health));
+
+    /* The successful pending -> normal transition preserves its MQTT session. */
+    assert(esp_base_protocol_begin_firmware_package_verification(&claim, digest));
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(mqtt_configures == 2U);
+    esp_base_protocol_set_ota_verification_pending(false);
+    esp_base_protocol_end_firmware_package_verification();
+    firmware_health_poll(fake_now_ms + 1000U);
+    assert(mqtt_configures == 2U && mqtt_revokes == 2U && frp_configures == 1U &&
+           frp_polls == 1U && listener_configures == 2U && listener_polls == 1U);
+    assert(esp_base_storage_release(&claim));
+}
+
 static void check_product_package_preboot_recovery(void)
 {
     reset_case();
@@ -674,6 +803,7 @@ static void check_frp_status(const char *request, int expected_http,
 
 int main(void)
 {
+    check_firmware_package_health();
     reset_case();
     allow_config_load = true;
     uint32_t config_revision = 0U;
@@ -1286,7 +1416,54 @@ void *heap_caps_malloc(size_t size, unsigned caps)
     return malloc(size);
 }
 #endif
-int64_t esp_timer_get_time(void) { return 1000000; }
+int64_t esp_timer_get_time(void) { return (int64_t)fake_now_ms * 1000; }
+
+esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
+    const char *device_id, const char *boot_id, emqtt_config_t *scratch)
+{
+    assert(config == &s_context.config.mqtt &&
+           !strcmp(device_id, s_context.device_id) && !strcmp(boot_id, s_boot_id) && scratch);
+    ++mqtt_configures;
+    return ESP_OK;
+}
+esp_err_t esp_base_mqtt_owner_revoke(void)
+{
+    ++mqtt_revokes;
+    return mqtt_revoke_result;
+}
+void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network, bool trusted,
+    ebase_mqtt_command_handler_t commands, ebase_mqtt_event_handler_t events, void *context)
+{
+    assert(now_ms == fake_now_ms && network == network_ready &&
+           trusted == trusted_time_ready && commands && events && context == NULL);
+    ++mqtt_polls;
+}
+esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
+    const char *device_id, const efrp_aead_flash_store_t *store)
+{
+    assert(config == &s_context.config.frp && !strcmp(device_id, s_context.device_id) &&
+           store == s_context.frp_flash_store);
+    ++frp_configures;
+    return ESP_OK;
+}
+void esp_base_frp_owner_poll(uint64_t now_ms, bool network, bool trusted, bool ready)
+{
+    assert(now_ms == fake_now_ms && network == network_ready &&
+           trusted == trusted_time_ready && ready);
+    ++frp_polls;
+}
+void esp_base_frp_status_listener_configure(const ebase_frp_config_t *config)
+{
+    assert(config == NULL || config == &s_context.config.frp);
+    ++listener_configures;
+}
+void esp_base_frp_status_listener_poll(uint64_t now_ms,
+    esp_base_frp_status_handler_t handler, void *context)
+{
+    assert(now_ms == fake_now_ms && handler && context == NULL);
+    ++listener_polls;
+}
+bool esp_base_frp_status_listener_ready(void) { return true; }
 uint64_t esp_base_mqtt_owner_event_sequence(void) { return 3; }
 esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
@@ -1562,7 +1739,7 @@ bool esp_base_container_product_event_accepting(void)
 }
 bool esp_base_container_product_trial_quiescent(void)
 {
-    return package_event_accepting;
+    return package_event_accepting && fake_trial_quiescent;
 }
 
 esp_base_container_trial_confirm_result_t esp_base_container_product_confirm_package_trial(

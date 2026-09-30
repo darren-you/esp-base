@@ -8,12 +8,17 @@
 
 候选准备在预留槽前返回 `BUSY` 时，安装／升级 worker 只在独立读回旧绑定与原 ECS2 序号完全一致后，把原操作记为失败并释放长存储占用；读回不确定则保留未决和占用，交由新 boot 对账。已预留候选的失败由 Container 返回精确 `ABORTED` 或不确定，不套用这个预留前规则。
 
+pending 固件包验证由主应用持原升级 claim，在 V3、ECS2 与候选 guest 准入后调用 `begin_firmware_package_verification`。控制任务随后启动既有 MQTT owner，复用产品 trial 的连续 30 秒 Wi-Fi／时间／MQTT 与代表事件窗口，通过非阻塞原子锁只提供 RAM 快照，不写 ECS2／otadata。主应用复核并持久提交健康、固件和包；离线、错误包／事件、失败计数变化、时钟逆行或超过 1 秒的采样间隔重算窗口。pending 写门及 FRP 门保持关闭；失败退出后 MQTT 由控制任务撤销并重试不完整清理，成功转入普通模式保留本次会话。
+
 ## 架构拓扑
 
 ```mermaid
 flowchart LR
     app["apps/esp_base：身份与只读状态"] --> owner["esp_base_protocol：单一控制任务"]
     owner --> state["control_state：最近进展与轮次 / pending 写门"]
+    app -->|"原收据候选准入"| business_health["RAM 健康快照：代表事件 / 连续在线 30 秒"]
+    owner --> business_health
+    business_health -->|"无 Flash 的读证据"| app
     state -->|"活性与确认后解除写门"| app
     serial["C3 USB Serial/JTAG / ESP32 UART0 VFS"] <-->|"有界读取"| owner
     broker["设备级 Broker：TLS / 精确 ACL"] <-->|"command / event / result / reported / status"| mqtt["mqtt_owner：UUID / LWT / 双 SUBACK 门"]

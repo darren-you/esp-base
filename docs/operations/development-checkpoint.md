@@ -1,5 +1,22 @@
 # 开发检查点
 
+## 2026-09-30 联合 OTA pending MQTT 与连续在线健康接线
+
+普通主应用现保留原 V3 收据，在 selected C 双次固件／ECS2 预检通过后，持久本 boot trial 并启动候选 guest。仅此准入允许控制任务在 pending 写门内启用既有 MQTT owner；FRP 仍等待全部确认。控制任务复用产品 trial 健康谓词，采集请求绑定代表事件、包摘要及失败数，要求 Wi-Fi、本 boot 可信时间、MQTT 连续 ready 30 秒、采样间隔不超过 1 秒、提交时空队列／无在途调用。RAM 快照使用非阻塞原子锁，不在锁内做 Flash／TLS。失联、无代表事件、错包、失败数变化／溢出、时钟逆行或采样中断重算窗口；离线保持 pending，不提前确认。
+
+主应用先完成本地控制进展窗口，再消费健康快照；Container 在事件锁下复核并冻结 guest，持久健康及独立读回后，Base 才确认固件并观察 VALID、确认包及引用，准备原产品账本，最后提交并读回原成功收据。提交前短暂忙可等待；健康提交不确定先停止并证明 native 回收才回滚。固件已 VALID 后包确认／账本／成功收据不确定，停止 guest 并保留原 claim 和写门。失败退出在控制任务内撤销 MQTT，清理未完可重试；成功转换保留会话。无包原有本地确认条件保持。
+
+C3／ESP32 完整 host ASan/UBSan 通过。真实调度单元覆盖完整 30 秒重算、采样过期／锁忙、全部在线谓词、计数溢出、退出清理与成功会话保留；主应用假件覆盖两模式晚到健康、未尝试提交重试、等待后 guest 故障、健康不确定与 native 停止失败，以及最终包确认、账本和收据故障。Container 本轮未改，真实签名 guest／持久冻结及回收证据沿用上一检查点；这些测试没有真实 Broker、FreeRTOS 并发或实体 Flash。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c` 检查、双目标测试键签名构建、官方 RSA v2／ECDSA v1 验签及容量门通过，链接映射证明 `start_firmware_package_trial`、`verify_firmware_package_health` 已在两目标实际 app 中。新增原收据静态对象 `0x118` B、RAM 健康对象 `0x48` B，另有两个原子字节及控制任务状态；静态链接不证明运行峰值内存。
+
+| 目标 | 签名 app／槽容量 | app SHA-256 |
+| --- | --- | --- |
+| ESP32-C3 | `0x121000/0x130000` | `59a72d8234e0cb0421da6eeb13fdd1f016e05cfddb1648a164896e6530339085` |
+| ESP32-D0WD-V3 | `0xffff4/0x120000` | `6ff848e5c5263f94674ad6c049434cbc83d690298e4ecff33228fa5f9e37b58f` |
+
+公开带包下载 worker 仍在持久登记前拒绝，带包 PREPARED 查询仍返回 unknown，待实际公开事务接通后统一开放；本轮不证明端到端公开 `ota.start`。SDK／Container／WAMR 和两目标依赖锁未变，未写实体板。真实 MQTT 授权事件、HTTPS 下载、五能力负载、Flash／otadata 掉电与两板迁移仍未验，P6-10/P7-04 保持进行中。
+
 ## 2026-09-30 联合 OTA 内部带包 trial 与健康持久提交
 
 内部 `start_firmware_package_trial` 现只消费原 `PREPARED` V3 收据，双次观察 pending C 与回退 A 并精确核对原操作／模式序号后，先持久 `TRIAL_STARTED` 和本 boot，再验签、授权和启动候选 guest。产品专用与联合固件包 trial 共享执行器事件跟踪：错误事件不建立代表完成序号；业务、运行时、定时器或日志失败撤销代表证据并计数。`verify_firmware_package_health` 要求调用方先取得连续在线健康窗口，再在事件锁下复核原代表事件、包摘要、失败次数及空队列／无在途调用，冻结事件和定时器，持久记下健康并独立读回。`NOT_STARTED` 证明未尝试持久写入，可等待下一控制轮；任何已进入提交的未知结果均保留冻结及长 claim。

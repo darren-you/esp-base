@@ -18,6 +18,20 @@ esp_base_container_boot_result_t esp_base_container_product_boot(
     const esp_base_storage_claim_t *claim, const char boot_id[37]);
 esp_base_container_boot_result_t esp_base_container_product_start_trial(
     const esp_base_storage_claim_t *claim, const char boot_id[37]);
+esp_base_container_boot_result_t esp_base_container_product_start_firmware_package_trial(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt, const char boot_id[37]);
+typedef enum {
+    ESP_BASE_CONTAINER_HEALTH_NOT_STARTED = 0,
+    ESP_BASE_CONTAINER_HEALTH_VERIFIED,
+    ESP_BASE_CONTAINER_HEALTH_UNCERTAIN,
+} esp_base_container_trial_health_result_t;
+esp_base_container_trial_health_result_t
+esp_base_container_product_verify_firmware_package_health(
+    const esp_base_storage_claim_t *claim,
+    const esp_base_ota_receipt_recovery_t *receipt,
+    uint64_t verified_event_sequence, uint64_t verified_failure_count);
+bool esp_base_container_product_event_accepting(void);
 bool esp_base_container_product_mark_healthy(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_confirm_firmware(const esp_base_storage_claim_t *claim);
 bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim);

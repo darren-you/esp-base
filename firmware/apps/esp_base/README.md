@@ -1,16 +1,16 @@
 # 无业务基座应用
 
-装配身份、完整配置读取、Wi-Fi、SNTP 同步门、槽状态、复位事实、串口心跳及 status/restart/config.set 命令；无包产品的 pending 新槽通过本地启动检查、控制循环进展与 30 秒窗口后确认。配置 Container 产品授权时可装载现有 confirmed 绑定；无包联合 OTA 的 pending 新槽先以原 V3 收据核对 A/C 和 ECS2，再进入本地确认。缺少可信收据而 ECS2 留有固件迁移时阻断产品启动。不配置 GPIO。
+装配身份、完整配置读取、Wi-Fi、SNTP 同步门、槽状态、复位事实、串口心跳及 status/restart/config.set 命令；无包产品的 pending 新槽通过本地启动检查、控制循环进展与 30 秒窗口后确认。配置 Container 产品授权时可装载现有 confirmed 绑定；无包联合 OTA 的 pending 新槽先以原 V3 收据核对 A/C 和 ECS2，再进入本地确认。带包 pending C 在原 V3 与完整包引用校验后，先持久本 boot trial 再启动 guest；控制任务只对该已准入候选开放 MQTT 并收集代表事件后连续在线健康证据，主应用先提交健康、确认固件 VALID，再确认包和原成功收据。离线保持 pending。缺少可信收据而 ECS2 留有固件迁移时阻断产品启动。不配置 GPIO。
 
 ## 架构拓扑
 
 ```mermaid
 flowchart LR
-    main["main/esp_base_main.c：本地启动检查 / 30 秒窗口"] --> identity["device_identity / remote_config：身份与配置"]
+    main["main/esp_base_main.c：本地检查 / 带包健康 / 持久确认"] --> identity["device_identity / remote_config：身份与配置"]
     main --> protocol["device_protocol：控制任务与 Wi-Fi"]
     protocol --> frp_status["FRP loopback：独立 HMAC / 只读 status"]
     frp_status --> frp["esp-frp：端点绑定后连接 FRPS"]
-    protocol -->|"首轮与最近进展"| main
+    protocol -->|"首轮／最近进展／MQTT 联合健康快照"| main
     main --> ota["esp-ota：pending 确认 / HTTPS / 槽机制"]
     main --> container["container_binding：确认绑定 / 唯一 guest"]
     receipt["ota_operation：产品约束 / operation 收据"] --> ota
@@ -27,7 +27,7 @@ flowchart LR
 
 FRP 大记录的 Flash scratch 在 C3／ESP32 产品构建中固定启用，两个目标分别要求 `frp_scratch@0x3e5000`／`frp_scratch@0x3ea000`；启动会核对真实分区的 label、data/undefined、offset、`0x10000` 大小、4 KiB 擦除单元及可写、未加密事实，并在任何 OTA pending 确认、Container 启动或网络 owner 启动前调用公开 FRP provider 的 boot recover。失败立即停止本次启动，不确认 pending 槽。Base 仅以现有全局 storage owner 为 recover/begin/write/read 的每次 Flash 操作取得和释放短 claim；FRP 库独占 lease、擦写、验读及隔离状态。clear 只撤销 RAM lease，不争用 owner 或再次擦除；旧密文由下一次 begin 或下次启动 recover 擦除。provider 对象为静态地址，FRP client 销毁前持续有效。两目标正式源码均声明独立 scratch；现役设备仍使用旧分区，迁移和实板验证未完成。没有已恢复 store 时，物理 USB `config.set` 拒绝启用 FRP 并返回 `frp_storage_unavailable`，保持原 revision/配置；已存 FRP 配置只报告 failed，不自动改 NVS。MQTT 入口继续先拒绝远端配置写入。小于等于 4 KiB 的 FRP 明文记录走库内 RAM reader；较大记录遇 OTA 长持 owner 时可能在 Flash I/O 上安全失败，但仍可 clear 并关闭 session，当前不保证同一 FRP session 在 OTA 期间持续活跃，P6-03 并发活性仍待同板测量。
 
-先读取运行槽状态，再进行 NVS、身份、配置与控制任务初始化。Wi-Fi 驱动初始化失败只将网络状态标为 `failed`，不阻止串口控制任务启动。pending 槽需在 5 秒内看到控制循环首轮完成，在之后的 30 秒内每秒核对最近进展不超过 5 秒，窗口结束后还要等待控制循环完成新一轮，最多再等 5 秒；此期间 `status` 可读、`config.set` 返回 `ota_verification_pending`，确认成功后恢复配置写入。确认 API 失败后若持久状态已为 VALID，仍清门；其它不确定状态输出 `ESP_BASE_OTA_RECOVERY_REQUIRED`。检查失败调用 IDF 标记无效并重启回滚；无可回退镜像时不强制重启，但后续复位不能保证可启动。网络在线不是本地确认条件。5 秒是当前活性策略值，真实 OTA/回滚仍需实板验证。
+先读取运行槽状态，再进行 NVS、身份、配置与控制任务初始化。Wi-Fi 驱动初始化失败只将网络状态标为 `failed`，不阻止串口控制任务启动。pending 槽需在 5 秒内看到控制循环首轮完成，在之后的 30 秒内每秒核对最近进展不超过 5 秒，窗口结束后还要等待控制循环完成新一轮，最多再等 5 秒；此期间 `status` 可读、`config.set` 返回 `ota_verification_pending`，确认成功后恢复配置写入。确认 API 失败后若持久状态已为 VALID，仍清门；其它不确定状态输出 `ESP_BASE_OTA_RECOVERY_REQUIRED`。检查失败调用 IDF 标记无效并重启回滚；无可回退镜像时不强制重启，但后续复位不能保证可启动。网络在线不是无包本地确认条件。带包 trial 额外要求 Wi-Fi、本 boot 可信时间和 MQTT owner 持续 ready 30 秒，轮询间隔不超过 1 秒，代表事件、包摘要及失败数保持有效，提交时队列为空且无在途 guest 调用。候选失败先停止并证明 native 回收才回滚；持久健康／包确认或成功收据不确定时停止候选、保留启动 claim。FRP 在该未决窗口不启动，配置及其它升级写入仍拒绝。5 秒是当前活性策略值，真实 OTA/回滚仍需实板验证。
 
 控制任务启动后以编译期 `CONFIG_ESP_BASE_TIME_SERVER` 初始化 SNTP，默认 `pool.ntp.org`；初始化失败只报告 `ESP_BASE_TIME_UNAVAILABLE`，不影响 pending 本地确认。心跳 `time_ready` 只有本次 boot 收到有效同步后才为 true。签名构建的 `ota.start` 要求 Wi-Fi IP 与该同步事实，随后在独立 worker 下载；普通未签名构建明确拒绝。服务器名称不写持久配置。
 
