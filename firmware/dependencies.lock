@@ -81,6 +81,6 @@ direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: c6a8ac19841456d00eef04b5dd757ad99accde50d705638136d81cf30f144284
+manifest_hash: 208b51ca133078a9bc5802177bcbb8a966a5343776b234fb354f0d026067fa42
 target: esp32c3
 version: 3.0.0

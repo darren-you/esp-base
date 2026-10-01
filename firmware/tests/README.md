@@ -113,4 +113,4 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 带包 A 侧启动恢复的 `ota_startup_test` 同时覆盖 `REUSE`／`WRITE`：原 V3 全字段进入 Container 对账，物理退役、包引用恢复和失败收据精确读回必须先于旧 guest 启动；失败收据再次启动不擦槽，终态下若 ECS2 仍未决则拒启。SDK 退役、Container 对账与收据提交或读回失败均保留 startup claim，目标 C 带包 trial 继续拒绝。两目标同源 ASan/UBSan 与测试键签名构建是软件证据，未模拟实板断电。
 
-2026-10-02 的取消回归使用 `tools/container_product_cancel_test.py` 在宿主生成四种临时 RSA 签名 ABI 2 包，并运行正式产品 owner 的五个 init／event／timer／停止失败场景。直接运行的独立 Container 测试实例不会继承此前已停止 Base owner 的标志；正式 Base owner 用例仍绑定真实原子标志。两目标完整生命周期与 host 通过；资源数值及尚待 SDK／实板项见[检查点](../../docs/operations/async_cancel_checkpoint.md)。`TEST_PYTHON` 同时指定 CMake 构包与直接 Python 调用。
+2026-10-02 的取消回归使用 `tools/container_product_cancel_test.py` 在宿主生成四种临时 RSA 签名 ABI 2 包，并运行正式产品 owner 的五个 init／event／timer／停止失败场景。直接运行的独立 Container 测试实例不会继承此前已停止 Base owner 的标志；正式 Base owner 用例仍绑定真实原子标志。两目标完整生命周期与 host 通过；资源数值、已通过的固定 SDK 构建及尚待实板项见[检查点](../../docs/operations/async_cancel_checkpoint.md)。`TEST_PYTHON` 同时指定 CMake 构包与直接 Python 调用。
