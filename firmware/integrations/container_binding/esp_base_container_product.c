@@ -935,6 +935,9 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
 static void *product_thread(void *unused)
 {
     (void)unused;
+    /* Native product work runs at 4 and control at 5. A pure Wasm loop must
+     * leave both runnable so they can publish an atomic cancellation request. */
+    vTaskPrioritySet(NULL, 3U);
     if (!s_product.trial_mode) {
         const econtainer_slots_result_t initialized = esp_base_container_with_firmware_set(
             s_product.claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,

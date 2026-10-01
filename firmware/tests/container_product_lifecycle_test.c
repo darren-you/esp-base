@@ -319,6 +319,12 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
     return ESP_BASE_OTA_FIRMWARE_OK;
 }
 
+void vTaskPrioritySet(TaskHandle_t task, UBaseType_t priority)
+{
+    /* The real priority relationship is verified separately with IDF/QEMU. */
+    assert(task == NULL && priority > 0U && priority < 4U);
+}
+
 /* The IDF provider is bypassed only because host Flash/NVS are in memory. */
 bool econtainer_slots_idf_bind(econtainer_slots_idf_provider_t *provider,
                                const econtainer_slots_idf_config_t *config)

@@ -29,7 +29,7 @@ ESP_BASE_TEST_TARGET=esp32c3 bash firmware/tests/run_host_tests.sh
 ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 ```
 
-两目标完整 host 与真实 RSA 签名 guest 生命周期均通过，Base 测试二进制启用 ASan／UBSan。新增五个取消场景覆盖另一 native 线程直接置既有原子停止标志的 init，以及公开内部停止入口处理的纯 Wasm event／timer；init 用例不证明公开管理面存在启动中取消入口。其余场景覆盖运行中的纯 Wasm init、event、timer，以及 event 取消后 stop 返回失败／stop 纯循环超期；成功 event／timer 停止以 250 ms 宿主观察门与原 500 ms 策略期限区分取消和等待期限，随后实际重开并再次停止。失败场景保持 BLOCKED、禁止重开，绑定、NVS 与包 Flash 写计数不变。
+两目标完整 host 与真实 RSA 签名 guest 生命周期均通过，Base 测试二进制启用 ASan／UBSan。新增五个场景分别为纯 Wasm init 取消、event 取消、timer 取消、event 取消后 stop 返回失败，以及 event 取消后 stop 纯循环超期。init 用例由另一 native 线程直接置既有原子标志，不证明公开管理面存在启动中取消入口；其余场景调用正式内部停止 API。成功 event／timer 停止以 250 ms 宿主观察门与原 500 ms 策略期限区分取消和等待期限，随后实际重开并再次停止。失败场景保持 BLOCKED、禁止重开，绑定、NVS 与包 Flash 写计数不变。
 
 原有签名包安装、启动、停止、卸载、同 boot EMPTY 和重装仍各运行 100 轮，ECS2 1→601。普通 macOS 分配统计第 10／50／100 轮 malloc 均为 384864 B；C3 分支虚拟字节均为 445752901632、region 均为 71，ESP32 分支虚拟字节均为 445752590336、region 为 70／70／72。region 拆分与 malloc／虚拟字节增长分别记录，不能宣称所有指标完全持平。此统计不是 RSS、ESP RAM 或设备回收证明。
 
@@ -45,6 +45,12 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 | esp32 | ECDSA v1 | 1114100／1179648 | `b3746150d51e8277b4be95ae41390addb0e6567ead05c2c0706592d25a1930c9` |
 
 使用仓外临时测试键、无网络凭据的 counter 产品授权、100000 指令、100 ms 期限、16384 B owner 栈；不启用硬件 Secure Boot，也不写设备。两个 ELF 均包含实际 Base 启动入口与取消异常；ESP32 另保留 WAMR 取消设置及 Container open／init 符号，C3 原有选择性 LTO 内联这些符号，不能要求它们以独立符号存在。这只证明当前组件编译和链接，不证明目标调度中的取消响应或生产发布。
+
+## FreeRTOS 请求者调度复现
+
+固定 SDK、同一 WAMR 取消实现的独立 C3／ESP32 单核 QEMU 探针复现默认 pthread 优先级 5 高于 Base 产品 worker 4 的问题：纯 Wasm 循环约 500 ms 后先由期限结束，低优先级请求者才写入取消标志。将执行者优先级降为 3 的对照才由实际取消结束，表明原子谓词本身不能代替请求者获得 CPU。
+
+Base 现仅在唯一 guest 线程入口调用 SDK 的 `vTaskPrioritySet(NULL, 3)`；产品 worker 4 与 control 5 保持既有设置。没有改全局 pthread 默认配置、其他 SDK 线程或取消回调的非阻塞合同。该新源码的双目标完整 host、五个真实签名取消场景与各 100 次生命周期已重新通过。第 10／50／100 轮 malloc 仍均为 384864 B；C3 虚拟字节均为 445752967168、region 均为 69，ESP32 虚拟字节均为 445752311808、region 均为 70。此次签名固件构建和实板仍待单独记录；上节 `8990128` 的签名镜像不包含此次调度修正。
 
 ## 尚未闭合
 
