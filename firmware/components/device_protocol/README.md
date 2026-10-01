@@ -1,5 +1,7 @@
 # device_protocol
 
+2026-10-02 C3 公开 REUSE 联合 OTA 实板切片通过：只发送一次 `ota.start`，沿原 ID 只读查询，经真实代表事件和 30 秒健康门后持久成功；再次重启保留成功与确认产品，公开卸载回读空绑定，A／C Flash 字节精确核对。过程中两次有绑定结果的 unknown 均保留，未重发写命令；实验输入与边界见[联合 OTA 检查点](../../../docs/operations/c3_joint_ota_reuse_checkpoint.md)。
+
 2026-10-02 C3 公开产品切片：原始 Base 经实际 HTTPS 下载验签、代表 MQTT 事件与原 30 秒健康门确认 counter，MQTT 重启后确认绑定和活动产品恢复，再由公开卸载取得持久成功及空绑定。ECS2 1→6→6→7，安装／重启／卸载各发送一次；实验 CA 只进入私有 SDK 构建，源码与生产信任未改，边界见[安装检查点](../../../docs/operations/c3_product_https_install_checkpoint.md)。两板、升级、完整宿主能力、FRP／OTA 与五能力组合仍待验证。
 
 2026-10-02 C3 隔离 Broker 切片：正式 Base 的严格 TLS、当前 boot 的 reported、HMAC 状态／产品查询、错误 HMAC／QoS 0 拒绝及远程配置写门通过。重启由唯一控制任务有界观察回执的精确 PUBACK；两目标 host、固定 SDK 签名重建与官方验签通过，C3 一次重启取得 running 并由同设备新 boot、版本 2 配置及联网恢复完成复验。原回执未交付的失败单独保留，见[故障说明](../../../docs/issues/mqtt_restart_receipt_delivery.md)。此为空产品切片，生产 Broker、完整产品安装／OTA 与 ESP32 仍待验收。
