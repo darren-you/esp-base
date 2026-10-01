@@ -75,7 +75,7 @@ pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制�
 - [乐鑫官方仓库全景与 ESP Base 选型](docs/design/espressif-official-solutions.md)
 - [乐鑫 342 个公开仓库逐项清单](docs/design/espressif-repository-catalog.md)
 - [来源记录](docs/design/source-provenance.md)
-- [嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)
+- [嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded_firmware_golden_path.md)
 
 ## 许可
 
