@@ -1,6 +1,6 @@
 # ESP Base
 
-2026-10-02 产品 owner 异步取消：精确消费新 Container／WAMR 取消合同与可复现的 MQTT 归档，并将唯一 guest 线程优先级设为 3，使既有产品 worker 4／control 5 能提交取消请求。双目标 host、真实签名 init／event／timer 取消、停止失败阻断及百次生命周期回归通过；修正后的固定 SDK 两目标签名固件与官方验签通过，独立两目标 QEMU 证明调度关系，实体板仍待验证，见[检查点](docs/operations/async_cancel_checkpoint.md)。
+2026-10-02 产品 owner 异步取消：精确消费新 Container／WAMR 取消合同与可复现的 MQTT 归档，并将唯一 guest 线程优先级设为 3，使既有产品 worker 4／control 5 能提交取消请求。双目标 host、真实签名 init／event／timer 取消、停止失败阻断及百次生命周期回归通过；修正后的固定 SDK 两目标签名固件与官方验签通过，独立两目标 QEMU 与 C3 直接 API 实板切片证明调度关系，Base 签名产品实板仍待验证，见[检查点](docs/operations/async_cancel_checkpoint.md)。
 
 2026-10-01 宿主工具归位：期限 guest 构包与 NVS QEMU runner 移至 `tools/`，固件 README 标准链接修正；双目标真实签名 guest、各 100 次重装和资源回归通过。中央检查器的嵌套 SDK 误报修正已在主工作区通过完整门禁，软件与实板边界见[开发检查点](docs/operations/development-checkpoint.md)。
 

@@ -1,6 +1,6 @@
 # 产品 owner 异步取消软件检查点
 
-2026-10-02，P6-07／P6-09 继续实施；本记录确认宿主软件结果与固定 SDK 两目标签名构建，实体板验证尚待执行。
+2026-10-02，P6-07／P6-09 继续实施；本记录确认宿主软件结果、固定 SDK 两目标签名构建及 C3 直接 API 调度切片，Base 签名产品实板验证尚待执行。
 
 ## 精确输入与源码归属
 
@@ -62,6 +62,14 @@ Base 现仅在唯一 guest 线程入口调用 SDK 的 `vTaskPrioritySet(NULL, 3)
 | esp32 | ECDSA v1 | 1114100／1179648 | `c78483debdb4701554346e0a05afa3f1f088fe48cb562df5c6a7ca0e6f226889` |
 
 两目标 SDK 配置摘要分别为 `04c4a18c58308c77334a5c017e6f17d52aa7c1d38b21925272e5aeffb28371ea`、`b0caf6f17f2aed9f4862f158c506c7d1b6f2764a3839bd8292204c0b570f370b`。这次完整 Base 构建与独立调度探针分别记录，不把独立 QEMU 结果等同于签名产品全链验收。
+
+## C3 实板调度切片
+
+同一独立探针源码在固定 SDK 中仅将控制台改为 C3 原生 USB Serial/JTAG，得到 189440 B 的未签名实验 app，SHA-256 为 `827afa5bb7138cbe14689f7e4975fcbe7eeb678bdf14cce5e05ec1afbdfc78e6`，SDK 配置摘要为 `839cddc7ea84a0a2e8c489a03855a30b86b6f2bab5bb797b020202fcf45a6e42`。本轮核对唯一接线 C3 的 USB 身份、4 MiB Flash、关闭的 Secure Boot／Flash Encryption，以及此前实验的 bootloader、分区表和完整 factory 槽字节后，只暂时替换 `0x10000/0x100000` app 槽，写后完整读回。
+
+实际 default owner 5 的循环在 500120 微秒后由期限结束，请求者又过 17809 微秒才写标志；owner 在入口自设优先级 3 后，循环由取消结束，请求到退出为 70 微秒，完整成功标记已取得。随后重新进入 ROM 下载模式恢复原 MQTT 实验 app；初次 `no_reset` 恢复失败的日志保留，受控复位后的完整槽读回与写前逐字节相同，bootloader／分区表读回未变。原 MQTT 应用确认 `wifi_down`，串口释放，没有 eFuse 写入。
+
+这是实际 C3 调度与 WAMR 直接 API 的切片；未运行 Base 的签名包、唯一产品 owner 或公开管理命令，也未运行联网组合负载，不能将其视为 P6-07／P6-09 完整验收。ESP32 未连接，本轮没有对应实板结果。
 
 ## 尚未闭合
 
