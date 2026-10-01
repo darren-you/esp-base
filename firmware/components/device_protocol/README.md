@@ -1,5 +1,7 @@
 # device_protocol
 
+2026-10-02 C3 公开产品切片：原始 Base 经实际 HTTPS 下载验签、代表 MQTT 事件与原 30 秒健康门确认 counter，MQTT 重启后确认绑定和活动产品恢复，再由公开卸载取得持久成功及空绑定。ECS2 1→6→6→7，安装／重启／卸载各发送一次；实验 CA 只进入私有 SDK 构建，源码与生产信任未改，边界见[安装检查点](../../../docs/operations/c3_product_https_install_checkpoint.md)。两板、升级、完整宿主能力、FRP／OTA 与五能力组合仍待验证。
+
 2026-10-02 C3 隔离 Broker 切片：正式 Base 的严格 TLS、当前 boot 的 reported、HMAC 状态／产品查询、错误 HMAC／QoS 0 拒绝及远程配置写门通过。重启由唯一控制任务有界观察回执的精确 PUBACK；两目标 host、固定 SDK 签名重建与官方验签通过，C3 一次重启取得 running 并由同设备新 boot、版本 2 配置及联网恢复完成复验。原回执未交付的失败单独保留，见[故障说明](../../../docs/issues/mqtt_restart_receipt_delivery.md)。此为空产品切片，生产 Broker、完整产品安装／OTA 与 ESP32 仍待验收。
 
 只读产品状态现硬切为十个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 、`package_data_schema_version` 与 `active_product`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。活动版本复制本次验签装载结果；状态查询没有新增包 Flash 读取或验签，不证明 guest 健康。
