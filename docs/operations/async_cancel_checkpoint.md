@@ -37,7 +37,7 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 
 ## 固定 SDK 签名构建
 
-独立归档输入为 Base `8990128674a8f680ca1813474f2268ddda393b84`，归档 SHA-256 为 `894a59135ee5e61d94c1f7aa42d3d4b0630cab0158b2ca5df61411bc748735a2`。完整固定 SDK 校验、两目标官方构建、签名验证、槽容量门及宿主工具 47／47 通过；NVS 容量项目以 C3 十一页／ESP32 六页分别完成实际 CMake 解析。生成锁相对上述输入只改变主固件两锁的 `manifest_hash`，所有依赖字段、target 和其余字段逐项一致；本仓采用 SDK 原样输出，不手改摘要。构建后没有再次编译同一软件路径。
+首次独立归档输入为 Base `8990128674a8f680ca1813474f2268ddda393b84`，归档 SHA-256 为 `894a59135ee5e61d94c1f7aa42d3d4b0630cab0158b2ca5df61411bc748735a2`。完整固定 SDK 校验、两目标官方构建、签名验证、槽容量门及宿主工具 47／47 通过；NVS 容量项目以 C3 十一页／ESP32 六页分别完成实际 CMake 解析。生成锁相对上述输入只改变主固件两锁的 `manifest_hash`，所有依赖字段、target 和其余字段逐项一致；本仓采用 SDK 原样输出，不手改摘要。下表记录调度修正前的镜像，修正后的完整重编译见下节。
 
 | target | 测试签名 | app 字节／槽字节 | app SHA-256 |
 | --- | --- | --- | --- |
@@ -48,9 +48,20 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 
 ## FreeRTOS 请求者调度复现
 
-固定 SDK、同一 WAMR 取消实现的独立 C3／ESP32 单核 QEMU 探针复现默认 pthread 优先级 5 高于 Base 产品 worker 4 的问题：纯 Wasm 循环约 500 ms 后先由期限结束，低优先级请求者才写入取消标志。将执行者优先级降为 3 的对照才由实际取消结束，表明原子谓词本身不能代替请求者获得 CPU。
+固定 SDK、同一 WAMR 取消实现的独立 C3／ESP32 单核 QEMU 探针复现默认 pthread 优先级 5 高于 Base 产品 worker 4 的问题：纯 Wasm 循环分别在 500099／500250 微秒后由期限结束，请求者再过 37083／17285 微秒才写入标志。最终对照在执行者入口实际调用 `vTaskPrioritySet(NULL, 3)`，保持全局 pthread 默认优先级 5；两目标由取消结束，请求到退出分别为 31／52 微秒。两份日志均取得完整成功标记后结束本次 QEMU 进程。这证明固定 SDK 调度与 WAMR 检查点的关系，尚不证明正式 Base 产品管理面或实体板响应。
 
-Base 现仅在唯一 guest 线程入口调用 SDK 的 `vTaskPrioritySet(NULL, 3)`；产品 worker 4 与 control 5 保持既有设置。没有改全局 pthread 默认配置、其他 SDK 线程或取消回调的非阻塞合同。该新源码的双目标完整 host、五个真实签名取消场景与各 100 次生命周期已重新通过。第 10／50／100 轮 malloc 仍均为 384864 B；C3 虚拟字节均为 445752967168、region 均为 69，ESP32 虚拟字节均为 445752311808、region 均为 70。此次签名固件构建和实板仍待单独记录；上节 `8990128` 的签名镜像不包含此次调度修正。
+最终独立探针源码 SHA-256 为 `dbf24a1417e0521d39a88679337fba32b07afa7d506f1fcef09ecb9d7c880035`；C3／ESP32 app 摘要分别为 `acd652ab1ec2c9f2d7457c6cc9c4d67f8bc5539ec6a81b76697267ed454f41b7`、`d50c8c730b5a12760e29ed7689621c7b572442210ecfc1dce0746237f06c4817`，完整 UART 日志摘要分别为 `c24b6a249ffa92e1c80a1cb6644880c4cb6698ff27bda1e742bf17f154c18e7a`、`6dbb69bd02b161299b42b8ff76323e15a811021e92b0196a7ece0b6535b0fdb8`。
+
+Base 现仅在唯一 guest 线程入口调用 SDK 的 `vTaskPrioritySet(NULL, 3)`；产品 worker 4 与 control 5 保持既有设置。没有改全局 pthread 默认配置、其他 SDK 线程或取消回调的非阻塞合同。该新源码的双目标完整 host、五个真实签名取消场景与各 100 次生命周期已重新通过。第 10／50／100 轮 malloc 仍均为 384864 B；C3 虚拟字节均为 445752967168、region 均为 69，ESP32 虚拟字节均为 445752311808、region 均为 70。
+
+修正源码 `9564d74f7bd7dfa64334680e1c07a8eca2abc9ef` 归档 SHA-256 为 `c70f5482e6f855070b9fdd049b64304c698f3c0bb4de2edef21b107a266134ff`。同一完整 SDK 的双目标签名构建、官方验签与容量门再次通过，四份锁逐字节保持不变，两个 ELF 均链接真实 Base 启动入口、优先级 API 和取消异常。测试键与 counter 授权仍为上述仓外输入，不含网络凭据，不写设备。
+
+| target | 测试签名 | app 字节／槽字节 | 调度修正后 app SHA-256 |
+| --- | --- | --- | --- |
+| esp32c3 | RSA v2 | 1183744／1245184 | `77d15d4bbb510663c1bdac88f6ccf581898c8b6101289aa5628d03a23bfec1bf` |
+| esp32 | ECDSA v1 | 1114100／1179648 | `c78483debdb4701554346e0a05afa3f1f088fe48cb562df5c6a7ca0e6f226889` |
+
+两目标 SDK 配置摘要分别为 `04c4a18c58308c77334a5c017e6f17d52aa7c1d38b21925272e5aeffb28371ea`、`b0caf6f17f2aed9f4862f158c506c7d1b6f2764a3839bd8292204c0b570f370b`。这次完整 Base 构建与独立调度探针分别记录，不把独立 QEMU 结果等同于签名产品全链验收。
 
 ## 尚未闭合
 
