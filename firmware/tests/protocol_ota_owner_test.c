@@ -1967,6 +1967,7 @@ esp_base_container_binding_result_t esp_base_container_product_status_snapshot(
     if (result == ESP_BASE_CONTAINER_BINDING_OK && active_fixture_mode != 0U) {
         active->present = true;
         active->product_id = "counter";
+        active->product_id_size_bytes = sizeof("counter") - 1U;
         active->product_version_size_bytes = 3900U;
         active->product_version = malloc(3901U);
         assert(active->product_version != NULL);

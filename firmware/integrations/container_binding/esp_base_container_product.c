@@ -2975,6 +2975,8 @@ static econtainer_slots_result_t read_binding_snapshot(
             } else {
                 active->present = true;
                 active->product_id = s_product.validation.expected_product_id;
+                active->product_id_size_bytes =
+                    sizeof(CONFIG_ESP_BASE_CONTAINER_PRODUCT_ID) - 1U;
                 active->product_version_size_bytes = s_product.product_version_size_bytes;
                 memcpy(active->product_version, s_product.product_version,
                        active->product_version_size_bytes + 1U);

@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-02 C3 签名产品实板切片：正式 Base 产品 owner 的 event／timer 原生取消、实际 stop／close／join 与 100 轮回收／199 次同 boot 重开已通过，完整边界见[取消检查点](docs/operations/async_cancel_checkpoint.md)。本任务维护者已允许丢弃 ESP 数据，C3 实验整片擦除后只恢复原代码制品，旧身份和配置不再保留；ESP32 未连接，五能力联网和公开管理全链仍未验收。
+
 2026-10-02 产品 owner 异步取消：精确消费新 Container／WAMR 取消合同与可复现的 MQTT 归档，并将唯一 guest 线程优先级设为 3，使既有产品 worker 4／control 5 能提交取消请求。双目标 host、真实签名 init／event／timer 取消、停止失败阻断及百次生命周期回归通过；修正后的固定 SDK 两目标签名固件与官方验签通过，独立两目标 QEMU 与 C3 直接 API 实板切片证明调度关系，Base 签名产品实板仍待验证，见[检查点](docs/operations/async_cancel_checkpoint.md)。
 
 2026-10-01 宿主工具归位：期限 guest 构包与 NVS QEMU runner 移至 `tools/`，固件 README 标准链接修正；双目标真实签名 guest、各 100 次重装和资源回归通过。中央检查器的嵌套 SDK 误报修正已在主工作区通过完整门禁，软件与实板边界见[开发检查点](docs/operations/development-checkpoint.md)。
@@ -72,7 +74,7 @@
 
 2026-09-28 按维护者裁决增加产品操作持久幂等账本的软件候选：单个 910 字节 NVS blob 暂存最近 8 条及单调序号，写意图和终态提交后逐字节读回；只读 `product.status`／`product.result` 与公开串口客户端已接入查询。宿主故障测试及 NVS 短时 I/O 适配测试通过；固定 SDK／QEMU 的 C3 六／八页、ESP32 六页均完成 100 代四记录容量与重启读回，见[C3](docs/operations/c3-eight-page-nvs-capacity.md)和[ESP32](docs/operations/esp32-six-page-nvs-capacity.md)记录。该轮尚未接设备产品写命令；真实 Flash 磨损与两板掉电验收未完成，不能把账本视为 P6-04 完成。
 
-基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载、按 operation ID 查询 `ota.result` 的 V3 持久收据、只读签名固件集合观察，以及与 Container 产品绑定的无包固件 OTA 和启动恢复软件链。FRP 已接入公开组件和单 owner；受控 loopback 管理端点已有认证 `status`／`restart` 软件候选，能在绑定成功后开放 FRP 启动门，但尚无同板资源及真实 FRPS 闭环；实体 C3 仍保留旧 Base、ESP32 仍保留旧 ESP-AT，五能力完整验收尚未完成。
+基于公开 ESP-IDF v6.1 维护 fork 的设备业务基座。当前具备持久 UUID、硬件事实、心跳、分区、配置事务、Wi-Fi station、本次启动 SNTP 时间同步门、USB status/restart/config.set 协议、配置后启动的严格 TLS MQTT 命令通道，以及 OTA pending 新槽本地确认。受控签名构建还具备 `ota.start` 下载、按 operation ID 查询 `ota.result` 的 V3 持久收据、只读签名固件集合观察，以及与 Container 产品绑定的无包固件 OTA 和启动恢复软件链。FRP 已接入公开组件和单 owner；受控 loopback 管理端点已有认证 `status`／`restart` 软件候选，能在绑定成功后开放 FRP 启动门，但尚无同板资源及真实 FRPS 闭环；C3 当前用于受控仓外实验，数据按维护者授权清空，原 MQTT 实验代码制品作为恢复目标；ESP32 已拔除，五能力完整验收尚未完成。
 
 2026-09-28 ESP32 产品源码现已采用此前签名 QEMU 使用过的完整 4 MiB 分区几何：双应用槽、三包槽、独立 FRP scratch、六页 Base NVS 与旧 AT 原字节区。scratch 的编译配置必须与该表精确一致；固定 SDK 测试键签名 app／分区表官方验签、容量门及 ESP32 host 回归通过。[源码几何检查点](docs/operations/p6-03-esp32-product-partition-source-checkpoint.md)记录完整输入。迁移恢复、正式 `ota.start` 全链及两块实板验收仍未闭合。C3 源码现采用双 `0x130000` app、三份 `0x77000` 包槽、`frp_scratch@0x3e5000` 与 11 页 `base_store`；旧 C3 表仅供离线迁移预检。
 
@@ -193,7 +195,7 @@ C3 `base_store` 后 31 页的脱敏逐页字节计数和旧 `ota_1` 同字节映
 
 `IDF_PATH` 指向 [sdk-lock.json](sdk-lock.json) 固定的公开 ESP-IDF v6.1 fork `578cf89c343e388db43ba1f4ddcd602fedcb763c`，其 lwIP 子模块固定为公开 `esp-lwip@2758df4cd3666b3b2a5b53830148379326425c0d`；准备及检查见[宿主工具](tools/README.md#sdk-源码准备)。构建会核对这两个提交、SDK 工作树、其他子模块及实际 lwIP 组件路径。其余依赖来自本仓、官方 cJSON 和 Component Manager 锁定的公开 `esp-mqtt@a46e209cc98c7b910774dbb77d11b34f79492720`、`esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`、`esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`、`esp-container@52d94d696d4cb0de3ce6a037c844c16be7edfb54`，不读取工作区相邻仓库。普通基座的软件候选使用 v3 配置；MQTT 的 HMAC、Topic 和 ClientID 合同未变，无凭据时不创建客户端。FRP 有独立 Token、CA、代理名和管理 key，loopback 管理 listener 未绑定时不创建连接；完整请求合同见[设备协议](docs/design/device-protocol.md#frp-base-软件接线边界)。隔离测试应用直接调用 `emqtt_` 接口。构建制品和实板结论以[开发检查点](docs/operations/development-checkpoint.md)为准；编译不写设备。
 
-NVS 初始化失败时保留原分区并停止初始化，不自动擦除。Base 身份使用 `nvs/base_identity/device_uuid`；C3 旧分区表保留为离线迁移预检输入；正式源码已切换到新分区，旧 ESP-AT 的 ESP32 没有可沿用的 Base UUID，须在新布局首次启动时建立独立身份。配置 `base_store/base_config/committed` 只接受 v3，旧 v1/v2 记录会使启动停止且不写入；现有实板必须在完整 Flash 备份、两槽与同一 NVS key 离线迁移验证后才可首次启动该镜像。只读预检和候选见[离线迁移](docs/operations/base-v3-offline-migration.md)。C3 与 ESP32-D0WD-V3 均按各自 4 MiB 布局独立构建，无 GPIO 动作。ESP32 的 UART0/CH340 控制入口、产品分区与 ECDSA v1 OTA 约束已有软件候选，但旧 ESP-AT 启动链、身份、持久区和新 Base 不能直接混用；需保留完整旧 Flash、仓外旧持久区归档、双签名 Base 与恢复步骤，再另行受控实板迁移。[旧 AT 配置只读检查点](docs/operations/esp32-at-nvs-readonly-checkpoint.md)说明现物 Wi-Fi 空值、MAC 与新 UUID 的边界，以及原始归档与活动配置迁移的区别。
+NVS 初始化失败时保留原分区并停止初始化，不自动擦除。Base 身份使用 `nvs/base_identity/device_uuid`；C3 旧分区表保留为离线迁移预检输入；正式源码已切换到新分区，旧 ESP-AT 的 ESP32 没有可沿用的 Base UUID，须在新布局首次启动时建立独立身份。配置 `base_store/base_config/committed` 只接受 v3，旧 v1/v2 记录会使启动停止且不写入；保留旧身份和配置的历史迁移流程要求完整 Flash 归档、两槽与同一 NVS key 离线验证。本任务维护者已明确丢弃 ESP 数据，受控 C3 实验采用整片擦除后生成新身份和配置，不恢复旧 NVS；不能把该实验称作旧数据迁移或正式双板验收。只读预检和候选见[离线迁移](docs/operations/base-v3-offline-migration.md)。C3 与 ESP32-D0WD-V3 均按各自 4 MiB 布局独立构建，无 GPIO 动作。ESP32 的 UART0/CH340 控制入口、产品分区与 ECDSA v1 OTA 约束已有软件候选，但旧 ESP-AT 启动链、身份、持久区和新 Base 不能直接混用；需保留完整旧 Flash、仓外旧持久区归档、双签名 Base 与恢复步骤，再另行受控实板迁移。[旧 AT 配置只读检查点](docs/operations/esp32-at-nvs-readonly-checkpoint.md)说明现物 Wi-Fi 空值、MAC 与新 UUID 的边界，以及原始归档与活动配置迁移的区别。
 
 pending OTA 槽只在身份、配置、USB 控制任务初始化成功，控制循环实际开始、在本地 30 秒窗口内持续报告进展，且跨过窗口终点再完成一轮后确认。Wi-Fi 初始化失败时状态为 `failed`，USB 控制仍启动，不因此回滚；窗口内 `config.set` 返回 `ota_verification_pending`，确认成功后恢复；不等待 Wi-Fi、Broker 或 FRPS 在线。确认 SDK 报错但 otadata 已为 VALID 时按持久状态清门。启动或活性检查失败时由 IDF 尝试回滚；无可回退镜像时当前执行暂留，但下次复位不保证可启动，需人工恢复。
 

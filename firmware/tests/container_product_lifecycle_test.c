@@ -1243,6 +1243,7 @@ static void check_active_product(const esp_base_storage_claim_t *claim,
     assert(esp_base_container_product_status_snapshot(claim, &binding, &active) ==
            ESP_BASE_CONTAINER_BINDING_OK);
     assert(active.present && !strcmp(active.product_id, "counter") &&
+           active.product_id_size_bytes == sizeof("counter") - 1U &&
            active.product_version_size_bytes == version->size &&
            !memcmp(active.product_version, version->bytes, version->size) &&
            active.product_version[version->size] == '\0' && active.is_trial == trial &&

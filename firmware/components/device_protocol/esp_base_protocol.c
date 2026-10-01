@@ -547,8 +547,10 @@ static void reply_product_status(const char *request_id,
         package_digest_hex(digest, binding->package_sha256);
         package_sha256 = digest;
     }
-    const size_t capacity = 1024U + (active->present ?
-        strlen(active->product_id) + active->product_version_size_bytes : 0U);
+    /* Absent views own zero lengths and nullable string pointers. Carry the
+     * authorized lengths from the snapshot, without a nullable strlen call. */
+    const size_t capacity = 1024U + active->product_id_size_bytes +
+        active->product_version_size_bytes;
     char *response = protocol_work_alloc(capacity);
     if (response == NULL) {
         reply(request_id, "unknown", "resource_failure", NULL);

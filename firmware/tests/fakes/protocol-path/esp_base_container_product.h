@@ -84,6 +84,7 @@ esp_base_container_stage_result_t esp_base_container_product_write_staged_firmwa
 typedef struct {
     bool present;
     const char *product_id; /* Immutable build authorization, verified on open. */
+    size_t product_id_size_bytes; /* Exact authorized ID length; zero when absent. */
     char *product_version; /* Owned copy; caller frees after a successful query. */
     size_t product_version_size_bytes;
     uint8_t package_sha256[32];
