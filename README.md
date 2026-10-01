@@ -1,8 +1,10 @@
 # ESP Base
 
+2026-10-02 C3 原始 USB 固件复验：修复空产品 `product.status` 的空指针容量读取后，真实空白数据首启、十字段状态查询、Wi-Fi 配置提交、公开重启与身份／配置／联网恢复通过。双目标 host、真实签名 guest 生命周期、固定 SDK 完整签名构建和官方验签通过；[故障与证据](docs/issues/c3_empty_product_status_null_pointer.md)单独记录，尚未验收 MQTT／FRP／OTA 联网组合。
+
 2026-10-02 C3 签名产品实板切片：正式 Base 产品 owner 的 event／timer 原生取消、实际 stop／close／join 与 100 轮回收／199 次同 boot 重开已通过，完整边界见[取消检查点](docs/operations/async_cancel_checkpoint.md)。本任务维护者已允许丢弃 ESP 数据，C3 实验整片擦除后只恢复原代码制品，旧身份和配置不再保留；ESP32 未连接，五能力联网和公开管理全链仍未验收。
 
-2026-10-02 产品 owner 异步取消：精确消费新 Container／WAMR 取消合同与可复现的 MQTT 归档，并将唯一 guest 线程优先级设为 3，使既有产品 worker 4／control 5 能提交取消请求。双目标 host、真实签名 init／event／timer 取消、停止失败阻断及百次生命周期回归通过；修正后的固定 SDK 两目标签名固件与官方验签通过，独立两目标 QEMU 与 C3 直接 API 实板切片证明调度关系，Base 签名产品实板仍待验证，见[检查点](docs/operations/async_cancel_checkpoint.md)。
+2026-10-02 产品 owner 异步取消：精确消费新 Container／WAMR 取消合同与可复现的 MQTT 归档，并将唯一 guest 线程优先级设为 3，使既有产品 worker 4／control 5 能提交取消请求。双目标 host、真实签名 init／event／timer 取消、停止失败阻断及百次生命周期回归通过；修正后的固定 SDK 两目标签名固件与官方验签通过，独立两目标 QEMU 与 C3 直接 API 实板切片证明调度关系，Base 签名产品的公开管理与联网组合仍待验证，见[检查点](docs/operations/async_cancel_checkpoint.md)。
 
 2026-10-01 宿主工具归位：期限 guest 构包与 NVS QEMU runner 移至 `tools/`，固件 README 标准链接修正；双目标真实签名 guest、各 100 次重装和资源回归通过。中央检查器的嵌套 SDK 误报修正已在主工作区通过完整门禁，软件与实板边界见[开发检查点](docs/operations/development-checkpoint.md)。
 
