@@ -229,6 +229,12 @@ static bool decode_uuid(const char value[37], uint8_t bytes[16])
     return written == 16;
 }
 
+static bool product_cancel_requested(void *context)
+{
+    const atomic_bool *requested = context;
+    return atomic_load_explicit(requested, memory_order_acquire);
+}
+
 static bool configure_policy(void)
 {
     if (CONFIG_ESP_BASE_CONTAINER_PRODUCT_ID[0] == '\0' ||
@@ -293,6 +299,8 @@ static bool configure_policy(void)
         .event_instruction_budget = CONFIG_ESP_BASE_CONTAINER_MAX_INSTRUCTIONS,
         .stop_instruction_budget = CONFIG_ESP_BASE_CONTAINER_MAX_INSTRUCTIONS,
         .max_entry_duration_ms = CONFIG_ESP_BASE_CONTAINER_MAX_ENTRY_MS,
+        .cancel_requested = product_cancel_requested,
+        .cancel_context = &s_product.stop_requested,
     };
     return true;
 }
@@ -1041,12 +1049,20 @@ static void *product_thread(void *unused)
     }
     const econtainer_runtime_result_t initialized = econtainer_product_init(open.runtime);
     if (initialized != ECONTAINER_RUNTIME_OK) {
-        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED init=%d", (int)initialized);
-        s_product.native_reclaimed = econtainer_product_close(&open.runtime) == ECONTAINER_RUNTIME_OK &&
-                                     open.runtime == NULL;
+        const bool requested_stop = initialized == ECONTAINER_RUNTIME_ENTRY_CANCELLED &&
+            atomic_load_explicit(&s_product.stop_requested, memory_order_acquire);
+        const econtainer_runtime_result_t stopped = requested_stop ?
+            econtainer_product_stop(open.runtime) : ECONTAINER_RUNTIME_OK;
+        const econtainer_runtime_result_t closed = econtainer_product_close(&open.runtime);
+        s_product.native_reclaimed = stopped == ECONTAINER_RUNTIME_OK &&
+                                     closed == ECONTAINER_RUNTIME_OK && open.runtime == NULL;
         s_product.stop_succeeded = s_product.native_reclaimed;
+        if (!requested_stop || !s_product.stop_succeeded)
+            ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED init=%d stopped=%d closed=%d",
+                     (int)initialized, (int)stopped, (int)closed);
+        report_result(requested_stop && s_product.stop_succeeded ?
+                      ESP_BASE_CONTAINER_STOPPED : ESP_BASE_CONTAINER_BLOCKED);
         xSemaphoreGive(s_product.stopped);
-        report_result(ESP_BASE_CONTAINER_BLOCKED);
         free(open.product_version);
         return NULL;
     }
@@ -1125,6 +1141,11 @@ static void *product_thread(void *unused)
                 open.runtime, event->bytes, event->size_bytes, &guest_result);
             memset(event->bytes, 0, event->size_bytes);
             free(event);
+            if (delivered == ECONTAINER_RUNTIME_ENTRY_CANCELLED &&
+                atomic_load_explicit(&s_product.stop_requested, memory_order_acquire)) {
+                requested_stop = finish_guest_work();
+                break;
+            }
             if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE) {
                 ESP_LOGE(TAG, "ESP_BASE_CONTAINER_EVENT_FAILED observation lock");
                 break;
@@ -1183,6 +1204,11 @@ static void *product_thread(void *unused)
                 int32_t guest_result = 0;
                 const econtainer_runtime_result_t fired = econtainer_product_poll_timer(
                     open.runtime, &event, &guest_result);
+                if (fired == ECONTAINER_RUNTIME_ENTRY_CANCELLED &&
+                    atomic_load_explicit(&s_product.stop_requested, memory_order_acquire)) {
+                    requested_stop = finish_guest_work();
+                    break;
+                }
                 if (fired != ECONTAINER_RUNTIME_OK &&
                     fired != ECONTAINER_RUNTIME_NO_TIMER) {
                     fail_guest_work();

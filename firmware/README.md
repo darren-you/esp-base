@@ -67,7 +67,7 @@ ESP32 产品目标由可设置的 `CONFIG_FREERTOS_UNICORE=y` 选出 SDK 派生�
 
 ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`，并要求关闭硬件 Secure Boot 与签名输出；它只用于离线容量与源码检查，**绝非可刷写候选**。ESP32 签名构建必须提供仓外绝对路径的 P-256 签名键，并在独立 sdkconfig 中启用 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y`、`CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、`CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y` 与 rollback；CMake 会拒绝缺失或错目标。测试键只用于仓外软件验证，不能作为设备首次启动密钥。签名 bin 还必须经固定 SDK 的 `espsecure verify-signature --version 1` 验证，并核对双槽与分区表。旧 ESP-AT 板卡的新启动链、两个已签名 Base 槽、otadata、旧区归档与完整恢复仍待 P7-01 受控实板验收。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@bebde3971c2f4b4ee99e150348213222bfd9e27e`，`esp_ota` 唯一来源是公开 `esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`，`esp_frp` 唯一来源是公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`，`esp_container` 唯一来源是公开 `esp-container@e8a0d0b6384bbba813b955ed08ebc315c134a707`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@50c9c45f0fe95d4e99ab39584ff04d45d432efbc`，`esp_ota` 唯一来源是公开 `esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`，`esp_frp` 唯一来源是公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`，`esp_container` 唯一来源是公开 `esp-container@2b93b979b8b0760dcb96b28ac5d13fc52ae547bf`，其 WAMR 固定 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
 当前 FRP 精确锁将 ESP32 的工作流及 TLS 私有对象条件分配至 8BIT IRAM；双目标签名容量、Base host 回归和 ESP32 一条真实 FRPS 工作流的仓外 QEMU 检查见[工作流 IRAM 精确锁检查点](../docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。正式 Base owner、MQTT／OTA／Container 并发与实体板容量尚未验收。
 
@@ -110,3 +110,5 @@ MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELE
 FRP 组件还要求 `CONFIG_MBEDTLS_MD5_C=y`、`CONFIG_LWIP_SO_LINGER=y` 和至少 12 个 lwIP socket；默认配置与 CMake 同时检查。普通镜像中保留库符号只证明编译组合，不能代替真实管理端点、FRPS/MQTT 同时运行或堆峰值测量。
 
 FRP Flash reader 的 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制。C3／ESP32 产品配置均启用，分别固定 `frp_scratch@0x3e5000/0x10000` 和 `frp_scratch@0x3ea000/0x10000`。启用时公开 FRP provider 核对实际 64 KiB 分区，并在任何 pending OTA 确认前擦除本次启动遗留的密文。FRP 每次物理操作使用独立短 claim，升级事务 claim 不再使它立即返回 BUSY；`clear` 不再次擦除。OTA app、Container 包和 NVS 尚未全部接入同一个短时 I/O 仲裁，FRP 最大记录与正式 OTA 下载的进展、期限和实板 Flash 时延仍未验收。C3 对齐软件候选及 ESP32 新源码几何仍按五仓计划完成容量、迁移与实体运行裁决。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
+
+产品 owner 的原子停止标志已进入 Classic 取消谓词；真实签名 init／event／timer 取消与停止失败阻断的宿主结果见[检查点](../docs/operations/async_cancel_checkpoint.md)。

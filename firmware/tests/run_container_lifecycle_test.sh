@@ -57,7 +57,8 @@ read -r -a openssl_cflags <<< "$(pkg-config --cflags openssl)"
 read -r -a openssl_libs <<< "$(pkg-config --libs openssl)"
 container_include="$container_source/components/esp_container/include"
 if ! cmake -S "$container_source" -B "$build_dir/container-build" \
-    -DBUILD_TESTING=ON -DESP_CONTAINER_WAMR_SOURCE="$wamr_source" \
+    -DBUILD_TESTING=ON -DPython3_EXECUTABLE="$(command -v "${TEST_PYTHON:-python3}")" \
+    -DESP_CONTAINER_WAMR_SOURCE="$wamr_source" \
     -DESP_CONTAINER_WASI_SDK_ROOT="$wasi_sdk_root" \
     >"$build_dir/configure.log" 2>&1; then
   tail -n 80 "$build_dir/configure.log" >&2
@@ -99,6 +100,8 @@ compile_args=(-std=c11 -D_POSIX_C_SOURCE=200809L \
 "${TEST_PYTHON:-python3}" "$firmware_root/../tools/container_product_deadline_test.py" \
   "$build_dir/container_product_lifecycle_test" "$container_source" \
   "$wasi_sdk_root" "$build_dir/container-build/runtime-guests"
+"${TEST_PYTHON:-python3}" "$firmware_root/../tools/container_product_cancel_test.py" \
+  "$build_dir/container_product_lifecycle_test" "$container_source" "$wasi_sdk_root"
 
 if [[ "$(uname -s)" == Darwin ]]; then
   "${CC:-cc}" -D_DARWIN_C_SOURCE=1 -DESP_BASE_TEST_RESOURCE_STATS=1 \

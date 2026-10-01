@@ -1,17 +1,17 @@
 dependencies:
   esp_container:
-    component_hash: 340183e0379d7eb2aef7e61ff481be9ca24d9222555d56673468e156898f2602
+    component_hash: c263f81e12963979dfeb7854d61cb5fcc9a8a3f6f20e99eb0e746705262daa97
     dependencies:
     - name: idf
       version: ==6.1.0
     - git: https://github.com/darren-you/wasm-micro-runtime.git
       name: wasm-micro-runtime
-      version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
+      version: 74fd95ccbdc417c3816e04f3308eea8a5473ed34
     source:
       git: https://github.com/esp-space/esp-container.git
       path: components/esp_container
       type: git
-    version: 52d94d696d4cb0de3ce6a037c844c16be7edfb54
+    version: 2b93b979b8b0760dcb96b28ac5d13fc52ae547bf
   esp_frp:
     component_hash: 467ebd742c3dc1c7fd9a6b4ebf704808014b0197839259ca5af8a08326526327
     dependencies:
@@ -49,7 +49,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: 7016873f05402189da4654639f1d39c4ba2e2d6ddab072e1eec863cc44ab8c30
+    component_hash: 9a5d2846eecb57456e745aa6f582cf014b96ec7603ee30a4261ce59bff35f616
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -57,9 +57,9 @@ dependencies:
       git: https://github.com/esp-space/esp-mqtt.git
       path: .
       type: git
-    version: a46e209cc98c7b910774dbb77d11b34f79492720
+    version: 50c9c45f0fe95d4e99ab39584ff04d45d432efbc
   wasm-micro-runtime:
-    component_hash: 713ac0a363a97ad951440e9f5a495d5cac426ee5501667a61d8aed6291c3facc
+    component_hash: d68663bda3f3b42ddfb2657d6576d7a46c440fa392e86de0c9debba2ca04cd6c
     dependencies:
     - name: idf
       version: '>=4.4'
@@ -74,13 +74,13 @@ dependencies:
     - esp32c6
     - esp32p4
     - esp32c5
-    version: c10736fffdf26d7c2ae234e05aa712df112eb6bf
+    version: 74fd95ccbdc417c3816e04f3308eea8a5473ed34
 direct_dependencies:
 - esp_container
 - esp_frp
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: b261e63e79754d81ec319aa527194adf68c48b3e5abf37f6c5bca491780b122b
+manifest_hash: c6a8ac19841456d00eef04b5dd757ad99accde50d705638136d81cf30f144284
 target: esp32c3
 version: 3.0.0

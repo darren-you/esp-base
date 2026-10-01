@@ -1,0 +1,40 @@
+# 产品 owner 异步取消软件检查点
+
+2026-10-02，P6-07／P6-09 继续实施；本记录只确认宿主软件结果，固定 SDK 签名固件构建与实体板验证尚待本批次执行。
+
+## 精确输入与源码归属
+
+- Base 改动基于 `1de99373da89e4c13a195cd3fb55d8d742e55f06`。
+- Container 固定公开提交 `2b93b979b8b0760dcb96b28ac5d13fc52ae547bf`；WAMR 固定维护 fork 提交 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`，此前为 `c10736fffdf26d7c2ae234e05aa712df112eb6bf`。
+- MQTT 固定公开提交 `50c9c45f0fe95d4e99ab39584ff04d45d432efbc`；其相对 `cc5be035aaed6476a28c4704b788e985933be7a5` 仅修改组件打包合同、宿主测试和文档，C／H 运行源码不变。真实 Component Manager 3.1.2 的两个独立缓存取得相同摘要 `9a5d2846eecb57456e745aa6f582cf014b96ec7603ee30a4261ce59bff35f616`、433 个逐字节相同文件，归档不含子模块 `.git` 定位文件；见 [MQTT 记录](https://github.com/esp-space/esp-mqtt/blob/50c9c45f0fe95d4e99ab39584ff04d45d432efbc/docs/verification/component_hash_reproducibility.md)。
+- 主固件与 NVS 容量探针的四份目标锁由官方 Component Manager 强制重新解析生成；Container／WAMR／MQTT 之外的依赖版本、摘要保持不变。SDK 仍固定 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，lwIP 固定 `2758df4cd3666b3b2a5b53830148379326425c0d`。
+- 宿主编译使用真实 wasi-sdk 33.0；不以改写 SDK 的 VERSION 或组件摘要来通过校验。
+
+## 真实缺口与执行合同
+
+此前的 Classic 配置关闭 guest 线程管理。另一 native 线程调用 `wasm_runtime_terminate` 不能中断纯 Wasm 循环，500 ms 探针最终由既有期限退出，取消后仍执行约 359 ms。维护 fork 新增由执行 owner 设置、读取与清除的取消谓词，沿 Classic 安全检查点及 native 导入前后轮询；其他 native 线程只写其自有原子标志，不改 VM 异常或期限，也不启用 guest 线程管理。
+
+Container 将入口取消返回为 `ENTRY_CANCELLED`，撤销本入口日志与计时器并禁止继续业务调用；取消后的真实 `stop` 使用独立预算和期限，取消标志不阻止清理入口。Base 将既有 `stop_requested` 绑定到平台限额，取消 init／event／timer 后由唯一 guest 线程执行真实 stop、close，调用方取得 stopped 信号并 join 后才承认停止。停止失败或超期仍阻断重开；不会把中断的业务事件计为成功或试运行失败，不额外改 ECS2／包字节。
+
+本变更不裁决公开手动停止的跨重启语义；启动过程 init 被取消后，现有同 boot 重开门仍保持关闭。同步阻塞 native／OS 调度没有硬抢占保证。
+
+## 宿主验证
+
+精确、干净的公开 Container／WAMR checkout 与 wasi-sdk 路径通过以下入口运行；`TEST_PYTHON` 同时提供给 CMake guest 构包和直接 Python 测试，解释器需安装 `cryptography`。
+
+```bash
+TEST_PYTHON=/absolute/python ESP_BASE_TEST_TARGET=esp32c3 bash firmware/tests/run_container_lifecycle_test.sh /absolute/container /absolute/wamr /absolute/wasi-sdk
+TEST_PYTHON=/absolute/python ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_container_lifecycle_test.sh /absolute/container /absolute/wamr /absolute/wasi-sdk
+ESP_BASE_TEST_TARGET=esp32c3 bash firmware/tests/run_host_tests.sh
+ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
+```
+
+两目标完整 host 与真实 RSA 签名 guest 生命周期均通过，Base 测试二进制启用 ASan／UBSan。新增五个取消场景覆盖运行中的纯 Wasm init、event、timer，以及 event 取消后 stop 返回失败／stop 纯循环超期；成功 event／timer 停止以 250 ms 宿主观察门与原 500 ms 策略期限区分取消和等待期限，随后实际重开并再次停止。失败场景保持 BLOCKED、禁止重开，绑定、NVS 与包 Flash 写计数不变。
+
+原有签名包安装、启动、停止、卸载、同 boot EMPTY 和重装仍各运行 100 轮，ECS2 1→601。普通 macOS 分配统计第 10／50／100 轮 malloc 均为 384864 B；C3 分支虚拟字节均为 445752901632、region 均为 71，ESP32 分支虚拟字节均为 445752590336、region 为 70／70／72。region 拆分与 malloc／虚拟字节增长分别记录，不能宣称所有指标完全持平。此统计不是 RSS、ESP RAM 或设备回收证明。
+
+真实 Container 的 goto／switch 分派全套 CTest 各 9／9 ASan／UBSan 通过，新增各 100 次取消／close／重开；其普通分配统计 malloc 均为 11104 B、虚拟字节均为 445751787520、region 均为 62，见 [Container 检查点](https://github.com/esp-space/esp-container/blob/2b93b979b8b0760dcb96b28ac5d13fc52ae547bf/docs/operations/async_cancel_checkpoint.md)。
+
+## 尚未闭合
+
+宿主 Flash／NVS、固件集合与任务边界使用测试替身。新锁完整 SDK 签名固件、C3／ESP32 签名产品入口取消、管理面响应、组合动态资源、迟到异步回调、实体掉电和 72 小时负载尚未验收；P6-07／P6-09 不因此勾选通过。当前只有 C3 接线，不假设 ESP32 可以执行实板任务。

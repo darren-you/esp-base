@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-02 产品 owner 异步取消：精确消费新 Container／WAMR 取消合同与可复现的 MQTT 归档，双目标 host、真实签名 init／event／timer 取消、停止失败阻断及百次生命周期回归通过；固定 SDK 与实体板仍待本批次验证，见[检查点](docs/operations/async_cancel_checkpoint.md)。
+
 2026-10-01 宿主工具归位：期限 guest 构包与 NVS QEMU runner 移至 `tools/`，固件 README 标准链接修正；双目标真实签名 guest、各 100 次重装和资源回归通过。中央检查器的嵌套 SDK 误报修正已在主工作区通过完整门禁，软件与实板边界见[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-10-01 FRP 设备认证重启软件续进：新增固定 restart 端点，复用全设备写守卫，在签名 running 回执后有界延迟重启。两目标 host、真实 HTTP／HMAC／Base handler 回环与固定 SDK 测试签名构建通过；网关重启与新 boot 确认、真实 FRPS 和两板仍待验收，见[重启检查点](docs/operations/frp_restart_checkpoint.md)。

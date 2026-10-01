@@ -437,6 +437,8 @@ static void configure_product(const file_t *public_key)
         .max_log_bytes = 16, .max_timers = 1,
         .init_instruction_budget = 200000, .event_instruction_budget = 200000,
         .stop_instruction_budget = 200000, .max_entry_duration_ms = 1000,
+        .cancel_requested = product_cancel_requested,
+        .cancel_context = &s_product.stop_requested,
     };
 }
 
@@ -528,8 +530,12 @@ static econtainer_slots_result_t open_after_stop(
         .selection = ECONTAINER_SLOT_SELECT_CONFIRMED,
     };
     econtainer_runtime_t *runtime = NULL;
+    /* This direct instance runs on the caller, outside the stopped Base owner. */
+    econtainer_runtime_limits_t limits = s_product.limits;
+    limits.cancel_requested = NULL;
+    limits.cancel_context = NULL;
     const econtainer_slot_runtime_result_t opened = econtainer_product_open(
-        &io, &geometry, &request, &s_product.validation, &s_product.limits, &runtime);
+        &io, &geometry, &request, &s_product.validation, &limits, &runtime);
     if (opened.slots != ECONTAINER_SLOTS_OK) return opened.slots;
     assert(opened.runtime == ECONTAINER_RUNTIME_OK && runtime != NULL);
     assert(econtainer_product_init(runtime) == ECONTAINER_RUNTIME_OK);
@@ -555,8 +561,12 @@ static econtainer_slots_result_t open_expired_init(
         .selection = ECONTAINER_SLOT_SELECT_CONFIRMED,
     };
     econtainer_runtime_t *runtime = NULL;
+    /* This direct instance runs on the caller, outside the stopped Base owner. */
+    econtainer_runtime_limits_t limits = s_product.limits;
+    limits.cancel_requested = NULL;
+    limits.cancel_context = NULL;
     const econtainer_slot_runtime_result_t opened = econtainer_product_open(
-        &io, &geometry, &request, &s_product.validation, &s_product.limits, &runtime);
+        &io, &geometry, &request, &s_product.validation, &limits, &runtime);
     if (opened.slots != ECONTAINER_SLOTS_OK) return opened.slots;
     assert(opened.runtime == ECONTAINER_RUNTIME_OK && runtime != NULL);
     /* The signed ABI 2 guest logs, starts one timer, then spins in pure Wasm. */
@@ -575,6 +585,133 @@ static econtainer_slots_result_t open_expired_init(
     assert(econtainer_product_stop(runtime) == ECONTAINER_RUNTIME_INVALID_STATE);
     assert(econtainer_product_close(&runtime) == ECONTAINER_RUNTIME_OK && runtime == NULL);
     return ECONTAINER_SLOTS_OK;
+}
+
+static atomic_bool cancel_entry_observed;
+
+static bool observe_product_cancellation(void *context)
+{
+    atomic_store_explicit(&cancel_entry_observed, true, memory_order_release);
+    return product_cancel_requested(context);
+}
+
+static void cancellation_policy(void)
+{
+    s_product.validation.max_instruction_budget = 100000000U;
+    s_product.validation.max_host_call_timeout_ms = 500U;
+    s_product.limits.init_instruction_budget = 100000000;
+    s_product.limits.event_instruction_budget = 100000000;
+    s_product.limits.stop_instruction_budget = 100000000;
+    s_product.limits.max_entry_duration_ms = 500U;
+    s_product.limits.cancel_requested = observe_product_cancellation;
+    atomic_store(&cancel_entry_observed, false);
+}
+
+static void wait_cancel_entry(void)
+{
+    for (unsigned attempt = 0; attempt < 400U; ++attempt) {
+        if (atomic_load_explicit(&cancel_entry_observed, memory_order_acquire)) return;
+        vTaskDelay(1U);
+    }
+    assert(!"the actual runtime did not query its owner cancellation predicate");
+}
+
+static void *request_init_cancellation(void *context)
+{
+    atomic_bool *requested = context;
+    wait_cancel_entry();
+    const struct timespec delay = {.tv_nsec = 10000000};
+    assert(nanosleep(&delay, NULL) == 0);
+    atomic_store_explicit(requested, true, memory_order_release);
+    return NULL;
+}
+
+static void run_cancel_product(const char *directory, const char *package_name,
+                                bool cancel_init, bool cancel_timer,
+                                bool stop_succeeds)
+{
+    file_t key = read_file(directory, "public.der");
+    file_t package = read_file(directory, package_name);
+    const char boot_id[] = "22222222-2222-4222-8222-222222222222";
+    configure(&key);
+    cancellation_policy();
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    install_context_t install = {.package = &package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    econtainer_slots_state_t before = {0}, after = {0};
+    assert(econtainer_slots_load(&io, &geometry, &before) == ECONTAINER_SLOTS_OK);
+    const int current = binding_index(&before, physical.running_firmware_sha256);
+    assert(current >= 0 && before.bindings[current].package_present);
+    const unsigned writes_before = store.blob_writes;
+    const unsigned flash_before = store.flash_writes;
+    const unsigned erases_before = store.flash_erases;
+    atomic_store(&cancel_entry_observed, false);
+    if (cancel_init) {
+        pthread_t requester;
+        assert(pthread_create(&requester, NULL, request_init_cancellation,
+                              &s_product.stop_requested) == 0);
+        assert(esp_base_container_product_boot(&claim, boot_id) ==
+               ESP_BASE_CONTAINER_STOPPED);
+        assert(pthread_join(requester, NULL) == 0);
+        assert(!s_product.reopen_allowed);
+    } else {
+        assert(esp_base_container_product_boot(&claim, boot_id) ==
+               ESP_BASE_CONTAINER_RUNNING);
+        atomic_store(&cancel_entry_observed, false);
+        const uint8_t event[] = {cancel_timer ? 'T' : 'E'};
+        assert(offer_event_when_available(before.bindings[current].package_sha256,
+            1U, event, sizeof event) == ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+        if (cancel_timer) {
+            for (unsigned attempt = 0; attempt < 400U &&
+                 esp_base_container_product_event_progress_count() == 0U; ++attempt)
+                vTaskDelay(1U);
+            assert(esp_base_container_product_event_progress_count() == 1U);
+            atomic_store(&cancel_entry_observed, false);
+        }
+        wait_cancel_entry();
+        const struct timespec delay = {.tv_nsec = 10000000};
+        assert(nanosleep(&delay, NULL) == 0);
+        assert(atomic_load_explicit(&s_product.result, memory_order_acquire) == ESP_BASE_CONTAINER_RUNNING);
+        const int64_t began_us = esp_timer_get_time();
+        assert(esp_base_container_product_stop_confirmed(&claim) == stop_succeeds);
+        const int64_t elapsed_us = esp_timer_get_time() - began_us;
+        if (stop_succeeds) assert(elapsed_us >= 0 && elapsed_us < 250000);
+        assert(esp_base_container_product_event_progress_count() ==
+               (cancel_timer ? 1U : 0U));
+        assert(s_product.trial_failure_count == 0U);
+        if (stop_succeeds) {
+            assert(s_product.reopen_allowed);
+            assert(esp_base_container_product_boot(&claim, boot_id) ==
+                   ESP_BASE_CONTAINER_RUNNING);
+            assert(esp_base_container_product_stop_confirmed(&claim));
+        } else {
+            assert(!s_product.reopen_allowed && !s_product.native_reclaimed);
+            assert(atomic_load_explicit(&s_product.result, memory_order_acquire) == ESP_BASE_CONTAINER_BLOCKED);
+            assert(esp_base_container_product_boot(&claim, boot_id) ==
+                   ESP_BASE_CONTAINER_BLOCKED);
+        }
+    }
+    assert(!s_product.thread_joinable && !atomic_load(&s_product.instance_active));
+    assert(s_product.event_queue == NULL && s_product.event_count == 0U &&
+           !s_product.guest_call_processing && store.mapping == NULL && !store.locked);
+    if (stop_succeeds)
+        assert(s_product.native_reclaimed && s_product.stop_succeeded &&
+               atomic_load_explicit(&s_product.result, memory_order_acquire) == ESP_BASE_CONTAINER_STOPPED);
+    assert(store.blob_writes == writes_before && store.flash_writes == flash_before &&
+           store.flash_erases == erases_before);
+    assert(econtainer_slots_load(&io, &geometry, &after) == ECONTAINER_SLOTS_OK &&
+           before.sequence == after.sequence &&
+           same_binding(&before.bindings[current], &after.bindings[current]));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+    free(key.bytes);
+    free(package.bytes);
 }
 
 static void run_deadline_product(const char *directory)
@@ -2765,6 +2902,15 @@ int main(int argc, char **argv)
                   trial_event_digest) != NULL);
     if (argc == 3 && strcmp(argv[2], "deadline") == 0) {
         run_deadline_product(argv[1]);
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[2], "cancel") == 0) {
+        run_cancel_product(argv[1], "cancel-init.pkg", true, false, true);
+        run_cancel_product(argv[1], "cancel.pkg", false, false, true);
+        run_cancel_product(argv[1], "cancel.pkg", false, true, true);
+        run_cancel_product(argv[1], "cancel-stop-fail.pkg", false, false, false);
+        run_cancel_product(argv[1], "cancel-stop-loop.pkg", false, false, false);
+        puts("container_product_cancel: signed init/event/timer cancellation, actual stop, reclaim and stop-failure blocking passed");
         return 0;
     }
     if (argc == 3 && strcmp(argv[2], "event-failure") == 0) {
