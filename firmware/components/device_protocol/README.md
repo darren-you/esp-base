@@ -30,7 +30,7 @@ flowchart LR
     broker["设备级 Broker：TLS / 精确 ACL"] <-->|"command / event / result / reported / status"| mqtt["mqtt_owner：UUID / LWT / 双 SUBACK 门"]
     mqtt <-->|"HMAC 验证后派发 / 结果发布"| owner
     owner --> frp_owner["frp_owner：公开 esp-frp 单实例 / 端点门 / 状态"]
-    owner --> frp_listener["frp_status_listener：loopback / FRP 独立 HMAC / 只读 status"]
+    owner --> frp_listener["frp_management_listener：loopback / FRP 独立 HMAC / 只读 status"]
     frp_listener -->|"绑定门"| frp_owner
     frp_owner --> frp["公开 esp-frp：严格 TLS / Yamux / Token"]
     owner --> parser["command_decoder：严格 JSON / 分片 / 超限排空"]
@@ -71,4 +71,4 @@ QoS 1 outbox 消息过期时，owner 撤销 `ready`、停止当前会话并在�
 
 签名构建的只读 `ota.result` 按 operation ID 读取最近一次持久收据，返回目标 signed bin 摘要/长度和当前 running/succeeded/failed/unknown；旧启动的 `request_id` 不会重放写动作。活跃 worker 或原 PREPARED 对应的新 pending 槽查询保持 running；目标槽运行且被选为 boot、VALID、完整 signed bin 摘要匹配，并有独立读回的 SUCCEEDED 收据后才 succeeded。仅 VALID 或 INVALID／ABORTED 不补出成功／失败；旧来源槽以 VALID 运行且被选为 boot，又有原 FAILED 收据，才返回 failed。NVS 登记必须先 commit+读回再创建 worker；失败收据持久化不确定时返回 unknown 并关闭本次启动配置写入。只有新旧两个镜像都含此查询命令时，回滚到旧槽才能由设备回报最终失败；较旧镜像缺少命令时工具报告 unknown。
 
-FRP owner 消费[组件清单](idf_component.yml)及 [C3](../../dependencies.lock)／[ESP32](../../dependencies.lock.esp32) 依赖锁固定的唯一公开 `esp-frp`，先要求独立 Token/CA、Wi-Fi IP、本次启动可信时间，并以受控 loopback 管理 listener 已绑定为启动门。启用 FRP 配置还要求启动期已恢复的独立 Flash scratch provider；每次 Flash I/O 通过 Base storage owner 取得短 claim。listener 与 FRP owner 同属唯一控制任务，只在 `127.0.0.1:local_port` 绑定，只接受独立 FRP key 的 HMAC 后解析四字段只读 `status`，并对原始响应 JSON 签发 HMAC；重配先撤销旧 listener，再等旧 FRP worker 销毁才装配新 key。HTTP 请求和结果字段见[设备协议](../../../docs/design/device-protocol.md#frp-base-软件接线边界)。host 测试覆盖半包、超限、重复长度头、错 tag、重配撤销旧 key、2 秒总时限、响应签发失败关闭、设备目标、30 秒同 ID 首次快照、新 ID 新状态与缓存容量；只读查询无需预知 boot／uptime，写命令约束保持；固定 SDK 双目标编译及 Flash reader QEMU 探针不代表真实 FRPS、MQTT/OTA 并行或内存门槛通过。
+FRP owner 消费[组件清单](idf_component.yml)及 [C3](../../dependencies.lock)／[ESP32](../../dependencies.lock.esp32) 依赖锁固定的唯一公开 `esp-frp`，先要求独立 Token/CA、Wi-Fi IP、本次启动可信时间，并以受控 loopback 管理 listener 已绑定为启动门。启用 FRP 配置还要求启动期已恢复的独立 Flash scratch provider；每次 Flash I/O 通过 Base storage owner 取得短 claim。listener 与 FRP owner 同属唯一控制任务，只在 `127.0.0.1:local_port` 绑定，在独立 FRP key 的 HMAC 验证后，仅接受四字段只读 `status` 或七字段 `restart`，并对原始响应 JSON 签发 HMAC；重配先撤销旧 listener，再等旧 FRP worker 销毁才装配新 key。HTTP 请求和结果字段见[设备协议](../../../docs/design/device-protocol.md#frp-base-软件接线边界)。host 测试覆盖半包、超限、重复长度头、错 tag、重配撤销旧 key、2 秒总时限、响应签发失败关闭、设备目标、30 秒同 ID 首次快照、新 ID 新状态与缓存容量；只读查询无需预知 boot／uptime，restart 复用跨通道写守卫与互斥门，在签名 running 回执后有界重启，202 不证明新 boot；固定 SDK 双目标编译及 Flash reader QEMU 探针不代表真实 FRPS、MQTT/OTA 并行或内存门槛通过。

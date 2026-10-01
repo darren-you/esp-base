@@ -42,9 +42,9 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
 "$BUILD_DIR/network_auth_test"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
-  "$ROOT/components/device_protocol/frp_status_listener.c" \
-  "$ROOT/tests/frp_status_listener_test.c" -o "$BUILD_DIR/frp_status_listener_test"
-"$BUILD_DIR/frp_status_listener_test"
+  "$ROOT/components/device_protocol/frp_management_listener.c" \
+  "$ROOT/tests/frp_management_listener_test.c" -o "$BUILD_DIR/frp_management_listener_test"
+"$BUILD_DIR/frp_management_listener_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
   -I "$ROOT/components/remote_config/include" \
@@ -120,6 +120,10 @@ fi
   -I "$ROOT/components/remote_config/include" -I "$ROOT/components/ota_operation/include" \
   -I "$EOTA_DIR/include" -I "$CJSON_DIR" \
   -c "$ROOT/components/device_protocol/command_decoder.c" -o "$BUILD_DIR/line_feed.o"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -ffunction-sections -fdata-sections -Debase_config_encode=ebase_config_encode_real \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/remote_config/include" \
+  -c "$ROOT/components/remote_config/config_codec.c" -o "$BUILD_DIR/config_codec_real.o"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
@@ -132,7 +136,7 @@ fi
   "$ROOT/components/device_protocol/control_state.c" \
   "$ROOT/components/device_protocol/product_ledger.c" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
-  "$BUILD_DIR/line_feed.o" \
+  "$BUILD_DIR/line_feed.o" "$BUILD_DIR/config_codec_real.o" "$BUILD_DIR/cJSON.o" \
   "$ROOT/tests/protocol_ota_owner_test.c" -o "$BUILD_DIR/protocol_ota_owner_test"
 "$BUILD_DIR/protocol_ota_owner_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \

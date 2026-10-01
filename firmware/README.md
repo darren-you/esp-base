@@ -47,8 +47,8 @@ flowchart LR
     protocol --> mqtt_owner["mqtt_owner：TLS / SUBACK / HMAC / 结果"]
     mqtt_owner --> mqtt["公开 esp-mqtt：官方核心 / emqtt_ 运行接口"]
     protocol --> frp_owner["frp_owner：端点门 / 单实例 / 停止收敛"]
-    protocol --> frp_status["frp_status_listener：loopback / HMAC / 只读 status"]
-    frp_status -->|"绑定成功"| frp_owner
+    protocol --> frp_management["frp_management_listener：loopback / HMAC / status / restart"]
+    frp_management -->|"绑定成功"| frp_owner
     frp_owner --> frp["公开 esp-frp：TLS / Yamux / Token"]
     host["公开 tools 或私有 Bridge"] <-->|"JSON Lines"| protocol
     c3["partitions/c3-product-partition-table.csv：C3 产品布局"] --> build["ESP-IDF 两目标独立 build"]

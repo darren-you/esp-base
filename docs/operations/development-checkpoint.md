@@ -1,5 +1,11 @@
 # 开发检查点
 
+## 2026-10-01 FRP 设备认证重启
+
+固定 status／restart 管理 listener 已硬切命名；restart 使用 USB／MQTT 共用写守卫和原 outcome，在认证 running 回执后按 100／2000 ms 边界执行一次重启。等待期间其他新写命令 busy，序列化失败不登记动作。两目标各 22 项 host 与两项实际 HTTP／HMAC 软件回环、固定 SDK 测试签名构建／验签通过；SDK、依赖锁、配置 schema 与分区未改。完整输入、镜像摘要与测试替身边界见[FRP 认证重启检查点](frp_restart_checkpoint.md)。
+
+尚未接入私有网关重启账本与新 boot 确认，真实外侧 HTTPS／FRPS、MCU 密码、两板及资源门槛继续未验收；本轮没有设备写入或生产发布，共享 Root／Profile／gitlink 保持停写。
+
 ## 2026-10-01 FRP 独立只读状态与响应认证
 
 设备 status 请求现严格四字段，不需要 USB／MQTT 先提供 boot／uptime；同 ID 的服务端 30 秒首次快照缓存保持八槽，新查询使用新 UUID。所有非空认证响应由实际 PSA wrapper 签发原始 JSON HMAC，错误输出长度或密码失败不发送成功结果，写命令合同保持。双目标完整 host、OpenSSL 回环 HTTP 及已有产品事件 probe 通过；固定 SDK 产品签名构建、官方验签和槽容量通过，两个 ELF 中均已链接新签发代码。完整输入、镜像摘要、早期缓存／测试同步故障及验收边界见[FRP 认证状态检查点](frp_authenticated_status_checkpoint.md)。

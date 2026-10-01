@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "esp_base_frp_status_listener.h"
+#include "esp_base_frp_management_listener.h"
 #include "esp_base_network_auth.h"
 
 #include <arpa/inet.h>
@@ -43,10 +43,13 @@ bool ebase_management_authenticate(const uint8_t key[EBASE_MANAGEMENT_KEY_BYTES]
     return true;
 }
 
-static int status_handler(const uint8_t *request, size_t length, char *response,
+static esp_base_frp_management_command_t expected_command = ESP_BASE_FRP_MANAGEMENT_STATUS;
+
+static int status_handler(esp_base_frp_management_command_t command, const uint8_t *request, size_t length, char *response,
                           size_t capacity, size_t *written, void *context)
 {
     (void)context;
+    assert(command == expected_command);
     assert(length == sizeof body - 1 && !memcmp(request, body, length));
     ++handled;
     assert(capacity >= sizeof result);
@@ -121,7 +124,7 @@ static void response(int fd, uint64_t start, int status, bool has_result)
     char text[1500] = {0};
     size_t length = 0;
     for (unsigned i = 0; i < 1000; ++i) {
-        esp_base_frp_status_listener_poll(start + i, status_handler, NULL);
+        esp_base_frp_management_listener_poll(start + i, status_handler, NULL);
         const ssize_t count = recv(fd, text + length, sizeof text - length - 1, 0);
         if (count > 0) length += (size_t)count;
         else if (count == 0) break;
@@ -150,15 +153,15 @@ int main(void)
 {
     ebase_frp_config_t config = {.configured = true, .local_port = unused_port()};
     memset(config.management_key, 0xaa, sizeof config.management_key);
-    esp_base_frp_status_listener_configure(&config);
-    esp_base_frp_status_listener_poll(1000, status_handler, NULL);
-    assert(esp_base_frp_status_listener_ready());
+    esp_base_frp_management_listener_configure(&config);
+    esp_base_frp_management_listener_poll(1000, status_handler, NULL);
+    assert(esp_base_frp_management_listener_ready());
 
     char frame[1200];
     size_t length = request(frame, sizeof frame, 'a', false);
     int fd = connect_client(config.local_port);
     write_all(fd, frame, 23);
-    esp_base_frp_status_listener_poll(1100, status_handler, NULL);
+    esp_base_frp_management_listener_poll(1100, status_handler, NULL);
     char one;
     assert(recv(fd, &one, 1, 0) < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
     write_all(fd, frame + 23, length - 23);
@@ -187,10 +190,10 @@ int main(void)
     length = request(frame, sizeof frame, 'a', false);
     write_all(fd, frame, length - 4);
     for (unsigned i = 0; i < 20; ++i) {
-        esp_base_frp_status_listener_poll(5500 + i, status_handler, NULL);
+        esp_base_frp_management_listener_poll(5500 + i, status_handler, NULL);
         nanosleep(&(struct timespec){.tv_nsec = 1000000}, NULL);
     }
-    esp_base_frp_status_listener_poll(7520, status_handler, NULL);
+    esp_base_frp_management_listener_poll(7520, status_handler, NULL);
     assert_closed(fd);
     close(fd);
     assert(authenticated == 2 && handled == 1);
@@ -198,16 +201,16 @@ int main(void)
     fd = connect_client(config.local_port);
     write_all(fd, frame, 16);
     for (unsigned i = 0; i < 20; ++i) {
-        esp_base_frp_status_listener_poll(7530 + i, status_handler, NULL);
+        esp_base_frp_management_listener_poll(7530 + i, status_handler, NULL);
         nanosleep(&(struct timespec){.tv_nsec = 1000000}, NULL);
     }
     config.management_key[0] = 0xbb;
-    esp_base_frp_status_listener_configure(&config);
+    esp_base_frp_management_listener_configure(&config);
     assert_closed(fd);
     close(fd);
-    assert(!esp_base_frp_status_listener_ready());
-    esp_base_frp_status_listener_poll(7600, status_handler, NULL);
-    assert(esp_base_frp_status_listener_ready());
+    assert(!esp_base_frp_management_listener_ready());
+    esp_base_frp_management_listener_poll(7600, status_handler, NULL);
+    assert(esp_base_frp_management_listener_ready());
     fd = connect_client(config.local_port);
     length = request(frame, sizeof frame, 'a', false);
     write_all(fd, frame, length);
@@ -241,18 +244,38 @@ int main(void)
     fd = connect_client(config.local_port);
     write_all(fd, frame, length);
     for (unsigned i = 0; i < 1000 && signed_responses < 5; ++i) {
-        esp_base_frp_status_listener_poll(9400 + i, status_handler, NULL);
+        esp_base_frp_management_listener_poll(9400 + i, status_handler, NULL);
         nanosleep(&(struct timespec){.tv_nsec = 1000000}, NULL);
     }
     assert_closed(fd);
     close(fd);
     assert(authenticated == 9 && handled == 7 && signed_responses == 5);
 
-    esp_base_frp_status_listener_configure(NULL);
-    assert(!esp_base_frp_status_listener_ready());
+    /* Only fixed paths reach the typed handler; a restart receipt is signed. */
+    handler_status = 202;
+    expected_command = ESP_BASE_FRP_MANAGEMENT_RESTART;
+    fail_sign = false;
+    length = request(frame, sizeof frame, 'b', false);
+    char restart_frame[1200];
+    const char *tail = strstr(frame, " HTTP/1.1");
+    assert(tail);
+    snprintf(restart_frame, sizeof restart_frame, "POST /api/v1/commands/restart%s", tail);
+    fd = connect_client(config.local_port);
+    write_all(fd, restart_frame, strlen(restart_frame));
+    response(fd, 9500, 202, true);
+    assert(!esp_base_frp_management_listener_response_pending());
+    const unsigned before = authenticated;
+    fd = connect_client(config.local_port);
+    snprintf(restart_frame, sizeof restart_frame, "POST /api/v1/commands/restart?x=1%s", tail);
+    write_all(fd, restart_frame, strlen(restart_frame));
+    response(fd, 9600, 400, false);
+    assert(authenticated == before);
+
+    esp_base_frp_management_listener_configure(NULL);
+    assert(!esp_base_frp_management_listener_ready());
     memset(config.management_key, 0, sizeof config.management_key);
-    esp_base_frp_status_listener_configure(&config);
-    esp_base_frp_status_listener_poll(9900, status_handler, NULL);
-    assert(!esp_base_frp_status_listener_ready());
-    puts("  frp_status_listener passed (loopback, framing, authentication, reconfigure, deadline)");
+    esp_base_frp_management_listener_configure(&config);
+    esp_base_frp_management_listener_poll(9900, status_handler, NULL);
+    assert(!esp_base_frp_management_listener_ready());
+    puts("  frp_management_listener passed (loopback, framing, authentication, reconfigure, deadline)");
 }

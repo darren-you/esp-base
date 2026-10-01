@@ -13,7 +13,7 @@
 ## 软件验证
 
 - C3／ESP32 完整 host ASan/UBSan 回归各 22 个通过摘要，无跳过。新增断言覆盖四字段／旧合同拒绝、设备目标、同 ID 首次快照、新状态、TTL 释放、容量满、768 字节真实 serializer、无写入、签名 200／400／409 与签发失败关闭。
-- 显式 `run_frp_status_crypto_tests.sh` 两目标定义均通过：实际 listener、decoder、auth wrapper 与回环 HTTP；OpenSSL 3.6.4 提供测试 PSA HMAC，Python 独立冻结请求／响应向量，检查错 key、tag／body 篡改、认证前空响应及已认证错误响应。已有产品事件 OpenSSL probe 的有效帧／篡改帧继续通过。它们不运行 IDF 密码端口。
+- 显式 `run_frp_management_crypto_tests.sh` 两目标定义均通过：实际 listener、decoder、auth wrapper 与回环 HTTP；OpenSSL 3.6.4 提供测试 PSA HMAC，Python 独立冻结请求／响应向量，检查错 key、tag／body 篡改、认证前空响应及已认证错误响应。已有产品事件 OpenSSL probe 的有效帧／篡改帧继续通过。它们不运行 IDF 密码端口。
 - 初轮本地生成 MQTT 缓存落后于精确锁，完整回归因此停止；按既有四仓精确 Git SHA 重新展开生成缓存后通过，没有修改锁或依赖版本。新增签发失败用例首轮无等待轮询遇到 TCP 调度竞态；改为按签发观察在一秒内有界等待，设备两秒总期限保持。host 使用的 cJSON 两个输入与固定 SDK 本轮重新解析的组件逐字节相同。
 - 固定 SDK 的两个完整产品签名构建、官方 RSA v2／ECDSA v1 验签和槽容量通过；实际 ELF 中 `ebase_management_sign`、`psa_mac_compute` 与 listener poll 均为已链接代码符号。复用仓外测试键，不使用生产键或改变设备信任根。
 
@@ -29,3 +29,5 @@ SDK 仍为 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，lwIP 为 `2758df4cd3666b
 ## 尚未验证
 
 HMAC 不提供机密性，loopback 仍为 HTTP；外侧受控 HTTPS 入口、隧道 TLS、路由授权、网关 Auth 和绑定必须分别闭合。尚未进行 FRPS 请求到设备、IDF 密码运行、五能力并行、栈／堆测量或两板隔离。仅 C3 当前连接，ESP32 已拔除；本次没有 UART、复位、Flash、eFuse、配置或生产发布操作。
+
+只读候选之后的设备重启扩展见 [FRP 认证重启检查点](frp_restart_checkpoint.md)。本页的原只读构建证据保留，当前源码 listener 已按管理职责更名。

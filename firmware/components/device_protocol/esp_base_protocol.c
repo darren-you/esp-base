@@ -6,7 +6,7 @@
 #include "esp_base_remote_config.h"
 #include "esp_base_mqtt_owner.h"
 #include "esp_base_frp_owner.h"
-#include "esp_base_frp_status_listener.h"
+#include "esp_base_frp_management_listener.h"
 #include "esp_base_wifi.h"
 #include "esp_base_time.h"
 #include "esp_base_ota_policy.h"
@@ -115,6 +115,8 @@ static bool s_reply_mqtt, s_mqtt_revision_set;
 static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
 static uint32_t s_frp_revision;
+static bool s_frp_restart_pending;
+static uint64_t s_frp_restart_since_ms;
 
 const char *esp_base_protocol_boot_id(void)
 {
@@ -601,13 +603,106 @@ static void emit_outcome(size_t slot, bool via_mqtt)
     s_reply_mqtt = previous_route;
 }
 
-static void save_outcome(size_t slot, const char *state, const char *error, bool status)
+static void store_outcome(size_t slot, const char *state, const char *error, bool status)
 {
     const bool via_mqtt = s_outcomes[slot].via_mqtt;
     s_outcomes[slot] = (command_outcome_t){.state = state, .error = error,
                                           .has_status = status, .via_mqtt = via_mqtt};
     if (status) s_outcomes[slot].status = snapshot();
-    emit_outcome(slot, via_mqtt);
+}
+
+static void save_outcome(size_t slot, const char *state, const char *error, bool status)
+{
+    store_outcome(slot, state, error, status);
+    emit_outcome(slot, s_outcomes[slot].via_mqtt);
+}
+
+static const char *admission_error(ebase_admission_t decision)
+{
+    static const char *const errors[] = {NULL, NULL, "invalid_identity", "wrong_device",
+        "wrong_boot", "expired", "invalid_deadline", "request_conflict", "capacity_exceeded"};
+    return errors[decision];
+}
+
+static const char *restart_write_error(void)
+{
+    if (s_ota_active) return "ota_in_progress";
+    if (s_product_active || s_frp_restart_pending) return "operation_busy";
+    if (s_ota_boot_uncertain) return "ota_boot_state_unknown";
+    if (s_trial_active) return "configuration_busy";
+    if (s_config_uncertain) return "storage_uncertain";
+    return NULL;
+}
+
+static int handle_frp_restart(const uint8_t *json, size_t json_length,
+                              char *response, size_t capacity,
+                              size_t *response_length)
+{
+    ebase_request_t request;
+    const char *parse_error = ebase_parse_frp_restart((const char *)json, json_length, &request);
+    const char *error = parse_error;
+    const char *state = "failed";
+    int http_status = 400;
+    bool schedule = false;
+    const uint64_t now = uptime_ms();
+    size_t slot = 0;
+    if (!error) {
+        const ebase_admission_t decision = ebase_admit(&s_guard, &request,
+            s_context.device_id, s_boot_id, now, &slot);
+        http_status = 409;
+        if (decision == EBASE_REPLAY) {
+            /* The global table also contains USB/MQTT admissions. Reading its
+             * result never executes the write again or changes its route. */
+            state = s_outcomes[slot].state;
+            error = s_outcomes[slot].error;
+        } else if (decision != EBASE_ACCEPT) {
+            error = admission_error(decision);
+            if (decision == EBASE_EXPIRED) state = "expired";
+        } else {
+            error = esp_base_control_state_ota_pending(&s_control_state) ?
+                "ota_verification_pending" : restart_write_error();
+            state = error ? "failed" : "running";
+            s_outcomes[slot].via_mqtt = false;
+            store_outcome(slot, state, error, false);
+            schedule = !error;
+        }
+        if (!error && !strcmp(state, "running")) http_status = 202;
+    }
+    const int formatted = format_result_json(response, capacity,
+        parse_error ? NULL : request.request_id, state, error, NULL);
+    if (formatted < 0) {
+        if (schedule) store_outcome(slot, "failed", "resource_failure", false);
+        return 500;
+    }
+    *response_length = (size_t)formatted;
+    if (schedule) {
+        s_frp_restart_since_ms = now;
+        s_frp_restart_pending = true;
+    }
+    return http_status;
+}
+
+static int handle_frp_management(esp_base_frp_management_command_t command,
+                                 const uint8_t *json, size_t json_length,
+                                 char *response, size_t capacity,
+                                 size_t *response_length, void *context)
+{
+    if (command == ESP_BASE_FRP_MANAGEMENT_STATUS)
+        return handle_frp_status(json, json_length, response, capacity, response_length, context);
+    if (command == ESP_BASE_FRP_MANAGEMENT_RESTART)
+        return handle_frp_restart(json, json_length, response, capacity, response_length);
+    return 500;
+}
+
+static void poll_frp_restart(uint64_t now)
+{
+    if (!s_frp_restart_pending || now - s_frp_restart_since_ms < 100U) return;
+    /* Allow the authenticated receipt to drain, with a hard two-second bound
+     * even if the peer stops reading. Receipt loss remains unconfirmed. */
+    if (esp_base_frp_management_listener_response_pending() &&
+        now - s_frp_restart_since_ms < 2000U) return;
+    s_frp_restart_pending = false;
+    esp_restart();
 }
 
 static void restore_committed(uint64_t now)
@@ -1759,12 +1854,14 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         s_context.device_id, s_boot_id, uptime_ms(), &slot);
     if (decision == EBASE_REPLAY) { emit_outcome(slot, s_reply_mqtt); return; }
     if (decision != EBASE_ACCEPT) {
-        static const char *const errors[] = {NULL, NULL, "invalid_identity", "wrong_device",
-            "wrong_boot", "expired", "invalid_deadline", "request_conflict", "capacity_exceeded"};
-        reply(command->request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", errors[decision], NULL);
+        reply(command->request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", admission_error(decision), NULL);
         return;
     }
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
+    if (s_frp_restart_pending) {
+        save_outcome(slot, "failed", "operation_busy", false);
+        return;
+    }
     if (command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
         command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) {
         handle_product_package(slot, command);
@@ -1865,11 +1962,8 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         save_outcome(slot, "running", NULL, false);
         return;
     }
-    if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
-    if (s_product_active) { save_outcome(slot, "failed", "operation_busy", false); return; }
-    if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
-    if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
-    if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
+    const char *write_error = restart_write_error();
+    if (write_error) { save_outcome(slot, "failed", write_error, false); return; }
     if (command->kind == EBASE_CONFIG_SET) {
         if (command->config.revision != s_context.config.revision) {
             save_outcome(slot, "failed", "revision_conflict", false); return;
@@ -2002,11 +2096,11 @@ static void poll_network_owners(uint64_t now)
         if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
             /* Revoke the old endpoint before waiting for the old FRP worker
              * to finish; no stale management key remains reachable. */
-            esp_base_frp_status_listener_configure(NULL);
+            esp_base_frp_management_listener_configure(NULL);
             const esp_err_t frp_configured = esp_base_frp_owner_configure(
                 &s_context.config.frp, s_context.device_id, s_context.frp_flash_store);
             if (frp_configured == ESP_OK) {
-                esp_base_frp_status_listener_configure(&s_context.config.frp);
+                esp_base_frp_management_listener_configure(&s_context.config.frp);
                 s_frp_revision = s_context.config.revision;
                 s_frp_revision_set = true;
             } else if (frp_configured == ESP_ERR_INVALID_STATE) {
@@ -2016,9 +2110,9 @@ static void poll_network_owners(uint64_t now)
                 s_frp_revision_set = true;
             }
         }
-        esp_base_frp_status_listener_poll(now, handle_frp_status, NULL);
+        esp_base_frp_management_listener_poll(now, handle_frp_management, NULL);
         esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
-                                esp_base_frp_status_listener_ready());
+                                esp_base_frp_management_listener_ready());
     }
 }
 
@@ -2039,6 +2133,7 @@ static void control_task(void *argument)
             next_time_poll = now + 1000;
         }
         poll_network_owners(now);
+        poll_frp_restart(uptime_ms());
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader != NULL && s_reader->length && now - last_input >= 2000) {
             free(s_reader);

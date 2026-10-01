@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "esp_base_frp_status_listener.h"
+#include "esp_base_frp_management_listener.h"
 #include "esp_base_network_auth.h"
 
 #include <errno.h>
@@ -47,7 +47,7 @@ static void close_client(void)
     wipe(s_output, sizeof s_output);
 }
 
-void esp_base_frp_status_listener_configure(const ebase_frp_config_t *config)
+void esp_base_frp_management_listener_configure(const ebase_frp_config_t *config)
 {
     bool configured = config && config->configured && config->local_port != 0;
     if (configured) {
@@ -69,7 +69,7 @@ void esp_base_frp_status_listener_configure(const ebase_frp_config_t *config)
     s_retry_at_ms = 0;
 }
 
-bool esp_base_frp_status_listener_ready(void)
+bool esp_base_frp_management_listener_ready(void)
 {
     return s_configured && s_listener >= 0;
 }
@@ -126,17 +126,26 @@ static bool equal_header(const uint8_t *name, size_t length, const char *expecte
 
 typedef struct {
     size_t header_length, body_length;
+    esp_base_frp_management_command_t command;
     uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES];
 } request_fields_t;
 
-/* A single fixed POST, Content-Length framing and no transfer encodings.
+/* Fixed command POST paths, Content-Length framing and no transfer encodings.
  * Duplicate security/framing headers, obs-fold and pipelining are rejected. */
 static bool parse_headers(request_fields_t *out)
 {
-    static const char request_line[] = "POST /api/v1/commands/status HTTP/1.1\r\n";
-    if (s_input_length < sizeof request_line - 1 ||
-        memcmp(s_input, request_line, sizeof request_line - 1)) return false;
-    size_t position = sizeof request_line - 1;
+    static const char status_line[] = "POST /api/v1/commands/status HTTP/1.1\r\n";
+    static const char restart_line[] = "POST /api/v1/commands/restart HTTP/1.1\r\n";
+    size_t position;
+    if (s_input_length >= sizeof status_line - 1 &&
+        !memcmp(s_input, status_line, sizeof status_line - 1)) {
+        out->command = ESP_BASE_FRP_MANAGEMENT_STATUS;
+        position = sizeof status_line - 1;
+    } else if (s_input_length >= sizeof restart_line - 1 &&
+               !memcmp(s_input, restart_line, sizeof restart_line - 1)) {
+        out->command = ESP_BASE_FRP_MANAGEMENT_RESTART;
+        position = sizeof restart_line - 1;
+    } else return false;
     bool host = false, type = false, length = false, tag = false;
     while (position < out->header_length - 2) {
         size_t end = position;
@@ -198,7 +207,7 @@ static void prepare_response(int status, const char *body, size_t body_length)
         memcpy(tag_header + sizeof prefix - 1 + sizeof tag * 2, "\r\n", 2);
         wipe(tag, sizeof tag);
     }
-    const char *reason = status == 200 ? "OK" : status == 400 ? "Bad Request" :
+    const char *reason = status == 200 ? "OK" : status == 202 ? "Accepted" : status == 400 ? "Bad Request" :
         status == 401 ? "Unauthorized" : status == 409 ? "Conflict" : "Internal Server Error";
     const int header = snprintf(s_output, FRP_HTTP_RESPONSE_OFFSET,
         "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n"
@@ -213,7 +222,7 @@ static void prepare_response(int status, const char *body, size_t body_length)
     s_output_length = (size_t)header + body_length;
 }
 
-static void receive_request(esp_base_frp_status_handler_t handler, void *context)
+static void receive_request(esp_base_frp_management_handler_t handler, void *context)
 {
     if (s_input_length == sizeof s_input) { prepare_response(400, NULL, 0); return; }
     const ssize_t received = recv(s_client, s_input + s_input_length,
@@ -245,11 +254,11 @@ static void receive_request(esp_base_frp_status_handler_t handler, void *context
         return;
     }
     size_t response_length = 0;
-    const int status = handler(body, fields.body_length,
+    const int status = handler(fields.command, body, fields.body_length,
                                s_output + FRP_HTTP_RESPONSE_OFFSET,
                                sizeof s_output - FRP_HTTP_RESPONSE_OFFSET,
                                &response_length, context);
-    if ((status != 200 && status != 400 && status != 409) ||
+    if ((status != 200 && status != 202 && status != 400 && status != 409) ||
         !response_length || response_length >= sizeof s_output - FRP_HTTP_RESPONSE_OFFSET) {
         prepare_response(500, NULL, 0);
         return;
@@ -257,8 +266,8 @@ static void receive_request(esp_base_frp_status_handler_t handler, void *context
     prepare_response(status, s_output + FRP_HTTP_RESPONSE_OFFSET, response_length);
 }
 
-void esp_base_frp_status_listener_poll(uint64_t now_ms,
-                                       esp_base_frp_status_handler_t handler,
+void esp_base_frp_management_listener_poll(uint64_t now_ms,
+                                       esp_base_frp_management_handler_t handler,
                                        void *context)
 {
     if (!handler) return;
@@ -302,4 +311,9 @@ void esp_base_frp_status_listener_poll(uint64_t now_ms,
         close_client(); return;
     }
     if (s_output_sent == s_output_length) close_client();
+}
+
+bool esp_base_frp_management_listener_response_pending(void)
+{
+    return s_client >= 0 && s_output_length > s_output_sent;
 }

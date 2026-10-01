@@ -76,6 +76,9 @@ static uint64_t fake_now_ms;
 static bool fake_trial_quiescent;
 static unsigned mqtt_configures, mqtt_polls, mqtt_revokes;
 static unsigned frp_configures, frp_polls, listener_configures, listener_polls;
+static bool fake_frp_response_pending;
+const char *ebase_parse_command_real(const char *, size_t, ebase_command_t *);
+const char *ebase_parse_frp_status_real(const char *, size_t, ebase_request_t *);
 static esp_err_t mqtt_revoke_result;
 static bool ota_source_package_present, ota_source_snapshot_changed, ota_package_receipt_changed;
 static esp_base_container_stage_result_t ota_package_write_result;
@@ -147,6 +150,8 @@ static void reset_case(void)
     s_product_active = s_product_trial_running = false;
     s_started = false;
     s_pending_mqtt_active = s_mqtt_revision_set = s_frp_revision_set = false;
+    s_frp_restart_pending = fake_frp_response_pending = false;
+    s_frp_restart_since_ms = 0U;
     atomic_store(&s_firmware_package_verifying, false);
     atomic_flag_clear(&s_firmware_health_lock);
     memset(&s_firmware_health, 0, sizeof s_firmware_health);
@@ -900,8 +905,134 @@ static void check_frp_status(const char *request, int expected_http,
     }
 }
 
+
+static void restart_request(char out[384], unsigned number, const char *device,
+                             const char *boot, unsigned deadline)
+{
+    const int n = snprintf(out, 384,
+        "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-%012u\","
+        "\"command\":\"restart\",\"device_id\":\"%s\",\"target_boot_id\":\"%s\","
+        "\"expires_at_uptime_ms\":%u,\"parameters\":{}}", number, device, boot, deadline);
+    assert(n > 0 && n < 384);
+}
+
+static void expect_frp_restart(const char *request, int expected_http,
+                               const char *state, const char *error)
+{
+    char response[768];
+    size_t length = 0;
+    assert(handle_frp_management(ESP_BASE_FRP_MANAGEMENT_RESTART,
+        (const uint8_t *)request, strlen(request), response, sizeof response,
+        &length, NULL) == expected_http);
+    assert(length > 0 && length < sizeof response);
+    assert(strstr(response, state) && strstr(response, "\"result\":null"));
+    if (error) assert(strstr(response, error));
+    else assert(strstr(response, "\"error_code\":null"));
+}
+
+static void check_frp_restart(void)
+{
+    const char *device = "22222222-2222-4222-8222-222222222222";
+    const char *boot = "33333333-3333-4333-8333-333333333333";
+    const char *other = "99999999-9999-4999-8999-999999999999";
+    char request[384], second[384];
+    reset_case();
+    restart_request(request, 1U, device, boot, 31000U);
+    expect_frp_restart(request, 202, "running", NULL);
+    assert(s_guard.count == 1U && s_frp_restart_pending && restart_calls == 0U);
+    fake_now_ms = 1010U;
+    expect_frp_restart(request, 202, "running", NULL);
+    assert(s_guard.count == 1U && s_frp_restart_since_ms == 1000U);
+    restart_request(second, 2U, device, boot, 31000U);
+    expect_frp_restart(second, 409, "failed", "operation_busy");
+    handle_mqtt_command((const uint8_t *)second, strlen(second), NULL);
+    expect_reply("failed", "operation_busy");
+    assert(s_guard.count == 2U && restart_calls == 0U);
+    /* All admitted writes stop before persistence, task creation or USB reply. */
+    start(3U);
+    expect_reply("failed", "operation_busy");
+    handle_mqtt_command((const uint8_t *)"package-40", strlen("package-40"), NULL);
+    expect_reply("failed", "operation_busy");
+    char usb[1200];
+    config_set(20U, false, usb, sizeof usb);
+    assert(strstr(usb, "operation_busy"));
+    assert(task_calls == 0U && register_calls == 0U && config_commit_calls == 0U &&
+           !s_product_active && !s_ota_active && !s_trial_active);
+    poll_frp_restart(1099U);
+    assert(restart_calls == 0U);
+    fake_frp_response_pending = true;
+    poll_frp_restart(1100U);
+    poll_frp_restart(2999U);
+    assert(restart_calls == 0U);
+    poll_frp_restart(3000U);
+    poll_frp_restart(3001U);
+    assert(restart_calls == 1U && !s_frp_restart_pending);
+
+    reset_case();
+    expect_frp_restart(request, 202, "running", NULL);
+    poll_frp_restart(1100U);
+    assert(restart_calls == 1U);
+    /* Old target boot cannot execute after boot identity changes. */
+    strcpy(s_boot_id, other);
+    expect_frp_restart(request, 409, "failed", "wrong_boot");
+    assert(restart_calls == 1U && !s_frp_restart_pending);
+
+    reset_case();
+    handle_mqtt_command((const uint8_t *)request, strlen(request), NULL);
+    expect_reply("running", NULL);
+    assert(restart_calls == 1U && s_guard.count == 1U);
+    expect_frp_restart(request, 202, "running", NULL);
+    assert(restart_calls == 1U && !s_frp_restart_pending);
+    restart_request(second, 1U, device, boot, 30000U);
+    expect_frp_restart(second, 409, "failed", "request_conflict");
+
+    for (unsigned fault = 0; fault < 6U; ++fault) {
+        reset_case();
+        const char *expected = NULL;
+        switch (fault) {
+            case 0: s_ota_active = true; expected = "ota_in_progress"; break;
+            case 1: s_product_active = true; expected = "operation_busy"; break;
+            case 2: s_ota_boot_uncertain = true; expected = "ota_boot_state_unknown"; break;
+            case 3: s_trial_active = true; expected = "configuration_busy"; break;
+            case 4: s_config_uncertain = true; expected = "storage_uncertain"; break;
+            case 5: esp_base_control_state_set_ota_pending(&s_control_state, true);
+                    expected = "ota_verification_pending"; break;
+        }
+        expect_frp_restart(request, 409, "failed", expected);
+        expect_frp_restart(request, 409, "failed", expected);
+        assert(s_guard.count == 1U && !s_frp_restart_pending && restart_calls == 0U);
+    }
+    reset_case();
+    restart_request(second, 2U, other, boot, 31000U);
+    expect_frp_restart(second, 409, "failed", "wrong_device");
+    restart_request(second, 2U, device, other, 31000U);
+    expect_frp_restart(second, 409, "failed", "wrong_boot");
+    restart_request(second, 2U, device, boot, 1000U);
+    expect_frp_restart(second, 409, "expired", "expired");
+    restart_request(second, 2U, device, boot, 31001U);
+    expect_frp_restart(second, 409, "failed", "invalid_deadline");
+    assert(s_guard.count == 0U && !s_frp_restart_pending);
+    expect_frp_restart("{}", 400, "failed", "invalid_request");
+    /* Fixed endpoint and JSON command must agree before admission. */
+    char response[768]; size_t length = 0;
+    assert(handle_frp_management(ESP_BASE_FRP_MANAGEMENT_STATUS,
+        (const uint8_t *)request, strlen(request), response, sizeof response,
+        &length, NULL) == 400);
+    assert(strstr(response, "invalid_request") && s_guard.count == 0U);
+    s_guard.count = EBASE_REQUEST_SLOTS;
+    expect_frp_restart(request, 409, "failed", "capacity_exceeded");
+    assert(!s_frp_restart_pending);
+    reset_case();
+    length = 0;
+    assert(handle_frp_management(ESP_BASE_FRP_MANAGEMENT_RESTART,
+        (const uint8_t *)request, strlen(request), response, 16U, &length, NULL) == 500);
+    assert(!s_frp_restart_pending && length == 0U && s_guard.count == 1U);
+    expect_frp_restart(request, 409, "failed", "resource_failure");
+}
+
 int main(void)
 {
+    check_frp_restart();
     check_firmware_package_health();
     check_package_ota_worker();
     reset_case();
@@ -1365,6 +1496,7 @@ int main(void)
            strstr(latest_reply, "\"package_sha256\":null") != NULL);
     s_reply_mqtt = false;
     puts("  protocol_ota_owner passed (OTA owner faults; product ledger/uninstall/recovery; USB FRP storage gate; MQTT write rejection)");
+    return 0;
 }
 
 const char *ebase_parse_command(const char *line, size_t length, ebase_command_t *out)
@@ -1373,6 +1505,7 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
         memset(out, 0, sizeof *out);
         return "invalid_request";
     }
+    if (length && line[0] == '{') return ebase_parse_command_real(line, length, out);
     unsigned number = 0;
     const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
     const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
@@ -1488,7 +1621,7 @@ ebase_product_ledger_io_t ebase_product_ledger_nvs_io(
 
 const char *ebase_parse_frp_status(const char *json, size_t length, ebase_request_t *out)
 {
-    (void)length;
+    if (length && json[0] == '{') return ebase_parse_frp_status_real(json, length, out);
     memset(out, 0, sizeof *out);
     if (!strcmp(json, "invalid")) return "invalid_request";
     strcpy(out->request_id, "11111111-1111-4111-8111-111111111111");
@@ -1569,18 +1702,21 @@ void esp_base_frp_owner_poll(uint64_t now_ms, bool network, bool trusted, bool r
            trusted == trusted_time_ready && ready);
     ++frp_polls;
 }
-void esp_base_frp_status_listener_configure(const ebase_frp_config_t *config)
+#ifndef ESP_BASE_TEST_REAL_FRP_LISTENER
+void esp_base_frp_management_listener_configure(const ebase_frp_config_t *config)
 {
     assert(config == NULL || config == &s_context.config.frp);
     ++listener_configures;
 }
-void esp_base_frp_status_listener_poll(uint64_t now_ms,
-    esp_base_frp_status_handler_t handler, void *context)
+void esp_base_frp_management_listener_poll(uint64_t now_ms,
+    esp_base_frp_management_handler_t handler, void *context)
 {
     assert(now_ms == fake_now_ms && handler && context == NULL);
     ++listener_polls;
 }
-bool esp_base_frp_status_listener_ready(void) { return true; }
+bool esp_base_frp_management_listener_ready(void) { return true; }
+bool esp_base_frp_management_listener_response_pending(void) { return fake_frp_response_pending; }
+#endif
 uint64_t esp_base_mqtt_owner_event_sequence(void) { return 3; }
 esp_base_container_event_observation_result_t
 esp_base_container_product_event_observation(
@@ -2097,6 +2233,5 @@ psa_status_t psa_hash_abort(psa_hash_operation_t *operation)
 }
 void vTaskDelay(TickType_t ticks)
 {
-    (void)ticks;
-    assert(false && "restart is outside this test");
+    assert(ticks == pdMS_TO_TICKS(100));
 }

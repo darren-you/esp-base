@@ -296,6 +296,45 @@ static void frp_status_tests(void)
     }
     assert(ebase_parse_frp_status(valid, 513, &request));
 }
+
+static void frp_restart_tests(void)
+{
+    ebase_request_t request;
+    ebase_command_t command;
+    assert(!ebase_parse_frp_restart(restart, strlen(restart), &request));
+    assert(!ebase_parse_command(restart, strlen(restart), &command));
+    assert(!memcmp(&request, &command.request, sizeof request));
+    assert(ebase_parse_frp_restart(status, strlen(status), &request));
+    const ebase_request_t empty = {0};
+    assert(!memcmp(&request, &empty, sizeof empty));
+    assert(ebase_parse_frp_restart(NULL, 0, &request));
+    assert(ebase_parse_frp_restart(restart, 385, &request));
+    assert(ebase_parse_frp_restart(restart, strlen(restart), NULL));
+    char mutation[sizeof restart];
+    unsigned seed = 142;
+    for (unsigned i = 0; i < 10000; ++i) {
+        memcpy(mutation, restart, sizeof restart);
+        seed = seed * 1664525u + 1013904223u;
+        mutation[seed % (sizeof restart - 1)] = (char)(seed >> 24);
+        const char *frp_error = ebase_parse_frp_restart(mutation, sizeof restart - 1, &request);
+        const char *error = ebase_parse_command(mutation, sizeof restart - 1, &command);
+        assert((frp_error == NULL) == (error == NULL && command.kind == EBASE_RESTART));
+        if (!frp_error) assert(!memcmp(&request, &command.request, sizeof request));
+        else assert(!memcmp(&request, &empty, sizeof empty));
+    }
+    const char *invalid[] = {
+        "{}", "[]", "null", "{\"command\":\"restart\"}",
+        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"restart\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":null}",
+        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"restart\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":{\"x\":1}}",
+        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"restart\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000.0,\"parameters\":{}}",
+        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"restart\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":-1,\"parameters\":{}}",
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; ++i) {
+        assert(ebase_parse_frp_restart(invalid[i], strlen(invalid[i]), &request));
+        assert(!memcmp(&request, &empty, sizeof empty));
+    }
+}
+
 int main(void)
 {
     config_tests();
@@ -306,6 +345,7 @@ int main(void)
     product_uninstall_tests();
     product_package_tests();
     frp_status_tests();
+    frp_restart_tests();
     ebase_command_t out;
     assert(!ebase_parse_command(status, strlen(status), &out) && out.kind == EBASE_STATUS);
     assert(!ebase_parse_command(restart, strlen(restart), &out) && out.kind == EBASE_RESTART);

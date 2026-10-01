@@ -51,6 +51,9 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
  * bytes before parsing and signs the response; write admission is unchanged. */
 const char *ebase_parse_frp_status(const char *json, size_t length,
                                   ebase_request_t *out);
+/* Same restart identity/fingerprint as USB/MQTT without the large write union. */
+const char *ebase_parse_frp_restart(const char *json, size_t length,
+                                   ebase_request_t *out);
 
 typedef struct {
     char data[EBASE_LINE_LIMIT + 1];

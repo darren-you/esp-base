@@ -112,6 +112,39 @@ static bool digest32(const cJSON *item, uint8_t output[32])
     return nonzero != 0U;
 }
 
+static const char *const write_keys[] = {"protocol_version", "request_id", "command",
+    "device_id", "target_boot_id", "expires_at_uptime_ms", "parameters"};
+
+static bool write_identity(const cJSON *root, ebase_request_t *request)
+{
+    const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
+    const cJSON *deadline = cJSON_GetObjectItemCaseSensitive(root, "expires_at_uptime_ms");
+    if (!exact_keys(root, write_keys, 7) || !cJSON_IsNumber(version) ||
+        version->valuedouble != 1 || !copy_id(root, "request_id", request->request_id) ||
+        !copy_id(root, "device_id", request->device_id) ||
+        !copy_id(root, "target_boot_id", request->boot_id) ||
+        !cJSON_IsNumber(deadline) || !isfinite(deadline->valuedouble) ||
+        deadline->valuedouble < 0 || deadline->valuedouble > 9007199254740991.0 ||
+        floor(deadline->valuedouble) != deadline->valuedouble) return false;
+    request->expires_at_ms = (uint64_t)deadline->valuedouble;
+    return true;
+}
+
+static bool restart_parameters(const cJSON *root, ebase_request_t *request)
+{
+    const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
+    if (!cJSON_IsString(command) || strcmp(command->valuestring, "restart") ||
+        !exact_keys(cJSON_GetObjectItemCaseSensitive(root, "parameters"), NULL, 0)) return false;
+    /* SHA-256("restart"); identity and deadline are compared by the guard. */
+    static const uint8_t fingerprint[32] = {
+        0x3a, 0xce, 0x60, 0xb0, 0xa0, 0xc1, 0xb6, 0xc9, 0x34, 0x5e, 0x31, 0x49,
+        0x41, 0x42, 0x94, 0x7a, 0xa9, 0x7d, 0x4e, 0xf4, 0x91, 0x2e, 0x89, 0x5d,
+        0x87, 0x95, 0x66, 0x33, 0x93, 0x81, 0x97, 0x59
+    };
+    memcpy(request->fingerprint, fingerprint, sizeof fingerprint);
+    return true;
+}
+
 const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out)
 {
     if (!out) return "invalid_request";
@@ -124,7 +157,6 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     const char *error = "invalid_request";
     const char *const status_keys[] = {"protocol_version", "request_id", "command"};
     const char *const query_keys[] = {"protocol_version", "request_id", "command", "parameters"};
-    const char *const write_keys[] = {"protocol_version", "request_id", "command", "device_id", "target_boot_id", "expires_at_uptime_ms", "parameters"};
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (end != json + length || !cJSON_IsObject(root) || !cJSON_IsNumber(version) || version->valuedouble != 1 || !cJSON_IsString(command)) goto done;
@@ -146,11 +178,7 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         error = NULL;
         goto done;
     }
-    if (!copy_id(root, "device_id", out->request.device_id) || !copy_id(root, "target_boot_id", out->request.boot_id)) goto done;
-    const cJSON *deadline = cJSON_GetObjectItemCaseSensitive(root, "expires_at_uptime_ms");
-    if (!cJSON_IsNumber(deadline) || !isfinite(deadline->valuedouble) || deadline->valuedouble < 0 ||
-        deadline->valuedouble > 9007199254740991.0 || floor(deadline->valuedouble) != deadline->valuedouble) goto done;
-    out->request.expires_at_ms = (uint64_t)deadline->valuedouble;
+    if (!write_identity(root, &out->request)) goto done;
     const bool product_install = !strcmp(command->valuestring, "product.install");
     const bool product_upgrade = !strcmp(command->valuestring, "product.upgrade");
     if (product_install || product_upgrade) {
@@ -406,14 +434,8 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         goto done;
     }
     if (strcmp(command->valuestring, "restart")) { error = "unsupported_command"; goto done; }
-    if (!exact_keys(cJSON_GetObjectItemCaseSensitive(root, "parameters"), NULL, 0)) goto done;
+    if (!restart_parameters(root, &out->request)) goto done;
     out->kind = EBASE_RESTART;
-    /* All restart parameters are empty; IDs and deadline are compared by the
-     * guard. SHA-256("restart") is the canonical command fingerprint. */
-    const uint8_t fingerprint[32] = {
-        0x3a, 0xce, 0x60, 0xb0, 0xa0, 0xc1, 0xb6, 0xc9, 0x34, 0x5e, 0x31, 0x49, 0x41, 0x42, 0x94, 0x7a, 0xa9, 0x7d, 0x4e, 0xf4, 0x91, 0x2e, 0x89, 0x5d, 0x87, 0x95, 0x66, 0x33, 0x93, 0x81, 0x97, 0x59
-    };
-    memcpy(out->request.fingerprint, fingerprint, sizeof fingerprint);
     error = NULL;
 done:
     if (error) memset(&out->config, 0, sizeof out->config);
@@ -444,6 +466,25 @@ const char *ebase_parse_frp_status(const char *json, size_t length,
         copy_id(root, "request_id", out->request_id)) {
         error = NULL;
     }
+    if (error) memset(out, 0, sizeof *out);
+    cJSON_Delete(root);
+    return error;
+}
+
+const char *ebase_parse_frp_restart(const char *json, size_t length,
+                                   ebase_request_t *out)
+{
+    if (!out) return "invalid_request";
+    memset(out, 0, sizeof *out);
+    if (!json || !length || length > 384 ||
+        !valid_bytes((const unsigned char *)json, length)) return "invalid_request";
+    const char *end = NULL;
+    cJSON *root = cJSON_ParseWithLengthOpts(json, length, &end, false);
+    if (!root) return "invalid_request";
+    while (end < json + length && (*end == ' ' || *end == '\t' ||
+                                   *end == '\r' || *end == '\n')) ++end;
+    const char *error = end == json + length && write_identity(root, out) &&
+        restart_parameters(root, out) ? NULL : "invalid_request";
     if (error) memset(out, 0, sizeof *out);
     cJSON_Delete(root);
     return error;
