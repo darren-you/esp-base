@@ -1,5 +1,7 @@
 # device_protocol
 
+2026-10-02 C3 隔离 Broker 切片：正式 Base 的严格 TLS、当前 boot 的 reported、HMAC 状态／产品查询、错误 HMAC／QoS 0 拒绝及远程配置写门已取得实际结果；MQTT 重启回执未交付的失败另行保留。重启现由唯一控制任务有界观察该回执的精确 PUBACK，宿主回归通过，签名重建与实板复验仍待完成，见[故障说明](../../../docs/issues/mqtt_restart_receipt_delivery.md)。此切片不等于生产 Broker 或完整产品安装／OTA 验收。
+
 只读产品状态现硬切为十个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 、`package_data_schema_version` 与 `active_product`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。活动版本复制本次验签装载结果；状态查询没有新增包 Flash 读取或验签，不证明 guest 健康。
 
 `product.status` 现硬切为十个 required 字段，新增 required nullable 的 `active_product`。非 null 对象精确包含 `product_id`、完整 `product_version`、非零 `package_sha256`、正 uint32 `guest_abi_version`／`data_schema_version`、布尔 `is_trial` 和 required nullable `operation_id`。ID／版本沿用 Container 的小写连字符 ASCII 合同，两者合计不超过 v1 manifest 的 4096 字节边界，不截为 64 字节。确认实例的摘要／ABI／schema 与根确认绑定一致且 operation ID 为 null；候选来自本 boot 的实际验签装载，操作 ID 必须匹配未决账本，确认绑定仍保留旧包。活动 ABI 必须等于实际运行时 ABI。null 只表示未取得可确认的活动实例，不能证明 guest 健康或所有 native 资源已回收。

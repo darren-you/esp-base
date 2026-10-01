@@ -17,6 +17,14 @@ static uint8_t s_management_key[EBASE_MQTT_KEY_BYTES];
 static bool s_configured, s_started, s_ready, s_failed, s_network_ready;
 static uint64_t s_retry_after_ms;
 static uint64_t s_event_sequence;
+static int s_restart_result_id;
+static bool s_restart_result_acknowledged;
+
+static void clear_restart_result(void)
+{
+    s_restart_result_id = 0;
+    s_restart_result_acknowledged = false;
+}
 
 static void wipe(void *memory, size_t length)
 {
@@ -26,6 +34,7 @@ static void wipe(void *memory, size_t length)
 
 esp_err_t esp_base_mqtt_owner_revoke(void)
 {
+    clear_restart_result();
     s_ready = false;
     s_network_ready = false;
     if (s_runtime) {
@@ -114,6 +123,7 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
     if (!s_configured || !s_runtime || s_failed) return;
     s_network_ready = network_ready && trusted_time_ready;
     if (!s_network_ready) {
+        clear_restart_result();
         s_ready = false;
         if (s_started) {
             if (emqtt_stop(s_runtime) != ESP_OK) { s_failed = true; return; }
@@ -132,6 +142,7 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
     for (unsigned i = 0; i < 8 && emqtt_poll(s_runtime, &s_event); ++i) {
         switch (s_event.kind) {
         case EMQTT_EVENT_READY: {
+            clear_restart_result();
             int message_id = -1;
             const esp_err_t sent = emqtt_enqueue(s_runtime, s_topics[EBASE_MQTT_STATUS],
                                                   s_online, strlen(s_online), 1, true, &message_id);
@@ -143,9 +154,15 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             break;
         }
         case EMQTT_EVENT_DISCONNECTED:
+            clear_restart_result();
             s_ready = false;
             break;
+        case EMQTT_EVENT_PUBACK:
+            if (s_restart_result_id > 0 && s_event.message_id == s_restart_result_id)
+                s_restart_result_acknowledged = true;
+            break;
         case EMQTT_EVENT_DELETED:
+            clear_restart_result();
             /* A QoS 1 outbox entry expired before broker acknowledgement.
              * That publication cannot be reported as delivered. Close this session;
              * the caller may resend the same request_id after a new SUBACK. */
@@ -154,7 +171,10 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             else { s_started = false; s_retry_after_ms = now_ms + 5000; }
             return;
         case EMQTT_EVENT_ERROR:
-            if (emqtt_state(s_runtime) != EMQTT_READY) s_ready = false;
+            if (emqtt_state(s_runtime) != EMQTT_READY) {
+                clear_restart_result();
+                s_ready = false;
+            }
             if (emqtt_state(s_runtime) == EMQTT_FAILED) {
                 if (emqtt_stop(s_runtime) != ESP_OK) s_failed = true;
                 else { s_started = false; s_retry_after_ms = now_ms + 5000; }
@@ -221,4 +241,21 @@ bool esp_base_mqtt_owner_result(const char *json, size_t length)
 bool esp_base_mqtt_owner_reported(const char *json, size_t length)
 {
     return publish(EBASE_MQTT_REPORTED, json, length);
+}
+
+bool esp_base_mqtt_owner_restart_result(const char *json, size_t length)
+{
+    if (!esp_base_mqtt_owner_ready() || s_restart_result_id != 0 ||
+        !json || !length || length > EMQTT_PUBLISH_PAYLOAD_MAX_BYTES) return false;
+    int message_id = 0;
+    if (emqtt_enqueue(s_runtime, s_topics[EBASE_MQTT_RESULT], json, length,
+                      1, false, &message_id) != ESP_OK || message_id <= 0) return false;
+    s_restart_result_id = message_id;
+    s_restart_result_acknowledged = false;
+    return true;
+}
+
+bool esp_base_mqtt_owner_restart_result_acknowledged(void)
+{
+    return s_restart_result_id > 0 && s_restart_result_acknowledged;
 }

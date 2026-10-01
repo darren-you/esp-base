@@ -33,3 +33,7 @@ bool esp_base_mqtt_owner_ready(void);
 /* Enqueue is transport delivery only; PUBACK cannot make an operation succeed. */
 bool esp_base_mqtt_owner_result(const char *json, size_t length);
 bool esp_base_mqtt_owner_reported(const char *json, size_t length);
+/* One restart receipt per session, tracked by its exact QoS 1 message ID.
+ * PUBACK proves broker delivery only. Session loss revokes that evidence. */
+bool esp_base_mqtt_owner_restart_result(const char *json, size_t length);
+bool esp_base_mqtt_owner_restart_result_acknowledged(void);

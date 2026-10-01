@@ -286,18 +286,38 @@ int main(void)
     assert(esp_base_mqtt_owner_reported("{}", 2));
     assert(!strcmp(last_topic, "esp-base/22222222-2222-4222-8222-222222222222/reported"));
     assert(last_qos == 1 && !last_retain);
+    assert(!esp_base_mqtt_owner_restart_result(NULL, 2));
+    assert(!esp_base_mqtt_owner_restart_result("{}", 0));
+    assert(!esp_base_mqtt_owner_restart_result(maximum_result, sizeof maximum_result + 1U));
     fail_publish = true;
     assert(!esp_base_mqtt_owner_result("{}", 2));
+    assert(!esp_base_mqtt_owner_restart_result("{}", 2));
     fail_publish = false;
+    assert(esp_base_mqtt_owner_restart_result("{}", 2));
+    const int restart_result_id = (int)sends;
+    assert(!esp_base_mqtt_owner_restart_result_acknowledged());
+    assert(!esp_base_mqtt_owner_restart_result("{}", 2));
+    assert(esp_base_mqtt_owner_result("{}", 2));
+    push(EMQTT_EVENT_PUBACK);
+    events[event_tail - 1].message_id = (int)sends;
+    esp_base_mqtt_owner_poll(2, true, true, received, received_event, &runtime);
+    assert(!esp_base_mqtt_owner_restart_result_acknowledged());
+    push(EMQTT_EVENT_PUBACK);
+    events[event_tail - 1].message_id = restart_result_id;
+    esp_base_mqtt_owner_poll(2, true, true, received, received_event, &runtime);
+    assert(esp_base_mqtt_owner_restart_result_acknowledged());
 
     push(EMQTT_EVENT_DISCONNECTED);
     esp_base_mqtt_owner_poll(3, true, true, received, received_event, &runtime);
     assert(!esp_base_mqtt_owner_ready());
+    assert(!esp_base_mqtt_owner_restart_result_acknowledged());
     push(EMQTT_EVENT_READY);
     esp_base_mqtt_owner_poll(4, true, true, received, received_event, &runtime);
     assert(esp_base_mqtt_owner_ready());
+    assert(esp_base_mqtt_owner_restart_result("{}", 2));
     esp_base_mqtt_owner_poll(5, false, true, received, received_event, &runtime);
     assert(stops == 1 && !esp_base_mqtt_owner_ready());
+    assert(!esp_base_mqtt_owner_restart_result_acknowledged());
     esp_base_mqtt_owner_poll(6, true, true, received, received_event, &runtime);
     assert(starts == 2 && !esp_base_mqtt_owner_ready());
     push(EMQTT_EVENT_READY);
@@ -366,6 +386,7 @@ int main(void)
     assert(!strcmp(esp_base_mqtt_owner_state(), "failed") && !esp_base_mqtt_owner_ready());
     fail_stop = false;
     assert(esp_base_mqtt_owner_revoke() == ESP_OK);
+    assert(!esp_base_mqtt_owner_restart_result_acknowledged());
     assert(destroys == 2 && !strcmp(esp_base_mqtt_owner_state(), "unconfigured") &&
            !esp_base_mqtt_owner_result("{}", 2));
     puts("mqtt_owner passed (TLS/UUID, SUBACK gate, auth, retain, reconnect, outbox expiry, fail closed)");

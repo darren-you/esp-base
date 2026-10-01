@@ -116,6 +116,8 @@ static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
 static uint32_t s_frp_revision;
 static bool s_frp_restart_pending;
+static bool s_mqtt_restart_pending;
+static uint64_t s_mqtt_restart_since_ms;
 static uint64_t s_frp_restart_since_ms;
 
 const char *esp_base_protocol_boot_id(void)
@@ -629,7 +631,7 @@ static const char *admission_error(ebase_admission_t decision)
 static const char *restart_write_error(void)
 {
     if (s_ota_active) return "ota_in_progress";
-    if (s_product_active || s_frp_restart_pending) return "operation_busy";
+    if (s_product_active || s_frp_restart_pending || s_mqtt_restart_pending) return "operation_busy";
     if (s_ota_boot_uncertain) return "ota_boot_state_unknown";
     if (s_trial_active) return "configuration_busy";
     if (s_config_uncertain) return "storage_uncertain";
@@ -704,6 +706,17 @@ static void poll_frp_restart(uint64_t now)
     if (esp_base_frp_management_listener_response_pending() &&
         now - s_frp_restart_since_ms < 2000U) return;
     s_frp_restart_pending = false;
+    esp_restart();
+}
+
+static void poll_mqtt_restart(uint64_t now)
+{
+    if (!s_mqtt_restart_pending || now - s_mqtt_restart_since_ms < 100U) return;
+    /* Return from the MESSAGE handler so the owner can observe the exact
+     * receipt PUBACK. A lost receipt remains unconfirmed; restart is bounded. */
+    if (!esp_base_mqtt_owner_restart_result_acknowledged() &&
+        now - s_mqtt_restart_since_ms < 2000U) return;
+    s_mqtt_restart_pending = false;
     esp_restart();
 }
 
@@ -1860,7 +1873,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
-    if (s_frp_restart_pending) {
+    if (s_frp_restart_pending || s_mqtt_restart_pending) {
         save_outcome(slot, "failed", "operation_busy", false);
         return;
     }
@@ -1987,6 +2000,18 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             restore_committed(uptime_ms());
             save_outcome(slot, "failed", "connection_proof_failed", false);
         } else s_trial_active = true;
+        return;
+    }
+    if (s_reply_mqtt) {
+        store_outcome(slot, "running", NULL, false);
+        const int length = format_result_json(s_response_json, sizeof s_response_json,
+            command->request.request_id, "running", NULL, NULL);
+        if (length < 0 || !esp_base_mqtt_owner_restart_result(s_response_json, (size_t)length)) {
+            save_outcome(slot, "failed", "resource_failure", false);
+            return;
+        }
+        s_mqtt_restart_since_ms = uptime_ms();
+        s_mqtt_restart_pending = true;
         return;
     }
     save_outcome(slot, "running", NULL, false);
@@ -2135,6 +2160,7 @@ static void control_task(void *argument)
             next_time_poll = now + 1000;
         }
         poll_network_owners(now);
+        poll_mqtt_restart(uptime_ms());
         poll_frp_restart(uptime_ms());
         if (now >= next_report) { reported(); next_report = now + 5000; }
         if (s_reader != NULL && s_reader->length && now - last_input >= 2000) {

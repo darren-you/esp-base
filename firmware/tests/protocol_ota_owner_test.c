@@ -77,6 +77,8 @@ static bool fake_trial_quiescent;
 static unsigned mqtt_configures, mqtt_polls, mqtt_revokes;
 static unsigned frp_configures, frp_polls, listener_configures, listener_polls;
 static bool fake_frp_response_pending;
+static bool mqtt_restart_enqueue_ok, mqtt_restart_acknowledged;
+static unsigned mqtt_restart_result_calls;
 const char *ebase_parse_command_real(const char *, size_t, ebase_command_t *);
 const char *ebase_parse_frp_status_real(const char *, size_t, ebase_request_t *);
 static esp_err_t mqtt_revoke_result;
@@ -152,6 +154,10 @@ static void reset_case(void)
     s_pending_mqtt_active = s_mqtt_revision_set = s_frp_revision_set = false;
     s_frp_restart_pending = fake_frp_response_pending = false;
     s_frp_restart_since_ms = 0U;
+    s_mqtt_restart_pending = mqtt_restart_acknowledged = false;
+    s_mqtt_restart_since_ms = 0U;
+    mqtt_restart_enqueue_ok = true;
+    mqtt_restart_result_calls = 0U;
     atomic_store(&s_firmware_package_verifying, false);
     atomic_flag_clear(&s_firmware_health_lock);
     memset(&s_firmware_health, 0, sizeof s_firmware_health);
@@ -930,6 +936,53 @@ static void expect_frp_restart(const char *request, int expected_http,
     else assert(strstr(response, "\"error_code\":null"));
 }
 
+static void check_mqtt_restart(void)
+{
+    const char *device = "22222222-2222-4222-8222-222222222222";
+    const char *boot = "33333333-3333-4333-8333-333333333333";
+    char request[384], second[384];
+    reset_case();
+    restart_request(request, 1U, device, boot, 31000U);
+    handle_mqtt_command((const uint8_t *)request, strlen(request), NULL);
+    expect_reply("running", NULL);
+    assert(s_mqtt_restart_pending && restart_calls == 0U && mqtt_restart_result_calls == 1U);
+    handle_mqtt_command((const uint8_t *)request, strlen(request), NULL);
+    expect_reply("running", NULL);
+    assert(mqtt_restart_result_calls == 1U && s_mqtt_restart_since_ms == 1000U);
+    restart_request(second, 2U, device, boot, 31000U);
+    handle_mqtt_command((const uint8_t *)second, strlen(second), NULL);
+    expect_reply("failed", "operation_busy");
+    expect_frp_restart(second, 409, "failed", "operation_busy");
+    poll_mqtt_restart(1099U);
+    assert(restart_calls == 0U);
+    mqtt_restart_acknowledged = true;
+    poll_mqtt_restart(1099U);
+    assert(restart_calls == 0U);
+    poll_mqtt_restart(1100U);
+    poll_mqtt_restart(1101U);
+    assert(restart_calls == 1U && !s_mqtt_restart_pending);
+
+    reset_case();
+    handle_mqtt_command((const uint8_t *)request, strlen(request), NULL);
+    poll_mqtt_restart(1100U);
+    poll_mqtt_restart(2999U);
+    assert(restart_calls == 0U && s_mqtt_restart_pending);
+    poll_mqtt_restart(3000U);
+    poll_mqtt_restart(3001U);
+    assert(restart_calls == 1U && !s_mqtt_restart_pending);
+
+    reset_case();
+    mqtt_restart_enqueue_ok = false;
+    handle_mqtt_command((const uint8_t *)request, strlen(request), NULL);
+    expect_reply("failed", "resource_failure");
+    poll_mqtt_restart(4000U);
+    assert(!s_mqtt_restart_pending && restart_calls == 0U);
+
+    reset_case();
+    handle_line(request, strlen(request), NULL);
+    assert(restart_calls == 1U && !s_mqtt_restart_pending && mqtt_restart_result_calls == 0U);
+}
+
 static void check_frp_restart(void)
 {
     const char *device = "22222222-2222-4222-8222-222222222222";
@@ -980,9 +1033,12 @@ static void check_frp_restart(void)
     reset_case();
     handle_mqtt_command((const uint8_t *)request, strlen(request), NULL);
     expect_reply("running", NULL);
-    assert(restart_calls == 1U && s_guard.count == 1U);
+    assert(restart_calls == 0U && s_guard.count == 1U && s_mqtt_restart_pending);
     expect_frp_restart(request, 202, "running", NULL);
-    assert(restart_calls == 1U && !s_frp_restart_pending);
+    assert(restart_calls == 0U && !s_frp_restart_pending && s_mqtt_restart_pending);
+    mqtt_restart_acknowledged = true;
+    poll_mqtt_restart(1100U);
+    assert(restart_calls == 1U && !s_mqtt_restart_pending && mqtt_restart_result_calls == 1U);
     restart_request(second, 1U, device, boot, 30000U);
     expect_frp_restart(second, 409, "failed", "request_conflict");
 
@@ -1032,6 +1088,7 @@ static void check_frp_restart(void)
 
 int main(void)
 {
+    check_mqtt_restart();
     check_frp_restart();
     check_firmware_package_health();
     check_package_ota_worker();
@@ -1748,6 +1805,16 @@ bool esp_base_mqtt_owner_result(const char *json, size_t length)
     memcpy(latest_reply, json, length);
     latest_reply[length] = '\0';
     return true;
+}
+bool esp_base_mqtt_owner_restart_result(const char *json, size_t length)
+{
+    if (!mqtt_restart_enqueue_ok) return false;
+    ++mqtt_restart_result_calls;
+    return esp_base_mqtt_owner_result(json, length);
+}
+bool esp_base_mqtt_owner_restart_result_acknowledged(void)
+{
+    return mqtt_restart_acknowledged;
 }
 bool esp_base_mqtt_owner_reported(const char *json, size_t length)
 {
