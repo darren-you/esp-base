@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-01 宿主工具归位：期限 guest 构包与 NVS QEMU runner 移至 `tools/`，固件 README 标准链接修正；双目标真实签名 guest、各 100 次重装和资源回归通过。中央检查器的嵌套 SDK 误报修正仍在隔离候选，全量门禁与实板边界见[开发检查点](docs/operations/development-checkpoint.md)。
+
 2026-10-01 FRP 设备认证重启软件续进：新增固定 restart 端点，复用全设备写守卫，在签名 running 回执后有界延迟重启。两目标 host、真实 HTTP／HMAC／Base handler 回环与固定 SDK 测试签名构建通过；网关重启与新 boot 确认、真实 FRPS 和两板仍待验收，见[重启检查点](docs/operations/frp_restart_checkpoint.md)。
 
 2026-10-01 FRP 只读状态认证软件续进：请求硬切为设备／请求 UUID 等四字段，可独立取得当前 boot／uptime；非空认证响应现由设备签发原始 JSON 的 HMAC，失败关闭。双目标 host、真实 OpenSSL 回环 HTTP、固定 SDK 测试签名构建与官方验签通过。私有网关、外侧 HTTPS、真实 FRPS 与两板仍未验收，见[认证状态检查点](docs/operations/frp_authenticated_status_checkpoint.md)。

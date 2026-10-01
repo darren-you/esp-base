@@ -1,5 +1,7 @@
 # 固件测试
 
+宿主 Python 构包和 QEMU runner 位于固件根之外的 [tools/](../../tools/README.md)：生命周期入口调用 `container_product_deadline_test.py`，NVS 探针调用 `run_nvs_capacity_qemu.py`。固件测试目录只保存 C／Shell 等测试装配，不保留旧 Python 路径入口。
+
 `container_product_lifecycle_test` 的 `event-failure` 分支新增两项真实签名已确认 guest 用例：候选准备前的事件预算异常拒绝升级且无写入；准备后的异常阻断停止／trial／同 boot 重开，内部显式放弃保持原绑定，随后卸载等待 native 回收且包槽逐字节不变。两目标使用精确 Container/WAMR 源码；Flash/NVS、固件观察与调度为宿主替身，已确认绑定为种子夹具。公开 worker 此处仍报告 unknown 并保留 claim，测试不经过设备命令／持久产品账本或生产 Broker。
 
 `product_event_broker_probe.c` 是可供明确外部 TLS Broker 测试使用的宿主二进制入口。它编译实际 `mqtt_event.c`、`mqtt_command.c`、`command_guard.c` 与 `network_auth.c`，PSA 接口用 OpenSSL 实际 HMAC 替代 IDF 端口；只消费公开 `00..1f` 测试密钥，不使用设备凭据。输入为 device UUID、boot UUID、Topic、QoS、retain 和收到的原始帧文件，输出授权解析结果及原始事件摘要；不运行 MQTT owner、序号准入、队列、guest 或健康确认。16 项真实 Broker 软件验证与原测试竞态边界见[开发检查点](../../docs/operations/development-checkpoint.md)，不新增普通 host 测试的私有仓依赖。

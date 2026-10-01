@@ -1,5 +1,16 @@
 # 开发检查点
 
+## 2026-10-01 固件根与宿主工具归位
+
+全工作区检查发现固件 README 标准入口漂移，以及主机 Python 构包工具位于固件根。现修正唯一标准链接，将 `container_product_deadline_test.py` 和 NVS QEMU runner 分别归位到 `tools/container_product_deadline_test.py`、`tools/run_nvs_capacity_qemu.py`；生命周期 Shell 入口和 NVS 探针三阶段命令同步使用新路径，旧文件删除，不保留别名。两个脚本的路径推导仍分别绑定本仓固件测试源码和本仓完整 Flash 排除边界，宿主与执行位保持原合同。
+
+独立 Git tree 冷导出与固定 SDK 宿主完成 C3／ESP32 两个目标的完整真实签名 guest 生命周期入口；ASan/UBSan、期限／异常退出、各 100 次重装和 macOS 资源版通过。两个资源版本在第 10／50／100 次的 malloc、虚拟字节和 region 读数各自相等。190 个未改的固件／C 测试非文档输入逐项保持字节与执行位，SDK、Container `52d94d6`、WAMR `c10736f`、OTA `04acb5e`、依赖锁与分区未改，无需因宿主归位重签固件。QEMU runner 帮助、两脚本编译与真实仓内 Flash 路径拒绝通过，未因此重新宣称 NVS QEMU 容量验收。
+
+隔离中央工程检查还修正了嵌套 ESP-IDF 测试项目的 `managed_components` 上游辅助脚本误报。原检查器明确拒绝该正例；修正后根与嵌套生成目录通过，同一测试项目旁边的第一方 Python 仍拒绝，当前 Base 嵌入式标准检查通过。共享停写窗口内中央检查器只保存在隔离候选，canonical Root `0ee90ab2` 的全工作区失败记录保留，尚未据局部结果改称全量门禁通过。
+
+本轮没有实体串口、Flash/eFuse、生产信任材料或发布操作；C3 仍为此前已清空的 MQTT 诊断样例，ESP32 未连接。真实网络、设备安装、产品停止跨重启策略及 P6/P7/P8 实板门保持开放。
+
+
 ## 2026-10-01 源仓历史与主机入口整合
 
 隔离产品链候选整合源仓 `135bb87fd22925c876a3423285ac44fb37dd558d`，保留已验证的双目标独立分区、V3 联合 OTA 收据、Container 装配与配置上下文保护。所有固件执行输入与整合前 `b55241395172e5475c691dda8be2fd90b79edcb1` 逐项相同；主机 Python 入口按源仓改为 `device_control.py`、`test_device_control.py`、`mqtt_lab_inputs_example.h`，三个真实读取器同步引用，不保留旧名入口。

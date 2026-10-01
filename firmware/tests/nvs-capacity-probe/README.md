@@ -13,7 +13,7 @@ Container 由本项目的 `main/idf_component.yml` 和目标专用 `dependencies
 
 ## 复现
 
-需要 [sdk-lock.json](../../../sdk-lock.json) 指定的 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`，以及对应目标支持 `-machine esp32c3` 或 `-machine esp32` 的 Espressif QEMU。项目配置阶段运行 `tools/check_sdk.py`。以下 C3 命令从本目录执行；将两个占位绝对路径替换为本机仓外工作目录及 QEMU 可执行文件：
+需要 [sdk-lock.json](../../../sdk-lock.json) 指定的 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`，以及对应目标支持 `-machine esp32c3` 或 `-machine esp32` 的 Espressif QEMU。项目配置阶段运行 `tools/check_sdk.py`。QEMU runner 位于固件根之外的宿主工具目录，使用 `tools/run_nvs_capacity_qemu.py`；只读构建输入并写仓外合成 Flash，不操作实体设备。以下 C3 命令从本目录执行；将两个占位绝对路径替换为本机仓外工作目录及 QEMU 可执行文件：
 
 ```bash
 probe_work_root=/absolute/path/outside/repo
@@ -28,7 +28,7 @@ for pages in 6 8; do
         idf.py -C . -B "$work/build" -D "SDKCONFIG=$work/sdkconfig" \
             -D "IDF_TARGET=esp32c3" -D "PROBE_NVS_PAGES=$pages" \
             -D "PROBE_STAGE=$stage" build
-        python3 run-qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
+        python3 ../../../tools/run_nvs_capacity_qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
             --stage "$stage" --target esp32c3 --nvs-pages "$pages" --qemu "$qemu_bin" \
             --timeout-seconds 600
     done
@@ -44,7 +44,7 @@ for stage in 1 2 3; do
     idf.py -C . -B "$work/build" -D "SDKCONFIG=$work/sdkconfig" \
         -D "IDF_TARGET=esp32c3" -D "PROBE_NVS_PAGES=11" \
         -D "PROBE_STAGE=$stage" build
-    python3 run-qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
+    python3 ../../../tools/run_nvs_capacity_qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
         --stage "$stage" --target esp32c3 --nvs-pages 11 --qemu "$qemu_bin" \
         --timeout-seconds 600
 done
@@ -59,7 +59,7 @@ mkdir -p "$work"
 for stage in 1 2 3; do
     idf.py -C . -B "$work/build" -D "SDKCONFIG=$work/sdkconfig" \
         -D "IDF_TARGET=esp32" -D "PROBE_NVS_PAGES=6" -D "PROBE_STAGE=$stage" build
-    python3 run-qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
+    python3 ../../../tools/run_nvs_capacity_qemu.py --build-dir "$work/build" --flash "$work/flash.bin" \
         --stage "$stage" --target esp32 --nvs-pages 6 --qemu "$qemu_xtensa" \
         --timeout-seconds 600
 done

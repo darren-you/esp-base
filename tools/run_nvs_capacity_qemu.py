@@ -41,7 +41,7 @@ def main() -> int:
     if args.log_prefix is not None and not re.fullmatch(r"[a-z0-9-]+", args.log_prefix):
         parser.error("--log-prefix must be lowercase kebab-case")
 
-    project_root = Path(__file__).resolve().parents[3]
+    project_root = Path(__file__).resolve().parents[1]
     image = args.flash.resolve()
     if image.is_relative_to(project_root):
         parser.error("--flash must be outside the repository")

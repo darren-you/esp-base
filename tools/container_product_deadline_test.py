@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 def main() -> None:
     binary, container, wasi_sdk, guests = map(Path, sys.argv[1:])
-    base = Path(__file__).resolve().parents[1]
+    base = Path(__file__).resolve().parents[1] / "firmware"
     sys.path.insert(0, str(container / "tests"))
     sys.path.insert(0, str(container / "tools"))
     from package_wasm_test import signed_package  # type: ignore[import-not-found]

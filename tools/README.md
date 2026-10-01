@@ -29,6 +29,12 @@ flowchart LR
     at_backup["两份 ESP32 旧 AT 完整 Flash 备份"] --> at_archive["archive_esp32_at.py：旧 NVS / at_customize 无损归档"]
 ```
 
+## 真实签名 guest 与 NVS 宿主测试
+
+`container_product_deadline_test.py` 由 `bash firmware/tests/run_container_lifecycle_test.sh` 调用，在 macOS/Linux 宿主使用明确传入的精确 Container、WAMR 和 wasi-sdk 构建真实签名期限 guest，再执行 Base 生命周期测试。它不进入 MCU 固件构建，也不读取设备凭据。
+
+`run_nvs_capacity_qemu.py` 在宿主调用所选 Espressif QEMU，使用显式构建目录和仓外合成 Flash；仍拒绝仓内 Flash 路径。完整三阶段命令见 [NVS 容量探针](../firmware/tests/nvs-capacity-probe/README.md)。
+
 ## 产品卸载 QEMU 测试源码准备
 
 `prepare_qemu_product_uninstall_probe.py` 只对**不含 `.git` 的独立 Base 源码归档**插入 FreeRTOS 测试任务，接收本轮已签名包的 SHA-256 和预置 ECS2 sequence，并在 READY 后用正式 Base API 执行确认停止、产品卸载、同 boot 空绑定读回及 storage claim 释放。不注入签名键或包内容，不修改纳管源码、真实设备、Flash、SDK 或组件。构建仍须提供仓外候选分区、签名输入，并按[双目标 QEMU 检查点](../docs/operations/product-uninstall-qemu-checkpoint.md)区分合成状态与真实产品入口。
