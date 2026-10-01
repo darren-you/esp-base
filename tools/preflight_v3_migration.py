@@ -333,7 +333,7 @@ def validate_v2_config(blob: bytes) -> int:
         if not flags & 2:
             require(not (host_len or user_len or mqtt_password_len or ca_len or port),
                     "EBCF v2 未配置 MQTT 却含数据")
-        spec = util.spec_from_file_location("esp_base_device_control", ROOT / "tools/device-control.py")
+        spec = util.spec_from_file_location("esp_base_device_control", ROOT / "tools/device_control.py")
         require(spec is not None and spec.loader is not None, "设备配置校验器不可用")
         module = util.module_from_spec(spec)
         spec.loader.exec_module(module)

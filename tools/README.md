@@ -6,7 +6,7 @@
 
 ```mermaid
 flowchart LR
-    user["开发者：本轮端点与设备 UUID"] --> cli["device-control.py"]
+    user["开发者：本轮端点与设备 UUID"] --> cli["device_control.py"]
     cli -->|"独占串口 / JSON Lines"| firmware["ESP Base device_protocol"]
     firmware -->|"状态、结果、启动 ID"| cli
     user --> event_frame["product_event.py：生成已签名业务事件帧"]
@@ -60,21 +60,21 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 先退出占用该端点的监控或烧录程序；工具仅使用 Python 3 标准库。从本轮系统枚举结果选择端点，不把历史端点当设备身份。
 
 ```bash
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE status
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --image-file <本地已签名.bin> --image-url <设备可达的HTTPS地址> --ota-target esp32c3/esp_base ota.start
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE status
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --image-file <本地已签名.bin> --image-url <设备可达的HTTPS地址> --ota-target esp32c3/esp_base ota.start
 # 新启动后仍使用同一 operation UUID，只读查询；ESP32 构建的 target 为 esp32/esp_base：
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <同一操作UUID> ota.result
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE product.status
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <原操作UUID> product.result
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <同一操作UUID> ota.result
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE product.status
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <原操作UUID> product.result
 # 首次安装要求 product.status 的当前包摘要为 null；本地已签名 .pkg 与 HTTPS URL 必须指向同一组字节：
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.install
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.install
 # 同 boot 升级另需提供当前已确认包的 SHA-256：
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.upgrade
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.upgrade
 # 从刚查询的 product.status 精确抄录下一操作序号、Container 序号和当前包摘要；先固定原操作 UUID：
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> product.uninstall
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> restart
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> product.uninstall
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> restart
 # ESP32-D0WD-V3 完成新布局、固件迁移和实板启动后，选择本轮 CH340 端点：
-python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
+python3 tools/device_control.py --port /dev/cu.usbserial-EXAMPLE status
 ```
 
 默认输出块状摘要，`--json` 输出设备 JSON。重启先读取状态、精确绑定 UUID/boot/deadline，收到 `running` 后再次查询同设备的新启动，才报告成功；超时为 unknown，写命令不自动重试。直接打开 POSIX 串口，使用 `flock` 和 `TIOCEXCL` 独占当前端点，不切换 DTR/RTS，并关闭 HUPCL；串口写入限一秒，以设备回执确认执行。C3 原生 USB 与 ESP32 CH340 UART 均须验证打开端点不改变 boot_id；后者还须实测无 USB 背压时的整帧与超载行为。完整 probe/flash/恢复编排由设备工具负责。
@@ -94,12 +94,12 @@ python3 tools/device-control.py --port /dev/cu.usbserial-EXAMPLE status
 配置使用当前用户拥有、权限 0600 的本机 JSON 文件，不把密码放在命令行或输出中：
 
 ```bash
-python3 tools/device-control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --config-file <本机私有配置文件> config.set
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --config-file <本机私有配置文件> config.set
 ```
 
 文件包含完整 `schema_version`、`wifi`、`mqtt`、`frp`、`business` 字段。当前 `schema_version` 为 3；`wifi` 为 `{ssid,password}` 或 null；`mqtt` 为 `{hostname,port,username,password,ca_pem,management_key_hex}` 或 null；`frp` 可为 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}` 或 null，`business` 必须为 null。MQTT 主机为 1–253 字节 ASCII DNS 名，端口 1–65535；用户名最多 128 UTF-8 字节、密码最多 256 UTF-8 字节，均非空；CA PEM 最多 4096 ASCII 字节并含证书标记；独立管理密钥为非全零 64 个小写十六进制字符。工具不会生成凭据，整个配置仅经本轮独占物理串口端点发送，整行请求上限 9216 字节。工具读取新鲜 revision 后构造 CAS 请求，最多等待 30 秒；仅确认新 revision 后报告成功。文件不存在、权限不合格、重复字段或内容无效会拒绝，不回显配置。固件 MQTT/FRP 状态由实际 owner 报告；设备级 Broker ACL 与网络控制端仍需联调。
 
-`python3 tools/test-device-control.py` 使用本机伪终端验证字节不变、禁用关闭挂断和写入背压期限；伪终端不证明物理 USB 复位行为，后者以同板重复打开后的 boot_id 与断电验收为准。
+`python3 tools/test_device_control.py` 使用本机伪终端验证字节不变、禁用关闭挂断和写入背压期限；伪终端不证明物理 USB 复位行为，后者以同板重复打开后的 boot_id 与断电验收为准。
 
 ## 产品 MQTT 业务事件帧
 

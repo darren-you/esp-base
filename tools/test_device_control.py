@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest import mock
 
-spec = importlib.util.spec_from_file_location("device_control", Path(__file__).with_name("device-control.py"))
+spec = importlib.util.spec_from_file_location("device_control", Path(__file__).with_name("device_control.py"))
 control = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(control)
 

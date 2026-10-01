@@ -135,6 +135,7 @@ class ArchiveTests(unittest.TestCase):
     def test_public_parent_blocks(self) -> None:
         public = self.work / "public"
         public.mkdir(mode=0o755)
+        public.chmod(0o755)
         self.assertNotEqual(self.run_tool(destination=public / "archive.bin").returncode, 0)
         self.assertFalse((public / "archive.bin").exists())
         link = self.work / "parent-link"

@@ -159,7 +159,7 @@ flowchart LR
     owner --> binding
     image_set --> binding
     layout["partitions：两目标各自的 4 MiB 双应用槽"] --> firmware
-    host["tools/device-control.py：公开串口示例"] <-->|"JSON 命令与设备结果"| state
+    host["tools/device_control.py：公开串口示例"] <-->|"JSON 命令与设备结果"| state
     firmware --> image["build/esp_base.bin"]
     lab["apps/mqtt_integration：隔离测试应用"] --> mqtt["公开 esp-mqtt：官方核心 + emqtt_ 运行接口"]
     mqtt <-->|"MQTT / 严格 TLS"| broker["Broker：实验已验收 / 设备级待联调"]
@@ -237,7 +237,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 - [乐鑫官方仓库全景与 ESP Base 选型](docs/design/espressif-official-solutions.md)
 - [乐鑫 342 个公开仓库逐项清单](docs/design/espressif-repository-catalog.md)
 - [来源记录](docs/design/source-provenance.md)
-- [嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)
+- [嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded_firmware_golden_path.md)
 
 ## 许可
 

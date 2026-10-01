@@ -19,7 +19,7 @@ flowchart LR
 
 先用普通基座配置 Wi-Fi 并保存同板恢复基线；本应用与普通基座共用 v3-only `remote_config` 读取器，旧 v1/v2 NVS 设备必须先完成受控迁移，不能从实验入口绕过。本应用只读取已提交配置，不提交新的 Wi-Fi 配置、不自动擦 NVS、不驱动 GPIO。身份沿用当前 UUID；已有身份不存在时，身份组件仍按正常初始化合同建立身份，因此刷写前必须核对本轮基线。
 
-将仓库 `tools/mqtt-lab-inputs.example.h` 复制到仓外权限 0700 的目录，文件设 0600，填写本轮隔离 Broker、用户名密码、CA 和 NTP。TLS 必须先收到 SNTP 同步，使用 CA 与主机名验证；认证或证书失败不切换明文。默认构建不允许 TCP；只有明文实验可在独立 sdkconfig 中显式设置 `CONFIG_EMQTT_PLAINTEXT_LAB=y`，并将私有输入设为 `.tls=false`、`.ca_pem=""`；TCP 与非空 CA 的矛盾配置会被拒绝。
+将仓库 `tools/mqtt_lab_inputs_example.h` 复制到仓外权限 0700 的目录，文件设 0600，填写本轮隔离 Broker、用户名密码、CA 和 NTP。TLS 必须先收到 SNTP 同步，使用 CA 与主机名验证；认证或证书失败不切换明文。默认构建不允许 TCP；只有明文实验可在独立 sdkconfig 中显式设置 `CONFIG_EMQTT_PLAINTEXT_LAB=y`，并将私有输入设为 `.tls=false`、`.ca_pem=""`；TCP 与非空 CA 的矛盾配置会被拒绝。
 
 从仓库根构建，两个应用使用不同 build 与 sdkconfig，避免缓存混用：
 
@@ -27,7 +27,7 @@ flowchart LR
 idf.py -C firmware -B /private/path/mqtt-build \
   -D SDKCONFIG=/private/path/mqtt-sdkconfig \
   -D ESP_BASE_APP=mqtt_integration \
-  -D ESP_BASE_MQTT_LAB_INPUTS=/private/path/mqtt-inputs.h build
+  -D ESP_BASE_MQTT_LAB_INPUTS=/private/path/mqtt_inputs.h build
 ```
 
 普通 `esp_base` 构建拒绝实验输入与明文实验选项。此门禁只覆盖本地构建选择；正式签名/发布制品门禁仍属于后续交付阶段。输入 header 会复制进私有 build，凭据和 CA 编进实验镜像；整个 build、配置、串口日志和固件必须按私有资料保存。

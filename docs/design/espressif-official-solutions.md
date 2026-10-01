@@ -54,4 +54,4 @@ USB 命令已使用 UUID v4 `boot_id`、配置 `revision` 与有界请求裁决�
 4. 用 `esp_http_client`、`app_update` 和 bootloader rollback 完成 OTA；在 ESP32-C3 双槽上量测镜像大小、运行堆、下载峰值、断电恢复与新启动自检。只有实板通过才更新 README 的已支持状态。
 5. FRP 继续按本仓公开 `esp-frp` 来源、许可和资源边界独立评估；它不属于乐鑫 342 仓所提供的官方替代方案。
 
-这份顺序只选择与当前[设备协议](./device-protocol.md)和[嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded_firmware/embedded_firmware_golden_path.md)一致的技术能力。任何 Flash 写入、整片擦除、eFuse、安全启动或加密配置变更，均应先满足该标准的精确设备和恢复基线要求。
+这份顺序只选择与当前[设备协议](./device-protocol.md)和[嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded_firmware_golden_path.md)一致的技术能力。任何 Flash 写入、整片擦除、eFuse、安全启动或加密配置变更，均应先满足该标准的精确设备和恢复基线要求。
