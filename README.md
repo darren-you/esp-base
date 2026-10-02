@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-03 C3 分配探针保留失败：139/139 下载状态 MQTT／FRP ready，联合功能、公开停止启动及原代码恢复通过；UART dump 缺失头部，完整解析拒绝，整轮未通过。独立诊断历史 heap 21360 B 仍低于 49152 B，下一候选修正连续捕获与 history 记录策略，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+
 2026-10-03 C3 公开停止／启动实体切片：USB 与认证 MQTT 各一次 stop/start、停止后重启自动运行 confirmed、旧 boot 原 ID unknown、十二项业务、A/C 字节读回和原代码恢复通过。130/130 下载样本 MQTT／FRP ready，441 个任务快照完整序列化；来源历史 heap 23888 B 仍未达 49152 B，完整容量、两板与生产继续开放，见[实体检查点](docs/operations/product_lifecycle_c3_checkpoint.md)。
 
 2026-10-03 FRP 唯一配置 owner 软件候选：借用 control task 的 canonical 配置并复用已有 work 做完整失败重载，保留 native 深拷贝与销毁重试；两个目标 host、普通／签名 SDK 和官方验签通过。C3 签名普通堆起点前移 2736 B，实体容量仍待复验，见[检查点](docs/operations/frp_canonical_config_owner_checkpoint.md)。

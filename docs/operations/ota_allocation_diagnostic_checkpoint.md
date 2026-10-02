@@ -1,5 +1,19 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-03 新低水探针：部分记录失败
+
+本轮实际运行源码为公开 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89`，精确消费 MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 OTA `bf11916ab904be4ee9bcdfae213c85336363e96a`；仅在仓外叠加既有实验 CA／授权、任务观测及私有分配探针。SDK／lwIP／provider、原生锁、正式 Wi-Fi 32／32、TLS 16384／4096、guest 64 KiB 及原任务栈预算保持。A／C 都为 1183744 B，分别为 `0.2.0-c3-heap-daf9-a/c`，完整构建和官方 RSA v2 验签通过；实际源 A／目标 C 摘要分别为 `76ea92a85851a9e4d535bd517b13efc2ecbbd8cb9b6066bfb753eb1659244090`／`f26c6896cbc5783271ae6b46c8cfe2a27d33164ca0d9954af2b00af02731abe5`。14289 个冻结文件及两份软件归档逐项字节、大小、模式／执行位核对通过。
+
+固定观察区 1800 B、实际 IRAM 增量 1332 B，对应普通堆起点后移 2832 B，均计入现场成本。探针在真实 `eota_prepare` 前准入，正文窗口为 `[0, 327680)`；分配 hook 在 native heap 解锁后读取计数，保留前 11 条与最新末条，largest 在任务边界延后采样。本次实际 C3 ELF 的 RAM／Retention／RTC 类型均同时含 `MALLOC_CAP_DEFAULT` 与 `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT`，两选择器匹配同一注册 heap 集合；这不扩大到其它目标或配置，也不能将各 heap 异时历史最低值与延后 largest 当作同时存活证明。
+
+公开安装、一次 WRITE OTA、USB／认证 MQTT 停止启动、停止后重启自动运行 confirmed、旧 stop ID 在新 boot unknown、十二项业务和卸载通过；五个生命周期原 ID 各写一次。来源下载 **139/139** 状态 MQTT／FRP ready，采样历史 heap **21360 B < 49152 B**。最后一个旧低水样本为 received 340928 B／25408 B，首次采到最终新低水为 349120 B／21360 B；这一区间已经超出固定探针窗。它是独立诊断 boot 的读数，不能与正式轮 23888 B 相减归因，也不加回观察成本。完整容量仍未通过。
+
+原始 UART 只保存了 index 8 的两个 heap 尾行，以及 index 9／10／11 的三个完整记录，SUMMARY 和前段记录缺失；实际 dropped／unsupported 数无法核定。完整 parser 正确拒绝 dump，`diagnostic_trigger_evidence_available=false`、整轮 `passed=false`，进程退出 1。三个完整尾记录均只有新 window-current 触发，没有 `NEW_HISTORY`；源 A 同一 SHA 的 ELF 只将其返回地址分别映射到 `http_header_init`、`esp_http_client_init`、`esf_buf_alloc_dynamic`。这不能证明历史低水的致因、完整分配时间线或 native 资源回收，不补造 SUMMARY。已确认原观察循环在正常状态查询之间关闭串口，形成无读者区间；没有发现显式 `tcflush`，不把特定 OS／设备缓冲丢弃机制写成已证实事实。
+
+任何解析错误均只聚合为失败，原恢复 finally 继续。Root 独立核对两份新鲜 4 MiB 基线、三个原代码的独立读取／切片／身份 SHA，以及实验 A/C 精确读回；结束整片擦除旧／实验数据，仅恢复原三代码区并逐字节读回，reset／Wi-Fi down ACK、三 fixture 关闭、串口释放、实验所属进程为零和四个精确 listener 不存在均通过。真实恢复没有失败，唯一聚合错误为 `heap_trigger_uart_parse: ValueError`；不写 eFuse、不恢复旧／实验 NVS。
+
+受限且 Git 忽略的 `c3-validation-20261003/c3-heap-trigger-partial` 保存全部失败输入和原始记录。软件源／证据归档 SHA-256 为 `8e450859589de8e8881cb67d3e0942f113d62095defc4be2b241d8bfb8df1bfa`／`ee8a6aee6907f620f44fac8e67110270b9acdf64d05e38fd05962f361689424f`；实体归档为 `29993f8c845062cb6dffba7d5bb322d0451beb2b95ec42f9ca21b300daddbe97`，181 个 member 全部逐项复核。私有索引为 `90c8aa0166942e9acf2f65b99345fc2e7fd23f964c041448918d043ca82fc797`。下一候选需覆盖整个实际 prepare、仅以 `NEW_HISTORY` 占用记录槽、保持连续单 reader，并重新冻结实际 A/C 字节；旧失败保持。ESP32、满合法峰值、Flash 成本、百次公开循环、掉电／72 小时和正式入口继续开放。
+
 2026-10-02，在已发布 Base `ebf2da71449d59365554e12a4efc3fe41e9b117f` 的运行源码上完成三轮私有诊断。三轮 C3 联合功能与原代码恢复均通过；诊断定位了指定窗口内的较大 TLS 分配，没有证明全部瞬时峰值或关闭 48 KiB 容量缺口。
 
 ## 输入与诊断边界
