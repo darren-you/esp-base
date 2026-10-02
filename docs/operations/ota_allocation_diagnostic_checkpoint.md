@@ -1,5 +1,21 @@
 # C3 OTA 分配诊断检查点
 
+## 连续诊断与公开生命周期复验
+
+2026-10-03，保持上一轮已冻结来源 A／目标 C 的签名固件字节、全部正式资源预算与生产信任不变，仅在仓外驱动的目标确认循环接受两种现有码未决形态：`ota_result_uncertain`／完整原操作元数据，或 `storage_uncertain`／null。后者继续同一原 OTA ID 的只读查询，不产生新 OTA 操作或重发写命令。132 项 pure mocks 通过，Root 独立重跑其中新增 10 项并核对三行精确差异、原恢复代码和全部输入。原单次 5 秒查询与 90 秒循环时序保持，success 先于总 deadline 判定的既有顺序未改，不宣称硬性 90 秒墙钟截断。
+
+新实体整轮退出 0，公开安装／一次 WRITE 联合 OTA 持久成功、USB／认证 MQTT 各一次 stop/start、五个生命周期原 ID 各写一次及重复只读均通过。原 OTA ID 的目标确认回读为 28 次 running、2 次 `ota_result_uncertain`、1 次 succeeded；本轮没有观察到 `storage_uncertain`，该分支由上一轮真实失败和本轮纯测试分别覆盖。停止后重启自动运行当前固件 confirmed，旧 boot 的 stop ID 在 USB 与 MQTT 两通道 unknown；十二项真实业务、卸载、来源 A 保持和目标 C 逐字节读回全部通过，PUBACK 仍只作传输证据。
+
+连续单 reader 从原一次 `ota.start` 前覆盖来源、目标及两种生命周期切片，明确重启请求后关闭；无 backend 重开、捕获错误、队列溢出或 join 超时，768227 B UART 全部记录并消费。64 KiB 有界队列的实际最高待消费量为 64988 B；这只证明本轮范围，不证明更大负载的捕获能力。完整 parser 保留 **10 条 NEW_HISTORY、dropped=0**，unsupported／ISR 均 0，实际 A ELF 返回位置与完整源绑定已核对。来源下载 **146/146** 样本 MQTT／FRP ready，历史各 heap minimum 合计 **22164 B < 49152 B**，窗口 current 最低 26856 B；全部观察成本保留，不与前轮独立读数相减归因或加回。
+
+原始日志另有 477 个完整存活任务快照，expected 与 captured 全部相等，无采样申请失败；13 个已观察任务名的栈余量均至少 1024 B。任务名含平台原样空格，解析保持原值。有限快照不证明全部任务生命周期或满合法峰值；公开 stop 结果与停止窗口不替代独立 native join／句柄仪器。
+
+写前重新读取安全状态、两份完整 4 MiB 基线和三个独立原代码区；初次完整实验 Flash、post-OTA A/C 与结束原三码逐字节核验通过。结束擦除全部实验数据，只恢复原 bootloader／partition／factory，不恢复旧／实验 NVS，不写 eFuse。reset／Wi-Fi down ACK、串口、三个 fixture、零所属进程及五个实测精确 listener 释放独立通过；FRPS remote port 在活动期间由所属进程实际 LISTEN 快照绑定。首次清理复核与两个 Root 只读复核并发，所属进程门禁拒绝；等其结束后原门禁单独回读通过，未减弱门禁或清理未知进程。
+
+受限且 Git 忽略的 `c3-validation-20261003/c3-heap-history-confirmed-observer` 保留原 14142 文件软件冷输入、46 member 新 driver overlay、184 member 本轮完整实体及独立证明。driver overlay 归档摘要 `18c127b4b86771f63c8f7beae6ed6e22f8f2754604ae9aab69eddee8df96401b`；实体归档摘要 `a856d4af618dfe3d1bfff0c63bad4b79206c7086aad27e0cda44271e4723f1c9`，私有索引 `3f30f1a187593e306bb0a15a20a55aee6e45820bde16503cad8e2d60098c72eb`。Root 独立复核全部成员与 19 份受限拷贝的字节、大小、mode、执行位；`c3-heap-history-confirmed-analysis` 的任务／冻结复核补充索引为 `e64ce36feae4fa77897dbde44bfb90f430962ae3deea7a4b47f33a8fb3a39154`，原冻结树未修改。两轮失败及正式 23888 B 生命周期读数均保持独立。
+
+只读内存 owner 复核没有发现第二份 64 KiB 或尚可再次回收的 10 KiB 启动栈；已识别 Container／WAMR 常驻上游申请子集至少 72578 B，不是完整总额。现有小型去重方向尚未实施或证明足以填补缺口，实际节省记为 0。满合法 MQTT 队列／在途与业务事件、FRP 双流／最大记录／重连、独立 native 全峰值、Flash 最坏成本、百次公开循环、ESP32、断电／72 小时及正式入口继续开放；本轮功能与诊断通过，P6-03／五能力容量总门未通过。
+
 ## 全 prepare 历史新低诊断与查询暂态失败
 
 2026-10-03，在公开 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89`／OTA `bf11916ab904be4ee9bcdfae213c85336363e96a` 的仓外诊断组合上，捕获范围从实际 `eota_prepare` 入口至返回。固定 1800 B 记录区只保留 `NEW_HISTORY`，连续单 reader 在原一次 OTA 写命令前开启、覆盖来源与目标观测；无 reader 重开、队列溢出或后台错误。观察成本不回加，正式 Wi-Fi、TLS、任务栈与 guest 预算保持。

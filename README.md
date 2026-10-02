@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-03 C3 连续诊断与公开生命周期复验：联合 OTA 持久确认、USB／MQTT 停止启动、停止后重启自动运行 confirmed、十二项业务、卸载、A/C 读回与原三码恢复通过；10 条历史新低完整无丢弃，146/146 下载样本网络 ready。477 个完整任务快照、13 个已观察名称栈余量均至少 1024 B；诊断历史 heap 22164 B 仍低于 49152 B，满合法峰值与双板总门继续开放，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+
 2026-10-03 C3 全 prepare 诊断：连续单 reader 收到 12 条完整历史新低记录，无丢弃，148/148 下载样本 MQTT／FRP ready；历史 heap 22016 B 仍未达 49152 B。目标确认期间驱动拒绝合法 `unknown/storage_uncertain/null`，后继功能未完成；原三码恢复、数据擦除与资源释放独立复核通过，失败证据保持，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-03 C3 分配探针保留失败：139/139 下载状态 MQTT／FRP ready，联合功能、公开停止启动及原代码恢复通过；UART dump 缺失头部，完整解析拒绝，整轮未通过。独立诊断历史 heap 21360 B 仍低于 49152 B，下一候选修正连续捕获与 history 记录策略，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
