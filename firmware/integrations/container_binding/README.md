@@ -48,6 +48,8 @@ Container 成功 open 返回本次重新验签包的 SHA-256 与签名 `event_qu
 
 同一 boot 内需要改动已确认产品绑定时，调用方先取得 Base storage claim，再调用 `esp_base_container_product_stop_confirmed`。仅在 guest 主动停止、Container `stop/close` 成功、唯一 pthread 已 join 且无实例引用后才允许再次调用 `product_boot`；失败保留 claim 并阻断重开。首次启动得到 `EMPTY` 时，已退出的线程 join 后也允许在有效 claim 下重试；重试仍由真实固件集合观察、ECS2 reconcile 和签名包 open 决定结果。`BLOCKED`、trial 和未完成停止都不开放重试；一旦卸载观察或提交进入 `UNCERTAIN`，即便后续单独停止 guest 也不开放本 boot 重试。此运行时收敛入口现由公开 `product.uninstall` 及安装／升级 worker 使用；包来源与持久操作收据由 Base 控制任务管理，试运行成功判据尚未闭合。
 
+维护者已确认停止只对当前启动生效，重启后自动运行已确认产品。`stop_confirmed` 的成功仅清理本 boot 的执行器与活动视图，不修改 ECS2 或包 Flash；下一 boot 仍由普通启动恢复、签名固件观察、ECS2 对账和包复验决定自动装载。停止不增加持久配置或账本操作；公开停止／启动入口仍待实现，完整语义见[设备协议](../../../docs/design/device-protocol.md#产品停止与新启动)。
+
 内部包准备成功后，旧确认 guest 必须先经上述停止与回收证明，才能用原 operation ID 和 `PREPARED` 序号启动产品专属 trial。启动前只读预检持久操作和签名固件，错误参数不消耗同 boot 重开机会；正式 Container 将状态推进 `TRIAL_STARTED` 后才重新验签、打开并执行候选 guest。只有候选包摘要匹配的已授权事件可入队；事件执行、离线和 Base ready 均不会自动确认产品。同 boot 精确试运行期间，绑定只读快照允许返回当前 ECS2 序号和仍已确认的旧包绑定；原 operation ID、boot ID、序号或签名固件不符则保持不确定，不把候选包报为已确认。放弃时先停止候选并回收 native 实例，再以原操作及 boot 身份持久提交 `ABORTED`、独立读回并核对全部固件绑定，成功后才允许同 boot 重新打开旧包；不确定结果仍阻断。公开安装／升级已经接入试运行，业务健康策略和成功终态尚未接线，详见[产品试运行检查点](../../../docs/operations/product-package-trial-checkpoint.md)。
 
 内部 `esp_base_container_product_confirm_package_trial` 只在调用方已独立判定真实授权代表事件、业务结果与验证窗口通过后使用；它本身不定义产品健康。入口要求当前仍是同一 operation ID、trial 序号与 boot 的运行候选，最近完成事件的序号与已核对原始字节 SHA-256 匹配、runtime 成功且 guest 未报告负数业务失败，事件包摘要与候选包一致。确认前在事件锁下核对队列为空且没有正在执行的 guest 调用，并暂时关闭新事件入队及定时器回调；原 Base claim 下先持久写入 `HEALTH_VERIFIED`、独立读回并证明旧绑定未变，再持久写入 `CONFIRMED`、独立读回新包绑定与未变的另一固件绑定。全部成功后才把本 boot 实例改为已确认状态并恢复事件入口，允许按正常路径停止／重新打开。任一步不确定时输出序号为空、保持入口关闭并保留 claim，不能据内存状态宣称成功。公开安装 worker 已接入候选试运行；实际业务健康判据与同 boot 持久账本成功终态尚未接线。

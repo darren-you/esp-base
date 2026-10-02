@@ -2968,6 +2968,8 @@ int main(int argc, char **argv)
     const unsigned flash_writes = store.flash_writes;
     uint8_t confirmed_blob[ECONTAINER_SLOT_BLOB_BYTES];
     memcpy(confirmed_blob, store.blob, sizeof confirmed_blob);
+    uint8_t confirmed_flash[FLASH_BYTES];
+    memcpy(confirmed_flash, store.flash, sizeof confirmed_flash);
 
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
@@ -2980,10 +2982,37 @@ int main(int argc, char **argv)
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
     assert(esp_base_container_product_stop_confirmed(&claim));
     assert(memcmp(store.blob, confirmed_blob, sizeof confirmed_blob) == 0);
+    assert(memcmp(store.flash, confirmed_flash, sizeof confirmed_flash) == 0);
     assert(store.blob_writes == blob_writes && store.flash_erases == flash_erases &&
            store.flash_writes == flash_writes);
+    esp_base_container_binding_snapshot_t stopped_binding = {0};
+    esp_base_container_active_product_t stopped_active = {0};
+    assert(esp_base_container_product_status_snapshot(
+        &claim, &stopped_binding, &stopped_active) == ESP_BASE_CONTAINER_BINDING_OK);
+    assert(stopped_binding.package_present && !stopped_active.present &&
+           stopped_active.product_version == NULL && s_product.native_reclaimed &&
+           !s_product.thread_joinable &&
+           !atomic_load(&s_product.instance_active));
     assert(esp_base_storage_release(&claim));
     assert(!store.locked && store.mapping == NULL);
+    dispose_product();
+
+    /* A stop belongs to the old boot. Reset only RAM owners, retaining the
+     * exact confirmed ECS2 and package Flash; normal startup must reopen it. */
+    configure_product(&key);
+    esp_base_storage_owner_init(&owner);
+    const char next_boot_id[] = "33333333-3333-4333-8333-333333333333";
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, next_boot_id) ==
+           ESP_BASE_CONTAINER_RUNNING);
+    check_active_product(&claim, &expected_confirmed_version, false, NULL);
+    assert(esp_base_container_product_event_accepting());
+    assert(memcmp(store.blob, confirmed_blob, sizeof confirmed_blob) == 0 &&
+           memcmp(store.flash, confirmed_flash, sizeof confirmed_flash) == 0);
+    assert(store.blob_writes == blob_writes && store.flash_erases == flash_erases &&
+           store.flash_writes == flash_writes);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
     dispose_product();
     assert(pthread_mutex_destroy(&store.mutex) == 0);
     run_uninstall_with_fallback(&key, &package, boot_id);

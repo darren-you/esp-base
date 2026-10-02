@@ -91,6 +91,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 `run_container_lifecycle_test.sh` 以精确锁定的公开 Container/WAMR 源和 wasi-sdk 编译真实签名 counter 包，Base 测试二进制启用 ASan/UBSan。卸载测试覆盖运行中 `stop/close/join`、已停止及损坏包启动失败但 native 资源确已回收的实例，调用公开 `econtainer_slots_uninstall` 后核对当前绑定清除、回退固件包引用与整份包 Flash 不变、同 boot 正式 `product_boot` 返回 `EMPTY`。错误 sequence/摘要在 guest 停止前拒绝；运行中失去 ECS2 key、Container 提交读回与 Base 独立读回各自失败、停止超时均返回不确定并禁止同 boot 重开；旧 OTA `SUCCEEDED` 收据在新产品 operation 推进 sequence 后仍核对原 A/C。Flash/NVS 与固件集合是宿主替身，不代表真实签名 Base 镜像或设备断电。
 
+同一入口补充停止只对当前启动生效的回归：实际签名已确认 guest 停止后活动视图为空、native 实例已回收，保留原 ECS2 blob、整个包 Flash 和全部写入计数；只重置 RAM owner 并更换 boot ID 后，普通 `product_boot` 自动运行同一个已确认包、恢复完整活动元数据和授权事件入口，整个过程不修改持久绑定或包字节。Flash/NVS、固件观察与新启动由宿主夹具提供；此用例不经过公开停止命令，也不证明实体板重启。
+
 同一真实签名 guest 生命周期还用构造的 V3 固件收据验证带包 selected C 的只读预检：空来源 `WRITE` 在 `WRITING` 时拒绝、完成包写入并读回 `PREPARED` 后通过；有来源包的 `REUSE`／`WRITE` 核对原 operation、来源与目标包身份，目标包字节篡改后拒绝，恢复字节后通过。整个只读预检不增加 blob、包槽擦除或写入计数；普通启动已消费该预检，但此分层用例不证明公开网络下载。
 
 同一用例还在模拟物理 A-only 后，以原 V3 收据测试带包回退：旧 B 未退役、部分 `WRITING`、`PREPARED`、人为推进的 `HEALTH_VERIFIED` 及已提交 `ABORTED` 后的续进均只清理原候选绑定，保留 A 的签名包与包 Flash；完成后的原收据重复调用不新增提交。错误来源摘要、来源包字节损坏或同 boot 放弃不能写 ECS2。`HEALTH_VERIFIED` 在测试中由 Container 原语人为推进，不代表真实业务事件或 30 秒在线健康通过；普通启动已消费原收据恢复，真实 SDK／签名 app 的离线回退另见本页顶部检查点。

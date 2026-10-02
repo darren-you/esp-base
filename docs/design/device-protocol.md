@@ -32,6 +32,12 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 配置 `schema_version` 固定 3，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 为 null 或精确 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}`；business 必须为 null。FRP Token 为 1–256 字节非空可打印 ASCII，CA PEM 最多 2048 字节，proxy_name 为 1–128 字节受限 ASCII，三个端口均为 1–65535；本地目标固定为 `127.0.0.1`，独立管理 key 与 MQTT key 不互用。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT/FRP 能力按实际 owner 状态报告。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。
 
+## 产品停止与新启动
+
+2026-10-02 维护者确认：手动停止只对当前启动生效；重启后自动运行当前固件绑定的已确认产品。停止成功须证明 guest `stop`／`close`、唯一产品线程 join 和 native 实例回收，随后活动产品为空、业务事件入口关闭；已确认包绑定、ECS2 序号、包 Flash 和产品数据保持原样。停止状态仅在本 boot 的 RAM 中，不写持久启动开关，也不将停止登记成安装／升级／卸载操作。
+
+新启动沿普通启动恢复：先对账原 OTA 收据和未决产品操作，再以本次签名固件集合核对 ECS2、重新验签和装载当前已确认包；全部事实成立时自动执行 `init` 并开放授权事件。无包返回空状态；存储、绑定、包或回收事实不确定时继续阻断。当前公开 USB／MQTT 协议尚未实现产品停止／启动命令；已有内部 `esp_base_container_product_stop_confirmed` 与 `product_boot` 满足上述运行合同，公开入口和实体重启链仍需单独验收。
+
 ## 结果与幂等
 
 无法解析或没有合法唯一 request_id 的输入返回 failed/invalid_request，request_id 为 null，不能与任何已提交操作关联。有效请求的结果带 protocol_version、device_id、boot_id、request_id、state、error_code、result。state 只允许 accepted/running/succeeded/failed/expired/unknown；error_code 为稳定字符串或 null。所有 key 必须存在。状态以设备最终结果裁决，USB write、HTTP 202、PUBACK 都不是 succeeded。
