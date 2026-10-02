@@ -6,7 +6,7 @@
 
 运行源码为 `b8d695838328b3664f983baeb7dafc992d5f3982`，与公开 `f0015bae58bc5dc2666de0b07bb5b2a2d05df588` 的运行输入逐字节相同。原启动入口、正式 C3 分区、四份依赖锁和固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c` 保持，未注入固件调用方。
 
-相对[前序 REUSE 镜像](c3_joint_ota_reuse_checkpoint.md)的实验 CA 配置，本轮私有构建仅授予 timer 能力 `0x4` 和一个定时器；目标 C 再通过官方 SDK 设置版本 `0.2.0-c3-lab-timer-c`，来源 A 为 `0.2.0`。没有增加日志、硬件、网络或存储能力，生产授权与信任未修改。两份 RSA v2 签名 app 均为 1183744／1245184 B，官方验签通过：A 的 SHA-256 为 `1fd9e100205d9995568a5c1806ad19103657782cc982ce693c6c4d802832e7ff`，C 为 `1540d0f53f96c01bef5e2e171b5fd2525bcfcfcb8165f9e4a80ebf0d75fbdeea`。
+相对[前序 REUSE 镜像](c3-joint-ota-reuse-checkpoint.md)的实验 CA 配置，本轮私有构建仅授予 timer 能力 `0x4` 和一个定时器；目标 C 再通过官方 SDK 设置版本 `0.2.0-c3-lab-timer-c`，来源 A 为 `0.2.0`。没有增加日志、硬件、网络或存储能力，生产授权与信任未修改。两份 RSA v2 签名 app 均为 1183744／1245184 B，官方验签通过：A 的 SHA-256 为 `1fd9e100205d9995568a5c1806ad19103657782cc982ce693c6c4d802832e7ff`，C 为 `1540d0f53f96c01bef5e2e171b5fd2525bcfcfcb8165f9e4a80ebf0d75fbdeea`。
 
 来源包仍为 10240 B 的无导入 counter，SHA-256 `3d71095bdc1af6e202ac01b58f19c2b484f2e0b126dec85fbce9f42a99a2dd99`。目标包来自公开 Container `d8a6caac573374e1d5bb6c28d088a94624fe3ca6` 的 message-counter 样例，以固定 wasi-sdk 33 构建并复用既有 RSA-3072 测试签名键；仅装配既有 key ID，没有升级平台 Container／WAMR pin。目标 Wasm 为 1054 B、SHA-256 `5fc50d5ec0e6faabf57fe5fb74a24d2bfa30ef5d0699744be5d6d294cd1aac1c`，包为 10240 B、SHA-256 `f23cff017748acbb97bf7f1d62b961013e2ab0e2ab88a8da0be25c52d4802d02`。其 guest ABI 2、schema 1、一页内存、4096 B Wasm 栈、timer 能力与零持久数据均由签名清单约束。
 

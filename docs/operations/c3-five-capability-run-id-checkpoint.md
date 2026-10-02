@@ -29,4 +29,4 @@
 
 本轮 143 份私有实板证据索引 SHA-256 为 `effd1620aa917549bd660eb246e00b050f48e80fc0747a630be06b80f2da2988`。软件与 SDK 的 78 份独立索引为 `6afed73993a23f226ddfc47b8fbb9eb81b7bfe3297a2c1a3a13fb7afe7ccb624`，其中 194 份编译输入与公开 Base 的运行文件逐字节核对，四份锁均验证。私有证据目录与索引已确认被 Git 排除，文件 0600／目录 0700；设备 UUID、MAC、凭据、签名私钥与恢复字节不进入公开仓。
 
-此前 109 份[失败证据](../issues/c3_product_frp_mqtt_ota_capacity.md)保持不变。[软件接线检查点](frp_stable_run_id_checkpoint.md)记录 API、鉴权替换和双目标 SDK 边界。
+此前 109 份[失败证据](../issues/c3-product-frp-mqtt-ota-capacity.md)保持不变。[软件接线检查点](frp-stable-run-id-checkpoint.md)记录 API、鉴权替换和双目标 SDK 边界。

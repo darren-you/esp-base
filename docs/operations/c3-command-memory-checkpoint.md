@@ -52,4 +52,4 @@ C3 第二轮使用原始应用入口、正式布局及精确依赖，私有配�
 
 第一轮 221 份私有证据索引为 `5c02f1f82cfc880cfc94250731c4419fe3f11f6d847bb476c1a7dae1cbe97fba`，包含其 352 字节欠栈事实，保持不变。第二轮 229 份索引为 `221873d88bc80d5b9be612a57f8994fc60bef59bff489eb663b273aba7d2e729`；输入源码归档 SHA-256 为 `5ffeb86a5e8bb5f634bdb06176df259a21142a299046056579439d6d0534027f`。源码、两目标签名输入、实验镜像、配置差异、原始日志、回读、验证及恢复结果逐文件核对。私有目录被所属仓 Git 排除，文件 0600／目录 0700，设备身份、凭据、签名私钥和恢复字节不进入公开仓。
 
-之前的[稳定身份功能轮](c3_five_capability_run_id_checkpoint.md)和[失败轮](../issues/c3_product_frp_mqtt_ota_capacity.md)证据保持；本次只闭合已测的命令分配、控制栈及联合功能切片。
+之前的[稳定身份功能轮](c3-five-capability-run-id-checkpoint.md)和[失败轮](../issues/c3-product-frp-mqtt-ota-capacity.md)证据保持；本次只闭合已测的命令分配、控制栈及联合功能切片。

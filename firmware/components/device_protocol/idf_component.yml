@@ -3,11 +3,11 @@ dependencies:
     version: "==1.7.19~2"
   mqtt:
     git: "https://github.com/esp-space/esp-mqtt.git"
-    version: "50c9c45f0fe95d4e99ab39584ff04d45d432efbc"
+    version: "ee11ed365c9f3c76a2074f5d29011b818d5b68c9"
   esp_ota:
     git: "https://github.com/esp-space/esp-ota.git"
     path: "components/esp_ota"
     version: "04acb5e80a744649f8442607fb8d901d30880ca0"
   esp_frp:
     git: "https://github.com/esp-space/esp-frp.git"
-    version: "fcbce1cd2a7a740c1fe04db9dc7d3dd7df66d5f7"
+    version: "989cc876d92b815aeb0b6806fb861f0ee2b39a86"

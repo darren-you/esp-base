@@ -1,6 +1,6 @@
 # FRP 认证重启软件检查点
 
-2026-10-01，在 `esp-base@88e4939a31c007849e94d928919710f426d0d730` 的隔离候选上补齐设备端认证 restart。协议事实源为[设备协议](../design/device-protocol.md#frp-base-软件接线边界)；只读状态的原构建证据见[认证状态检查点](frp_authenticated_status_checkpoint.md)。本项不表示私有网关重启、生产 FRPS 或实体板验收完成。
+2026-10-01，在 `esp-base@88e4939a31c007849e94d928919710f426d0d730` 的隔离候选上补齐设备端认证 restart。协议事实源为[设备协议](../design/device-protocol.md#frp-base-软件接线边界)；只读状态的原构建证据见[认证状态检查点](frp-authenticated-status-checkpoint.md)。本项不表示私有网关重启、生产 FRPS 或实体板验收完成。
 
 ## 行为
 

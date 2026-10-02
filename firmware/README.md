@@ -1,18 +1,18 @@
 # ESP Base 固件
 
-2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](../docs/operations/c3_command_memory_checkpoint.md)。
+2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](../docs/operations/c3-command-memory-checkpoint.md)。
 
-2026-10-02 C3 稳定 FRP 身份联合功能切片通过：公开一次 WRITE OTA 与一次 MQTT restart 后，目标和第三 boot 均经 FRP 认证状态核验，十二项消息计数业务、卸载、A／C 字节核对及原代码恢复完成。143 份实板证据冻结；来源下载最低历史 heap 4124 B，48 KiB 容量门继续失败，见[检查点](../docs/operations/c3_five_capability_run_id_checkpoint.md)。
+2026-10-02 C3 稳定 FRP 身份联合功能切片通过：公开一次 WRITE OTA 与一次 MQTT restart 后，目标和第三 boot 均经 FRP 认证状态核验，十二项消息计数业务、卸载、A／C 字节核对及原代码恢复完成。143 份实板证据冻结；来源下载最低历史 heap 4124 B，48 KiB 容量门继续失败，见[检查点](../docs/operations/c3-five-capability-run-id-checkpoint.md)。
 
-2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](../docs/operations/frp_stable_run_id_checkpoint.md)。
+2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](../docs/operations/frp-stable-run-id-checkpoint.md)。
 
-2026-10-02 C3 产品／FRP／MQTT／WRITE OTA 组合实测保留失败：来源产品与网络同机下载、目标产品和原 OTA ID 持久确认、C 上 FRP 认证状态均通过；再次重启后 MQTT ready、FRP 登录拒绝，官方 FRPS 报告相同 client_id 仍在线。来源下载 67 份采样均 MQTT/FRP ready，历史最低堆仅 6500 B，低于 48 KiB；该登录错误与容量缺口分别处理。109 份失败证据、数据丢弃、原代码恢复与清理已核对，见[组合缺口](../docs/issues/c3_product_frp_mqtt_ota_capacity.md)。
+2026-10-02 C3 产品／FRP／MQTT／WRITE OTA 组合实测保留失败：来源产品与网络同机下载、目标产品和原 OTA ID 持久确认、C 上 FRP 认证状态均通过；再次重启后 MQTT ready、FRP 登录拒绝，官方 FRPS 报告相同 client_id 仍在线。来源下载 67 份采样均 MQTT/FRP ready，历史最低堆仅 6500 B，低于 48 KiB；该登录错误与容量缺口分别处理。109 份失败证据、数据丢弃、原代码恢复与清理已核对，见[组合缺口](../docs/issues/c3-product-frp-mqtt-ota-capacity.md)。
 
-2026-10-02 C3 空产品的真实 FRP/MQTT 认证管理与一次重启恢复通过。该轮使用原始启动入口、正式分区及私有实验配置，设备 HMAC 经 Tool 原有控制库验证；产品、OTA 并发和资源总门继续开放，见[实板检查点](../docs/operations/c3_frp_mqtt_management_checkpoint.md)。
+2026-10-02 C3 空产品的真实 FRP/MQTT 认证管理与一次重启恢复通过。该轮使用原始启动入口、正式分区及私有实验配置，设备 HMAC 经 Tool 原有控制库验证；产品、OTA 并发和资源总门继续开放，见[实板检查点](../docs/operations/c3-frp-mqtt-management-checkpoint.md)。
 
-2026-10-02 C3 公开 WRITE 联合 OTA 实板切片通过：不同签名 message-counter 包的代表事件、原健康门、原 ID 持久成功及重启后恢复、十二项业务检查、卸载和 A／C Flash 字节核对完成。源码与依赖锁保持，私有配置仅实验 CA／timer 授权及一个定时器／目标版本，生产授权未改，见[检查点](../docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。REUSE 与 WRITE 均仅完成 C3 实验切片；生产网络、完整能力、FRP、ESP32、掉电和五能力总门仍开放。
+2026-10-02 C3 公开 WRITE 联合 OTA 实板切片通过：不同签名 message-counter 包的代表事件、原健康门、原 ID 持久成功及重启后恢复、十二项业务检查、卸载和 A／C Flash 字节核对完成。源码与依赖锁保持，私有配置仅实验 CA／timer 授权及一个定时器／目标版本，生产授权未改，见[检查点](../docs/operations/c3-joint-ota-write-message-counter-checkpoint.md)。REUSE 与 WRITE 均仅完成 C3 实验切片；生产网络、完整能力、FRP、ESP32、掉电和五能力总门仍开放。
 
-2026-10-02 前序原始 C3 Base REUSE 实验：代表 MQTT 事件、连续 30 秒健康门、原 ID 持久成功、再次重启成功结果与产品恢复、公开卸载及 A／C 字节读回通过。仅私有实验 CA／版本配置变化，范围与失败观察器记录见[检查点](../docs/operations/c3_joint_ota_reuse_checkpoint.md)。
+2026-10-02 前序原始 C3 Base REUSE 实验：代表 MQTT 事件、连续 30 秒健康门、原 ID 持久成功、再次重启成功结果与产品恢复、公开卸载及 A／C 字节读回通过。仅私有实验 CA／版本配置变化，范围与失败观察器记录见[检查点](../docs/operations/c3-joint-ota-reuse-checkpoint.md)。
 
 当前 OTA 收据为 V3、308 字节；来源和目标包字段已编码，内部登记已校验带包目标与来源身份，Container 内部 stage 已能将 `REUSE` 提交为 `PREPARED`、将 `WRITE` 预约为 `WRITING`，独立内部续写入口可在原收据约束下写包、验签授权并读回 `PREPARED`。收据的只读恢复入口可完整返回有效带包 V3 字段。启动现按原收据接通 A 侧回滚、pending C 的带包 trial 与连续在线健康验证，以及已有健康证据的 VALID C 确认恢复；公开 worker 现按包模式核对原收据与来源，准备新固件后停止 guest，复用包重验或严格 HTTPS 写新包，持久 PREPARED／完整传输读回后才选 boot。公开 `ota.start` 已严格解析三种包模式并由客户端生成对应参数；三种模式各自满足来源／容量／授权条件后可登记并执行；不确定保留原操作和 claim，禁止另起升级。旧 V2 长度与不合法带包 V3 均视为存储事实不确定；有效带包 V3 不能仅据只读结果重放或确认，必须完成模式对应的物理／ECS2 对账和终态读回。公开软件入口已接联合恢复和健康协议；真实 HTTPS／MQTT、设备更新、掉电与五能力容量仍待验收。
 
@@ -81,11 +81,11 @@ ESP32 产品目标由可设置的 `CONFIG_FREERTOS_UNICORE=y` 选出 SDK 派生�
 
 ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`，并要求关闭硬件 Secure Boot 与签名输出；它只用于离线容量与源码检查，**绝非可刷写候选**。ESP32 签名构建必须提供仓外绝对路径的 P-256 签名键，并在独立 sdkconfig 中启用 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y`、`CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、`CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y` 与 rollback；CMake 会拒绝缺失或错目标。测试键只用于仓外软件验证，不能作为设备首次启动密钥。签名 bin 还必须经固定 SDK 的 `espsecure verify-signature --version 1` 验证，并核对双槽与分区表。旧 ESP-AT 板卡的新启动链、两个已签名 Base 槽、otadata、旧区归档与完整恢复仍待 P7-01 受控实板验收。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded_firmware_golden_path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是公开 `esp-mqtt@50c9c45f0fe95d4e99ab39584ff04d45d432efbc`，`esp_ota` 唯一来源是公开 `esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`，`esp_frp` 唯一来源是公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`，`esp_container` 唯一来源是公开 `esp-container@2b93b979b8b0760dcb96b28ac5d13fc52ae547bf`，其 WAMR 固定 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是`esp-mqtt@ee11ed365c9f3c76a2074f5d29011b818d5b68c9`，`esp_ota` 唯一来源是公开 `esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`，`esp_frp` 唯一来源是`esp-frp@989cc876d92b815aeb0b6806fb861f0ee2b39a86`，`esp_container` 唯一来源是公开 `esp-container@2b93b979b8b0760dcb96b28ac5d13fc52ae547bf`，其 WAMR 固定 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
 当前 FRP 精确锁将 ESP32 的工作流及 TLS 私有对象条件分配至 8BIT IRAM；双目标签名容量、Base host 回归和 ESP32 一条真实 FRPS 工作流的仓外 QEMU 检查见[工作流 IRAM 精确锁检查点](../docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。正式 Base owner、MQTT／OTA／Container 并发与实体板容量尚未验收。
 
-ESP32 命令／配置临时工作区此前按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；后续正式串口产品卸载暴露 4／6 KiB 控制栈溢出，现将 ESP32 控制任务栈设为 8 KiB，C3 保持 6 KiB，见[签名 QEMU 复测](../docs/operations/product_uninstall_protocol_qemu_checkpoint.md)。双流、三条 MQTT 消息与一次真实配置提交的旧仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
+ESP32 命令／配置临时工作区此前按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；后续正式串口产品卸载暴露 4／6 KiB 控制栈溢出，现将 ESP32 控制任务栈设为 8 KiB，C3 保持 6 KiB，见[签名 QEMU 复测](../docs/operations/product-uninstall-protocol-qemu-checkpoint.md)。双流、三条 MQTT 消息与一次真实配置提交的旧仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
 
 后续[HTTPS OTA 并发检查点](../docs/operations/p6-03-ota-https-combination-checkpoint.md)在同片签名 ESP32 QEMU 中经严格 HTTPS 将 **1,114,100 B** 独立签名 app 完整准备到备用槽，同时完成双 FRP 工作流与三条 MQTT 消息；普通堆历史最低 **26,416 B**，比不变的容量门低 **22,736 B**。探针未执行正式 Base `ota.start` 收据、Container stage、选槽及实板流程，P6-03/P7-01/P7-02 仍开放。
 
@@ -125,4 +125,4 @@ FRP 组件还要求 `CONFIG_MBEDTLS_MD5_C=y`、`CONFIG_LWIP_SO_LINGER=y` 和至�
 
 FRP Flash reader 的 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制。C3／ESP32 产品配置均启用，分别固定 `frp_scratch@0x3e5000/0x10000` 和 `frp_scratch@0x3ea000/0x10000`。启用时公开 FRP provider 核对实际 64 KiB 分区，并在任何 pending OTA 确认前擦除本次启动遗留的密文。FRP 每次物理操作使用独立短 claim，升级事务 claim 不再使它立即返回 BUSY；`clear` 不再次擦除。OTA app、Container 包和 NVS 尚未全部接入同一个短时 I/O 仲裁，FRP 最大记录与正式 OTA 下载的进展、期限和实板 Flash 时延仍未验收。C3 对齐软件候选及 ESP32 新源码几何仍按五仓计划完成容量、迁移与实体运行裁决。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
 
-产品 owner 的原子停止标志已进入 Classic 取消谓词；真实签名 init／event／timer 取消与停止失败阻断的宿主结果见[检查点](../docs/operations/async_cancel_checkpoint.md)。
+产品 owner 的原子停止标志已进入 Classic 取消谓词；真实签名 init／event／timer 取消与停止失败阻断的宿主结果见[检查点](../docs/operations/async-cancel-checkpoint.md)。

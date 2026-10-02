@@ -13,7 +13,7 @@ dependencies:
       type: git
     version: 2b93b979b8b0760dcb96b28ac5d13fc52ae547bf
   esp_frp:
-    component_hash: 77ae03cceca6ac201f23ce9ce384f161a7219be92e77f9b64c48436d45613eab
+    component_hash: 19bc086d624665dab10111b919b147e9f985166b4618e7fcae82a0952ccc71f3
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -23,7 +23,7 @@ dependencies:
       git: https://github.com/esp-space/esp-frp.git
       path: .
       type: git
-    version: fcbce1cd2a7a740c1fe04db9dc7d3dd7df66d5f7
+    version: 989cc876d92b815aeb0b6806fb861f0ee2b39a86
   esp_ota:
     component_hash: 865f054e54efba8c0f153387d1902f550a5f4342a8083646ae567916559eec3f
     dependencies:
@@ -49,7 +49,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: 9a5d2846eecb57456e745aa6f582cf014b96ec7603ee30a4261ce59bff35f616
+    component_hash: 879ef676d7bbc241d2b6a6a981bebf767381b9b58ef740a73cf6c75347414158
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -57,7 +57,7 @@ dependencies:
       git: https://github.com/esp-space/esp-mqtt.git
       path: .
       type: git
-    version: 50c9c45f0fe95d4e99ab39584ff04d45d432efbc
+    version: ee11ed365c9f3c76a2074f5d29011b818d5b68c9
   wasm-micro-runtime:
     component_hash: d68663bda3f3b42ddfb2657d6576d7a46c440fa392e86de0c9debba2ca04cd6c
     dependencies:
@@ -81,6 +81,6 @@ direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: c88f620514ce8b4ef0457335b23268a11ef489bacf009cd244bcb18bd7447aa4
+manifest_hash: 750a65307aa2e4e7c60b1ff3eade2a3b67df4044383fbd826ce8f88486b11601
 target: esp32
 version: 3.0.0

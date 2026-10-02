@@ -2,7 +2,7 @@
 
 2026-10-02，C3 的原始 Base 启动入口、正式分区和现有网络 owner，在隔离官方 FRPS 与 TLS Broker 下完成认证状态、错误密钥拒绝及一次 FRP 重启。运行源码与 `b8d695838328b3664f983baeb7dafc992d5f3982` 逐字节一致，没有注入固件调用方。该轮没有产品绑定；它补齐 C3 管理链路实证，不能代替产品、OTA 与五能力容量验收。
 
-软件合同见[认证状态](frp_authenticated_status_checkpoint.md)、[认证重启](frp_restart_checkpoint.md)及[设备协议](../design/device-protocol.md#frp-base-软件接线边界)。
+软件合同见[认证状态](frp-authenticated-status-checkpoint.md)、[认证重启](frp-restart-checkpoint.md)及[设备协议](../design/device-protocol.md#frp-base-软件接线边界)。
 
 ## 精确输入
 
@@ -17,7 +17,7 @@
 | Tool 控制库 | `6bf7dabc91a5044bc61be7c06587772e7262f324` 的原始 Server 归档，SHA-256 `83fc5e5c9da539bc0aabbc06555c53fdd12e0f0b94c6bc9e9b77aa956c9fa607` |
 | 实板观察器 | SHA-256 `a8bee826fe1b36003cebda08e565ac1b0a7c008fadb58af7d6e346abe974d92d` |
 
-该 app 复用 [WRITE 实验](c3_joint_ota_write_message_counter_checkpoint.md)的来源 A：仅私有实验 CA 与 timer 授权／一个定时器的官方配置不同。本轮没有装载 guest，也没有发送安装、升级或 OTA。源文件、依赖锁、正式分区和生产信任未改；测试签名键没有写入 eFuse。
+该 app 复用 [WRITE 实验](c3-joint-ota-write-message-counter-checkpoint.md)的来源 A：仅私有实验 CA 与 timer 授权／一个定时器的官方配置不同。本轮没有装载 guest，也没有发送安装、升级或 OTA。源文件、依赖锁、正式分区和生产信任未改；测试签名键没有写入 eFuse。
 
 官方归档原 catalog 登记的是 FRPC。该轮只在私有目录提取同归档中的官方 FRPS，核对摘要和实际版本；没有把实验服务登记为受管运行面，没有改变生产 FRPS 或 catalog。
 

@@ -6,7 +6,7 @@
 
 运行源码为 `b8d695838328b3664f983baeb7dafc992d5f3982`，与公开 `8bb80dbfc51bfa51e0fc54e9780b67f7c3c5631d` 的运行输入逐字节相同。原启动入口、正式 C3 分区、四份依赖锁与固定 SDK 保持，未注入固件调用方。SDK 为 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`。
 
-来源 A 复用[公开安装实验](c3_product_https_install_checkpoint.md)的私有 CA 构建，版本为 `0.2.0`，RSA v2 签名 app 为 1183744／1245184 B，SHA-256 `e5c2651f97997d372213ac13e524502c4293bd6a97aa150c129b32a63cbc7ba7`。目标 C 使用同一源码、策略、签名测试键与实验 CA，仅增加官方 SDK 的版本配置，实际镜像描述版本为 `0.2.0-c3-lab-c`；签名 app 同为 1183744 B，SHA-256 `7f8263d712993e18a189e0c59207151ef47151de3e76e008b51de1285a9d8e33`，官方验签通过。实验 CA 和版本设置均在私有构建，生产信任未修改。
+来源 A 复用[公开安装实验](c3-product-https-install-checkpoint.md)的私有 CA 构建，版本为 `0.2.0`，RSA v2 签名 app 为 1183744／1245184 B，SHA-256 `e5c2651f97997d372213ac13e524502c4293bd6a97aa150c129b32a63cbc7ba7`。目标 C 使用同一源码、策略、签名测试键与实验 CA，仅增加官方 SDK 的版本配置，实际镜像描述版本为 `0.2.0-c3-lab-c`；签名 app 同为 1183744 B，SHA-256 `7f8263d712993e18a189e0c59207151ef47151de3e76e008b51de1285a9d8e33`，官方验签通过。实验 CA 和版本设置均在私有构建，生产信任未修改。
 
 产品仍为 `counter/v0-1-0`：整包 10240 B、Wasm 469 B、guest ABI 2、数据 schema 1、一页内存、空能力集合，包 SHA-256 `3d71095bdc1af6e202ac01b58f19c2b484f2e0b126dec85fbce9f42a99a2dd99`。本轮复用这个包，没有以新包代替 REUSE。
 

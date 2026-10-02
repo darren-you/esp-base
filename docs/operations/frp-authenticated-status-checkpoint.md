@@ -30,4 +30,4 @@ SDK 仍为 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，lwIP 为 `2758df4cd3666b
 
 HMAC 不提供机密性，loopback 仍为 HTTP；外侧受控 HTTPS 入口、隧道 TLS、路由授权、网关 Auth 和绑定必须分别闭合。尚未进行 FRPS 请求到设备、IDF 密码运行、五能力并行、栈／堆测量或两板隔离。仅 C3 当前连接，ESP32 已拔除；本次没有 UART、复位、Flash、eFuse、配置或生产发布操作。
 
-只读候选之后的设备重启扩展见 [FRP 认证重启检查点](frp_restart_checkpoint.md)。本页的原只读构建证据保留，当前源码 listener 已按管理职责更名。
+只读候选之后的设备重启扩展见 [FRP 认证重启检查点](frp-restart-checkpoint.md)。本页的原只读构建证据保留，当前源码 listener 已按管理职责更名。

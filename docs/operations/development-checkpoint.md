@@ -1,10 +1,10 @@
 # 开发检查点
 
-2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](c3_command_memory_checkpoint.md)。
+2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](c3-command-memory-checkpoint.md)。
 
-2026-10-02 C3 稳定 FRP 身份联合功能切片通过：公开一次 WRITE OTA 与一次 MQTT restart 后，目标和第三 boot 均经 FRP 认证状态核验，十二项消息计数业务、卸载、A／C 字节核对及原代码恢复完成。143 份实板证据冻结；来源下载最低历史 heap 4124 B，48 KiB 容量门继续失败，见[检查点](c3_five_capability_run_id_checkpoint.md)。
+2026-10-02 C3 稳定 FRP 身份联合功能切片通过：公开一次 WRITE OTA 与一次 MQTT restart 后，目标和第三 boot 均经 FRP 认证状态核验，十二项消息计数业务、卸载、A／C 字节核对及原代码恢复完成。143 份实板证据冻结；来源下载最低历史 heap 4124 B，48 KiB 容量门继续失败，见[检查点](c3-five-capability-run-id-checkpoint.md)。
 
-2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](frp_stable_run_id_checkpoint.md)。
+2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](frp-stable-run-id-checkpoint.md)。
 
 ## 2026-10-01 固件根与宿主工具归位
 
@@ -30,13 +30,13 @@
 
 ## 2026-10-01 FRP 设备认证重启
 
-固定 status／restart 管理 listener 已硬切命名；restart 使用 USB／MQTT 共用写守卫和原 outcome，在认证 running 回执后按 100／2000 ms 边界执行一次重启。等待期间其他新写命令 busy，序列化失败不登记动作。两目标各 22 项 host 与两项实际 HTTP／HMAC 软件回环、固定 SDK 测试签名构建／验签通过；SDK、依赖锁、配置 schema 与分区未改。完整输入、镜像摘要与测试替身边界见[FRP 认证重启检查点](frp_restart_checkpoint.md)。
+固定 status／restart 管理 listener 已硬切命名；restart 使用 USB／MQTT 共用写守卫和原 outcome，在认证 running 回执后按 100／2000 ms 边界执行一次重启。等待期间其他新写命令 busy，序列化失败不登记动作。两目标各 22 项 host 与两项实际 HTTP／HMAC 软件回环、固定 SDK 测试签名构建／验签通过；SDK、依赖锁、配置 schema 与分区未改。完整输入、镜像摘要与测试替身边界见[FRP 认证重启检查点](frp-restart-checkpoint.md)。
 
 尚未接入私有网关重启账本与新 boot 确认，真实外侧 HTTPS／FRPS、MCU 密码、两板及资源门槛继续未验收；本轮没有设备写入或生产发布，共享 Root／Profile／gitlink 保持停写。
 
 ## 2026-10-01 FRP 独立只读状态与响应认证
 
-设备 status 请求现严格四字段，不需要 USB／MQTT 先提供 boot／uptime；同 ID 的服务端 30 秒首次快照缓存保持八槽，新查询使用新 UUID。所有非空认证响应由实际 PSA wrapper 签发原始 JSON HMAC，错误输出长度或密码失败不发送成功结果，写命令合同保持。双目标完整 host、OpenSSL 回环 HTTP 及已有产品事件 probe 通过；固定 SDK 产品签名构建、官方验签和槽容量通过，两个 ELF 中均已链接新签发代码。完整输入、镜像摘要、早期缓存／测试同步故障及验收边界见[FRP 认证状态检查点](frp_authenticated_status_checkpoint.md)。
+设备 status 请求现严格四字段，不需要 USB／MQTT 先提供 boot／uptime；同 ID 的服务端 30 秒首次快照缓存保持八槽，新查询使用新 UUID。所有非空认证响应由实际 PSA wrapper 签发原始 JSON HMAC，错误输出长度或密码失败不发送成功结果，写命令合同保持。双目标完整 host、OpenSSL 回环 HTTP 及已有产品事件 probe 通过；固定 SDK 产品签名构建、官方验签和槽容量通过，两个 ELF 中均已链接新签发代码。完整输入、镜像摘要、早期缓存／测试同步故障及验收边界见[FRP 认证状态检查点](frp-authenticated-status-checkpoint.md)。
 
 未接私有网关、外侧 HTTPS 或真实 FRPS；未验证 IDF 密码运行、五能力并行与两板。共享合入／发布冻结保持，仅 C3 连接，未读写实体配置、Flash 或 eFuse。
 
@@ -277,7 +277,7 @@ C3／ESP32 两目标 host ASan/UBSan 回归通过，假件验证模式拒绝、�
 
 无包 OTA 的最新收据从 186 字节 V2 硬切为 308 字节 V3，新增包模式、目标包长度／摘要／ABI／schema、代表事件摘要及来源包身份字段；提交后仍逐字节读回。当前正式 `ota.start` 只登记 `NO_PACKAGE`；带包请求在登记前拒绝，读到带包 V3 或旧 V2 长度时启动恢复保留不确定状态，不能凭字节完整性执行擦除。双目标 Base host 回归、固定 SDK C3 正式产品测试键签名构建与 RSA v2 验签、ESP32 测试键签名构建与 ECDSA v1 验签通过。C3 签名 app `0x121000/0x130000`，ESP32 `0xffff4/0x120000`；两者尚未运行联合 OTA。
 
-新 V3 长度的 11 页 C3 和六页 ESP32 合成 NVS 均在三次独立 QEMU 启动完成 100 轮最大配置、OTA 收据形态、ECS2 和八条产品账本写入／读回，最终可用 entry 分别为 `960/1386` 与 `328/756`，官方非空页 CRC 通过；完整输入摘要见[C3 十一页](c3_eleven_page_nvs_capacity.md)与[ESP32 六页](esp32-six-page-nvs-capacity.md)容量记录。V3 源码只是 P6-10 的持久意图前置：公开带包授权、REUSE／WRITE 准备、代表事件完成后的联合确认与跨提交恢复仍未接通；未写实体设备，P6-10/P7-04 保持进行中。
+新 V3 长度的 11 页 C3 和六页 ESP32 合成 NVS 均在三次独立 QEMU 启动完成 100 轮最大配置、OTA 收据形态、ECS2 和八条产品账本写入／读回，最终可用 entry 分别为 `960/1386` 与 `328/756`，官方非空页 CRC 通过；完整输入摘要见[C3 十一页](c3-eleven-page-nvs-capacity.md)与[ESP32 六页](esp32-six-page-nvs-capacity.md)容量记录。V3 源码只是 P6-10 的持久意图前置：公开带包授权、REUSE／WRITE 准备、代表事件完成后的联合确认与跨提交恢复仍未接通；未写实体设备，P6-10/P7-04 保持进行中。
 
 ## 2026-09-29 双板新鲜恢复基线与迁移阻断复核
 
@@ -309,9 +309,9 @@ Base 将短时 Flash I/O owner 的释放结果交给公开 `esp-container@e8a0d0
 
 2026-09-29 P6-04 业务事件客户端断线语义：公开发布器原来使用 Paho 2.1.0 的默认自动重连；该库在干净会话重连时可能再次发布尚未确认的 QoS 1 消息（[Paho 官方说明](https://github.com/eclipse-paho/paho.mqtt.python#known-limitations)；[固定 2.1.0 源码](https://github.com/eclipse-paho/paho.mqtt.python/blob/v2.1.0/src/paho/mqtt/client.py)），与本客户端“只发布一次、状态不明按原事件核对”的合同冲突。现在显式关闭自动重连，发布后断线仍只返回 unknown，不创建新序号或重发。发布器伪 MQTT 回归新增断线后仅一次 `publish` 和禁用自动重连参数断言，6/6 通过；原帧生成测试 1/1、Python 编译与 `git diff --check` 通过；临时安装固定 Paho 2.1.0 并实例化真实客户端，确认默认 `reconnect_on_failure=True`、本客户端传入后为 `False`。本轮没有真实 Broker、设备或试运行确认结果，P6-04/P7 不据此验收。
 
-2026-09-28 P6-03/P6-04 C3 对照：保留正式 USB 控制台与三 `0x82000` 包槽的同源码测试键 RSA v2 签名 app `0x121000` B，官方尺寸门拒绝双 `0x120000` app 槽，各超 `0x1000` B。仓外仅为 QEMU 改用 UART、双 `0x130000` app 与三 `0x74000` 诊断包槽后，正式 JSON `product.uninstall`、同片冷启动持久结果及同 ID 不重执行均通过，C3 6 KiB 控制栈未溢出；官方 NVS CRC、账本/ECS2 CRC 与 Flash 分区不变性读回通过。关部分曲线、错误名查表和 NIST 优化的组合可暂时降到 `0x111000` B，但内容距下次签名台阶仅 56 B，且未验证真实 TLS/时延，不作为产品配置或完整布局验收。无实板写入；[精确输入与容量阻断](product_uninstall_c3_protocol_qemu_checkpoint.md)。
+2026-09-28 P6-03/P6-04 C3 对照：保留正式 USB 控制台与三 `0x82000` 包槽的同源码测试键 RSA v2 签名 app `0x121000` B，官方尺寸门拒绝双 `0x120000` app 槽，各超 `0x1000` B。仓外仅为 QEMU 改用 UART、双 `0x130000` app 与三 `0x74000` 诊断包槽后，正式 JSON `product.uninstall`、同片冷启动持久结果及同 ID 不重执行均通过，C3 6 KiB 控制栈未溢出；官方 NVS CRC、账本/ECS2 CRC 与 Flash 分区不变性读回通过。关部分曲线、错误名查表和 NIST 优化的组合可暂时降到 `0x111000` B，但内容距下次签名台阶仅 56 B，且未验证真实 TLS/时延，不作为产品配置或完整布局验收。无实板写入；[精确输入与容量阻断](product-uninstall-c3-protocol-qemu-checkpoint.md)。
 
-2026-09-28 P6-04 串口产品卸载签名 QEMU：原 ESP32 控制任务 4,096 B 在 `product.status`、6,144 B 在 `product.uninstall` 触发真实 FreeRTOS 栈溢出；目标独立调整为 ESP32 8,192 B、C3 仍 6,144 B。最终源码重新签名并按新 app 摘要制造 ECS2 sequence 6、空 EPRD 及 4 MiB Flash，正式串口命令完成卸载，冷启动后原操作结果和相同 ID 的重复请求均保持 sequence 7／账本高水位 1；官方 NVS CRC、账本/ECS2 CRC 与逐区 Flash 读回通过。C3／ESP32 普通构建与 host ASan/UBSan 均通过。无 Broker、HTTPS、FRPS 并发或实体板，P6-03/P6-04/P7 不勾验收；[精确输入与日志](product_uninstall_protocol_qemu_checkpoint.md)。
+2026-09-28 P6-04 串口产品卸载签名 QEMU：原 ESP32 控制任务 4,096 B 在 `product.status`、6,144 B 在 `product.uninstall` 触发真实 FreeRTOS 栈溢出；目标独立调整为 ESP32 8,192 B、C3 仍 6,144 B。最终源码重新签名并按新 app 摘要制造 ECS2 sequence 6、空 EPRD 及 4 MiB Flash，正式串口命令完成卸载，冷启动后原操作结果和相同 ID 的重复请求均保持 sequence 7／账本高水位 1；官方 NVS CRC、账本/ECS2 CRC 与逐区 Flash 读回通过。C3／ESP32 普通构建与 host ASan/UBSan 均通过。无 Broker、HTTPS、FRPS 并发或实体板，P6-03/P6-04/P7 不勾验收；[精确输入与日志](product-uninstall-protocol-qemu-checkpoint.md)。
 
 2026-09-28 P6-04 公开卸载写入口：`a99c02c` 将 `product.uninstall` 接入设备命令、持久 EPRD 意图／终态和正式 Container 停止／卸载；复位后只读核对 ECS2 原 UUID、序号及包绑定，能证明提交或未提交才写回终态，无法证明时阻断 READY。`9da7aba` 将串口设备回执超时接回原 operation ID 的只读结果查询，写命令不重发。C3／ESP32 宿主 ASan/UBSan、8 项伪串口测试、固定 SDK 两目标普通完整构建及真实签名 guest 的卸载恢复生命周期通过；本地 app 分别为 `0xe3eb0`／`0xd5c10` B。没有写实板，真实掉电、Broker 设备联调、公开安装／升级、包来源及试运行健康确认尚未验收，P6-04/P7 总状态不变。
 

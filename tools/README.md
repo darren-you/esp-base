@@ -33,7 +33,7 @@ flowchart LR
 
 `container_product_deadline_test.py` 由 `bash firmware/tests/run_container_lifecycle_test.sh` 调用，在 macOS/Linux 宿主使用明确传入的精确 Container、WAMR 和 wasi-sdk 构建真实签名期限 guest，再执行 Base 生命周期测试。它不进入 MCU 固件构建，也不读取设备凭据。
 
-`container_product_cancel_test.py` 由同一生命周期入口调用，使用临时 RSA 测试键构造 init／event／timer 长循环及 stop 失败包，验证正式 Base owner 的原子停止、真实 guest stop／close／join 与失败阻断；不用生产凭据或设备。结果见[取消检查点](../docs/operations/async_cancel_checkpoint.md)。
+`container_product_cancel_test.py` 由同一生命周期入口调用，使用临时 RSA 测试键构造 init／event／timer 长循环及 stop 失败包，验证正式 Base owner 的原子停止、真实 guest stop／close／join 与失败阻断；不用生产凭据或设备。结果见[取消检查点](../docs/operations/async-cancel-checkpoint.md)。
 
 `run_nvs_capacity_qemu.py` 在宿主调用所选 Espressif QEMU，使用显式构建目录和仓外合成 Flash；仍拒绝仓内 Flash 路径。完整三阶段命令见 [NVS 容量探针](../firmware/tests/nvs-capacity-probe/README.md)。
 

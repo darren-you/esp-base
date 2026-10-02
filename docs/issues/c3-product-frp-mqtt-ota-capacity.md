@@ -1,12 +1,12 @@
 # C3 产品、FRP、MQTT 与联合 OTA 组合缺口
 
-后续进展：稳定 run_id 已闭合[第三 boot 登录冲突](../operations/c3_five_capability_run_id_checkpoint.md)。[命令内存与控制栈第二轮](../operations/c3_command_memory_checkpoint.md)的联合功能及原代码恢复通过，控制栈最低余量 2400 B；来源 OTA 历史 heap 11404 B／采样连续块 16384 B 仍不足。以下保留原始失败输入和结果，不覆盖旧收据。
+后续进展：稳定 run_id 已闭合[第三 boot 登录冲突](../operations/c3-five-capability-run-id-checkpoint.md)。[命令内存与控制栈第二轮](../operations/c3-command-memory-checkpoint.md)的联合功能及原代码恢复通过，控制栈最低余量 2400 B；来源 OTA 历史 heap 11404 B／采样连续块 16384 B 仍不足。以下保留原始失败输入和结果，不覆盖旧收据。
 
 2026-10-02，原始 Base、正式分区及现有精确依赖，在同一 C3 上完成来源产品、FRP/MQTT 在线、公开 WRITE 联合 OTA 和目标产品确认；整轮因随后再次重启的 FRP 登录拒绝停止，且实际内存低水明确未达到 48 KiB。两个问题分别记录，不能把登录拒绝归因于内存不足。
 
 ## 输入与范围
 
-运行源码与 `b8d695838328b3664f983baeb7dafc992d5f3982` 逐字节一致，沿用[WRITE 检查点](../operations/c3_joint_ota_write_message_counter_checkpoint.md)的来源 A、目标签名 C、counter 与 message-counter 包，及[FRP/MQTT 检查点](../operations/c3_frp_mqtt_management_checkpoint.md)的官方 FRPS 0.71.0、Tool 原有控制库与隔离严格 TLS 网络。仅私有实验 CA、timer 授权／一个定时器与目标版本配置不同；没有修改固件调用方、生产授权或依赖锁。
+运行源码与 `b8d695838328b3664f983baeb7dafc992d5f3982` 逐字节一致，沿用[WRITE 检查点](../operations/c3-joint-ota-write-message-counter-checkpoint.md)的来源 A、目标签名 C、counter 与 message-counter 包，及[FRP/MQTT 检查点](../operations/c3-frp-mqtt-management-checkpoint.md)的官方 FRPS 0.71.0、Tool 原有控制库与隔离严格 TLS 网络。仅私有实验 CA、timer 授权／一个定时器与目标版本配置不同；没有修改固件调用方、生产授权或依赖锁。
 
 来源 A app SHA-256 为 `1fd9e100205d9995568a5c1806ad19103657782cc982ce693c6c4d802832e7ff`，目标 C 为 `1540d0f53f96c01bef5e2e171b5fd2525bcfcfcb8165f9e4a80ebf0d75fbdeea`，各为 1183744 B／RSA v2。来源完整空白数据 Flash 写入后全量核对；观察器 SHA-256 为 `5d24b2e558c7541bdb0e7cc9e50973fe419d402d6de378bd17678e65a46a0f6c`。没有重发安装、OTA 或重启命令，也没有扩大固件等待期限。
 
@@ -43,8 +43,8 @@ ESP Tool 私有 `c3-validation-20261002/five-capability-write-first-failed` 保�
 
 ## 稳定身份软件修正续进
 
-2026-10-02，Base 已接入公开 FRP 0.2.0 的调用方稳定请求 run ID，并用已有设备 UUID，不增加持久元数据。官方 FRPS 鉴权先于替换的 host 回归、固定 SDK 双目标及 Base owner 回归通过；详情见[接线检查点](../operations/frp_stable_run_id_checkpoint.md)。本页原失败证据保持，实板重测与容量尚未通过。
+2026-10-02，Base 已接入公开 FRP 0.2.0 的调用方稳定请求 run ID，并用已有设备 UUID，不增加持久元数据。官方 FRPS 鉴权先于替换的 host 回归、固定 SDK 双目标及 Base owner 回归通过；详情见[接线检查点](../operations/frp-stable-run-id-checkpoint.md)。本页原失败证据保持，实板重测与容量尚未通过。
 
 ## 实板修正与容量续进
 
-2026-10-02，公开稳定 run ID 接线在 C3 的一次 WRITE 联合 OTA、一次 MQTT restart 中完成目标与第三 boot 的 FRP 恢复，十二项业务检查、卸载和代码恢复通过。143 份新成功证据索引为 `effd1620aa917549bd660eb246e00b050f48e80fc0747a630be06b80f2da2988`；本页原 109 份失败保持。新来源下载的 88 份采样全部 MQTT／FRP ready，最低本次 free 为 9080 B、最低历史为 4124 B，容量仍失败。具体边界见[联合检查点](../operations/c3_five_capability_run_id_checkpoint.md)。
+2026-10-02，公开稳定 run ID 接线在 C3 的一次 WRITE 联合 OTA、一次 MQTT restart 中完成目标与第三 boot 的 FRP 恢复，十二项业务检查、卸载和代码恢复通过。143 份新成功证据索引为 `effd1620aa917549bd660eb246e00b050f48e80fc0747a630be06b80f2da2988`；本页原 109 份失败保持。新来源下载的 88 份采样全部 MQTT／FRP ready，最低本次 free 为 9080 B、最低历史为 4124 B，容量仍失败。具体边界见[联合检查点](../operations/c3-five-capability-run-id-checkpoint.md)。

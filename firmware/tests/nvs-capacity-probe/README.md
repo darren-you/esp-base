@@ -93,4 +93,4 @@ python3 "$IDF_PATH/components/nvs_flash/nvs_partition_tool/nvs_tool.py" \
     -i -d none "$probe_work_root/esp32-6-pages/base_store-final.bin"
 ```
 
-11 页新布局结果见[C3 十一页容量记录](../../../docs/operations/c3_eleven_page_nvs_capacity.md)。历史六／八页结果和输入摘要见[C3 容量记录](../../../docs/operations/c3-eight-page-nvs-capacity.md)，ESP32 结果见[ESP32 容量记录](../../../docs/operations/esp32-six-page-nvs-capacity.md)。`evidence/` 中已提交的 118 字节 OTA／占位 Container 日志属于 2026-09-26 的历史八页测试，不能作为当前精确记录的证据。完整 QEMU 串口日志、合成 Flash、提取的 NVS 和构建产物均留在仓外。
+11 页新布局结果见[C3 十一页容量记录](../../../docs/operations/c3-eleven-page-nvs-capacity.md)。历史六／八页结果和输入摘要见[C3 容量记录](../../../docs/operations/c3-eight-page-nvs-capacity.md)，ESP32 结果见[ESP32 容量记录](../../../docs/operations/esp32-six-page-nvs-capacity.md)。`evidence/` 中已提交的 118 字节 OTA／占位 Container 日志属于 2026-09-26 的历史八页测试，不能作为当前精确记录的证据。完整 QEMU 串口日志、合成 Flash、提取的 NVS 和构建产物均留在仓外。

@@ -1,6 +1,6 @@
 # 固件测试
 
-`command_allocation_test.c` 验证实际缓冲分配、九个扩容失败点、行边界／排空、释放前清零、按类型载荷和复用恢复；`protocol_ota_owner_test.c` 验证配置移交后的独占存活期及两秒半包超时。两目标 ASan/UBSan 回归及实板范围见[检查点](../../docs/operations/c3_command_memory_checkpoint.md)。
+`command_allocation_test.c` 验证实际缓冲分配、九个扩容失败点、行边界／排空、释放前清零、按类型载荷和复用恢复；`protocol_ota_owner_test.c` 验证配置移交后的独占存活期及两秒半包超时。两目标 ASan/UBSan 回归及实板范围见[检查点](../../docs/operations/c3-command-memory-checkpoint.md)。
 
 宿主 Python 构包和 QEMU runner 位于固件根之外的 [tools/](../../tools/README.md)：生命周期入口调用 `container_product_deadline_test.py`，NVS 探针调用 `run_nvs_capacity_qemu.py`。固件测试目录只保存 C／Shell 等测试装配，不保留旧 Python 路径入口。
 
@@ -14,7 +14,7 @@
 
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
-`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器并注入 HTTP／单调时钟假件，检查 URL 和证书 bundle 配置、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，见[来源检查点](../../docs/operations/product_package_https_source_checkpoint.md)。
+`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器并注入 HTTP／单调时钟假件，检查 URL 和证书 bundle 配置、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，见[来源检查点](../../docs/operations/product-package-https-source-checkpoint.md)。
 
 `command_decoder_test` 另检查只读 `product.status`／`product.result` 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown`、持久序号与绑定快照、成功记录的结果序列化，以及绑定观察不确定后保留存储 claim。公开 Python 串口工具的伪设备测试核对原 ID 查询、窗口外 `unknown`、序号与可选包摘要；真实签名 guest 生命周期测试覆盖空绑定、已安装和卸载后的 ECS2 快照。正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
 
@@ -99,11 +99,11 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 产品包准备入口的同源签名 guest 用例在旧确认实例运行时，先用完整目标摘要和被篡改的下载字节触发校验失败，核对 WRITING 已持久转为 ABORTED、当前绑定和旧槽包字节不变；再以合法源完成独立读回的 PREPARED，核对候选使用未引用槽、旧 guest 仍接收事件。NVS 保留写入但读回失败时返回不确定、没有擦写包 Flash，调用者持有原存储 claim 并需从持久 ECS2 恢复。准备入口只是内部事务阶段，不含 HTTPS 来源、公开安装／升级命令、业务试运行或最终确认；宿主假 Flash／NVS 不证明实体掉电结果。
 
-同一真实签名 guest 用例还验证内部产品试运行：旧实例未停止时拒绝，停止后错误 PREPARED 序号或 operation ID 不写存储，正确参数持久进入 `TRIAL_STARTED` 并运行候选；旧包事件被拒绝，候选事件返回 3 后仍未自动确认。固件 OTA 的确认入口不能确认产品 trial；放弃后独立读回 `ABORTED` 和未变的旧绑定，允许同 boot 重开旧 guest。此测试没有公开安装／升级、真实 Broker、产品健康谓词或实体掉电，见[检查点](../../docs/operations/product_package_trial_checkpoint.md)。
+同一真实签名 guest 用例还验证内部产品试运行：旧实例未停止时拒绝，停止后错误 PREPARED 序号或 operation ID 不写存储，正确参数持久进入 `TRIAL_STARTED` 并运行候选；旧包事件被拒绝，候选事件返回 3 后仍未自动确认。固件 OTA 的确认入口不能确认产品 trial；放弃后独立读回 `ABORTED` 和未变的旧绑定，允许同 boot 重开旧 guest。此测试没有公开安装／升级、真实 Broker、产品健康谓词或实体掉电，见[检查点](../../docs/operations/product-package-trial-checkpoint.md)。
 
 产品包内部确认用例从初始空绑定准备真实签名包、同 boot 试运行并完成事件；未发生事件、错误 operation ID／trial 序号／事件序号均不写存储。正确参数先后提交并独立读回 `HEALTH_VERIFIED`／`CONFIRMED`，当前固件改绑新包后可按已确认实例停止并重开。两次提交的读回故障分别保留 `HEALTH_VERIFIED` 或 `CONFIRMED` 的持久事实，入口返回不确定且保留原 claim。此用例直接调用内部原语，未验证公开请求、MQTT 真消息、业务健康策略、账本收尾或实体掉电。
 
-产品包冷启动恢复用例保留宿主假 Flash/NVS，签名 guest 的候选 trial 后模拟新 boot 并损坏候选字节。普通 Container reconcile 先证明会拒绝损坏候选；新入口在 guest 装载前按原 operation ID、摘要、旧序号及新 boot 身份放弃，独立读回后旧确认 guest 可重新打开。错误 ID、旧 boot 与已放弃的重复恢复不改写 ECS2；另验证账本意图已提交但 Container 从未预留候选的只读裁决。协议假件验证账本 `PREPARED→FAILED` 终态与结果序号，启动假件验证失败保留 claim 且不打开 guest；仓外 C3 签名 QEMU 另验证无未决操作的正常冷启动，见[恢复检查点](../../docs/operations/product_package_cold_recovery_checkpoint.md)。
+产品包冷启动恢复用例保留宿主假 Flash/NVS，签名 guest 的候选 trial 后模拟新 boot 并损坏候选字节。普通 Container reconcile 先证明会拒绝损坏候选；新入口在 guest 装载前按原 operation ID、摘要、旧序号及新 boot 身份放弃，独立读回后旧确认 guest 可重新打开。错误 ID、旧 boot 与已放弃的重复恢复不改写 ECS2；另验证账本意图已提交但 Container 从未预留候选的只读裁决。协议假件验证账本 `PREPARED→FAILED` 终态与结果序号，启动假件验证失败保留 claim 且不打开 guest；仓外 C3 签名 QEMU 另验证无未决操作的正常冷启动，见[恢复检查点](../../docs/operations/product-package-cold-recovery-checkpoint.md)。
 
 仓外双目标签名镜像另以[宿主脚本](../../tools/prepare_qemu_product_uninstall_probe.py)准备调度测试任务，经 QEMU 执行正式 Base 卸载和同片冷启动；真实输入、C3 GDB／ESP32 UART 与 Flash 读回见[产品卸载检查点](../../docs/operations/product-uninstall-qemu-checkpoint.md)。该任务不在普通产品中编译。
 
@@ -111,8 +111,8 @@ MQTT 通用运行层的 host 回归由公开 `esp-mqtt` 仓执行；本仓不再
 
 [nvs-same-key-probe](nvs-same-key-probe/README.md) 是独立 ESP-IDF/QEMU 测试项目；三种模式分别观察初始化、同键提交和新进程持久读回，并逐页比较仓外 Flash 副本。它不接入正常固件构建，不读取仓内私有数据。实板异常页与正式预检的判断见[离线迁移记录](../../docs/operations/base-v3-offline-migration.md#固定-sdk-qemu-同键保页探针)。
 
-[nvs-capacity-probe](nvs-capacity-probe/README.md) 只用合成数据验证最大 v3 配置、OTA 收据形态、精确 Container ECS2 产品键和最近八条产品操作账本的反复提交、页回收与重启读回；它不修改产品分区表或实板。当前 V3 长度已在正式 C3 十一页与 ESP32 六页布局复测，见[C3 产品布局容量记录](../../docs/operations/c3_eleven_page_nvs_capacity.md)和[ESP32 容量记录](../../docs/operations/esp32-six-page-nvs-capacity.md)。历史 C3 六／八页结果使用当时的 V2 长度，见[C3 容量记录](../../docs/operations/c3-eight-page-nvs-capacity.md)。
+[nvs-capacity-probe](nvs-capacity-probe/README.md) 只用合成数据验证最大 v3 配置、OTA 收据形态、精确 Container ECS2 产品键和最近八条产品操作账本的反复提交、页回收与重启读回；它不修改产品分区表或实板。当前 V3 长度已在正式 C3 十一页与 ESP32 六页布局复测，见[C3 产品布局容量记录](../../docs/operations/c3-eleven-page-nvs-capacity.md)和[ESP32 容量记录](../../docs/operations/esp32-six-page-nvs-capacity.md)。历史 C3 六／八页结果使用当时的 V2 长度，见[C3 容量记录](../../docs/operations/c3-eight-page-nvs-capacity.md)。
 
 带包 A 侧启动恢复的 `ota_startup_test` 同时覆盖 `REUSE`／`WRITE`：原 V3 全字段进入 Container 对账，物理退役、包引用恢复和失败收据精确读回必须先于旧 guest 启动；失败收据再次启动不擦槽，终态下若 ECS2 仍未决则拒启。SDK 退役、Container 对账与收据提交或读回失败均保留 startup claim，目标 C 带包 trial 继续拒绝。两目标同源 ASan/UBSan 与测试键签名构建是软件证据，未模拟实板断电。
 
-2026-10-02 的取消回归使用 `tools/container_product_cancel_test.py` 在宿主生成四种临时 RSA 签名 ABI 2 包，并运行正式产品 owner 的五个 init／event／timer／停止失败场景。直接运行的独立 Container 测试实例不会继承此前已停止 Base owner 的标志；正式 Base owner 用例仍绑定真实原子标志。两目标完整生命周期与 host 通过；资源数值、已通过的固定 SDK 构建及尚待实板项见[检查点](../../docs/operations/async_cancel_checkpoint.md)。`TEST_PYTHON` 同时指定 CMake 构包与直接 Python 调用。
+2026-10-02 的取消回归使用 `tools/container_product_cancel_test.py` 在宿主生成四种临时 RSA 签名 ABI 2 包，并运行正式产品 owner 的五个 init／event／timer／停止失败场景。直接运行的独立 Container 测试实例不会继承此前已停止 Base owner 的标志；正式 Base owner 用例仍绑定真实原子标志。两目标完整生命周期与 host 通过；资源数值、已通过的固定 SDK 构建及尚待实板项见[检查点](../../docs/operations/async-cancel-checkpoint.md)。`TEST_PYTHON` 同时指定 CMake 构包与直接 Python 调用。
