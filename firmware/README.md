@@ -1,5 +1,7 @@
 # ESP Base 固件
 
+2026-10-02 C3 空产品的真实 FRP/MQTT 认证管理与一次重启恢复通过。该轮使用原始启动入口、正式分区及私有实验配置，设备 HMAC 经 Tool 原有控制库验证；产品、OTA 并发和资源总门继续开放，见[实板检查点](../docs/operations/c3_frp_mqtt_management_checkpoint.md)。
+
 2026-10-02 C3 公开 WRITE 联合 OTA 实板切片通过：不同签名 message-counter 包的代表事件、原健康门、原 ID 持久成功及重启后恢复、十二项业务检查、卸载和 A／C Flash 字节核对完成。源码与依赖锁保持，私有配置仅实验 CA／timer 授权及一个定时器／目标版本，生产授权未改，见[检查点](../docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。REUSE 与 WRITE 均仅完成 C3 实验切片；生产网络、完整能力、FRP、ESP32、掉电和五能力总门仍开放。
 
 2026-10-02 前序原始 C3 Base REUSE 实验：代表 MQTT 事件、连续 30 秒健康门、原 ID 持久成功、再次重启成功结果与产品恢复、公开卸载及 A／C 字节读回通过。仅私有实验 CA／版本配置变化，范围与失败观察器记录见[检查点](../docs/operations/c3_joint_ota_reuse_checkpoint.md)。
