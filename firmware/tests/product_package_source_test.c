@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_product_package_source.h"
-#include "esp_crt_bundle.h"
+#include "eota_http_transport.h"
+#include "http_deadline.h"
 #include "esp_http_client.h"
 #include "freertos/task.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static const uint8_t body[] = {1, 2, 3, 4, 5, 6};
 static int64_t clock_us;
@@ -17,10 +19,56 @@ static bool chunked, complete, open_ok, eagain_once, header_eagain_once;
 static bool header_eagain_forever, read_eagain_forever;
 static unsigned init_calls, open_calls, cleanup_calls, read_calls, delay_calls;
 static size_t body_offset;
+static bool transport_create_ok, client_init_ok, owner_allocate_ok, client_alive;
+static bool slow_header_drip;
+static unsigned transport_create_calls, transport_destroy_calls;
+static unsigned owner_allocate_calls, owner_free_calls;
+struct esp_transport_fake { bool alive; eota_http_deadline_t *deadline; };
+static struct esp_transport_fake transport;
+
+void *ebase_package_test_calloc(size_t count, size_t size)
+{
+    ++owner_allocate_calls;
+    return owner_allocate_ok ? calloc(count, size) : NULL;
+}
+void ebase_package_test_free(void *pointer)
+{
+    assert(!client_alive && !transport.alive);
+    if (pointer != NULL) ++owner_free_calls;
+    free(pointer);
+}
+
+esp_transport_handle_t eota_http_transport_create(eota_http_deadline_t *deadline,
+    uint32_t connect_timeout_ms, bool trusted_time)
+{
+    ++transport_create_calls;
+    assert(trusted_time && deadline != NULL && connect_timeout_ms == 5000U);
+    assert(deadline->started_us == clock_us && deadline->last_progress_us == clock_us &&
+        deadline->total_timeout_ms == 300000U && deadline->idle_timeout_ms == 30000U);
+    assert(!transport.alive);
+    if (!transport_create_ok) return NULL;
+    transport.alive = true;
+    transport.deadline = deadline;
+    return &transport;
+}
+esp_err_t esp_transport_destroy(esp_transport_handle_t handle)
+{
+    assert(handle == &transport && transport.alive && !client_alive);
+    assert(transport.deadline->total_timeout_ms == 300000U);
+    ++transport_destroy_calls;
+    transport.alive = false;
+    return ESP_OK;
+}
+
 
 static void reset(void)
 {
+    assert(!transport.alive && !client_alive);
     clock_us = 1000;
+    transport_create_ok = client_init_ok = owner_allocate_ok = true;
+    slow_header_drip = false;
+    transport_create_calls = transport_destroy_calls = 0;
+    owner_allocate_calls = owner_free_calls = 0;
     open_time_us = header_time_us = read_time_us = 0;
     announced_length = sizeof body;
     status_code = 200;
@@ -40,14 +88,16 @@ void vTaskDelay(TickType_t ticks)
     ++delay_calls;
     clock_us += 1000;
 }
-int esp_crt_bundle_attach(void *config) { assert(config != NULL); return ESP_OK; }
 
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config)
 {
-    assert(config != NULL && config->url != NULL && config->crt_bundle_attach ==
-           esp_crt_bundle_attach && config->disable_auto_redirect &&
+    assert(config != NULL && config->url != NULL && config->transport == &transport &&
+           transport.alive && config->crt_bundle_attach == NULL &&
+           config->disable_auto_redirect &&
            config->timeout_ms == 1000 && config->buffer_size == 1024);
     ++init_calls;
+    if (!client_init_ok) return NULL;
+    client_alive = true;
     return &clock_us;
 }
 
@@ -63,10 +113,20 @@ int64_t esp_http_client_fetch_headers(esp_http_client_handle_t client)
 {
     assert(client == &clock_us);
     clock_us += header_time_us;
+    if (slow_header_drip) {
+        /* One synchronous SDK call would keep consuming bytes. Only the
+         * shared lower transport can stop it before returning to Base. */
+        for (unsigned index = 0; index < 600U; ++index) {
+            clock_us += 1000000;
+            if (!eota_http_deadline_progress(transport.deadline)) break;
+        }
+        return -ESP_ERR_HTTP_EAGAIN;
+    }
     if (header_eagain_once || header_eagain_forever) {
         header_eagain_once = false;
         return -ESP_ERR_HTTP_EAGAIN;
     }
+    (void)eota_http_deadline_progress(transport.deadline);
     return announced_length;
 }
 
@@ -91,13 +151,38 @@ int esp_http_client_read(esp_http_client_handle_t client, char *buffer, int leng
         count : sizeof body - body_offset;
     memcpy(buffer, body + body_offset, actual);
     body_offset += actual;
+    (void)eota_http_deadline_progress(transport.deadline);
     return (int)actual;
 }
 
 bool esp_http_client_is_complete_data_received(esp_http_client_handle_t client)
 { assert(client == &clock_us); return complete && body_offset == sizeof body; }
 esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client)
-{ assert(client == &clock_us); ++cleanup_calls; return ESP_OK; }
+{ assert(client == &clock_us && client_alive && transport.alive); ++cleanup_calls; client_alive = false; return ESP_OK; }
+
+static void reject_resource_faults(void)
+{
+    reset();
+    owner_allocate_ok = false;
+    assert(esp_base_product_package_source_open("https://host/x", 6U, true) == NULL);
+    assert(transport_create_calls == 0U && init_calls == 0U && owner_free_calls == 0U);
+    reset();
+    transport_create_ok = false;
+    assert(esp_base_product_package_source_open("https://host/x", 6U, true) == NULL);
+    assert(transport_create_calls == 1U && init_calls == 0U &&
+        transport_destroy_calls == 0U && owner_free_calls == 1U);
+    reset();
+    client_init_ok = false;
+    assert(esp_base_product_package_source_open("https://host/x", 6U, true) == NULL);
+    assert(init_calls == 1U && cleanup_calls == 0U &&
+        transport_destroy_calls == 1U && owner_free_calls == 1U);
+    reset();
+    slow_header_drip = true;
+    const int64_t started_us = clock_us;
+    assert(esp_base_product_package_source_open("https://host/x", 6U, true) == NULL);
+    assert(clock_us - started_us == 300000000);
+    assert(cleanup_calls == 1U && transport_destroy_calls == 1U && owner_free_calls == 1U);
+}
 
 static void valid_stream(void)
 {
@@ -208,6 +293,7 @@ static void reject_late_or_incomplete_body(void)
 
 int main(void)
 {
+    reject_resource_faults();
     valid_stream();
     reject_bad_urls();
     reject_wrong_response();

@@ -6,8 +6,10 @@
 #define ESP_ERR_HTTP_EAGAIN 0x7007
 typedef int esp_err_t;
 typedef void *esp_http_client_handle_t;
+typedef struct esp_transport_fake *esp_transport_handle_t;
 typedef struct {
     const char *url;
+    esp_transport_handle_t transport;
     esp_err_t (*crt_bundle_attach)(void *config);
     bool disable_auto_redirect;
     int timeout_ms;

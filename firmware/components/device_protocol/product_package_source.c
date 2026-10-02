@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "esp_crt_bundle.h"
+#include "eota_http_transport.h"
 #include "esp_http_client.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -14,16 +14,16 @@
 enum {
     PACKAGE_CONNECT_TIMEOUT_MS = 5000,
     PACKAGE_READ_TIMEOUT_MS = 1000,
-    PACKAGE_IDLE_TIMEOUT_US = 30000000,
-    PACKAGE_TOTAL_TIMEOUT_US = 300000000,
+    PACKAGE_IDLE_TIMEOUT_MS = 30000,
+    PACKAGE_TOTAL_TIMEOUT_MS = 300000,
 };
 
 struct esp_base_product_package_source {
     esp_http_client_handle_t client;
+    esp_transport_handle_t transport;
     uint32_t expected_size_bytes;
     uint32_t received_bytes;
-    int64_t started_us;
-    int64_t progress_us;
+    eota_http_deadline_t deadline;
     bool complete;
     bool failed;
 };
@@ -76,25 +76,32 @@ bool esp_base_product_package_source_request_valid(
 
 static bool deadline_valid(const esp_base_product_package_source_t *source)
 {
-    const int64_t now = esp_timer_get_time();
-    return now >= source->started_us && now >= source->progress_us &&
-        now - source->started_us < PACKAGE_TOTAL_TIMEOUT_US &&
-        now - source->progress_us < PACKAGE_IDLE_TIMEOUT_US;
+    return eota_http_deadline_remaining_us(&source->deadline) > 0;
 }
 
 static bool connect_deadline_valid(
     const esp_base_product_package_source_t *source)
 {
     const int64_t now = esp_timer_get_time();
-    return now >= source->started_us &&
-        now - source->started_us < PACKAGE_CONNECT_TIMEOUT_MS * 1000;
+    return now >= source->deadline.started_us &&
+        now - source->deadline.started_us < PACKAGE_CONNECT_TIMEOUT_MS * 1000;
 }
 
 void esp_base_product_package_source_close(
     esp_base_product_package_source_t *source)
 {
     if (source == NULL) return;
-    if (source->client != NULL) (void)esp_http_client_cleanup(source->client);
+    /* The locked SDK frees any non-NULL valid client and returns ESP_OK.
+     * Its custom transport is borrowed, so destroy it only after cleanup,
+     * while the caller-owned deadline still exists. */
+    if (source->client != NULL) {
+        (void)esp_http_client_cleanup(source->client);
+        source->client = NULL;
+    }
+    if (source->transport != NULL) {
+        (void)esp_transport_destroy(source->transport);
+        source->transport = NULL;
+    }
     free(source);
 }
 
@@ -107,11 +114,14 @@ esp_base_product_package_source_t *esp_base_product_package_source_open(
     esp_base_product_package_source_t *source = calloc(1, sizeof *source);
     if (source == NULL) return NULL;
     source->expected_size_bytes = expected_size_bytes;
-    source->started_us = esp_timer_get_time();
-    source->progress_us = source->started_us;
+    if (!eota_http_deadline_init(&source->deadline,
+            PACKAGE_TOTAL_TIMEOUT_MS, PACKAGE_IDLE_TIMEOUT_MS)) goto fail;
+    source->transport = eota_http_transport_create(&source->deadline,
+        PACKAGE_CONNECT_TIMEOUT_MS, trusted_time);
+    if (source->transport == NULL) goto fail;
     const esp_http_client_config_t config = {
         .url = url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .transport = source->transport,
         .disable_auto_redirect = true,
         .timeout_ms = PACKAGE_READ_TIMEOUT_MS,
         .buffer_size = 1024,
@@ -134,7 +144,6 @@ esp_base_product_package_source_t *esp_base_product_package_source_open(
         esp_http_client_is_chunked_response(source->client) ||
         esp_http_client_get_content_length(source->client) != expected_size_bytes ||
         !deadline_valid(source)) goto fail;
-    source->progress_us = esp_timer_get_time();
     return source;
 fail:
     esp_base_product_package_source_close(source);
@@ -165,7 +174,6 @@ bool esp_base_product_package_source_read(void *context,
         }
         if (count <= 0 || (size_t)count > size_bytes - received) break;
         received += (size_t)count;
-        source->progress_us = esp_timer_get_time();
     }
     if (received != size_bytes) {
         source->failed = true;
@@ -173,14 +181,20 @@ bool esp_base_product_package_source_read(void *context,
     }
     source->received_bytes += (uint32_t)size_bytes;
     if (source->received_bytes == source->expected_size_bytes) {
-        if (!esp_http_client_is_complete_data_received(source->client) ||
-            esp_http_client_cleanup(source->client) != ESP_OK) {
+        if (!esp_http_client_is_complete_data_received(source->client)) {
             source->failed = true;
             return false;
         }
-        /* The candidate validator may allocate the guest runtime. Release
-         * the TLS/HTTP buffers before it reads the signed package from Flash. */
+        /* Release HTTP before its borrowed TLS transport, with the deadline
+         * owner alive throughout. Flash package validation follows this read. */
+        (void)esp_http_client_cleanup(source->client);
         source->client = NULL;
+        (void)esp_transport_destroy(source->transport);
+        source->transport = NULL;
+        if (!deadline_valid(source)) {
+            source->failed = true;
+            return false;
+        }
         source->complete = true;
     }
     return true;

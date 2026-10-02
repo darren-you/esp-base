@@ -16,7 +16,7 @@
 
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
-`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器并注入 HTTP／单调时钟假件，检查 URL 和证书 bundle 配置、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，见[来源检查点](../../docs/operations/product-package-https-source-checkpoint.md)。
+`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器及公开 OTA 的同一期限源码，注入 HTTP／transport／单调时钟假件，检查可信时间和借用 transport 的装配、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。分配、transport 创建、HTTP 初始化、打开和慢响应失败分别核对 HTTP cleanup、transport destroy、期限 owner release 的顺序；最后一段成功读取也先释放 TLS 再进入离线 Flash 校验。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，真实 mbedTLS 机制由公开 OTA 回环测试单独核对，见[共享期限消费检查点](../../docs/operations/shared_http_deadline_consumer_checkpoint.md)。
 
 `command_decoder_test` 另检查只读 `product.status`／`product.result` 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown`、持久序号与绑定快照、成功记录的结果序列化，以及绑定观察不确定后保留存储 claim。公开 Python 串口工具的伪设备测试核对原 ID 查询、窗口外 `unknown`、序号与可选包摘要；真实签名 guest 生命周期测试覆盖空绑定、已安装和卸载后的 ECS2 快照。正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+EOTA_DIR="${ESP_BASE_TEST_OTA_DIR:-$ROOT/managed_components/esp_ota}"
 case "${ESP_BASE_TEST_TARGET:-esp32c3}" in
   esp32c3) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32C3 ;;
   esp32) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32 ;;
@@ -26,9 +27,15 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   "$ROOT/tests/product_ledger_nvs_test.c" -o "$BUILD_DIR/product_ledger_nvs_test"
 "$BUILD_DIR/product_ledger_nvs_test"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -Dcalloc=ebase_package_test_calloc -Dfree=ebase_package_test_free \
   -I "$ROOT/tests/fakes/product_package_source" -I "$ROOT/tests/fakes" \
-  -I "$ROOT/components/device_protocol/include" \
-  "$ROOT/components/device_protocol/product_package_source.c" \
+  -I "$ROOT/components/device_protocol/include" -I "$EOTA_DIR/include" \
+  -c "$ROOT/components/device_protocol/product_package_source.c" \
+  -o "$BUILD_DIR/product_package_source.o"
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes/product_package_source" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/components/device_protocol/include" -I "$EOTA_DIR/include" -I "$EOTA_DIR/src" \
+  "$BUILD_DIR/product_package_source.o" "$EOTA_DIR/src/http_deadline.c" \
   "$ROOT/tests/product_package_source_test.c" -o "$BUILD_DIR/product_package_source_test"
 "$BUILD_DIR/product_package_source_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -57,7 +64,6 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   "$ROOT/tests/mqtt_owner_test.c" -o "$BUILD_DIR/mqtt_owner_test"
 "$BUILD_DIR/mqtt_owner_test"
 CJSON_DIR="$ROOT/managed_components/espressif__cjson/cJSON"
-EOTA_DIR="$ROOT/managed_components/esp_ota"
 EFRP_DIR="$ROOT/managed_components/esp_frp"
 if [[ ! -f "$CJSON_DIR/cJSON.c" || ! -f "$EOTA_DIR/include/eota.h" || ! -f "$EFRP_DIR/include/esp_frp.h" ]]; then
   printf 'esp-base host tests\n  error  Run idf.py -C firmware reconfigure to resolve the locked cJSON and esp-ota dependencies.\n' >&2

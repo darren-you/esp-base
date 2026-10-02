@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-02 产品包 HTTPS 共享期限软件候选：读取器改为借用公开 OTA 的唯一 DNS／TCP／TLS 机制，保留 5 秒连接、1 秒单次操作、30 秒无进展与 5 分钟总期限，以及原 URL／长度／HTTP 策略。最终组合包含公开停止／启动改动；正式依赖保存与实板验收边界见[检查点](docs/operations/shared_http_deadline_consumer_checkpoint.md)。
+
 2026-10-02 C3 新 MQTT 任务栈诊断：联合功能及恢复通过，325 份存活任务快照完整；来源历史 heap 22040 B 仍未达 48 KiB，观测开销不回加，正式 Wi-Fi 默认值保持，见[诊断检查点](docs/operations/mqtt_task_stack_diagnostic_checkpoint.md)。
 
 2026-10-02 产品停止／启动软件接入：仅当前启动停止，重启自动运行已确认产品；公开 USB／MQTT 原 ID 查询、重新验签和真实 guest 回收通过双目标组合验证，Tool 完整消费与实体容量仍待验收，见[检查点](docs/operations/public_product_lifecycle_checkpoint.md)。
