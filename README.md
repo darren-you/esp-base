@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-02 C3 新 MQTT 任务栈诊断：联合功能及恢复通过，325 份存活任务快照完整；来源历史 heap 22040 B 仍未达 48 KiB，观测开销不回加，正式 Wi-Fi 默认值保持，见[诊断检查点](docs/operations/mqtt_task_stack_diagnostic_checkpoint.md)。
+
 2026-10-02 产品停止／启动软件接入：仅当前启动停止，重启自动运行已确认产品；公开 USB／MQTT 原 ID 查询、重新验签和真实 guest 回收通过双目标组合验证，Tool 完整消费与实体容量仍待验收，见[检查点](docs/operations/public_product_lifecycle_checkpoint.md)。
 
 2026-10-02 MQTT 消息 owner 精确消费：采用公开 `6443b71db761f4d667503f14108687bad5e6b5ee` 和官方生成双目标锁；双目标普通／签名构建、完整 host 与官方验签通过。SDK 双锁、provider 字节及实际编译输入已核对，实板容量未据此验收，见[软件消费检查点](docs/operations/mqtt_sized_message_owner_consumer_checkpoint.md)。
