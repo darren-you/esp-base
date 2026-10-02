@@ -1,5 +1,7 @@
 # 固件测试
 
+`config_store_test.c` 保持最大 7618 B、v3-only、损坏／冲突和写后不确定回归，新增 C3 load／commit／规范回调的三个 workspace OOM 点：输出保持、无 NVS 写入／commit、回调不执行、工作配置清零及随后恢复；每次释放检查整份 workspace 清零，完整 commit 只拥有一份缓冲，ESP32 无新增 heap 申请。两目标完整 host 和相关 ASan／UBSan 回归通过，见[RTC 检查点](../../docs/operations/rtc_config_ownership_checkpoint.md)。
+
 `command_allocation_test.c` 验证实际缓冲分配、九个扩容失败点、行边界／排空、释放前清零、按类型载荷和复用恢复；`protocol_ota_owner_test.c` 验证配置移交后的独占存活期及两秒半包超时。两目标 ASan/UBSan 回归及实板范围见[检查点](../../docs/operations/c3-command-memory-checkpoint.md)。
 
 宿主 Python 构包和 QEMU runner 位于固件根之外的 [tools/](../../tools/README.md)：生命周期入口调用 `container_product_deadline_test.py`，NVS 探针调用 `run_nvs_capacity_qemu.py`。固件测试目录只保存 C／Shell 等测试装配，不保留旧 Python 路径入口。

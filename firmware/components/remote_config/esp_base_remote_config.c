@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_remote_config.h"
 #include <string.h>
+#include <stdlib.h>
+#include "sdkconfig.h"
 #include "esp_attr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -9,15 +11,38 @@
 #define CONFIG_NAMESPACE "base_config"
 #define CONFIG_KEY "committed"
 
-/* Startup and the single control task own this RTC buffer. NVS copies the
- * encoded candidate before readback reuses it; neither operation overlaps.
- * RTC data can survive deep sleep, so wipe it before each new use and on exit. */
+/* Startup and the single control task own the codec workspace. On C3 the
+ * live config occupies RTC; the codec owns one bounded ordinary-RAM buffer.
+ * ESP32 keeps its existing RTC workspace and byte-accessible IRAM config. */
+#if !defined(CONFIG_IDF_TARGET_ESP32C3)
 static RTC_DATA_ATTR uint8_t s_config_bytes[EBASE_CONFIG_MAX_BYTES];
+#endif
 
 static void wipe(void *memory, size_t length)
 {
     volatile uint8_t *bytes = memory;
     while (length--) *bytes++ = 0;
+}
+
+static uint8_t *acquire_config_bytes(void)
+{
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    uint8_t *bytes = malloc(EBASE_CONFIG_MAX_BYTES);
+    if (bytes) memset(bytes, 0, EBASE_CONFIG_MAX_BYTES);
+    return bytes;
+#else
+    wipe(s_config_bytes, sizeof s_config_bytes);
+    return s_config_bytes;
+#endif
+}
+
+static void release_config_bytes(uint8_t *bytes)
+{
+    if (!bytes) return;
+    wipe(bytes, EBASE_CONFIG_MAX_BYTES);
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    free(bytes);
+#endif
 }
 
 /* The v3 decoder accepts one canonical byte representation per valid config:
@@ -58,18 +83,19 @@ bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t 
                                                  void *context)
 {
     if (!config || !consume) return false;
-    wipe(s_config_bytes, sizeof s_config_bytes);
+    uint8_t *bytes = acquire_config_bytes();
+    if (!bytes) return false;
     size_t size = 0;
-    const bool encoded = ebase_config_encode(config, s_config_bytes, &size);
-    const bool consumed = encoded && consume(s_config_bytes, size, context);
-    wipe(s_config_bytes, sizeof s_config_bytes);
+    const bool encoded = ebase_config_encode(config, bytes, &size);
+    const bool consumed = encoded && consume(bytes, size, context);
+    release_config_bytes(bytes);
     return consumed;
 }
 
-esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
+static esp_err_t load_config_with_bytes(esp_base_remote_config_t *config,
+                                         uint8_t *bytes)
 {
-    if (!config) return ESP_ERR_INVALID_ARG;
-    wipe(s_config_bytes, sizeof s_config_bytes);
+    wipe(bytes, EBASE_CONFIG_MAX_BYTES);
     esp_err_t error = nvs_flash_init_partition(CONFIG_PARTITION);
     if (error != ESP_OK) return error;
     nvs_handle_t handle;
@@ -82,18 +108,23 @@ esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
         error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) {
         size_t received = size;
-        error = nvs_get_blob(handle, CONFIG_KEY, s_config_bytes, &received);
+        error = nvs_get_blob(handle, CONFIG_KEY, bytes, &received);
         if (error == ESP_OK && received != size) error = ESP_ERR_INVALID_STATE;
     }
     nvs_close(handle);
     if (error == ESP_ERR_NVS_NOT_FOUND) { *config = (esp_base_remote_config_t){0}; return ESP_OK; }
-    if (error != ESP_OK) {
-        wipe(s_config_bytes, sizeof s_config_bytes);
-        return error;
-    }
-    const bool valid = ebase_config_decode(s_config_bytes, size, config);
-    wipe(s_config_bytes, sizeof s_config_bytes);
-    return valid ? ESP_OK : ESP_ERR_INVALID_STATE;
+    if (error != ESP_OK) return error;
+    return ebase_config_decode(bytes, size, config) ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
+{
+    if (!config) return ESP_ERR_INVALID_ARG;
+    uint8_t *bytes = acquire_config_bytes();
+    if (!bytes) return ESP_ERR_NO_MEM;
+    const esp_err_t result = load_config_with_bytes(config, bytes);
+    release_config_bytes(bytes);
+    return result;
 }
 
 esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t *candidate,
@@ -104,30 +135,33 @@ esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t 
     if (!candidate || !committed || !work || work == candidate || work == committed ||
         !ebase_config_valid(candidate) || candidate->revision != expected_revision)
         return ESP_ERR_INVALID_ARG;
-    esp_err_t result = esp_base_remote_config_load(work);
+    uint8_t *bytes = acquire_config_bytes();
+    esp_err_t result = ESP_ERR_NO_MEM;
     size_t bytes_size = 0;
     nvs_handle_t handle;
+    if (!bytes) goto done;
+    result = load_config_with_bytes(work, bytes);
     if (result != ESP_OK) goto done;
     if (work->revision != expected_revision) { result = ESP_BASE_CONFIG_CONFLICT; goto done; }
     if (expected_revision == UINT32_MAX) { result = ESP_BASE_CONFIG_EXHAUSTED; goto done; }
     *work = *candidate;
     work->revision = expected_revision + 1;
-    if (!ebase_config_encode(work, s_config_bytes, &bytes_size)) {
+    if (!ebase_config_encode(work, bytes, &bytes_size)) {
         result = ESP_ERR_INVALID_ARG; goto done;
     }
     result = nvs_open_from_partition(CONFIG_PARTITION, CONFIG_NAMESPACE, NVS_READWRITE, &handle);
     if (result != ESP_OK) goto done;
-    result = nvs_set_blob(handle, CONFIG_KEY, s_config_bytes, bytes_size);
+    result = nvs_set_blob(handle, CONFIG_KEY, bytes, bytes_size);
     if (result == ESP_OK) result = nvs_commit(handle);
     nvs_close(handle);
     if (result != ESP_OK) { result = ESP_BASE_CONFIG_UNCERTAIN; goto done; }
-    if (esp_base_remote_config_load(work) != ESP_OK ||
+    if (load_config_with_bytes(work, bytes) != ESP_OK ||
         !same_config(work, candidate, expected_revision + 1)) {
         result = ESP_BASE_CONFIG_UNCERTAIN; goto done;
     }
     *committed = *work;
 done:
     wipe(work, sizeof *work);
-    wipe(s_config_bytes, sizeof s_config_bytes);
+    release_config_bytes(bytes);
     return result;
 }

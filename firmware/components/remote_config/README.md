@@ -2,13 +2,16 @@
 
 拥有完整配置、单调 revision 和 NVS 提交边界。候选验证由单一控制任务调度，本组件只在连接证明成立后提交。
 
+C3 在一次 load、规范字节消费或完整 commit 中只申请一份 7618 B 编解码缓冲，commit 的前值读取、编码、写入和独立读回复用同一 owner；返回前清零释放。OOM 不开始 NVS 操作，读取与 committed 输出保持，工作配置清零。ESP32 保留已有 RTC 缓冲。C3 长期 context 由 device_protocol 放在 RTC，并在每次启动加载前清空、从 NVS 恢复；RTC 不作为持久事实。双目标故障回归及 C3 实板边界见[RTC 检查点](../../../docs/operations/rtc_config_ownership_checkpoint.md)。
+
 ## 架构拓扑
 
 ```mermaid
 flowchart LR
     app["apps/esp_base：启动读取"] --> store["esp_base_remote_config：条件提交 / 读回"]
     owner["device_protocol：候选与连接证明"] -->|"expected_revision + 完整配置"| store
-    store --> codec["config_codec：类型校验 / 规范字节"]
+    store --> workspace["唯一编解码 owner：C3 按需 heap / ESP32 RTC；全量清零"]
+    workspace --> codec["config_codec：类型校验 / 规范字节"]
     store --> nvs["base_store/base_config/committed：单个 NVS blob"]
     nvs -->|"revision 与配置一起恢复"| app
     identity["nvs/base_identity：独立持久身份"]

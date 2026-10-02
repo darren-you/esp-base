@@ -4,6 +4,34 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#undef malloc
+#undef free
+#include <stdlib.h>
+
+static bool config_allocation_fails;
+static unsigned config_allocations, config_releases;
+static void *config_workspace;
+
+void *ebase_config_test_malloc(size_t size)
+{
+    assert(size == EBASE_CONFIG_MAX_BYTES && config_workspace == NULL);
+    ++config_allocations;
+    if (config_allocation_fails) return NULL;
+    config_workspace = malloc(size);
+    assert(config_workspace != NULL);
+    memset(config_workspace, 0xa5, size);
+    return config_workspace;
+}
+
+void ebase_config_test_free(void *memory)
+{
+    assert(memory == config_workspace && memory != NULL);
+    const unsigned char *bytes = memory;
+    for (size_t i = 0; i < EBASE_CONFIG_MAX_BYTES; ++i) assert(bytes[i] == 0);
+    free(memory);
+    config_workspace = NULL;
+    ++config_releases;
+}
 
 /* Faults exercise our storage caller, not NVS power-loss behavior. */
 static uint8_t stored[EBASE_CONFIG_MAX_BYTES];
@@ -233,9 +261,41 @@ static void codec_tests(void)
     assert(check.calls == 2);
 }
 
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+static void workspace_oom_tests(void)
+{
+    esp_base_remote_config_t candidate = configured(0), before, committed;
+    memset(&committed, 0x5a, sizeof committed);
+    before = committed;
+    const unsigned initial_writes = writes, initial_commits = commits;
+    const unsigned allocation_count = config_allocations;
+    config_allocation_fails = true;
+    assert(esp_base_remote_config_load(&committed) == ESP_ERR_NO_MEM);
+    assert(!memcmp(&committed, &before, sizeof before));
+    memset(&work, 0x6b, sizeof work);
+    assert(esp_base_remote_config_commit_verified(&candidate, 0, &committed, &work) == ESP_ERR_NO_MEM);
+    assert(!memcmp(&committed, &before, sizeof before));
+    assert_work_wiped();
+    uint8_t bytes[EBASE_CONFIG_MAX_BYTES];
+    size_t length = 0;
+    assert(ebase_config_encode(&candidate, bytes, &length));
+    bytes_check_t check = {.expected = bytes, .size = length, .accept = true};
+    assert(!esp_base_remote_config_with_canonical_bytes(&candidate, check_canonical_bytes, &check));
+    assert(check.calls == 0);
+    assert(config_workspace == NULL && config_allocations == allocation_count + 3);
+    assert(handles == 0 && writes == initial_writes && commits == initial_commits);
+    config_allocation_fails = false;
+    assert(esp_base_remote_config_with_canonical_bytes(&candidate, check_canonical_bytes, &check));
+    assert(check.calls == 1 && config_workspace == NULL);
+}
+#endif
+
 int main(void)
 {
     codec_tests();
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    workspace_oom_tests();
+#endif
     esp_base_remote_config_t current = configured(42), candidate = configured(0);
     assert(esp_base_remote_config_load(&current) == ESP_OK && current.revision == 0 && !current.wifi.configured);
     assert(esp_base_remote_config_commit_verified(&candidate, 0, &current, &work) == ESP_OK);
@@ -290,5 +350,11 @@ int main(void)
     stored_size = EBASE_CONFIG_MAX_BYTES + 1; /* Oversized key rejected before reading or writing. */
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE);
     assert(writes == before && handles == 0);
+    assert(config_workspace == NULL);
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    assert(config_allocations == config_releases + 3);
+#else
+    assert(config_allocations == 0 && config_releases == 0);
+#endif
     puts("  config_store     passed (v3-only; fault injection, not a power-cut test)");
 }

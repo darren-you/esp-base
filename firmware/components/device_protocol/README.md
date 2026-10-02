@@ -1,5 +1,7 @@
 # device_protocol
 
+2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](../../../docs/operations/rtc_config_ownership_checkpoint.md)及[前轮 MQTT 消费](../../../docs/operations/mqtt_owned_config_consumer_checkpoint.md)。
+
 2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](../../../docs/operations/c3-command-memory-checkpoint.md)。
 
 2026-10-02 C3 稳定 FRP 身份联合功能切片通过：公开一次 WRITE OTA 与一次 MQTT restart 后，目标和第三 boot 均经 FRP 认证状态核验，十二项消息计数业务、卸载、A／C 字节核对及原代码恢复完成。143 份实板证据冻结；来源下载最低历史 heap 4124 B，48 KiB 容量门继续失败，见[检查点](../../../docs/operations/c3-five-capability-run-id-checkpoint.md)。
@@ -37,6 +39,8 @@ pending 固件包验证由主应用持原升级 claim，在 V3、ECS2 与候选 
 ```mermaid
 flowchart LR
     app["apps/esp_base：身份与只读状态"] --> owner["esp_base_protocol：单一控制任务"]
+    owner --> config_context["protocol_state_t：C3 RTC / ESP32 8BIT IRAM；启动清空后加载"]
+    config_context <-->|"已提交配置 / revision"| store
     owner --> state["control_state：最近进展与轮次 / pending 写门"]
     app -->|"原收据候选准入"| business_health["RAM 健康快照：代表事件 / 连续在线 30 秒"]
     owner --> business_health

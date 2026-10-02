@@ -53,7 +53,13 @@ typedef struct {
     esp_base_storage_owner_t *flash_io_owner;
     const efrp_aead_flash_store_t *frp_flash_store;
 } protocol_state_t;
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+/* C3 has no byte-accessible IRAM heap. Reuse RTC data for the live config;
+ * the codec borrows ordinary RAM only during its bounded operation. */
+static RTC_DATA_ATTR protocol_state_t s_context;
+#else
 static protocol_state_t s_context IRAM_BSS_ATTR;
+#endif
 static char s_boot_id[EBASE_ID_BYTES];
 static ebase_request_guard_t s_guard IRAM_BSS_ATTR;
 /* A USB/UART command is the only consumer of the full line buffer. Keep it
@@ -2195,6 +2201,8 @@ esp_err_t esp_base_protocol_load_config(uint32_t *revision,
     if (!revision || flash_io_owner == NULL) return ESP_ERR_INVALID_ARG;
     if (s_started) return ESP_ERR_INVALID_STATE;
     s_config_loaded = false;
+    /* RTC may survive deep sleep. Never treat prior RAM as committed config. */
+    memset(&s_context, 0, sizeof s_context);
     const esp_err_t error = load_config_with_flash_io(
         &s_context.config, flash_io_owner);
     if (error != ESP_OK) return error;

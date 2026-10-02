@@ -96,7 +96,8 @@ printf 'esp-base host tests\n  command_guard  passed\n'
   "$ROOT/tests/command_allocation_test.c" -lm -o "$BUILD_DIR/command_allocation_test"
 "$BUILD_DIR/command_allocation_test"
 printf '  hardware       not used\n'
-"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -Dmalloc=ebase_config_test_malloc -Dfree=ebase_config_test_free \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/remote_config/include" \
   "$ROOT/components/remote_config/config_codec.c" \
   "$ROOT/components/remote_config/esp_base_remote_config.c" \
