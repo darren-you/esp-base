@@ -29,22 +29,29 @@ typedef struct {
 typedef struct {
     ebase_command_kind_t kind;
     ebase_request_t request;
-    /* Each command kind owns exactly one payload. The control task copies
-     * config/OTA data into their independent long-lived storage before another
-     * command is parsed; status and restart have no payload. */
+    /* Payload storage is allocated only for the selected command kind. The
+     * transport copies values or transfers an accepted payload to its owner. */
+    size_t payload_size_bytes;
     union {
-        esp_base_remote_config_t config;
-        esp_base_ota_request_t ota;
-        char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
-        ebase_product_uninstall_request_t product_uninstall;
-        ebase_product_package_request_t product_package;
+        void *payload;
+        esp_base_remote_config_t *config;
+        esp_base_ota_request_t *ota;
+        char *operation_id;
+        ebase_product_uninstall_request_t *product_uninstall;
+        ebase_product_package_request_t *product_package;
     };
 } ebase_command_t;
 
 /* The parser never mutates hardware or storage. request_id is empty unless a
  * valid unique UUID was decoded. For CONFIG_SET, OTA_START and product writes,
  * the transport owner must hash canonical values before admission. */
-const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out);
+typedef void *(*ebase_command_alloc_t)(size_t size_bytes);
+/* Zero-initialize before first use. Parsing releases any previous payload.
+ * allocate must return storage that free() can release; the transport chooses
+ * its existing memory domain. Release after consuming the borrowed fields. */
+const char *ebase_parse_command(const char *json, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate);
+void ebase_command_release(ebase_command_t *command);
 
 /* Read-only FRP status bootstraps current boot/uptime using device/request UUIDs.
  * It leaves boot/deadline zero. The listener authenticates the exact request
@@ -56,11 +63,17 @@ const char *ebase_parse_frp_restart(const char *json, size_t length,
                                    ebase_request_t *out);
 
 typedef struct {
-    char data[EBASE_LINE_LIMIT + 1];
-    size_t length;
+    char *data;
+    size_t length, capacity;
     bool discard;
 } ebase_line_reader_t;
 typedef void (*ebase_line_handler_t)(const char *line, size_t length, void *context);
-/* An invalid/oversized line is drained to LF and delivered as (NULL, 0). */
+/* Zero-initialize the reader. Storage grows only for actual bytes, up to the
+ * same line limit; a completed or rejected line releases it. An invalid,
+ * oversized, or allocation-failed line is drained to LF as (NULL, 0).
+ * The callback borrows data until return and must not reenter this reader. */
 void ebase_line_feed(ebase_line_reader_t *reader, const void *bytes, size_t length,
                      ebase_line_handler_t handler, void *context);
+
+/* Wipes and releases a partial line; safe for an empty reader. */
+void ebase_line_release(ebase_line_reader_t *reader);

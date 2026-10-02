@@ -1,5 +1,7 @@
 # 固件测试
 
+`command_allocation_test.c` 验证实际缓冲分配、九个扩容失败点、行边界／排空、释放前清零、按类型载荷和复用恢复；`protocol_ota_owner_test.c` 验证配置移交后的独占存活期及两秒半包超时。两目标 ASan/UBSan 回归及实板范围见[检查点](../../docs/operations/c3_command_memory_checkpoint.md)。
+
 宿主 Python 构包和 QEMU runner 位于固件根之外的 [tools/](../../tools/README.md)：生命周期入口调用 `container_product_deadline_test.py`，NVS 探针调用 `run_nvs_capacity_qemu.py`。固件测试目录只保存 C／Shell 等测试装配，不保留旧 Python 路径入口。
 
 `container_product_lifecycle_test` 的 `event-failure` 分支新增两项真实签名已确认 guest 用例：候选准备前的事件预算异常拒绝升级且无写入；准备后的异常阻断停止／trial／同 boot 重开，内部显式放弃保持原绑定，随后卸载等待 native 回收且包槽逐字节不变。两目标使用精确 Container/WAMR 源码；Flash/NVS、固件观察与调度为宿主替身，已确认绑定为种子夹具。公开 worker 此处仍报告 unknown 并保留 claim，测试不经过设备命令／持久产品账本或生产 Broker。

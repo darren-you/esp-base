@@ -4,14 +4,33 @@
 #include <limits.h>
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 
-/* Error cleanup wipes the largest union member without erasing request_id,
- * which the caller may still use in its failure response. */
-_Static_assert(sizeof(esp_base_remote_config_t) >= sizeof(esp_base_ota_request_t) &&
-               sizeof(esp_base_remote_config_t) >= ESP_BASE_OTA_OPERATION_ID_BYTES &&
-               sizeof(esp_base_remote_config_t) >= sizeof(ebase_product_uninstall_request_t) &&
-               sizeof(esp_base_remote_config_t) >= sizeof(ebase_product_package_request_t),
-               "config wipe must cover every command payload");
+static void release_payload(ebase_command_t *command)
+{
+    volatile unsigned char *bytes = command->payload;
+    for (size_t i = 0; i < command->payload_size_bytes; ++i) bytes[i] = 0;
+    free(command->payload);
+    command->payload = NULL;
+    command->payload_size_bytes = 0U;
+}
+
+void ebase_command_release(ebase_command_t *command)
+{
+    if (!command) return;
+    release_payload(command);
+    memset(command, 0, sizeof *command);
+}
+
+static bool allocate_payload(ebase_command_t *command, size_t size_bytes,
+                             ebase_command_alloc_t allocate)
+{
+    command->payload = allocate(size_bytes);
+    if (!command->payload) return false;
+    command->payload_size_bytes = size_bytes;
+    memset(command->payload, 0, size_bytes);
+    return true;
+}
 
 /* cJSON supplies the JSON tree. Before allocation, bound nesting and enforce
  * UTF-8, integer spelling and absence of embedded NUL (also escaped NUL). */
@@ -145,10 +164,12 @@ static bool restart_parameters(const cJSON *root, ebase_request_t *request)
     return true;
 }
 
-const char *ebase_parse_command(const char *json, size_t length, ebase_command_t *out)
+const char *ebase_parse_command(const char *json, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate)
 {
     if (!out) return "invalid_request";
-    memset(out, 0, sizeof *out);
+    ebase_command_release(out);
+    if (!allocate) return "invalid_request";
     if (!json || !length || length > EBASE_LINE_LIMIT || !valid_bytes((const unsigned char *)json, length)) return "invalid_request";
     const char *end = NULL;
     cJSON *root = cJSON_ParseWithLengthOpts(json, length, &end, false);
@@ -171,6 +192,9 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     if (status) { out->kind = EBASE_STATUS; error = NULL; goto done; }
     if (product_status) { out->kind = EBASE_PRODUCT_STATUS; error = NULL; goto done; }
     if (query) {
+        if (!allocate_payload(out, ESP_BASE_OTA_OPERATION_ID_BYTES, allocate)) {
+            error = "resource_failure"; goto done;
+        }
         const char *const keys[] = {"operation_id"};
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         if (!exact_keys(parameters, keys, 1) || !copy_id(parameters, "operation_id", out->operation_id)) goto done;
@@ -187,7 +211,10 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             "expected_container_sequence", "previous_package_sha256",
             "package_url", "package_sha256", "trial_event_sha256", "package_size_bytes",
             "guest_abi_version", "data_schema_version"};
-        ebase_product_package_request_t *request = &out->product_package;
+        if (!allocate_payload(out, sizeof *out->product_package, allocate)) {
+            error = "resource_failure"; goto done;
+        }
+        ebase_product_package_request_t *request = out->product_package;
         if (!exact_keys(parameters, keys, 10) ||
             !copy_id(parameters, "operation_id", request->operation_id) ||
             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "operation_sequence"),
@@ -221,11 +248,14 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         goto done;
     }
     if (!strcmp(command->valuestring, "product.uninstall")) {
+        if (!allocate_payload(out, sizeof *out->product_uninstall, allocate)) {
+            error = "resource_failure"; goto done;
+        }
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const keys[] = {"operation_id", "operation_sequence",
                                     "expected_container_sequence", "package_sha256"};
         if (!exact_keys(parameters, keys, 4) ||
-            !copy_id(parameters, "operation_id", out->product_uninstall.operation_id)) goto done;
+            !copy_id(parameters, "operation_id", out->product_uninstall->operation_id)) goto done;
         const cJSON *sequence = cJSON_GetObjectItemCaseSensitive(parameters,
                                                                   "operation_sequence");
         const cJSON *container_sequence = cJSON_GetObjectItemCaseSensitive(parameters,
@@ -243,19 +273,22 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             const int upper = hex_digit(digest->valuestring[index * 2U]);
             const int lower = hex_digit(digest->valuestring[index * 2U + 1U]);
             if (upper < 0 || lower < 0) goto done;
-            out->product_uninstall.package_sha256[index] =
+            out->product_uninstall->package_sha256[index] =
                 (uint8_t)((upper << 4) | lower);
-            nonzero |= out->product_uninstall.package_sha256[index];
+            nonzero |= out->product_uninstall->package_sha256[index];
         }
         if (nonzero == 0U) goto done;
-        out->product_uninstall.operation_sequence = (uint32_t)sequence->valuedouble;
-        out->product_uninstall.expected_container_sequence =
+        out->product_uninstall->operation_sequence = (uint32_t)sequence->valuedouble;
+        out->product_uninstall->expected_container_sequence =
             (uint32_t)container_sequence->valuedouble;
         out->kind = EBASE_PRODUCT_UNINSTALL_COMMAND;
         error = NULL;
         goto done;
     }
     if (!strcmp(command->valuestring, "ota.start")) {
+        if (!allocate_payload(out, sizeof *out->ota, allocate)) {
+            error = "resource_failure"; goto done;
+        }
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const no_package_keys[] = {"operation_id", "image_url", "sha256",
             "image_size_bytes", "target", "signature", "package_mode"};
@@ -271,27 +304,27 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         if (!cJSON_IsString(mode)) goto done;
         if (!strcmp(mode->valuestring, "no_package")) {
             if (!exact_keys(parameters, no_package_keys, 7U)) goto done;
-            out->ota.package_mode = ESP_BASE_OTA_NO_PACKAGE;
+            out->ota->package_mode = ESP_BASE_OTA_NO_PACKAGE;
         } else if (!strcmp(mode->valuestring, "reuse")) {
             if (!exact_keys(parameters, reuse_keys, 12U)) goto done;
-            out->ota.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
+            out->ota->package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
         } else if (!strcmp(mode->valuestring, "write")) {
             if (!exact_keys(parameters, write_keys, 13U)) goto done;
-            out->ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
+            out->ota->package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
         } else goto done;
-        if (!copy_id(parameters, "operation_id", out->ota.operation_id)) goto done;
-        if (out->ota.package_mode != ESP_BASE_OTA_NO_PACKAGE &&
+        if (!copy_id(parameters, "operation_id", out->ota->operation_id)) goto done;
+        if (out->ota->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
             (!digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
-                       out->ota.package_sha256) ||
+                       out->ota->package_sha256) ||
              !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "trial_event_sha256"),
-                       out->ota.trial_event_sha256) ||
+                       out->ota->trial_event_sha256) ||
              !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "package_size_bytes"),
-                           INT_MAX, &out->ota.package_size_bytes) ||
+                           INT_MAX, &out->ota->package_size_bytes) ||
              !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "guest_abi_version"),
-                           UINT32_MAX, &out->ota.guest_abi_version) ||
+                           UINT32_MAX, &out->ota->guest_abi_version) ||
              !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "data_schema_version"),
-                           UINT32_MAX, &out->ota.data_schema_version))) goto done;
-        if (out->ota.package_mode == ESP_BASE_OTA_PACKAGE_WRITE) {
+                           UINT32_MAX, &out->ota->data_schema_version))) goto done;
+        if (out->ota->package_mode == ESP_BASE_OTA_PACKAGE_WRITE) {
             const cJSON *package_url = cJSON_GetObjectItemCaseSensitive(
                 parameters, "package_url");
             if (!cJSON_IsString(package_url)) goto done;
@@ -299,7 +332,7 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             if (package_url_size <= 8U ||
                 package_url_size > ESP_BASE_OTA_PACKAGE_URL_BYTES ||
                 strncmp(package_url->valuestring, "https://", 8U) != 0) goto done;
-            memcpy(out->ota.package_url, package_url->valuestring,
+            memcpy(out->ota->package_url, package_url->valuestring,
                    package_url_size + 1U);
         }
         const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "image_url");
@@ -317,19 +350,22 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             !cJSON_IsString(target) || strcmp(target->valuestring, ESP_BASE_OTA_TARGET) ||
             !exact_keys(signature, signature_keys, 1) || !cJSON_IsString(scheme) ||
             strcmp(scheme->valuestring, ESP_BASE_OTA_SIGNATURE_SCHEME)) goto done;
-        for (size_t i = 0; i < sizeof out->ota.sha256; ++i) {
+        for (size_t i = 0; i < sizeof out->ota->sha256; ++i) {
             const int hi = hex_digit(digest->valuestring[2 * i]);
             const int lo = hex_digit(digest->valuestring[2 * i + 1]);
             if (hi < 0 || lo < 0) goto done;
-            out->ota.sha256[i] = (uint8_t)((hi << 4) | lo);
+            out->ota->sha256[i] = (uint8_t)((hi << 4) | lo);
         }
-        memcpy(out->ota.image_url, url->valuestring, strlen(url->valuestring) + 1);
-        out->ota.image_size_bytes = (uint32_t)size->valuedouble;
+        memcpy(out->ota->image_url, url->valuestring, strlen(url->valuestring) + 1);
+        out->ota->image_size_bytes = (uint32_t)size->valuedouble;
         out->kind = EBASE_OTA_START;
         error = NULL;
         goto done;
     }
     if (!strcmp(command->valuestring, "config.set")) {
+        if (!allocate_payload(out, sizeof *out->config, allocate)) {
+            error = "resource_failure"; goto done;
+        }
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const parameter_keys[] = {"expected_revision", "config"};
         if (!exact_keys(parameters, parameter_keys, 2)) goto done;
@@ -344,7 +380,7 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
         if (!cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(config, "business"))) {
             error = "unsupported_configuration"; goto done;
         }
-        out->config.revision = (uint32_t)revision->valuedouble;
+        out->config->revision = (uint32_t)revision->valuedouble;
         const cJSON *wifi = cJSON_GetObjectItemCaseSensitive(config, "wifi");
         if (!cJSON_IsNull(wifi)) {
             const char *const wifi_keys[] = {"ssid", "password"};
@@ -353,9 +389,9 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
             const cJSON *password = cJSON_GetObjectItemCaseSensitive(wifi, "password");
             if (!cJSON_IsString(ssid) || strlen(ssid->valuestring) > 32 ||
                 !cJSON_IsString(password) || strlen(password->valuestring) > 64) goto done;
-            out->config.wifi.configured = true;
-            memcpy(out->config.wifi.ssid, ssid->valuestring, strlen(ssid->valuestring));
-            memcpy(out->config.wifi.password, password->valuestring, strlen(password->valuestring));
+            out->config->wifi.configured = true;
+            memcpy(out->config->wifi.ssid, ssid->valuestring, strlen(ssid->valuestring));
+            memcpy(out->config->wifi.password, password->valuestring, strlen(password->valuestring));
         }
         const cJSON *mqtt = cJSON_GetObjectItemCaseSensitive(config, "mqtt");
         if (!cJSON_IsNull(mqtt)) {
@@ -376,17 +412,17 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
                 !cJSON_IsString(password) || strlen(password->valuestring) > 256 ||
                 !cJSON_IsString(ca) || strlen(ca->valuestring) > 4096 ||
                 !cJSON_IsString(key) || strlen(key->valuestring) != 64) goto done;
-            out->config.mqtt.configured = true;
-            out->config.mqtt.port = (uint16_t)port->valuedouble;
-            memcpy(out->config.mqtt.hostname, hostname->valuestring, strlen(hostname->valuestring));
-            memcpy(out->config.mqtt.username, username->valuestring, strlen(username->valuestring));
-            memcpy(out->config.mqtt.password, password->valuestring, strlen(password->valuestring));
-            memcpy(out->config.mqtt.ca_pem, ca->valuestring, strlen(ca->valuestring));
+            out->config->mqtt.configured = true;
+            out->config->mqtt.port = (uint16_t)port->valuedouble;
+            memcpy(out->config->mqtt.hostname, hostname->valuestring, strlen(hostname->valuestring));
+            memcpy(out->config->mqtt.username, username->valuestring, strlen(username->valuestring));
+            memcpy(out->config->mqtt.password, password->valuestring, strlen(password->valuestring));
+            memcpy(out->config->mqtt.ca_pem, ca->valuestring, strlen(ca->valuestring));
             for (size_t i = 0; i < EBASE_MQTT_KEY_BYTES; ++i) {
                 const int hi = hex_digit(key->valuestring[2 * i]);
                 const int lo = hex_digit(key->valuestring[2 * i + 1]);
                 if (hi < 0 || lo < 0) goto done;
-                out->config.mqtt.management_key[i] = (uint8_t)((hi << 4) | lo);
+                out->config->mqtt.management_key[i] = (uint8_t)((hi << 4) | lo);
             }
         }
         const cJSON *frp = cJSON_GetObjectItemCaseSensitive(config, "frp");
@@ -413,22 +449,22 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
                 !cJSON_IsNumber(local) || !isfinite(local->valuedouble) || local->valuedouble < 1 ||
                 local->valuedouble > UINT16_MAX || floor(local->valuedouble) != local->valuedouble ||
                 !cJSON_IsString(key) || strlen(key->valuestring) != 64) goto done;
-            out->config.frp.configured = true;
-            out->config.frp.server_port = (uint16_t)port->valuedouble;
-            out->config.frp.remote_port = (uint16_t)remote->valuedouble;
-            out->config.frp.local_port = (uint16_t)local->valuedouble;
-            memcpy(out->config.frp.server_hostname, host->valuestring, strlen(host->valuestring));
-            memcpy(out->config.frp.token, token->valuestring, strlen(token->valuestring));
-            memcpy(out->config.frp.ca_pem, ca->valuestring, strlen(ca->valuestring));
-            memcpy(out->config.frp.proxy_name, proxy->valuestring, strlen(proxy->valuestring));
+            out->config->frp.configured = true;
+            out->config->frp.server_port = (uint16_t)port->valuedouble;
+            out->config->frp.remote_port = (uint16_t)remote->valuedouble;
+            out->config->frp.local_port = (uint16_t)local->valuedouble;
+            memcpy(out->config->frp.server_hostname, host->valuestring, strlen(host->valuestring));
+            memcpy(out->config->frp.token, token->valuestring, strlen(token->valuestring));
+            memcpy(out->config->frp.ca_pem, ca->valuestring, strlen(ca->valuestring));
+            memcpy(out->config->frp.proxy_name, proxy->valuestring, strlen(proxy->valuestring));
             for (size_t i = 0; i < EBASE_FRP_KEY_BYTES; ++i) {
                 const int hi = hex_digit(key->valuestring[2 * i]);
                 const int lo = hex_digit(key->valuestring[2 * i + 1]);
                 if (hi < 0 || lo < 0) goto done;
-                out->config.frp.management_key[i] = (uint8_t)((hi << 4) | lo);
+                out->config->frp.management_key[i] = (uint8_t)((hi << 4) | lo);
             }
         }
-        if (!ebase_config_valid(&out->config)) goto done;
+        if (!ebase_config_valid(out->config)) goto done;
         out->kind = EBASE_CONFIG_SET;
         error = NULL;
         goto done;
@@ -438,7 +474,7 @@ const char *ebase_parse_command(const char *json, size_t length, ebase_command_t
     out->kind = EBASE_RESTART;
     error = NULL;
 done:
-    if (error) memset(&out->config, 0, sizeof out->config);
+    if (error) release_payload(out);
     cJSON_Delete(root);
     return error;
 }
@@ -490,6 +526,15 @@ const char *ebase_parse_frp_restart(const char *json, size_t length,
     return error;
 }
 
+void ebase_line_release(ebase_line_reader_t *r)
+{
+    if (!r) return;
+    volatile unsigned char *bytes = (volatile unsigned char *)r->data;
+    for (size_t i = 0; i < r->capacity; ++i) bytes[i] = 0;
+    free(r->data);
+    memset(r, 0, sizeof *r);
+}
+
 void ebase_line_feed(ebase_line_reader_t *r, const void *bytes, size_t length,
                      ebase_line_handler_t handler, void *context)
 {
@@ -497,13 +542,35 @@ void ebase_line_feed(ebase_line_reader_t *r, const void *bytes, size_t length,
     for (size_t i = 0; i < length; ++i) {
         unsigned char c = input[i];
         if (c == '\n') {
-            r->data[r->length] = '\0';
-            if (r->discard || r->length) handler(r->discard ? NULL : r->data, r->discard ? 0 : r->length, context);
-            r->length = 0;
-            r->discard = false;
+            if (r->discard) handler(NULL, 0, context);
+            else if (r->length) {
+                r->data[r->length] = '\0';
+                handler(r->data, r->length, context);
+            }
+            ebase_line_release(r);
         } else if (!r->discard) {
-            if (!c || r->length == EBASE_LINE_LIMIT) { r->length = 0; r->discard = true; }
-            else r->data[r->length++] = (char)c;
+            if (!c || r->length == EBASE_LINE_LIMIT) {
+                ebase_line_release(r);
+                r->discard = true;
+                continue;
+            }
+            if (r->length + 1U >= r->capacity) {
+                size_t capacity = r->capacity ? r->capacity * 2U : 64U;
+                if (capacity > EBASE_LINE_LIMIT + 1U) capacity = EBASE_LINE_LIMIT + 1U;
+                char *data = malloc(capacity);
+                if (!data) {
+                    ebase_line_release(r);
+                    r->discard = true;
+                    continue;
+                }
+                if (r->length) memcpy(data, r->data, r->length);
+                size_t used = r->length;
+                ebase_line_release(r);
+                r->data = data;
+                r->capacity = capacity;
+                r->length = used;
+            }
+            r->data[r->length++] = (char)c;
         }
     }
 }

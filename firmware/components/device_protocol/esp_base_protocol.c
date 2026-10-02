@@ -187,7 +187,7 @@ static bool fingerprint_product_uninstall(
 static bool fingerprint_product_package(const ebase_command_t *command,
                                         uint8_t fingerprint[32])
 {
-    const ebase_product_package_request_t *request = &command->product_package;
+    const ebase_product_package_request_t *request = command->product_package;
     const char *domain = command->kind == EBASE_PRODUCT_INSTALL_COMMAND ?
                          "product.install" : "product.upgrade";
     psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
@@ -1458,7 +1458,7 @@ static void finish_product_without_worker(size_t slot, ebase_product_ledger_t *l
 
 static void handle_product_package(size_t slot, const ebase_command_t *command)
 {
-    const ebase_product_package_request_t *request = &command->product_package;
+    const ebase_product_package_request_t *request = command->product_package;
     const ebase_product_kind_t kind = command->kind == EBASE_PRODUCT_INSTALL_COMMAND ?
         EBASE_PRODUCT_INSTALL : EBASE_PRODUCT_UPGRADE;
     if (s_product_active) {
@@ -1619,7 +1619,7 @@ static void handle_product_package(size_t slot, const ebase_command_t *command)
 
 static void handle_product_uninstall(size_t slot, const ebase_command_t *command)
 {
-    const ebase_product_uninstall_request_t *request = &command->product_uninstall;
+    const ebase_product_uninstall_request_t *request = command->product_uninstall;
     if (esp_base_control_state_ota_pending(&s_control_state)) {
         save_outcome(slot, "failed", "ota_verification_pending", false); return;
     }
@@ -1749,7 +1749,7 @@ static void handle_product_uninstall(size_t slot, const ebase_command_t *command
 
 static void handle_command_line(const char *line, size_t length, ebase_command_t *command)
 {
-    const char *error = ebase_parse_command(line, length, command);
+    const char *error = ebase_parse_command(line, length, command, protocol_work_alloc);
     if (error) { reply(command->request.request_id, "failed", error, NULL); return; }
     if (command->kind == EBASE_STATUS) {
         status_snapshot_t current = snapshot();
@@ -1834,13 +1834,13 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     if (command->kind == EBASE_CONFIG_SET) {
-        if (!esp_base_remote_config_with_canonical_bytes(&command->config,
+        if (!esp_base_remote_config_with_canonical_bytes(command->config,
                 fingerprint_config_bytes, command->request.fingerprint)) {
             reply(command->request.request_id, "failed", "resource_failure", NULL); return;
         }
     }
     if (command->kind == EBASE_PRODUCT_UNINSTALL_COMMAND &&
-        !fingerprint_product_uninstall(&command->product_uninstall,
+        !fingerprint_product_uninstall(command->product_uninstall,
                                        command->request.fingerprint)) {
         reply(command->request.request_id, "failed", "resource_failure", NULL);
         return;
@@ -1848,8 +1848,8 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     if ((command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
          command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) &&
         !esp_base_product_package_source_request_valid(
-            command->product_package.package_url,
-            command->product_package.package_size_bytes)) {
+            command->product_package->package_url,
+            command->product_package->package_size_bytes)) {
         reply(command->request.request_id, "failed", "invalid_request", NULL);
         return;
     }
@@ -1860,7 +1860,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     if (command->kind == EBASE_OTA_START) {
-        if (!fingerprint_ota_request(&command->ota, command->request.fingerprint)) {
+        if (!fingerprint_ota_request(command->ota, command->request.fingerprint)) {
             reply(command->request.request_id, "failed", "resource_failure", NULL); return;
         }
     }
@@ -1896,16 +1896,16 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     }
     if (command->kind == EBASE_OTA_START) {
         if (!eota_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
-        if (command->ota.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
+        if (command->ota->package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
             !esp_base_product_package_source_request_valid(
-                command->ota.package_url, command->ota.package_size_bytes)) {
+                command->ota->package_url, command->ota->package_size_bytes)) {
             save_outcome(slot, "failed", "invalid_request", false); return;
         }
         eota_image_t candidate = {
-            .image_url = command->ota.image_url,
-            .image_size_bytes = command->ota.image_size_bytes,
+            .image_url = command->ota->image_url,
+            .image_size_bytes = command->ota->image_size_bytes,
         };
-        memcpy(candidate.sha256, command->ota.sha256, sizeof candidate.sha256);
+        memcpy(candidate.sha256, command->ota->sha256, sizeof candidate.sha256);
         if (eota_validate_image_request(&candidate) != EOTA_UPDATE_OK) {
             save_outcome(slot, "failed", "invalid_request", false); return;
         }
@@ -1915,7 +1915,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
         if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
         if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
-        if (!esp_base_container_product_ota_ready(command->ota.package_mode)) {
+        if (!esp_base_container_product_ota_ready(command->ota->package_mode)) {
             save_outcome(slot, "failed", "product_ota_unavailable", false); return;
         }
         if (!esp_base_wifi_ready()) { save_outcome(slot, "failed", "network_unavailable", false); return; }
@@ -1925,7 +1925,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         }
         esp_base_ota_receipt_snapshot_t snapshot = {0};
         if (!esp_base_container_product_snapshot_for_ota(
-                &s_ota_storage_claim, &command->ota, &snapshot)) {
+                &s_ota_storage_claim, command->ota, &snapshot)) {
             const bool released = esp_base_storage_release(&s_ota_storage_claim);
             if (!released) s_config_uncertain = true;
             save_outcome(slot, released ? "failed" : "unknown",
@@ -1933,7 +1933,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             return;
         }
         const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(
-            s_context.device_id, &command->ota, &snapshot);
+            s_context.device_id, command->ota, &snapshot);
         if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
             const char *receipt_error = receipt == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
                 receipt == ESP_BASE_OTA_RECEIPT_CONFLICT ? "ota_operation_conflict" :
@@ -1953,7 +1953,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
                          uncertain ? "storage_uncertain" : receipt_error, false);
             return;
         }
-        s_ota_request = command->ota;
+        s_ota_request = *command->ota;
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
@@ -1964,7 +1964,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
             memset(&s_ota_request, 0, sizeof s_ota_request);
-            if (esp_base_ota_receipt_record_failure(s_context.device_id, command->ota.operation_id,
+            if (esp_base_ota_receipt_record_failure(s_context.device_id, command->ota->operation_id,
                     EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
                 esp_base_storage_release(&s_ota_storage_claim)) {
                 save_outcome(slot, "failed", "resource_failure", false);
@@ -1980,18 +1980,18 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     const char *write_error = restart_write_error();
     if (write_error) { save_outcome(slot, "failed", write_error, false); return; }
     if (command->kind == EBASE_CONFIG_SET) {
-        if (command->config.revision != s_context.config.revision) {
+        if (command->config->revision != s_context.config.revision) {
             save_outcome(slot, "failed", "revision_conflict", false); return;
         }
-        if (command->config.revision == UINT32_MAX) { save_outcome(slot, "failed", "revision_exhausted", false); return; }
-        if (command->config.frp.configured && s_context.frp_flash_store == NULL) {
+        if (command->config->revision == UINT32_MAX) { save_outcome(slot, "failed", "revision_exhausted", false); return; }
+        if (command->config->frp.configured && s_context.frp_flash_store == NULL) {
             save_outcome(slot, "failed", "frp_storage_unavailable", false); return;
         }
-        s_candidate = protocol_work_alloc(sizeof *s_candidate);
-        if (s_candidate == NULL) {
-            save_outcome(slot, "failed", "resource_failure", false); return;
-        }
-        *s_candidate = command->config;
+        /* Transfer the validated config to its trial owner. The command no
+         * longer owns it, and later parsing cannot erase the active trial. */
+        s_candidate = command->config;
+        command->payload = NULL;
+        command->payload_size_bytes = 0U;
         s_trial_slot = slot;
         s_trial_deadline = uptime_ms() + 20000;
         save_outcome(slot, "running", NULL, false);
@@ -2028,8 +2028,9 @@ static void handle_line(const char *line, size_t length, void *context)
         reply("", "failed", "resource_failure", NULL);
         return;
     }
-    handle_command_line(line, length, command);
     memset(command, 0, sizeof *command);
+    handle_command_line(line, length, command);
+    ebase_command_release(command);
     free(command);
 }
 
@@ -2077,6 +2078,7 @@ static void feed_serial(const unsigned char *bytes, size_t count)
         ebase_line_feed(s_reader, &c, 1, handle_line, NULL);
         if (c == '\n' || s_reader->discard) {
             const bool discard = s_reader->discard;
+            ebase_line_release(s_reader);
             free(s_reader);
             s_reader = NULL;
             /* ebase_line_feed reports an invalid line only at LF. Preserve
@@ -2084,6 +2086,15 @@ static void feed_serial(const unsigned char *bytes, size_t count)
             if (discard) s_serial_discard = true;
         }
     }
+}
+
+static void expire_serial_input(uint64_t now, uint64_t last_input)
+{
+    if (s_reader == NULL || !s_reader->length || now - last_input < 2000U) return;
+    ebase_line_release(s_reader);
+    free(s_reader);
+    s_reader = NULL;
+    s_serial_discard = true; /* Never interpret a timed-out tail as a command. */
 }
 
 static void poll_network_owners(uint64_t now)
@@ -2163,11 +2174,7 @@ static void control_task(void *argument)
         poll_mqtt_restart(uptime_ms());
         poll_frp_restart(uptime_ms());
         if (now >= next_report) { reported(); next_report = now + 5000; }
-        if (s_reader != NULL && s_reader->length && now - last_input >= 2000) {
-            free(s_reader);
-            s_reader = NULL;
-            s_serial_discard = true; /* Never interpret a timed-out tail as a command. */
-        }
+        expire_serial_input(now, last_input);
         size_t count = 0;
         // Read from the selected console VFS without blocking the control loop.
         // The C3 USB FIFO backpressures the host; UART0 has no such guarantee
@@ -2234,14 +2241,9 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     if (error != ESP_OK) {
         ESP_LOGW("base_wifi", "ESP_BASE_WIFI_UNAVAILABLE error=%s", esp_err_to_name(error));
     }
-    /* ESP32 product queries and mutations verify the signed firmware set on
-     * this task, including the SDK image verifier. The signed QEMU uninstall
-     * path overflows at 6144 bytes and completes at 8192 bytes. */
-#if defined(CONFIG_IDF_TARGET_ESP32)
+    /* Signed C3 joint OTA reached only 352 free stack bytes at 6144.
+     * Both targets reserve 8192 for the complete SDK verification call path. */
     const uint32_t control_stack_bytes = 8192;
-#else
-    const uint32_t control_stack_bytes = 6144;
-#endif
     if (xTaskCreate(control_task, "base_control", control_stack_bytes, NULL, 5, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

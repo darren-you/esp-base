@@ -82,6 +82,19 @@ fi
   "$ROOT/tests/command_decoder_test.c" -lm -o "$BUILD_DIR/command_decoder_test"
 printf 'esp-base host tests\n  command_guard  passed\n'
 "$BUILD_DIR/command_decoder_test"
+# Inject allocation failures only into the decoder; cJSON keeps its allocator.
+"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -Dmalloc=ebase_line_test_malloc -Dfree=ebase_line_test_free \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
+  -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" -I "$CJSON_DIR" \
+  -c "$ROOT/components/device_protocol/command_decoder.c" -o "$BUILD_DIR/command_decoder_injected.o"
+"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
+  -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" -I "$CJSON_DIR" \
+  "$ROOT/components/device_protocol/command_guard.c" "$ROOT/components/remote_config/config_codec.c" \
+  "$BUILD_DIR/command_decoder_injected.o" "$BUILD_DIR/cJSON.o" \
+  "$ROOT/tests/command_allocation_test.c" -lm -o "$BUILD_DIR/command_allocation_test"
+"$BUILD_DIR/command_allocation_test"
 printf '  hardware       not used\n'
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/remote_config/include" \

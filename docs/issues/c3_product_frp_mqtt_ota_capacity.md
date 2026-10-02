@@ -1,5 +1,7 @@
 # C3 产品、FRP、MQTT 与联合 OTA 组合缺口
 
+后续进展：稳定 run_id 已闭合[第三 boot 登录冲突](../operations/c3_five_capability_run_id_checkpoint.md)。[命令内存与控制栈第二轮](../operations/c3_command_memory_checkpoint.md)的联合功能及原代码恢复通过，控制栈最低余量 2400 B；来源 OTA 历史 heap 11404 B／采样连续块 16384 B 仍不足。以下保留原始失败输入和结果，不覆盖旧收据。
+
 2026-10-02，原始 Base、正式分区及现有精确依赖，在同一 C3 上完成来源产品、FRP/MQTT 在线、公开 WRITE 联合 OTA 和目标产品确认；整轮因随后再次重启的 FRP 登录拒绝停止，且实际内存低水明确未达到 48 KiB。两个问题分别记录，不能把登录拒绝归因于内存不足。
 
 ## 输入与范围

@@ -79,7 +79,7 @@ static unsigned frp_configures, frp_polls, listener_configures, listener_polls;
 static bool fake_frp_response_pending;
 static bool mqtt_restart_enqueue_ok, mqtt_restart_acknowledged;
 static unsigned mqtt_restart_result_calls;
-const char *ebase_parse_command_real(const char *, size_t, ebase_command_t *);
+const char *ebase_parse_command_real(const char *, size_t, ebase_command_t *, ebase_command_alloc_t);
 const char *ebase_parse_frp_status_real(const char *, size_t, ebase_request_t *);
 static esp_err_t mqtt_revoke_result;
 static bool ota_source_package_present, ota_source_snapshot_changed, ota_package_receipt_changed;
@@ -91,6 +91,7 @@ static unsigned iram_work_allocations;
 
 static void reset_case(void)
 {
+    ebase_line_release(s_reader);
     free(s_reader);
     s_reader = NULL;
     s_serial_discard = false;
@@ -1254,6 +1255,14 @@ int main(void)
     assert(s_reader != NULL && s_reader->length == 9U && !s_serial_discard);
     feed_serial((const unsigned char *)"\n", 1U);
     assert(s_reader == NULL && !s_serial_discard && !s_trial_active);
+    feed_serial((const unsigned char *)"config-20", 9U);
+    assert(s_reader != NULL && s_reader->data != NULL);
+    expire_serial_input(2099U, 100U);
+    assert(s_reader != NULL && !s_serial_discard);
+    expire_serial_input(2100U, 100U);
+    assert(s_reader == NULL && s_serial_discard);
+    feed_serial((const unsigned char *)"discarded-tail\nconfig-24\n", 25U);
+    assert(s_reader == NULL && !s_serial_discard && !s_trial_active);
     unsigned char invalid[EBASE_LINE_LIMIT + 1U];
     memset(invalid, 'x', sizeof invalid);
     feed_serial(invalid, sizeof invalid);
@@ -1277,6 +1286,8 @@ int main(void)
     assert(!s_trial_active && s_candidate == NULL && config_commit_calls == 1U &&
            s_context.config.revision == 8U && wifi_apply_calls == 1U);
 #if defined(CONFIG_IDF_TARGET_ESP32)
+    /* Header, transferred config and commit workspace preserve ESP32 IRAM
+     * ownership without allocating a duplicate candidate. */
     assert(iram_work_allocations == 3U);
 #endif
 
@@ -1556,13 +1567,14 @@ int main(void)
     return 0;
 }
 
-const char *ebase_parse_command(const char *line, size_t length, ebase_command_t *out)
+const char *ebase_parse_command(const char *line, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate)
 {
     if (line == NULL) {
         memset(out, 0, sizeof *out);
         return "invalid_request";
     }
-    if (length && line[0] == '{') return ebase_parse_command_real(line, length, out);
+    if (length && line[0] == '{') return ebase_parse_command_real(line, length, out, allocate);
     unsigned number = 0;
     const bool configure = length > 7U && sscanf(line, "config-%u", &number) == 1;
     const bool query = length > 7U && sscanf(line, "result-%u", &number) == 1;
@@ -1583,33 +1595,45 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
                 product_package_command ? (number < 50U ?
                     EBASE_PRODUCT_INSTALL_COMMAND : EBASE_PRODUCT_UPGRADE_COMMAND) :
                 product_uninstall_command ? EBASE_PRODUCT_UNINSTALL_COMMAND : EBASE_OTA_START;
+    const size_t payload_size = configure ? sizeof *out->config :
+        query || product_query ? ESP_BASE_OTA_OPERATION_ID_BYTES :
+        product_status_query ? 0U :
+        product_package_command ? sizeof *out->product_package :
+        product_uninstall_command ? sizeof *out->product_uninstall : sizeof *out->ota;
+    if (payload_size) {
+        out->payload = allocate(payload_size);
+        if (!out->payload) return "resource_failure";
+        out->payload_size_bytes = payload_size;
+        memset(out->payload, 0, payload_size);
+    }
     snprintf(out->request.request_id, sizeof out->request.request_id,
              "11111111-1111-4111-8111-%012u",
              product_package_command && (number == 41U || number == 46U) ? 40U : number);
     strcpy(out->request.device_id, "22222222-2222-4222-8222-222222222222");
     strcpy(out->request.boot_id, "33333333-3333-4333-8333-333333333333");
     out->request.expires_at_ms = 10000;
+    if (product_status_query) return NULL;
     if (configure) {
-        out->config.revision = 7U;
-        out->config.frp.configured = true;
-        out->config.wifi.configured = true;
+        out->config->revision = 7U;
+        out->config->frp.configured = true;
+        out->config->wifi.configured = true;
         return NULL;
     }
     if (query || product_query) {
-        snprintf(out->operation_id, sizeof out->operation_id,
+        snprintf(out->operation_id, ESP_BASE_OTA_OPERATION_ID_BYTES,
                  "44444444-4444-4444-8444-%012u", number);
         return NULL;
     }
     if (product_uninstall_command) {
-        strcpy(out->product_uninstall.operation_id,
+        strcpy(out->product_uninstall->operation_id,
                "44444444-4444-4444-8444-000000000001");
-        out->product_uninstall.operation_sequence = number == 34U ? 2U : 1U;
-        out->product_uninstall.expected_container_sequence = 6U;
-        memset(out->product_uninstall.package_sha256, 0x7b, 32);
+        out->product_uninstall->operation_sequence = number == 34U ? 2U : 1U;
+        out->product_uninstall->expected_container_sequence = 6U;
+        memset(out->product_uninstall->package_sha256, 0x7b, 32);
         return NULL;
     }
     if (product_package_command) {
-        ebase_product_package_request_t *package = &out->product_package;
+        ebase_product_package_request_t *package = out->product_package;
         strcpy(package->operation_id, "44444444-4444-4444-8444-000000000040");
         package->operation_sequence = 1U;
         package->expected_container_sequence = 6U;
@@ -1629,21 +1653,21 @@ const char *ebase_parse_command(const char *line, size_t length, ebase_command_t
             "https://packages.example.test/a.pkg");
         return NULL;
     }
-    snprintf(out->ota.operation_id, sizeof out->ota.operation_id,
+    snprintf(out->ota->operation_id, sizeof out->ota->operation_id,
              "44444444-4444-4444-8444-%012u", number);
-    strcpy(out->ota.image_url, "https://example.invalid/signed.bin");
-    out->ota.image_size_bytes = 4096;
-    memset(out->ota.sha256, 0x5a, sizeof out->ota.sha256);
+    strcpy(out->ota->image_url, "https://example.invalid/signed.bin");
+    out->ota->image_size_bytes = 4096;
+    memset(out->ota->sha256, 0x5a, sizeof out->ota->sha256);
     if (number == 85U || number == 86U || number == 87U) {
-        out->ota.package_mode = number == 85U ? ESP_BASE_OTA_PACKAGE_REUSE :
+        out->ota->package_mode = number == 85U ? ESP_BASE_OTA_PACKAGE_REUSE :
                                 ESP_BASE_OTA_PACKAGE_WRITE;
-        out->ota.package_size_bytes = 10240U;
-        out->ota.guest_abi_version = 2U;
-        out->ota.data_schema_version = 1U;
-        memset(out->ota.package_sha256, 0x7b, 32);
-        memset(out->ota.trial_event_sha256, 0x22, 32);
+        out->ota->package_size_bytes = 10240U;
+        out->ota->guest_abi_version = 2U;
+        out->ota->data_schema_version = 1U;
+        memset(out->ota->package_sha256, 0x7b, 32);
+        memset(out->ota->trial_event_sha256, 0x22, 32);
         if (number != 85U)
-            strcpy(out->ota.package_url, number == 87U ?
+            strcpy(out->ota->package_url, number == 87U ?
                    "http://packages.example.test/a.pkg" :
                    "https://packages.example.test/a.pkg");
     }
