@@ -50,3 +50,7 @@ ESP Tool 受限、Git 忽略的 `c3-validation-20261002/rtc-config-ownership-c3`
 最新基线的私有候选归档为 `335d49b375b9811ba7bce639bffbf1f1d502a7b8df32f2cd9d72cee9fab83965`。两个目标的普通构建、完整 host 回归、测试键签名、官方验签及 C3 A／C 实验构建均通过；重新原生生成的两份目标锁与此父提交逐字节一致。119 份软件制品及原始日志的索引为 `1ce00d537229e88287a932fdf42f173b5eddde7048ece0ed2c102dae243febca`，归档为 `88cb1db890cfcaf0e6cdb20b186b409aab83ec75414b4fa08bfcdd8531db3f82`，完整回读核对。该复核没有再次写设备；C3 功能及容量仍引用上文受测源码字节相同的实板轮。
 
 当前精确基线的软件与 Main 合入摘要另冻结为 130 份，保存于 ESP Tool 私有 `c3-validation-20261002/rtc-config-current-naming-software`；索引为 `d7c27693d7dc7527bf0fadc0cb2350931451cd111dfc6f318a4d2d4e7b63912f`。该索引独立于前两轮实板索引，全部文件摘要与原生两锁再次核对。
+
+## 后续分配诊断
+
+三轮仓外探针在当前精确基线上完成 C3 联合功能及恢复，指定较大 TLS 分配、真实调用位置和释放已有新证据；原生 ALL 轮溢出，完整资源总门继续开放。详见[OTA 分配诊断](ota_allocation_diagnostic_checkpoint.md)。本页正常固件的独立实测和原索引保持。
