@@ -49,7 +49,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: 879ef676d7bbc241d2b6a6a981bebf767381b9b58ef740a73cf6c75347414158
+    component_hash: cbb11f97b3230be35bade3ba3de43ea87bd06eb975002b602991b23be42b2622
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -57,7 +57,7 @@ dependencies:
       git: https://github.com/esp-space/esp-mqtt.git
       path: .
       type: git
-    version: ee11ed365c9f3c76a2074f5d29011b818d5b68c9
+    version: f32335852d6f823c1a3b130bfbe3a7ac4499e10a
   wasm-micro-runtime:
     component_hash: d68663bda3f3b42ddfb2657d6576d7a46c440fa392e86de0c9debba2ca04cd6c
     dependencies:
@@ -81,6 +81,6 @@ direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: 750a65307aa2e4e7c60b1ff3eade2a3b67df4044383fbd826ce8f88486b11601
+manifest_hash: ed73dc1800b09e17b30ebca14bd117b3ef08f865caf7d83a46936a6166a6ab0f
 target: esp32
 version: 3.0.0
