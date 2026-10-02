@@ -19,6 +19,6 @@ Base owner 的 ASan/UBSan 回归核对请求 run ID 等于既有 client_id。固
 
 ## 实板与容量边界
 
-C3 联合 WRITE OTA／MQTT 重启后的 FRP 恢复将使用新签名实验镜像复测。先前[五能力失败](../issues/c3_product_frp_mqtt_ota_capacity.md)的 109 份证据和数据丢弃／原代码恢复结果保持不变，不用软件测试改写实板结论。
+C3 联合 WRITE OTA／MQTT 重启后的 FRP 恢复已用新签名实验镜像完成代表业务功能复测，见[实板检查点](c3_five_capability_run_id_checkpoint.md)。先前[五能力失败](../issues/c3_product_frp_mqtt_ota_capacity.md)的 109 份证据和数据丢弃／原代码恢复结果保持不变，不用软件测试改写实板结论。
 
 身份修正不代表容量优化。此前来源下载最低普通 heap 为 6500 B，48 KiB 门未通过；最大记录、MQTT 满队列、连续块、任务栈、两板、掉电、72 小时及生产入口继续开放。

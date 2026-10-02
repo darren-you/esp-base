@@ -42,3 +42,7 @@ ESP Tool 私有 `c3-validation-20261002/five-capability-write-first-failed` 保�
 ## 稳定身份软件修正续进
 
 2026-10-02，Base 已接入公开 FRP 0.2.0 的调用方稳定请求 run ID，并用已有设备 UUID，不增加持久元数据。官方 FRPS 鉴权先于替换的 host 回归、固定 SDK 双目标及 Base owner 回归通过；详情见[接线检查点](../operations/frp_stable_run_id_checkpoint.md)。本页原失败证据保持，实板重测与容量尚未通过。
+
+## 实板修正与容量续进
+
+2026-10-02，公开稳定 run ID 接线在 C3 的一次 WRITE 联合 OTA、一次 MQTT restart 中完成目标与第三 boot 的 FRP 恢复，十二项业务检查、卸载和代码恢复通过。143 份新成功证据索引为 `effd1620aa917549bd660eb246e00b050f48e80fc0747a630be06b80f2da2988`；本页原 109 份失败保持。新来源下载的 88 份采样全部 MQTT／FRP ready，最低本次 free 为 9080 B、最低历史为 4124 B，容量仍失败。具体边界见[联合检查点](../operations/c3_five_capability_run_id_checkpoint.md)。
