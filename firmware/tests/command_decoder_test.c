@@ -170,6 +170,42 @@ static void product_status_tests(void)
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.status\",\"extra\":1}");
     ebase_command_release(&out);
 }
+static void product_run_tests(void)
+{
+    const char *format = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\","
+        "\"command\":\"product.%s\",\"device_id\":\"" DEVICE "\","
+        "\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,"
+        "\"parameters\":{\"expected_container_sequence\":%s,\"package_sha256\":\"%s\"%s}}";
+    char json[600], digest[65];
+    memset(digest, 'a', 64U); digest[64] = '\0';
+    ebase_command_t out = {0};
+    for (unsigned start = 0; start < 2U; ++start) {
+        const char *command = start ? "start" : "stop";
+        assert(snprintf(json, sizeof json, format, command, "4294967295", digest, "") > 0);
+        assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
+               out.kind == (start ? EBASE_PRODUCT_START_COMMAND : EBASE_PRODUCT_STOP_COMMAND) &&
+               out.product_run->expected_container_sequence == UINT32_MAX &&
+               out.product_run->package_sha256[0] == 0xaaU);
+        const char *bad[] = {"0", "4294967296", "1.5", "true", "null"};
+        for (size_t index = 0; index < sizeof bad / sizeof *bad; ++index) {
+            assert(snprintf(json, sizeof json, format, command, bad[index], digest, "") > 0);
+            reject(json);
+        }
+        const char *extra[] = {",\"operation_id\":\"" REQUEST "\"",
+                              ",\"operation_sequence\":1", ",\"extra\":1",
+                              ",\"expected_container_sequence\":6"};
+        for (size_t index = 0; index < sizeof extra / sizeof *extra; ++index) {
+            assert(snprintf(json, sizeof json, format, command, "6", digest, extra[index]) > 0);
+            reject(json);
+        }
+    }
+    memset(digest, '0', 64U);
+    assert(snprintf(json, sizeof json, format, "stop", "6", digest, "") > 0); reject(json);
+    digest[0] = 'A';
+    assert(snprintf(json, sizeof json, format, "start", "6", digest, "") > 0); reject(json);
+    ebase_command_release(&out);
+}
+
 static void product_uninstall_tests(void)
 {
     const char *format =
@@ -352,6 +388,7 @@ int main(void)
     ota_result_tests();
     product_result_tests();
     product_status_tests();
+    product_run_tests();
     product_uninstall_tests();
     product_package_tests();
     frp_status_tests();

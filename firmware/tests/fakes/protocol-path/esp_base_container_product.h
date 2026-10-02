@@ -15,6 +15,15 @@ typedef enum {
 esp_base_container_boot_result_t esp_base_container_product_boot(
     const esp_base_storage_claim_t *claim, const char boot_id[37]);
 typedef enum {
+    ESP_BASE_CONTAINER_RUN_COMPLETE = 0,
+    ESP_BASE_CONTAINER_RUN_REJECTED,
+    ESP_BASE_CONTAINER_RUN_BUSY,
+    ESP_BASE_CONTAINER_RUN_UNCERTAIN,
+} esp_base_container_run_result_t;
+esp_base_container_run_result_t esp_base_container_product_set_running(
+    const esp_base_storage_claim_t *claim, bool running, const char boot_id[37],
+    uint32_t expected_sequence, const uint8_t package_sha256[32]);
+typedef enum {
     ESP_BASE_CONTAINER_UNINSTALL_COMPLETE = 0,
     ESP_BASE_CONTAINER_UNINSTALL_NOT_CONFIGURED,
     ESP_BASE_CONTAINER_UNINSTALL_REJECTED,

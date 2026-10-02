@@ -184,12 +184,16 @@ def status(port):
         return value
 
 
-def product_result(port, current, operation_id):
+def product_result(port, current, operation_id, deadline=None):
     canonical_id(operation_id)
+    if deadline is None:
+        deadline = time.monotonic() + 5
+    if time.monotonic() >= deadline:
+        raise TimeoutError("产品结果查询期限已到；状态为 unknown，不自动重发写命令")
     request_id = str(uuid.uuid4())
     send(port, {"protocol_version": 1, "request_id": request_id,
                 "command": "product.result", "parameters": {"operation_id": operation_id}})
-    for value in read_result(port, request_id, time.monotonic() + 5):
+    for value in read_result(port, request_id, deadline):
         if value["device_id"] != current["device_id"] or value["boot_id"] != current["boot_id"]:
             raise ValueError("产品结果来自另一设备或启动；状态为 unknown")
         result = value["result"]
@@ -198,17 +202,31 @@ def product_result(port, current, operation_id):
                 raise ValueError("产品结果 operation_id 不匹配；状态为 unknown")
             sequence = result.get("operation_sequence")
             container_sequence = result.get("container_sequence")
+            kind = result.get("kind")
+            if (type(container_sequence) is not int or
+                    not 1 <= container_sequence <= 4294967295 or not isinstance(kind, str)):
+                raise ValueError("设备产品结果字段无效；状态为 unknown")
+            if kind in {"stop", "start"}:
+                if (set(result) != {"operation_id", "operation_sequence", "kind", "container_sequence"} or
+                        sequence is not None or
+                        (value["state"] in {"running", "succeeded"} and value["error_code"] is not None) or
+                        (value["state"] == "unknown" and value["error_code"] not in {
+                            "product_state_uncertain", "storage_uncertain"}) or
+                        value["state"] not in {"running", "succeeded", "failed", "unknown"}):
+                    raise ValueError("设备本次启动产品结果字段无效；状态为 unknown")
+                return value
             code = result.get("result_code")
             digest = result.get("package_sha256")
-            if (type(sequence) is not int or not 1 <= sequence <= 4294967295 or
-                    type(container_sequence) is not int or not 1 <= container_sequence <= 4294967295 or
+            if (set(result) != {"operation_id", "operation_sequence", "kind", "package_sha256",
+                               "container_sequence", "result_code"} or
+                    type(sequence) is not int or not 1 <= sequence <= 4294967295 or
                     type(code) is not int or not 0 <= code <= 255 or
-                    result.get("kind") not in {"install", "upgrade", "uninstall"} or
+                    kind not in {"install", "upgrade", "uninstall"} or
                     not isinstance(digest, str) or len(digest) != 64 or
                     any(char not in "0123456789abcdef" for char in digest)):
                 raise ValueError("设备产品结果字段无效；状态为 unknown")
         elif value["state"] != "unknown":
-            raise ValueError("设备产品结果缺少持久证据；状态为 unknown")
+            raise ValueError("设备产品结果缺少操作证据；状态为 unknown")
         return value
 
 
@@ -457,6 +475,79 @@ def product_status(port, current):
                     active["guest_abi_version"] != package_abi or active["data_schema_version"] != schema):
                 raise ValueError("活动产品与确认绑定不一致；状态为 unknown")
         return value
+
+
+def product_lifecycle(port, current, command, operation_id,
+                      expected_container_sequence, expected_package_sha256):
+    canonical_id(operation_id)
+    if (command not in {"product.stop", "product.start"} or
+            type(expected_container_sequence) is not int or
+            not 1 <= expected_container_sequence <= 4294967295 or
+            not isinstance(expected_package_sha256, str) or
+            re.fullmatch(r"[0-9a-f]{64}", expected_package_sha256) is None or
+            expected_package_sha256 == "0" * 64):
+        raise ValueError("产品停止／启动前置参数无效；未发送命令")
+    snapshot = product_status(port, current)
+    if snapshot["state"] != "succeeded":
+        raise ValueError("产品绑定不可确认；未发送命令：" + str(snapshot["error_code"]))
+    binding = snapshot["result"]
+    active = binding["active_product"]
+    if (binding["container_sequence"] != expected_container_sequence or
+            binding["package_sha256"] != expected_package_sha256 or
+            binding["pending_operation_id"] is not None or
+            (active is not None and active["is_trial"])):
+        raise ValueError("产品确认绑定与预期不符或仍在试运行；未发送命令")
+    fresh = status(port)
+    if (fresh["device_id"] != current["device_id"] or fresh["boot_id"] != current["boot_id"] or
+            fresh["result"]["uptime_ms"] > 9007199254740991 - 10000):
+        raise ValueError("产品状态查询后设备已重启或期限无效；未发送命令")
+    deadline = time.monotonic() + 30
+    request = {"protocol_version": 1, "request_id": operation_id, "command": command,
+               "device_id": current["device_id"], "target_boot_id": current["boot_id"],
+               "expires_at_uptime_ms": fresh["result"]["uptime_ms"] + 10000,
+               "parameters": {"expected_container_sequence": expected_container_sequence,
+                              "package_sha256": expected_package_sha256}}
+    try:
+        send(port, request)
+        for receipt in read_result(port, operation_id, min(deadline, time.monotonic() + 5)):
+            if receipt["device_id"] != current["device_id"] or receipt["boot_id"] != current["boot_id"]:
+                raise ValueError("产品停止／启动回执来自另一设备或启动；状态为 unknown")
+            if receipt["result"] is not None:
+                raise ValueError("产品停止／启动写回执字段无效；状态为 unknown")
+            if receipt["state"] in {"failed", "expired"}:
+                return receipt
+            if receipt["state"] in {"running", "succeeded", "unknown"}:
+                break
+    except (TimeoutError, OSError):
+        # A partial write or missing receipt cannot prove rejection. Query only.
+        pass
+    unconfirmed = {"protocol_version": 1, "device_id": current["device_id"],
+                   "boot_id": current["boot_id"], "request_id": operation_id,
+                   "state": "unknown", "error_code": "product_lifecycle_result_unconfirmed", "result": None}
+    observed = unconfirmed
+    while time.monotonic() < deadline:
+        try:
+            observed = product_result(port, current, operation_id,
+                                      min(deadline, time.monotonic() + 5))
+        except TimeoutError:
+            pass
+        except OSError:
+            return unconfirmed
+        else:
+            evidence = observed["result"]
+            if evidence is not None:
+                if (evidence["kind"] != command.removeprefix("product.") or
+                        evidence["operation_sequence"] is not None or
+                        evidence["container_sequence"] != expected_container_sequence):
+                    raise ValueError("产品停止／启动结果与原请求不符；状态为 unknown")
+                if observed["state"] in {"succeeded", "failed"}:
+                    return observed
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
+    if observed["state"] == "running":
+        return unconfirmed
+    return observed
 
 
 def product_uninstall(port, current, operation_id, operation_sequence,
@@ -774,10 +865,10 @@ def main():
     parser.add_argument("--ota-target", choices=sorted(OTA_TARGETS), help="固件构建的精确 target")
     parser.add_argument("--ota-package-mode", choices=("no_package", "reuse", "write"),
                         help="ota.start 的联合产品包模式；默认 no_package")
-    parser.add_argument("--operation-sequence", type=int, help="产品写入的持久操作序号")
+    parser.add_argument("--operation-sequence", type=int, help="仅安装、升级或卸载的持久操作序号")
     parser.add_argument("--expected-container-sequence", type=int,
                         help="产品写入的当前 ECS2 序号")
-    parser.add_argument("--expected-package-sha256", help="卸载或升级的当前包 SHA-256")
+    parser.add_argument("--expected-package-sha256", help="卸载、升级、停止或启动的当前确认包 SHA-256")
     parser.add_argument("--package-file", help="安装／升级时用于计算整包摘要和长度的本地签名包")
     parser.add_argument("--trial-event-file", help="安装／升级时绑定随后应发布的原始代表业务事件")
     parser.add_argument("--package-url", help="设备下载同一签名包的 HTTPS URL")
@@ -786,9 +877,11 @@ def main():
     parser.add_argument("--json", action="store_true", help="输出纯 JSON 设备结果")
     parser.add_argument("command", choices=["status", "restart", "config.set", "ota.start", "ota.result", "product.status",
                                             "product.result", "product.uninstall",
-                                            "product.install", "product.upgrade"])
+                                            "product.install", "product.upgrade", "product.stop", "product.start"])
     args = parser.parse_args()
-    product_writes = {"product.uninstall", "product.install", "product.upgrade"}
+    persistent_writes = {"product.uninstall", "product.install", "product.upgrade"}
+    lifecycle_writes = {"product.stop", "product.start"}
+    product_writes = persistent_writes | lifecycle_writes
     package_writes = {"product.install", "product.upgrade"}
     if args.command in {"restart", "config.set", "ota.start"} | product_writes and not args.device_id:
         parser.error("写命令必须指定已核对的 --device-id")
@@ -805,13 +898,18 @@ def main():
     if args.command != "ota.start" and args.ota_package_mode is not None:
         parser.error("--ota-package-mode 只能用于 ota.start")
     ota_package_mode = args.ota_package_mode or "no_package"
-    if args.command in product_writes:
+    if args.command in persistent_writes:
         if args.operation_sequence is None or args.expected_container_sequence is None:
             parser.error("产品写入必须提供操作序号和 Container 序号")
         if args.command != "product.install" and args.expected_package_sha256 is None:
             parser.error("产品升级／卸载必须提供当前包摘要")
         if args.command == "product.install" and args.expected_package_sha256 is not None:
             parser.error("产品安装必须从无包绑定开始")
+    elif args.command in lifecycle_writes:
+        if args.operation_sequence is not None:
+            parser.error("产品停止／启动不接受持久 --operation-sequence")
+        if args.expected_container_sequence is None or args.expected_package_sha256 is None:
+            parser.error("产品停止／启动必须提供当前 Container 序号和确认包摘要")
     elif any(value is not None for value in (args.operation_sequence,
                                              args.expected_container_sequence,
                                              args.expected_package_sha256)):
@@ -879,6 +977,9 @@ def main():
             current = product_uninstall(port, current, args.operation_id,
                                         args.operation_sequence, args.expected_container_sequence,
                                         args.expected_package_sha256)
+        if args.command in lifecycle_writes:
+            current = product_lifecycle(port, current, args.command, args.operation_id,
+                                        args.expected_container_sequence, args.expected_package_sha256)
         if args.command in package_writes:
             current = product_package(port, current, args.command, args.operation_id,
                                       args.operation_sequence, args.expected_container_sequence,
@@ -894,7 +995,13 @@ def main():
             if args.command in product_writes | {"product.result", "ota.start", "ota.result"}:
                 print("  操作  " + args.operation_id)
                 if args.command in product_writes | {"product.result"} and current["result"] is not None:
-                    print("  序号  " + str(current["result"]["operation_sequence"]))
+                    if current["result"]["kind"] in {"stop", "start"}:
+                        print("  作用域  当前启动")
+                        print("  Container 序号  " + str(current["result"]["container_sequence"]))
+                    else:
+                        print("  序号  " + str(current["result"]["operation_sequence"]))
+                if args.command in lifecycle_writes:
+                    print("  后续  当前启动内用原操作 UUID 查询 product.result；不要重发写命令")
                 if args.command == "ota.start":
                     print("  后续  用原操作 UUID 查询 ota.result；不要重发 ota.start")
                 if args.command == "ota.result" and current["result"] is not None:

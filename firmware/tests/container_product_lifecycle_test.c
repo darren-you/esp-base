@@ -697,6 +697,9 @@ static void run_cancel_product(const char *directory, const char *package_name,
             assert(esp_base_container_product_stop_confirmed(&claim));
         } else {
             assert(!s_product.reopen_allowed && !s_product.native_reclaimed);
+            assert(esp_base_container_product_set_running(&claim, true, boot_id,
+                before.sequence, before.bindings[current].package_sha256) ==
+                ESP_BASE_CONTAINER_RUN_REJECTED);
             assert(atomic_load_explicit(&s_product.result, memory_order_acquire) == ESP_BASE_CONTAINER_BLOCKED);
             assert(esp_base_container_product_boot(&claim, boot_id) ==
                    ESP_BASE_CONTAINER_BLOCKED);
@@ -939,6 +942,8 @@ static void run_confirmed_event_failure(const char *directory, bool prepare_firs
            !observation.runtime_ok);
     assert(!esp_base_container_product_stop_confirmed(&claim));
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_BLOCKED);
+    assert(esp_base_container_product_set_running(&claim, true, boot_id,
+        before.container_sequence, before.package_sha256) == ESP_BASE_CONTAINER_RUN_REJECTED);
     uint32_t resolved_sequence = before.container_sequence;
     if (prepare_first) {
         /* A trap between prepare and stop must never start the candidate.
@@ -2902,6 +2907,105 @@ static void run_success_receipt_replay(const file_t *key, const file_t *package,
     assert(pthread_mutex_destroy(&store.mutex) == 0);
 }
 
+
+static void run_public_product_lifecycle(const file_t *key, const file_t *package,
+    const char boot_id[37])
+{
+    configure(key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    uint8_t sha[32];
+    assert(SHA256(package->bytes, package->size, sha) != NULL);
+    assert(esp_base_container_product_set_running(&claim, true, boot_id, 1U, sha) ==
+        ESP_BASE_CONTAINER_RUN_REJECTED);
+    install_context_t install = {.package = package};
+    assert(esp_base_container_with_firmware_set(&claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+        NULL, install_signed, &install) == ECONTAINER_SLOTS_OK);
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+    esp_base_container_binding_snapshot_t binding = {0};
+    assert(esp_base_container_product_binding_snapshot(&claim, &binding) ==
+        ESP_BASE_CONTAINER_BINDING_OK && memcmp(binding.package_sha256, sha, 32U) == 0);
+    const unsigned blob_writes = store.blob_writes, flash_writes = store.flash_writes,
+        flash_erases = store.flash_erases;
+    uint8_t blob[sizeof store.blob], flash[sizeof store.flash];
+    memcpy(blob, store.blob, sizeof blob);
+    memcpy(flash, store.flash, sizeof flash);
+    uint8_t wrong_sha[32]; memcpy(wrong_sha, sha, sizeof sha); wrong_sha[0] ^= 1U;
+    assert(esp_base_container_product_set_running(NULL, false, boot_id,
+        binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_BUSY);
+    assert(esp_base_container_product_set_running(&claim, false, boot_id,
+        binding.container_sequence + 1U, sha) == ESP_BASE_CONTAINER_RUN_REJECTED);
+    assert(esp_base_container_product_set_running(&claim, false, boot_id,
+        binding.container_sequence, wrong_sha) == ESP_BASE_CONTAINER_RUN_REJECTED);
+    assert(esp_base_container_product_set_running(&claim, false,
+        "33333333-3333-4333-8333-333333333333", binding.container_sequence, sha) ==
+        ESP_BASE_CONTAINER_RUN_REJECTED);
+    s_product.trial_mode = true;
+    assert(esp_base_container_product_set_running(&claim, false, boot_id,
+        binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_REJECTED);
+    s_product.trial_mode = false;
+    for (unsigned cycle = 0; cycle < 3U; ++cycle) {
+        assert(esp_base_container_product_set_running(&claim, true, boot_id,
+            binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_COMPLETE);
+        check_active_product(&claim, &expected_confirmed_version, false, NULL);
+        assert(esp_base_container_product_set_running(&claim, false, boot_id,
+            binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_COMPLETE);
+        assert(confirmed_stopped() && s_product.event_count == 0U &&
+            !s_product.guest_call_processing && store.mapping == NULL && !store.locked);
+        assert(esp_base_container_product_set_running(&claim, false, boot_id,
+            binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_COMPLETE);
+        assert(esp_base_container_product_set_running(&claim, true, boot_id,
+            binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_COMPLETE);
+        const uint8_t event[] = {1U, 2U, 3U};
+        assert(offer_event_when_available(sha, 1U, event, sizeof event) ==
+            ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+        for (unsigned attempt = 0; attempt < 200U &&
+             esp_base_container_product_event_progress_count() == 0U; ++attempt)
+            vTaskDelay(1U);
+        esp_base_container_event_observation_t observation = {0};
+        assert(esp_base_container_product_event_observation(&observation) ==
+            ESP_BASE_CONTAINER_EVENT_OBSERVED && observation.runtime_ok &&
+            observation.guest_result == 3);
+    }
+    assert(esp_base_container_product_set_running(&claim, false, boot_id,
+        binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_COMPLETE);
+    /* The package bytes and hash are unchanged. A different valid RSA modulus
+     * must fail the fresh signature verification, proving start does not reuse
+     * the previous open's validation or Wasm instance. */
+    uint8_t *wrong_key = malloc(key->size);
+    assert(wrong_key != NULL);
+    memcpy(wrong_key, key->bytes, key->size);
+    wrong_key[key->size / 2U] ^= 1U;
+    s_product.validation.public_key_rsa_der = wrong_key;
+    assert(esp_base_container_product_set_running(&claim, true, boot_id,
+        binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_UNCERTAIN);
+    s_product.validation.public_key_rsa_der = key->bytes;
+    free(wrong_key);
+    assert(atomic_load(&s_product.result) == ESP_BASE_CONTAINER_BLOCKED &&
+        !s_product.reopen_allowed && !s_product.thread_joinable &&
+        !atomic_load(&s_product.instance_active) && !esp_base_container_product_event_accepting());
+    assert(esp_base_container_product_set_running(&claim, true, boot_id,
+        binding.container_sequence, sha) == ESP_BASE_CONTAINER_RUN_REJECTED);
+    assert(memcmp(blob, store.blob, sizeof blob) == 0 &&
+        memcmp(flash, store.flash, sizeof flash) == 0 && store.blob_writes == blob_writes &&
+        store.flash_writes == flash_writes && store.flash_erases == flash_erases);
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    configure_product(key); /* A new boot uses the exact retained confirmed package. */
+    esp_base_storage_owner_init(&owner);
+    assert(esp_base_storage_claim(&owner, &claim));
+    assert(esp_base_container_product_boot(&claim,
+        "33333333-3333-4333-8333-333333333333") == ESP_BASE_CONTAINER_RUNNING);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+    puts("container_public_lifecycle: exact boot/package/sequence, stop/close/join, fresh RSA verification, events and no persistent writes passed");
+}
+
 int main(int argc, char **argv)
 {
     const uint8_t representative_event[] = {1U, 2U, 3U};
@@ -3015,6 +3119,7 @@ int main(int argc, char **argv)
     assert(esp_base_storage_release(&claim));
     dispose_product();
     assert(pthread_mutex_destroy(&store.mutex) == 0);
+    run_public_product_lifecycle(&key, &package, boot_id);
     run_uninstall_with_fallback(&key, &package, boot_id);
     run_uninstall_uncertain(&key, &package, boot_id, 1U);
     run_uninstall_uncertain(&key, &package, boot_id, 2U);

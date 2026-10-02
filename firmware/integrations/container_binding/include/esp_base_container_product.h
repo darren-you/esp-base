@@ -71,6 +71,21 @@ bool esp_base_container_product_stop_trial(const esp_base_storage_claim_t *claim
 bool esp_base_container_product_stop_confirmed(
     const esp_base_storage_claim_t *claim);
 
+typedef enum {
+    ESP_BASE_CONTAINER_RUN_COMPLETE = 0,
+    ESP_BASE_CONTAINER_RUN_REJECTED,
+    ESP_BASE_CONTAINER_RUN_BUSY,
+    ESP_BASE_CONTAINER_RUN_UNCERTAIN,
+} esp_base_container_run_result_t;
+/* Boot-local public stop/start: preserve the exact confirmed binding and ECS2
+ * sequence. Stop success proves close/join/reclamation; start reopens only a
+ * successfully stopped owner, or observes the same live confirmed instance.
+ * Trial, trap, blocked and failed-stop owners cannot be restarted here.
+ * UNCERTAIN retains the Base claim; no persistence is repaired by this call. */
+esp_base_container_run_result_t esp_base_container_product_set_running(
+    const esp_base_storage_claim_t *claim, bool running, const char boot_id[37],
+    uint32_t expected_sequence, const uint8_t package_sha256[32]);
+
 /* After an EMPTY boot, prove the durable ECS2 record is exactly its initial
  * no-package binding for the currently signed firmware set. A later history,
  * changed firmware identity or unreadable state forbids first ledger creation. */

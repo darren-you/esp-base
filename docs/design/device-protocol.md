@@ -1,6 +1,6 @@
 # 设备控制协议 v1
 
-本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、`product.status`／`product.result`、公开产品安装／升级／卸载、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执。安装／升级会持久登记原操作、下载并验签候选，在同 boot 试运行中等待请求绑定的授权业务事件完成和连续在线稳定窗口；真实 Broker、两块实体板和生产账户尚未验收。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与测试边界见开发检查点。
+本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、`product.status`／`product.result`、公开产品安装／升级／卸载与本次启动内停止／启动、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执。安装／升级会持久登记原操作、下载并验签候选，在同 boot 试运行中等待请求绑定的授权业务事件完成和连续在线稳定窗口；真实 Broker、两块实体板和生产账户尚未验收。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与测试边界见开发检查点。
 
 ## 帧与身份
 
@@ -10,7 +10,7 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 只读 `ota.result` 请求精确包含 `protocol_version:1`、`request_id`、`command:"ota.result"`、`parameters:{"operation_id":"<UUID v4>"}`；它不携带写入期限或目标 boot，允许在新启动后按原 operation ID 读取结果。响应 `request_id` 对应本次查询，`result` 含 `operation_id`、完整 signed bin `sha256`、`image_size_bytes`、固定 `target`、`target_slot`、`package_mode` 和可为 null 的 `package_sha256`；`no_package` 的包摘要必须为 null。设备身份仍以响应的 `device_id` 由调用方核对。
 
-只读 `product.result` 使用相同的四个顶层字段，`command` 为 `product.result`，`parameters` 只含原 `operation_id`。它从 `base_store/base_product/operations` 的持久账本读取最近固定 8 条；已记录结果包含 `operation_id`、`operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与数值 `result_code`。已完成记录返回 `succeeded`／`failed`，未决意图返回 `unknown/product_operation_unresolved`，窗口外旧 ID 或尚未初始化的账本返回 `unknown/product_operation_not_found`，存储不确定返回 `unknown/storage_uncertain`。缺失 NVS 键不能自行重置操作序号并受理写入；启动时仅在签名固件与 ECS2 均证明无历史操作的初始空绑定后建账，历史状态或不确定读回阻断 READY。查询不会触发安装、下载、试运行或重放。持久连续序号阻止窗口外旧请求用原序号重执行；公开安装／升级／卸载仍需设备级验收。
+只读 `product.result` 使用相同的四个顶层字段，`command` 为 `product.result`，`parameters` 只含原 `operation_id`。停止／启动的当前 boot 观察按后文四字段分支读取；安装／升级／卸载从 `base_store/base_product/operations` 的持久账本读取最近固定 8 条；已记录结果包含 `operation_id`、`operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与数值 `result_code`。已完成记录返回 `succeeded`／`failed`，未决意图返回 `unknown/product_operation_unresolved`，窗口外旧 ID 或尚未初始化的账本返回 `unknown/product_operation_not_found`，存储不确定返回 `unknown/storage_uncertain`。缺失 NVS 键不能自行重置操作序号并受理写入；启动时仅在签名固件与 ECS2 均证明无历史操作的初始空绑定后建账，历史状态或不确定读回阻断 READY。查询不会触发安装、下载、试运行或重放。持久连续序号阻止窗口外旧请求用原序号重执行；公开安装／升级／卸载仍需设备级验收。
 
 只读 `product.status` 精确包含 `protocol_version:1`、`request_id`、`command:"product.status"`，没有 `parameters`。在同一 Base 存储占用期内核对签名固件对应的 ECS2 绑定并读取账本，返回 `operation_sequence_high_watermark`、`next_operation_sequence`、`pending_operation_id`、`container_sequence` 与可为 null 的 `package_sha256`；高水位耗尽时下一序号为 null，末条为未决 PREPARED 时返回其原 ID，否则未决 ID 为 null。键缺失返回 `unknown/product_ledger_uninitialized` 且 result 为 null，忙或绑定／存储不确定同样不输出序号。查询不初始化账本，不验证包字节或 guest 健康，也不保证后来写入时序号仍未被另一请求占用；写命令在持久账本上核对连续序号。
 
@@ -34,9 +34,20 @@ USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 N
 
 ## 产品停止与新启动
 
+`product.stop`／`product.start` 沿普通七字段写请求；顶层 `request_id` 同时是本次停止／启动的原操作 ID。`parameters` 精确包含 `expected_container_sequence`（正 uint32，允许最大值）和非零小写 `package_sha256`，绑定当前已确认包。它们不接受 `operation_id` 或 `operation_sequence` 参数，不推进 ECS2 或持久账本序号。USB 与已认证 MQTT 使用相同入口；FRP 管理端点仍只提供 status／restart。
+
+两种命令复用唯一产品 worker、Base 长操作 claim 与现有写守卫；OTA 验证／下载、配置试运行、产品安装／升级试运行或未决持久账本均拒绝冲突操作。同一当前 boot 的原 ID 和规范请求指纹只执行一次；同 ID 更改命令、绑定、期限或参数冲突，固定 32 项请求表满后拒绝，不驱逐旧 ID。结果观察复用现有 outcome 空间，不建立第二份 RAM 或持久账本。
+
+`product.result` 先读取当前 boot 的停止／启动原 ID。对应 `result` 精确为 `operation_id`、nullable `operation_sequence`（必须为 null）、`kind`（stop／start）和 `container_sequence`（原请求绑定的序号，失败结果也不冒充当前状态快照）；包摘要已纳入原请求指纹，不再为每条结果复制摘要。查询返回原动作在现有 outcome 中的 running／succeeded／failed／unknown 结果，不触发动作；跨 boot 没有该 RAM 观察时沿原持久查询返回 unknown／product_operation_not_found。安装／升级／卸载的六字段持久结果保持原合同。
+
+原 ID 在持久三种操作与本 boot 停止／启动之间不得互相占用：停止／启动先沿既有 Flash 短 claim 只读查询 EPRD，已有持久 ID 返回 `product_operation_conflict`；持久写入也拒绝本 boot 已有停止／启动 ID。账本无法一致读取、内存申请失败或重启意图已受理时，未登记停止／启动观察；后续 `product.result` 不伪造四字段结果，沿原持久查询可返回 `unknown/product_operation_not_found`。过期与身份／容量拒绝也不建立该观察。已收到直接拒绝的客户端不再轮询；写回执丢失时只查询原 ID，unknown 不重发。
+
+停止成功须证明 native 回收、线程 join、活动视图与事件入口关闭；启动成功须重新验签装载并完成 init，或证明同一已确认实例已经在运行。已完整停止的同包再次停止可只读成功；trap、启动异常、停止失败或不确定实例不能被 start 自动重开。实际实体停止／启动、两板与 Tool 完整消费者仍待验收。
+
+
 2026-10-02 维护者确认：手动停止只对当前启动生效；重启后自动运行当前固件绑定的已确认产品。停止成功须证明 guest `stop`／`close`、唯一产品线程 join 和 native 实例回收，随后活动产品为空、业务事件入口关闭；已确认包绑定、ECS2 序号、包 Flash 和产品数据保持原样。停止状态仅在本 boot 的 RAM 中，不写持久启动开关，也不将停止登记成安装／升级／卸载操作。
 
-新启动沿普通启动恢复：先对账原 OTA 收据和未决产品操作，再以本次签名固件集合核对 ECS2、重新验签和装载当前已确认包；全部事实成立时自动执行 `init` 并开放授权事件。无包返回空状态；存储、绑定、包或回收事实不确定时继续阻断。当前公开 USB／MQTT 协议尚未实现产品停止／启动命令；已有内部 `esp_base_container_product_stop_confirmed` 与 `product_boot` 满足上述运行合同，公开入口和实体重启链仍需单独验收。
+新启动沿普通启动恢复：先对账原 OTA 收据和未决产品操作，再以本次签名固件集合核对 ECS2、重新验签和装载当前已确认包；全部事实成立时自动执行 `init` 并开放授权事件。无包返回空状态；存储、绑定、包或回收事实不确定时继续阻断。本候选公开 USB／MQTT 停止／启动复用内部 `esp_base_container_product_stop_confirmed` 与 `product_boot`；实体链仍需单独验收。
 
 ## 结果与幂等
 

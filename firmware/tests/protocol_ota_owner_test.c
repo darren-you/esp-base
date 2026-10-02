@@ -13,6 +13,7 @@ struct esp_base_product_package_source { unsigned marker; };
 static esp_base_storage_owner_t owner;
 static uint8_t product_bytes[EBASE_PRODUCT_LEDGER_BYTES];
 static bool product_present;
+static bool product_ledger_read_busy;
 static bool pristine_product_baseline;
 static unsigned pristine_product_calls;
 static esp_base_container_binding_result_t binding_result;
@@ -22,6 +23,9 @@ static unsigned binding_snapshot_calls;
 static esp_base_container_uninstall_result_t product_uninstall_result;
 static esp_base_container_boot_result_t product_boot_result;
 static unsigned product_uninstall_calls, product_boot_calls;
+static esp_base_container_run_result_t product_run_result;
+static unsigned product_run_calls;
+static bool product_run_started;
 static esp_base_container_uninstall_recovery_t product_recovery_result;
 static unsigned product_recovery_calls;
 static esp_base_container_package_recovery_t package_recovery_outcome;
@@ -101,6 +105,7 @@ static void reset_case(void)
     s_context.storage_owner = &owner;
     s_context.flash_io_owner = &owner;
     product_present = false;
+    product_ledger_read_busy = false;
     pristine_product_baseline = false;
     pristine_product_calls = 0;
     binding_result = ESP_BASE_CONTAINER_BINDING_OK;
@@ -110,6 +115,9 @@ static void reset_case(void)
     product_uninstall_result = ESP_BASE_CONTAINER_UNINSTALL_COMPLETE;
     product_boot_result = ESP_BASE_CONTAINER_EMPTY;
     product_uninstall_calls = product_boot_calls = 0;
+    product_run_calls = 0U;
+    product_run_started = false;
+    product_run_result = ESP_BASE_CONTAINER_RUN_COMPLETE;
     product_recovery_result = ESP_BASE_CONTAINER_UNINSTALL_RECOVERY_UNCERTAIN;
     product_recovery_calls = 0;
     package_recovery_outcome = ESP_BASE_CONTAINER_PACKAGE_RECOVERY_UNCERTAIN;
@@ -141,6 +149,8 @@ static void reset_case(void)
     memset(&s_ota_storage_claim, 0, sizeof s_ota_storage_claim);
     free(s_product_request);
     s_product_request = NULL;
+    free(s_product_run_request);
+    s_product_run_request = NULL;
     memset(&s_product_storage_claim, 0, sizeof s_product_storage_claim);
     memset(s_product_operation_id, 0, sizeof s_product_operation_id);
     memset(s_product_fingerprint, 0, sizeof s_product_fingerprint);
@@ -300,6 +310,243 @@ static void initialize_empty_product_ledger(void)
     const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
     assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_UNINITIALIZED);
     assert(ebase_product_ledger_initialize_empty(&ledger, &io) == EBASE_LEDGER_OK);
+}
+
+
+static void product_run_json(unsigned id, bool running, uint32_t sequence,
+    const char *device, const char *boot, uint64_t deadline, unsigned digest_byte)
+{
+    char digest[65], json[700];
+    for (size_t i = 0; i < 32U; ++i)
+        (void)snprintf(digest + i * 2U, 3U, "%02x", digest_byte);
+    const int length = snprintf(json, sizeof json,
+        "{\"protocol_version\":1,\"request_id\":\"55555555-5555-4555-8555-%012u\","
+        "\"command\":\"product.%s\",\"device_id\":\"%s\",\"target_boot_id\":\"%s\","
+        "\"expires_at_uptime_ms\":%llu,\"parameters\":{\"expected_container_sequence\":%u,"
+        "\"package_sha256\":\"%s\"}}", id, running ? "start" : "stop", device,
+        boot, (unsigned long long)deadline, sequence, digest);
+    assert(length > 0 && (size_t)length < sizeof json);
+    s_reply_mqtt = true;
+    handle_line(json, (size_t)length, NULL);
+    s_reply_mqtt = false;
+}
+
+static void product_run(unsigned id, bool running)
+{
+    product_run_json(id, running, binding_sequence, s_context.device_id,
+        s_boot_id, 31000U, 0x7bU);
+}
+
+static void product_run_query(unsigned id)
+{
+    char json[300];
+    const int length = snprintf(json, sizeof json,
+        "{\"protocol_version\":1,\"request_id\":\"66666666-6666-4666-8666-000000000001\","
+        "\"command\":\"product.result\",\"parameters\":{\"operation_id\":"
+        "\"55555555-5555-4555-8555-%012u\"}}", id);
+    assert(length > 0 && (size_t)length < sizeof json);
+    s_reply_mqtt = true;
+    handle_line(json, (size_t)length, NULL);
+    s_reply_mqtt = false;
+}
+
+static void setup_product_run(void)
+{
+    reset_case();
+    product_configured = true;
+    binding_package_present = true;
+    initialize_empty_product_ledger();
+}
+
+static void check_product_run_guard(void)
+{
+    setup_product_run();
+    uint8_t ledger_before[sizeof product_bytes];
+    memcpy(ledger_before, product_bytes, sizeof product_bytes);
+    product_run(1U, false);
+    expect_reply("running", NULL);
+    assert(product_run_calls == 1U && !product_run_started && s_product_active);
+    product_run_query(1U);
+    expect_reply("running", NULL);
+    assert(strstr(latest_reply, "\"operation_sequence\":null") &&
+        strstr(latest_reply, "\"kind\":\"stop\"") &&
+        strstr(latest_reply, "\"container_sequence\":6") &&
+        !strstr(latest_reply, "package_sha256") && !strstr(latest_reply, "result_code"));
+    poll_product();
+    expect_reply("succeeded", NULL);
+    assert(!s_product_active && !s_product_run_request && atomic_load(&owner.active_token) == 0U);
+    product_run(1U, false);
+    expect_reply("succeeded", NULL);
+    assert(product_run_calls == 1U && task_calls == 1U);
+    product_run(1U, true);
+    expect_reply("failed", "request_conflict");
+    product_run_json(1U, false, 7U, s_context.device_id, s_boot_id, 31000U, 0x7bU);
+    expect_reply("failed", "request_conflict");
+    product_run_json(1U, false, 6U, s_context.device_id, s_boot_id, 31000U, 0x7cU);
+    expect_reply("failed", "request_conflict");
+    product_run_json(1U, false, 6U, s_context.device_id, s_boot_id, 31001U, 0x7bU);
+    expect_reply("failed", "request_conflict");
+    product_run_json(1U, false, 6U, s_context.device_id,
+        "77777777-7777-4777-8777-777777777777", 31000U, 0x7bU);
+    expect_reply("failed", "wrong_boot");
+    product_run_json(1U, false, 6U, "77777777-7777-4777-8777-777777777777",
+        s_boot_id, 31000U, 0x7bU);
+    expect_reply("failed", "wrong_device");
+    assert(product_run_calls == 1U && s_guard.count == 1U);
+    product_run(2U, true);
+    expect_reply("running", NULL);
+    poll_product();
+    expect_reply("succeeded", NULL);
+    assert(product_run_started && product_run_calls == 2U &&
+        memcmp(ledger_before, product_bytes, sizeof product_bytes) == 0);
+
+    /* A later durable write cannot take an existing boot-local operation ID. */
+    for (unsigned kind = 0U; kind < 3U; ++kind) {
+        char json[1200], digest[65];
+        for (size_t i = 0; i < 32U; ++i) (void)snprintf(digest + i * 2U, 3U, "7b");
+        const int length = snprintf(json, sizeof json,
+            "{\"protocol_version\":1,\"request_id\":\"88888888-8888-4888-8888-%012u\","
+            "\"command\":\"product.%s\",\"device_id\":\"%s\",\"target_boot_id\":\"%s\","
+            "\"expires_at_uptime_ms\":31000,\"parameters\":{\"operation_id\":"
+            "\"55555555-5555-4555-8555-000000000001\",\"operation_sequence\":1,"
+            "\"expected_container_sequence\":6,\"package_sha256\":\"%s\"%s}}",
+            kind + 1U, kind == 0U ? "install" : kind == 1U ? "upgrade" : "uninstall",
+            s_context.device_id, s_boot_id, digest, kind == 2U ? "" :
+            ",\"previous_package_sha256\":null,\"package_url\":\"https://packages.example.test/a.pkg\","
+            "\"trial_event_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\","
+            "\"package_size_bytes\":10240,\"guest_abi_version\":2,\"data_schema_version\":1");
+        assert(length > 0 && (size_t)length < sizeof json);
+        /* Upgrade needs a present old digest; install needs null. */
+        if (kind == 1U) {
+            char *field = strstr(json, "\"previous_package_sha256\":null");
+            assert(field != NULL);
+            const size_t offset = (size_t)(field - json) + strlen("\"previous_package_sha256\":");
+            const size_t tail = strlen(json + offset + 4U);
+            memmove(json + offset + 66U, json + offset + 4U, tail + 1U);
+            json[offset] = '"'; memcpy(json + offset + 1U, digest, 64U); json[offset + 65U] = '"';
+        }
+        s_reply_mqtt = true; handle_line(json, strlen(json), NULL); s_reply_mqtt = false;
+        expect_reply("failed", "product_operation_conflict");
+        product_run_query(1U);
+        expect_reply("succeeded", NULL);
+        assert(strstr(latest_reply, "\"kind\":\"stop\"") &&
+            memcmp(ledger_before, product_bytes, sizeof product_bytes) == 0 &&
+            product_uninstall_calls == 0U && package_prepare_calls == 0U);
+    }
+    s_guard.count = EBASE_REQUEST_SLOTS;
+    product_run(3U, false);
+    expect_reply("failed", "capacity_exceeded");
+    product_run_query(1U);
+    expect_reply("succeeded", NULL);
+    memset(&s_guard, 0, sizeof s_guard);
+    memset(s_outcomes, 0, sizeof s_outcomes);
+    strcpy(s_boot_id, "77777777-7777-4777-8777-777777777777");
+    product_run_query(1U);
+    expect_reply("unknown", "product_operation_not_found");
+    assert(strstr(latest_reply, "\"result\":null") && product_run_calls == 2U);
+
+    setup_product_run();
+    product_run_json(4U, false, 6U, s_context.device_id, s_boot_id, 1000U, 0x7bU);
+    expect_reply("expired", "expired");
+    assert(s_guard.count == 0U && product_run_calls == 0U);
+    product_run_query(4U);
+    expect_reply("unknown", "product_operation_not_found");
+
+    for (unsigned gate = 0; gate < 6U; ++gate) {
+        setup_product_run();
+        if (gate == 0U) esp_base_control_state_set_ota_pending(&s_control_state, true);
+        if (gate == 1U) s_ota_active = true;
+        if (gate == 2U) s_trial_active = true;
+        if (gate == 3U) s_product_active = true;
+        if (gate == 4U) s_config_uncertain = true;
+        if (gate == 5U) binding_sequence = 7U;
+        product_run_json(5U, false, 6U, s_context.device_id, s_boot_id, 31000U, 0x7bU);
+        expect_reply(gate == 4U ? "unknown" : "failed",
+            gate == 0U ? "ota_verification_pending" : gate == 4U ? "storage_uncertain" :
+            gate == 5U ? "product_precondition_conflict" : "operation_busy");
+        product_run_query(5U);
+        assert(strstr(latest_reply, "\"operation_sequence\":null") && product_run_calls == 0U);
+    }
+
+    setup_product_run();
+    ebase_command_t old_command = {0};
+    assert(ebase_parse_command("package-43", strlen("package-43"), &old_command, malloc) == NULL);
+    assert(fingerprint_product_package(&old_command, s_product_fingerprint));
+    strcpy(s_product_operation_id, old_command.product_package->operation_id);
+    ebase_command_release(&old_command);
+    product_run(6U, false); /* The new active worker is stop, not the old package. */
+    product_package(43U);
+    expect_reply("failed", "operation_busy");
+    assert(product_run_calls == 1U && package_source_opens == 0U);
+    poll_product();
+    product_run_query(6U);
+    expect_reply("succeeded", NULL);
+    setup_product_run();
+    worker_created = false;
+    product_run(6U, true);
+    expect_reply("failed", "resource_failure");
+    product_run_query(6U);
+    expect_reply("failed", "resource_failure");
+    assert(!s_product_run_request && !s_product_active && product_run_calls == 0U &&
+        atomic_load(&owner.active_token) == 0U);
+
+    const esp_base_container_run_result_t outcomes[] = {
+        ESP_BASE_CONTAINER_RUN_REJECTED, ESP_BASE_CONTAINER_RUN_BUSY,
+        ESP_BASE_CONTAINER_RUN_UNCERTAIN};
+    for (size_t index = 0; index < sizeof outcomes / sizeof *outcomes; ++index) {
+        setup_product_run();
+        product_run_result = outcomes[index];
+        product_run(7U, false);
+        poll_product();
+        product_run_query(7U);
+        expect_reply(index == 2U ? "unknown" : "failed", index == 2U ?
+            "product_state_uncertain" : index == 1U ? "operation_busy" :
+            "product_precondition_conflict");
+        product_run(7U, false);
+        assert(product_run_calls == 1U);
+        if (index == 2U) {
+            assert(s_product_active && s_config_uncertain &&
+                esp_base_storage_claim_active(&s_product_storage_claim));
+            product_run(8U, true);
+            assert(product_run_calls == 1U);
+            product_run_query(7U);
+            expect_reply("unknown", "product_state_uncertain");
+        } else assert(!s_product_active && atomic_load(&owner.active_token) == 0U);
+    }
+    setup_product_run();
+    esp_base_storage_claim_t flash_busy = {0};
+    assert(esp_base_storage_claim(&owner, &flash_busy));
+    product_ledger_read_busy = true;
+    product_run(9U, false);
+    expect_reply("unknown", "operation_busy");
+    assert(!s_outcomes[0].has_product_run && product_run_calls == 0U);
+    assert(esp_base_storage_release(&flash_busy));
+    product_ledger_read_busy = false;
+    product_run_query(9U);
+    expect_reply("unknown", "product_operation_not_found");
+
+    /* Durable IDs retain their original six-field query result. */
+    setup_product_run();
+    ebase_product_ledger_t ledger;
+    const ebase_product_ledger_io_t io = ebase_product_ledger_nvs_io(&owner);
+    assert(ebase_product_ledger_open(&ledger, &io) == EBASE_LEDGER_OK);
+    ebase_product_record_t record = {.sequence = 1U, .container_sequence = 6U,
+        .kind = EBASE_PRODUCT_UNINSTALL, .state = EBASE_PRODUCT_PREPARED};
+    strcpy(record.operation_id, "55555555-5555-4555-8555-000000000010");
+    memset(record.fingerprint, 0xa1, 32U);
+    memset(record.package_sha256, 0x7b, 32U);
+    assert(ebase_product_ledger_begin(&ledger, &io, &record) == EBASE_LEDGER_OK);
+    assert(ebase_product_ledger_finish(&ledger, &io, 1U, record.operation_id,
+        record.fingerprint, EBASE_PRODUCT_FAILED, 1U, 6U) == EBASE_LEDGER_OK);
+    memcpy(ledger_before, product_bytes, sizeof product_bytes);
+    product_run(10U, false);
+    expect_reply("failed", "product_operation_conflict");
+    assert(!s_outcomes[0].has_product_run && product_run_calls == 0U);
+    product_run_query(10U);
+    assert(strstr(latest_reply, "\"operation_sequence\":1") &&
+        strstr(latest_reply, "\"kind\":\"uninstall\"") &&
+        strstr(latest_reply, "\"result_code\":1") &&
+        memcmp(ledger_before, product_bytes, sizeof product_bytes) == 0);
 }
 
 static void check_product_uninstall_path(void)
@@ -1524,6 +1771,7 @@ int main(void)
     poll_ota();
     expect_reply("unknown", "storage_uncertain");
     assert(retire_calls == 1 && product_retire_calls == 1 && prepare_calls == 0);
+    check_product_run_guard();
     check_product_uninstall_path();
     check_product_package_guard();
     check_product_trial_health();
@@ -1679,6 +1927,7 @@ static ebase_ledger_io_result_t read_product_ledger(
 {
     (void)bytes;
     assert(context == &owner);
+    if (product_ledger_read_busy) return EBASE_LEDGER_IO_BUSY;
     if (!product_present) return EBASE_LEDGER_IO_NOT_FOUND;
     memcpy(bytes, product_bytes, sizeof product_bytes);
     return EBASE_LEDGER_IO_OK;
@@ -2022,6 +2271,18 @@ bool esp_base_container_product_ota_ready(esp_base_ota_package_mode_t mode)
 bool esp_base_container_product_configured(void)
 {
     return product_configured;
+}
+
+esp_base_container_run_result_t esp_base_container_product_set_running(
+    const esp_base_storage_claim_t *claim, bool running, const char boot_id[37],
+    uint32_t expected_sequence, const uint8_t package_sha256[32])
+{
+    assert(esp_base_storage_claim_active(claim) &&
+        !strcmp(boot_id, s_boot_id) && expected_sequence == binding_sequence &&
+        package_sha256[0] == 0x7b);
+    ++product_run_calls;
+    product_run_started = running;
+    return product_run_result;
 }
 
 bool esp_base_container_product_pristine_baseline(

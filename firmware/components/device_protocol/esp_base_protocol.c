@@ -75,10 +75,14 @@ typedef enum {
     PRODUCT_WORK_UNCERTAIN = 0,
     PRODUCT_WORK_FAILED,
     PRODUCT_WORK_TRIAL_RUNNING,
+    PRODUCT_WORK_RUN_COMPLETE,
+    PRODUCT_WORK_RUN_REJECTED,
+    PRODUCT_WORK_RUN_BUSY,
 } product_work_result_t;
 static bool s_product_active, s_product_trial_running;
 static size_t s_product_slot;
 static ebase_product_package_request_t *s_product_request;
+static ebase_product_run_request_t *s_product_run_request;
 static char s_product_operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
 static uint32_t s_product_operation_sequence;
 static uint8_t s_product_fingerprint[32];
@@ -149,9 +153,22 @@ static struct {
 } s_frp_status_seen[FRP_STATUS_REPLAY_SLOTS] IRAM_BSS_ATTR;
 typedef struct {
     const char *state, *error;
+    bool has_status, via_mqtt, has_product_run;
+    union {
+        status_snapshot_t status;
+        struct {
+            uint32_t container_sequence;
+            ebase_command_kind_t kind;
+        } product_run;
+    };
+} command_outcome_t;
+_Static_assert(sizeof(((command_outcome_t *)0)->product_run) <= sizeof(status_snapshot_t),
+               "boot-local receipt must reuse existing outcome space");
+_Static_assert(sizeof(command_outcome_t) == sizeof(struct {
+    const char *state, *error;
     bool has_status, via_mqtt;
     status_snapshot_t status;
-} command_outcome_t;
+}), "boot-local receipts must not grow the 32-slot outcome array");
 static command_outcome_t s_outcomes[EBASE_REQUEST_SLOTS] IRAM_BSS_ATTR;
 
 static bool fingerprint_config_bytes(const uint8_t *bytes, size_t length, void *context)
@@ -226,6 +243,23 @@ static bool fingerprint_product_package(const ebase_command_t *command,
         written == 32U;
     if (!valid) (void)psa_hash_abort(&hash);
     return valid;
+}
+
+static bool fingerprint_product_run(const ebase_command_t *command,
+                                    uint8_t fingerprint[32])
+{
+    const char *domain = command->kind == EBASE_PRODUCT_START_COMMAND ?
+        "product.start" : "product.stop";
+    uint8_t bytes[sizeof("product.start") + 4U + 32U];
+    const size_t domain_size = strlen(domain) + 1U;
+    memcpy(bytes, domain, domain_size);
+    const uint32_t sequence = command->product_run->expected_container_sequence;
+    for (unsigned index = 0; index < 4U; ++index)
+        bytes[domain_size + index] = (uint8_t)(sequence >> (24U - 8U * index));
+    memcpy(bytes + domain_size + 4U, command->product_run->package_sha256, 32U);
+    size_t written = 0U;
+    return psa_hash_compute(PSA_ALG_SHA_256, bytes, domain_size + 4U + 32U,
+        fingerprint, 32U, &written) == PSA_SUCCESS && written == 32U;
 }
 
 static bool fingerprint_ota_request(const esp_base_ota_request_t *request,
@@ -487,6 +521,45 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
     funlockfile(stdout);
 }
 
+static bool find_product_run(const char *operation_id, size_t *out_slot)
+{
+    for (size_t slot = 0; slot < s_guard.count; ++slot) {
+        if (s_outcomes[slot].has_product_run &&
+            !strcmp(s_guard.entries[slot].request_id, operation_id)) {
+            if (out_slot != NULL) *out_slot = slot;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void reply_product_run(const char *request_id, size_t slot)
+{
+    const command_outcome_t *outcome = &s_outcomes[slot];
+    const char *kind = outcome->product_run.kind == EBASE_PRODUCT_START_COMMAND ?
+        "start" : "stop";
+    const int length = snprintf(s_response_json, sizeof s_response_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
+        "\"result\":{\"operation_id\":\"%s\",\"operation_sequence\":null,"
+        "\"kind\":\"%s\",\"container_sequence\":%" PRIu32 "}}",
+        s_context.device_id, s_boot_id, request_id, outcome->state,
+        outcome->error ? "\"" : "null", outcome->error ? outcome->error : "",
+        outcome->error ? "\"" : "", s_guard.entries[slot].request_id, kind,
+        outcome->product_run.container_sequence);
+    if (length <= 0 || (size_t)length >= sizeof s_response_json) return;
+    if (s_reply_mqtt) {
+        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
+        return;
+    }
+    flockfile(stdout);
+    fputc('\n', stdout);
+    (void)fwrite(s_response_json, 1, (size_t)length, stdout);
+    fputc('\n', stdout);
+    fflush(stdout);
+    funlockfile(stdout);
+}
+
 static void reply_product_result(const char *request_id,
                                  const ebase_product_record_t *record)
 {
@@ -615,9 +688,12 @@ static void emit_outcome(size_t slot, bool via_mqtt)
 
 static void store_outcome(size_t slot, const char *state, const char *error, bool status)
 {
-    const bool via_mqtt = s_outcomes[slot].via_mqtt;
+    const command_outcome_t previous = s_outcomes[slot];
     s_outcomes[slot] = (command_outcome_t){.state = state, .error = error,
-                                          .has_status = status, .via_mqtt = via_mqtt};
+        .has_status = status, .via_mqtt = previous.via_mqtt,
+        .has_product_run = !status && previous.has_product_run};
+    if (s_outcomes[slot].has_product_run)
+        s_outcomes[slot].product_run = previous.product_run;
     if (status) s_outcomes[slot].status = snapshot();
 }
 
@@ -1129,6 +1205,18 @@ static void product_task(void *argument)
     const ebase_product_package_request_t *request = s_product_request;
     product_work_result_t outcome = PRODUCT_WORK_UNCERTAIN;
     uint32_t resolved_sequence = 0U;
+    if (s_product_run_request != NULL &&
+        esp_base_storage_claim_active(&s_product_storage_claim)) {
+        const esp_base_container_run_result_t ran =
+            esp_base_container_product_set_running(&s_product_storage_claim,
+                s_product_run_request->running,
+                s_boot_id, s_product_run_request->expected_container_sequence,
+                s_product_run_request->package_sha256);
+        outcome = ran == ESP_BASE_CONTAINER_RUN_COMPLETE ? PRODUCT_WORK_RUN_COMPLETE :
+            ran == ESP_BASE_CONTAINER_RUN_REJECTED ? PRODUCT_WORK_RUN_REJECTED :
+            ran == ESP_BASE_CONTAINER_RUN_BUSY ? PRODUCT_WORK_RUN_BUSY : PRODUCT_WORK_UNCERTAIN;
+        goto done;
+    }
     if (!esp_base_storage_claim_active(&s_product_storage_claim) ||
         request == NULL) goto done;
     ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
@@ -1255,6 +1343,25 @@ static void poll_product(void)
                                                     memory_order_relaxed);
     const uint32_t resolved_sequence = (uint32_t)atomic_load_explicit(
         &s_product_resolved_sequence, memory_order_relaxed);
+    if (s_product_run_request != NULL) {
+        memset(s_product_run_request, 0, sizeof *s_product_run_request);
+        free(s_product_run_request);
+        s_product_run_request = NULL;
+        if ((outcome == PRODUCT_WORK_RUN_COMPLETE ||
+             outcome == PRODUCT_WORK_RUN_REJECTED || outcome == PRODUCT_WORK_RUN_BUSY) &&
+            esp_base_storage_release(&s_product_storage_claim)) {
+            s_product_active = false;
+            save_outcome(s_product_slot,
+                outcome == PRODUCT_WORK_RUN_COMPLETE ? "succeeded" : "failed",
+                outcome == PRODUCT_WORK_RUN_COMPLETE ? NULL :
+                outcome == PRODUCT_WORK_RUN_BUSY ? "operation_busy" : "product_precondition_conflict",
+                false);
+        } else {
+            s_config_uncertain = true;
+            save_outcome(s_product_slot, "unknown", "product_state_uncertain", false);
+        }
+        return;
+    }
     if (outcome == PRODUCT_WORK_TRIAL_RUNNING && s_product_request != NULL) {
         memcpy(s_product_trial_event_sha256, s_product_request->trial_event_sha256,
                sizeof s_product_trial_event_sha256);
@@ -1462,12 +1569,100 @@ static void finish_product_without_worker(size_t slot, ebase_product_ledger_t *l
     save_outcome(slot, state, error, false);
 }
 
+static void handle_product_run(size_t slot, ebase_command_t *command)
+{
+    /* Read-only collision check: a boot-local ID cannot hide a durable receipt. */
+    ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
+    if (ledger == NULL) {
+        save_outcome(slot, "failed", "resource_failure", false); return;
+    }
+    const ebase_product_ledger_io_t io =
+        ebase_product_ledger_nvs_io(s_context.flash_io_owner);
+    const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
+    ebase_product_record_t prior = {0};
+    const ebase_product_ledger_result_t found = opened == EBASE_LEDGER_OK ?
+        ebase_product_ledger_query(ledger, command->request.request_id, &prior) : opened;
+    const bool pending = opened == EBASE_LEDGER_OK && ledger->count != 0U &&
+        ledger->records[ledger->count - 1U].state == EBASE_PRODUCT_PREPARED;
+    free(ledger);
+    if (found != EBASE_LEDGER_UNKNOWN) {
+        save_outcome(slot, found == EBASE_LEDGER_OK ? "failed" : "unknown",
+            found == EBASE_LEDGER_OK ? "product_operation_conflict" :
+            found == EBASE_LEDGER_BUSY ? "operation_busy" :
+            found == EBASE_LEDGER_UNINITIALIZED ? "product_ledger_uninitialized" :
+            "storage_uncertain", false);
+        return;
+    }
+    s_outcomes[slot].has_product_run = true;
+    s_outcomes[slot].product_run.kind = command->kind;
+    s_outcomes[slot].product_run.container_sequence =
+        command->product_run->expected_container_sequence;
+    if (esp_base_control_state_ota_pending(&s_control_state)) {
+        save_outcome(slot, "failed", "ota_verification_pending", false); return;
+    }
+    if (s_ota_active || s_trial_active || s_product_active) {
+        save_outcome(slot, "failed", "operation_busy", false); return;
+    }
+    if (s_config_uncertain || s_ota_boot_uncertain) {
+        save_outcome(slot, "unknown", "storage_uncertain", false); return;
+    }
+    if (pending) {
+        save_outcome(slot, "failed", "product_previous_unresolved", false); return;
+    }
+    if (!esp_base_container_product_configured()) {
+        save_outcome(slot, "failed", "product_not_configured", false); return;
+    }
+    s_product_storage_claim = (esp_base_storage_claim_t){0};
+    if (!esp_base_storage_claim(s_context.storage_owner, &s_product_storage_claim)) {
+        save_outcome(slot, "failed", "operation_busy", false); return;
+    }
+    esp_base_container_binding_snapshot_t binding = {0};
+    const esp_base_container_binding_result_t bound =
+        esp_base_container_product_binding_snapshot(&s_product_storage_claim, &binding);
+    if (bound != ESP_BASE_CONTAINER_BINDING_OK) {
+        finish_product_without_worker(slot, NULL,
+            bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN, "failed",
+            bound == ESP_BASE_CONTAINER_BINDING_BUSY ? "operation_busy" :
+            bound == ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE ? "resource_failure" :
+            "product_not_configured");
+        return;
+    }
+    if (!binding.package_present ||
+        binding.container_sequence != command->product_run->expected_container_sequence ||
+        memcmp(binding.package_sha256, command->product_run->package_sha256, 32) != 0) {
+        finish_product_without_worker(slot, NULL, false,
+            "failed", "product_precondition_conflict"); return;
+    }
+    s_product_run_request = command->product_run;
+    command->payload = NULL;
+    command->payload_size_bytes = 0U;
+    s_product_slot = slot;
+    s_product_active = true;
+    s_product_trial_running = false;
+    atomic_store_explicit(&s_product_done, false, memory_order_relaxed);
+    if (xTaskCreate(product_task, "base_product", 12288, NULL, 4, NULL) != pdPASS) {
+        memset(s_product_run_request, 0, sizeof *s_product_run_request);
+        free(s_product_run_request);
+        s_product_run_request = NULL;
+        s_product_active = false;
+        finish_product_without_worker(slot, NULL, false,
+            "failed", "resource_failure"); return;
+    }
+    save_outcome(slot, "running", NULL, false);
+}
+
 static void handle_product_package(size_t slot, const ebase_command_t *command)
 {
     const ebase_product_package_request_t *request = command->product_package;
+    if (find_product_run(request->operation_id, NULL)) {
+        save_outcome(slot, "failed", "product_operation_conflict", false); return;
+    }
     const ebase_product_kind_t kind = command->kind == EBASE_PRODUCT_INSTALL_COMMAND ?
         EBASE_PRODUCT_INSTALL : EBASE_PRODUCT_UPGRADE;
     if (s_product_active) {
+        if (s_outcomes[s_product_slot].has_product_run) {
+            save_outcome(slot, "failed", "operation_busy", false); return;
+        }
         if (!strcmp(s_product_operation_id, request->operation_id)) {
             if (memcmp(s_product_fingerprint, command->request.fingerprint, 32) == 0)
                 save_outcome(slot, s_config_uncertain ? "unknown" : "running",
@@ -1626,6 +1821,9 @@ static void handle_product_package(size_t slot, const ebase_command_t *command)
 static void handle_product_uninstall(size_t slot, const ebase_command_t *command)
 {
     const ebase_product_uninstall_request_t *request = command->product_uninstall;
+    if (find_product_run(request->operation_id, NULL)) {
+        save_outcome(slot, "failed", "product_operation_conflict", false); return;
+    }
     if (esp_base_control_state_ota_pending(&s_control_state)) {
         save_outcome(slot, "failed", "ota_verification_pending", false); return;
     }
@@ -1820,6 +2018,11 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         return;
     }
     if (command->kind == EBASE_PRODUCT_RESULT) {
+        size_t slot = 0U;
+        if (find_product_run(command->operation_id, &slot)) {
+            reply_product_run(command->request.request_id, slot);
+            return;
+        }
         ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
         if (ledger == NULL) {
             reply(command->request.request_id, "unknown", "resource_failure", NULL);
@@ -1848,6 +2051,12 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     if (command->kind == EBASE_PRODUCT_UNINSTALL_COMMAND &&
         !fingerprint_product_uninstall(command->product_uninstall,
                                        command->request.fingerprint)) {
+        reply(command->request.request_id, "failed", "resource_failure", NULL);
+        return;
+    }
+    if ((command->kind == EBASE_PRODUCT_STOP_COMMAND ||
+         command->kind == EBASE_PRODUCT_START_COMMAND) &&
+        !fingerprint_product_run(command, command->request.fingerprint)) {
         reply(command->request.request_id, "failed", "resource_failure", NULL);
         return;
     }
@@ -1881,6 +2090,11 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
     if (s_frp_restart_pending || s_mqtt_restart_pending) {
         save_outcome(slot, "failed", "operation_busy", false);
+        return;
+    }
+    if (command->kind == EBASE_PRODUCT_STOP_COMMAND ||
+        command->kind == EBASE_PRODUCT_START_COMMAND) {
+        handle_product_run(slot, command);
         return;
     }
     if (command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||

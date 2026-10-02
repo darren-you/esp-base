@@ -80,6 +80,9 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> --package-file <本地已签名.pkg> --package-url <设备可达的HTTPS地址> --guest-abi-version <已签名清单ABI> --data-schema-version <已签名清单schema> --trial-event-file <随后要发布的原始业务事件文件> product.upgrade
 # 从刚查询的 product.status 精确抄录下一操作序号、Container 序号和当前包摘要；先固定原操作 UUID：
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --operation-sequence <下一操作序号> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前包SHA-256> product.uninstall
+# 仅改变本 boot 的确认包运行状态；不提供持久 operation sequence：
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次固定操作UUID> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前确认包SHA-256> product.stop
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> --operation-id <本次另一固定操作UUID> --expected-container-sequence <当前Container序号> --expected-package-sha256 <当前确认包SHA-256> product.start
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚核对的UUID> restart
 # ESP32-D0WD-V3 完成新布局、固件迁移和实板启动后，选择本轮 CH340 端点：
 python3 tools/device_control.py --port /dev/cu.usbserial-EXAMPLE status
@@ -89,7 +92,7 @@ python3 tools/device_control.py --port /dev/cu.usbserial-EXAMPLE status
 
 `ota.start` 默认调用正式无包固件 OTA，发送必需的 `package_mode=no_package`：用户显式指定本轮精确 target，工具从本地已签名固件读取完整长度和 SHA-256，核对目标槽上限、新鲜 boot 与 OTA ready，再发送设备使用同一字节的 HTTPS URL；设备独立验证镜像签名和摘要。`--ota-package-mode reuse` 要求本地签名包、guest ABI、data schema 与代表事件文件，并先核对设备当前确认包摘要；`write` 另要求包 HTTPS URL，两种模式均按精确 target 检查包槽上限。当前公开软件 worker 已接三种模式；来源、容量或产品授权不满足仍返回 `product_ota_unavailable`。带包命令必须在新 boot 向精确 event Topic 发布请求绑定的代表事件，设备在线窗口及持久联合确认完成后才成功。收到 `running` 仅表示已受理，固件随后可能重启；串口回执超时也不重发写命令。新启动后用原 operation UUID 调用 `ota.result`，只接受同一设备的持久结果，并检查固件摘要、长度、target、目标槽及包模式／摘要字段。`unknown`、`running` 或尚未观察到新 boot 都不是成功。真实 HTTPS／MQTT、两板连续更新、掉电与资源验收仍须在 P6-10 完成。
 
-`product.result` 仅按原 operation ID 查询最近固定条数的设备持久账本，不触发产品写入或重放。旧记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。`product.install`／`product.upgrade` 在发送前从本地普通文件计算整包 SHA-256 和长度，并从 `--trial-event-file` 的原始 guest 业务字节计算代表事件 SHA-256；后续帧生成器的 `--event-file` 必须使用同一原始字节。工具复核 `product.status` 的持久序号与旧绑定；设备从指定 HTTPS URL 下载并自行验签，本工具不上传包或生成签名。写回执之后只按原 ID 读取持久账本，超时也绝不重发写命令。候选试运行期间返回 `unknown/product_operation_unresolved`；代表事件完成后须连续在线 30 秒，才可能得到持久成功结果。真实 Broker 和两块实体板仍待端到端验收。
+`product.result` 仅按原 operation ID 只读查询，不触发产品写入或重放。安装／升级／卸载仍从最近固定条数的设备持久账本读取，结果精确包含 `operation_id`、正 uint32 `operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与 `result_code` 六字段。停止／启动仅查询本 boot 的命令缓存，结果精确包含 `operation_id`、值为 null 的 `operation_sequence`、`kind=stop|start` 和 `container_sequence` 四字段；没有持久结果码或包摘要。停止／启动缓存与其他写请求共享本 boot 的固定 32 槽，不驱逐既有记录；满后拒绝新写请求，既有 ID 仍可只读查询。本 boot 未记录该 ID、跨 boot 或旧持久记录不在窗口内时返回 `unknown/product_operation_not_found`；客户端不据此生成新 ID 重试。`product.install`／`product.upgrade` 在发送前从本地普通文件计算整包 SHA-256 和长度，并从 `--trial-event-file` 的原始 guest 业务字节计算代表事件 SHA-256；后续帧生成器的 `--event-file` 必须使用同一原始字节。工具复核 `product.status` 的持久序号与旧绑定；设备从指定 HTTPS URL 下载并自行验签，本工具不上传包或生成签名。写回执之后只按原 ID 读取持久账本，超时也绝不重发写命令。候选试运行期间返回 `unknown/product_operation_unresolved`；代表事件完成后须连续在线 30 秒，才可能得到持久成功结果。真实 Broker 和两块实体板仍待端到端验收。
 
 `product.status` 在同一个 Base 存储占用期读取持久高水位、下一操作序号、未决操作 ID 和当前签名固件对应的 ECS2 `container_sequence`／`package_sha256`。无包时摘要为 `null`；它是持久绑定元数据，不证明包字节或 guest 健康。缺失账本返回 `unknown/product_ledger_uninitialized`，不会自动初始化；绑定或签名固件观察不确定时返回 `unknown/storage_uncertain` 并阻断本次启动的后续写入。查询到的序号只是快照，正式写入仍须由设备持久账本与 Container 原子裁决。
 
@@ -99,6 +102,10 @@ python3 tools/device_control.py --port /dev/cu.usbserial-EXAMPLE status
 
 `product.uninstall` 仅接受已经确认的当前包绑定：操作者显式给出原 operation UUID、下一持久序号和从本轮 `product.status` 读到的 ECS2 序号／包摘要；工具在发送前重新读状态并逐项比较。设备验证目标 UUID、boot 和期限，先把意图持久提交并读回，再停止、卸载、读回空绑定与写入结果。命令超时或返回 unknown 时只用原 ID 查询 `product.result`，不自动重发或生成新 ID。包 Flash、产品数据和回退固件仍引用的包保持原位；此入口不能安装或升级包。
 
+`product.stop`／`product.start` 只改变当前 boot 中已确认包的运行状态，不提交 ECS2，不占用持久操作序号，也不更换包、清除产品数据或修改启动绑定。操作者给出当前确认包摘要、Container 序号及固定原操作 UUID；`--operation-sequence` 会被拒绝。工具先重新读取 `product.status`，逐项核对确认绑定、无未决操作及非试运行实例，再从新鲜 `status` 核对同设备／同 boot 并构造期限。写请求的顶层 `request_id` 直接使用该原操作 UUID，`parameters` 精确只有 `expected_container_sequence` 与 `package_sha256`；Container 序号允许 1 至 UINT32_MAX。
+
+工具只发送一次停止／启动命令。明确的 failed／expired 写拒绝直接返回；running、unknown、缺失或部分写回执随后只轮询原 ID 的 `product.result`，每次查询使用新的只读请求 ID，所有等待共用发送前固定的 30 秒期限，超时仍为 unknown。成功必须有同设备、同 boot、同原操作 ID、同操作类型及未变化 Container 序号的四字段结果。活动实例为 null 不能证明已安全停止；已经运行的 start、已经安全停止的 stop，仍须由设备 owner 证明目标状态才报告成功。trap、阻塞或 native 回收不确定时不会自动重新开启。后续 boot 按原确认绑定执行正常启动，上一 boot 的停止／启动结果不持久保留。
+
 配置使用当前用户拥有、权限 0600 的本机 JSON 文件，不把密码放在命令行或输出中：
 
 ```bash
@@ -107,7 +114,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <刚�
 
 文件包含完整 `schema_version`、`wifi`、`mqtt`、`frp`、`business` 字段。当前 `schema_version` 为 3；`wifi` 为 `{ssid,password}` 或 null；`mqtt` 为 `{hostname,port,username,password,ca_pem,management_key_hex}` 或 null；`frp` 可为 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}` 或 null，`business` 必须为 null。MQTT 主机为 1–253 字节 ASCII DNS 名，端口 1–65535；用户名最多 128 UTF-8 字节、密码最多 256 UTF-8 字节，均非空；CA PEM 最多 4096 ASCII 字节并含证书标记；独立管理密钥为非全零 64 个小写十六进制字符。工具不会生成凭据，整个配置仅经本轮独占物理串口端点发送，整行请求上限 9216 字节。工具读取新鲜 revision 后构造 CAS 请求，最多等待 30 秒；仅确认新 revision 后报告成功。文件不存在、权限不合格、重复字段或内容无效会拒绝，不回显配置。固件 MQTT/FRP 状态由实际 owner 报告；设备级 Broker ACL 与网络控制端仍需联调。
 
-`python3 tools/test_device_control.py` 使用本机伪终端验证字节不变、禁用关闭挂断和写入背压期限；伪终端不证明物理 USB 复位行为，后者以同板重复打开后的 boot_id 与断电验收为准。
+`python3 tools/test_device_control.py` 使用本机伪终端验证字节不变、禁用关闭挂断和写入背压期限，并以宿主假设备验证停止／启动的完整参数、原 ID 只读轮询、共享期限、异形结果／跨 boot 拒绝、丢失回执不重发和原持久三类结果；这些测试不证明 native 实例已安全回收或物理 USB 复位行为，后者以同板重复打开后的 boot_id 与断电验收为准。
 
 ## 产品 MQTT 业务事件帧
 

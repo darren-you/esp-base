@@ -3,6 +3,7 @@
 import importlib.util
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -140,6 +141,48 @@ class ConfigurationV3Tests(unittest.TestCase):
 
 
 class ProductResultTests(unittest.TestCase):
+    def testBootLocalExactFourFieldsAndFailureCodes(self):
+        current = {"device_id": "22222222-2222-4222-8222-222222222222",
+                   "boot_id": "33333333-3333-4333-8333-333333333333"}
+        operation = "44444444-4444-4444-8444-444444444444"
+        for kind in ("stop", "start"):
+            result = {"operation_id": operation, "operation_sequence": None,
+                      "kind": kind, "container_sequence": 4294967295}
+            reply = {**current, "state": "succeeded", "error_code": None, "result": result}
+            with (self.subTest(kind=kind), mock.patch.object(control, "send"),
+                  mock.patch.object(control, "read_result", side_effect=lambda *args: iter([reply]))):
+                self.assertEqual(control.product_result(object(), current, operation)["result"], result)
+                for code in ("ota_verification_pending", "operation_busy", "product_precondition_conflict",
+                             "product_previous_unresolved", "resource_failure", "product_not_configured"):
+                    reply.update(state="failed", error_code=code)
+                    self.assertEqual(control.product_result(object(), current, operation)["error_code"], code)
+                for code in ("storage_uncertain", "product_state_uncertain"):
+                    reply.update(state="unknown", error_code=code)
+                    self.assertEqual(control.product_result(object(), current, operation)["error_code"], code)
+                reply.update(state="succeeded", error_code=None)
+                for missing in result:
+                    reply["result"] = {key: value for key, value in result.items() if key != missing}
+                    with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "unknown"):
+                        control.product_result(object(), current, operation)
+
+    def testPersistentKindsKeepExactSixFields(self):
+        current = {"device_id": "22222222-2222-4222-8222-222222222222",
+                   "boot_id": "33333333-3333-4333-8333-333333333333"}
+        operation = "44444444-4444-4444-8444-444444444444"
+        for kind in ("install", "upgrade", "uninstall"):
+            result = {"operation_id": operation, "operation_sequence": 7, "kind": kind,
+                      "package_sha256": "ab" * 32, "container_sequence": 12, "result_code": 0}
+            reply = {**current, "state": "succeeded", "error_code": None, "result": result}
+            with (self.subTest(kind=kind), mock.patch.object(control, "send"),
+                  mock.patch.object(control, "read_result", side_effect=lambda *args: iter([reply]))):
+                self.assertEqual(control.product_result(object(), current, operation)["result"], result)
+                reply["result"] = {**result, "extra": 1}
+                with self.assertRaisesRegex(ValueError, "unknown"):
+                    control.product_result(object(), current, operation)
+                reply["result"] = {key: value for key, value in result.items() if key != "result_code"}
+                with self.assertRaisesRegex(ValueError, "unknown"):
+                    control.product_result(object(), current, operation)
+
     def testOriginalIdQueryAndEvictedUnknown(self):
         device = "22222222-2222-4222-8222-222222222222"
         boot = "33333333-3333-4333-8333-333333333333"
@@ -270,6 +313,262 @@ class ProductStatusTests(unittest.TestCase):
                 control.product_status(Device(7, pending, "ab" * 32, {"active_product": bad}), current)
         with self.assertRaises(ValueError):
             control.product_status(Device(7, missing="active_product"), current)
+
+
+class ProductLifecycleTests(unittest.TestCase):
+    device_id = "22222222-2222-4222-8222-222222222222"
+    boot_id = "33333333-3333-4333-8333-333333333333"
+    operation_id = "44444444-4444-4444-8444-444444444444"
+    digest = "ab" * 32
+
+    class Clock:
+        def __init__(self):
+            self.now = 0
+
+        def monotonic(self):
+            self.now += 0.0001
+            return self.now
+
+        def sleep(self, duration):
+            self.now += duration
+
+    class Device:
+        def __init__(self, case, clock, command, query_states=("running", "succeeded"),
+                     write_state="running", drop_write=False, write_error=None,
+                     binding_changes=None, query_changes=None, fresh_boot=None,
+                     query_boot=None, drop_query=False, write_result=None):
+            self.case, self.clock, self.command = case, clock, command
+            self.query_states = list(query_states)
+            self.write_state, self.drop_write, self.write_error = write_state, drop_write, write_error
+            self.binding_changes, self.query_changes = binding_changes or {}, query_changes or {}
+            self.fresh_boot = fresh_boot
+            self.query_boot, self.drop_query, self.write_result = query_boot, drop_query, write_result
+            self.requests = []
+            self.response = bytearray()
+
+        def write(self, payload):
+            request = json.loads(payload.strip())
+            self.requests.append(request)
+            command = request["command"]
+            state, error, result = "succeeded", None, None
+            boot = self.case.boot_id
+            if command == "product.status":
+                result = {"operation_sequence_high_watermark": 4294967295,
+                          "next_operation_sequence": None, "pending_operation_id": None,
+                          "container_sequence": 4294967295,
+                          "package_sha256": self.case.digest, "firmware_sha256": "f" * 64,
+                          "runtime_guest_abi_version": 2, "package_guest_abi_version": 2,
+                          "package_data_schema_version": 1, "active_product": None,
+                          **self.binding_changes}
+            elif command == "status":
+                result = {"uptime_ms": 2000}
+                boot = self.fresh_boot or boot
+            elif command == self.command:
+                self.write_started = self.clock.now
+                if self.drop_write:
+                    if self.write_error is not None:
+                        raise self.write_error
+                    return len(payload)
+                state = self.write_state
+                result = self.write_result
+                error = {"failed": "product_precondition_conflict", "expired": "expired",
+                         "unknown": "product_state_uncertain"}.get(state)
+            elif command == "product.result":
+                self.case.assertEqual(set(request), {"protocol_version", "request_id", "command", "parameters"})
+                self.case.assertEqual(request["parameters"], {"operation_id": self.case.operation_id})
+                self.case.assertNotEqual(request["request_id"], self.case.operation_id)
+                boot = self.query_boot or boot
+                if self.drop_query:
+                    return len(payload)
+                state = self.query_states[0]
+                if len(self.query_states) > 1:
+                    self.query_states.pop(0)
+                result = {"operation_id": self.case.operation_id, "operation_sequence": None,
+                          "kind": self.command.split(".")[1], "container_sequence": 4294967295,
+                          **self.query_changes}
+                error = {"failed": "resource_failure", "unknown": "product_state_uncertain",
+                         "expired": "expired"}.get(state)
+                if state == "not_found":
+                    state, error, result = "unknown", "product_operation_not_found", None
+            else:
+                raise AssertionError("unexpected command " + command)
+            reply = {"protocol_version": 1, "device_id": self.case.device_id,
+                     "boot_id": boot, "request_id": request["request_id"],
+                     "state": state, "error_code": error, "result": result}
+            self.response = bytearray(json.dumps(reply).encode() + b"\n")
+            return len(payload)
+
+        def read(self, size=1):
+            if not self.response:
+                self.clock.now += 0.05
+                return b""
+            value = bytes(self.response[:size])
+            del self.response[:size]
+            return value
+
+        def close(self):
+            self.closed = True
+
+    def run_case(self, command="product.stop", **options):
+        clock = self.Clock()
+        device = self.Device(self, clock, command, **options)
+        current = {"device_id": self.device_id, "boot_id": self.boot_id}
+        with (mock.patch.object(control.time, "monotonic", side_effect=clock.monotonic),
+              mock.patch.object(control.time, "sleep", side_effect=clock.sleep)):
+            result = control.product_lifecycle(device, current, command, self.operation_id,
+                                               4294967295, self.digest)
+        return result, device, clock
+
+    def testExactWriteOriginalIdAndReadOnlyPolling(self):
+        for command in ("product.stop", "product.start"):
+            with self.subTest(command=command):
+                result, device, clock = self.run_case(command)
+                self.assertEqual(result["state"], "succeeded")
+                self.assertIsNone(result["result"]["operation_sequence"])
+                self.assertEqual(result["result"]["container_sequence"], 4294967295)
+                self.assertEqual([item["command"] for item in device.requests],
+                                 ["product.status", "status", command, "product.result", "product.result"])
+                self.assertEqual(device.requests[2], {
+                    "protocol_version": 1, "request_id": self.operation_id, "command": command,
+                    "device_id": self.device_id, "target_boot_id": self.boot_id,
+                    "expires_at_uptime_ms": 12000,
+                    "parameters": {"expected_container_sequence": 4294967295,
+                                   "package_sha256": self.digest}})
+                self.assertLess(clock.now, 30)
+        confirmed = {"product_id": "counter", "product_version": "v0-1-0", "package_sha256": self.digest,
+                     "guest_abi_version": 2, "data_schema_version": 1, "is_trial": False, "operation_id": None}
+        self.assertEqual(self.run_case("product.start", binding_changes={"active_product": confirmed})[0]
+                         ["state"], "succeeded")
+
+    def testMissingOrUnknownReceiptQueriesWithoutResending(self):
+        for options in ({"drop_write": True}, {"drop_write": True, "write_error": TimeoutError("partial")},
+                        {"drop_write": True, "write_error": OSError("partial")}, {"write_state": "unknown"},
+                        {"write_state": "succeeded"}):
+            with self.subTest(options=options):
+                result, device, _ = self.run_case(query_states=("succeeded",), **options)
+                self.assertEqual(result["state"], "succeeded")
+                self.assertEqual(sum(item["command"] == "product.stop" for item in device.requests), 1)
+                self.assertEqual(device.requests[-1]["command"], "product.result")
+
+    def testUnknownAndRunningHaveOneTotalDeadline(self):
+        for state in ("running", "unknown", "not_found"):
+            with self.subTest(state=state):
+                result, device, clock = self.run_case(query_states=(state,))
+                self.assertEqual(result["state"], "unknown")
+                self.assertLess(clock.now - device.write_started, 30.1)
+                self.assertGreater(sum(item["command"] == "product.result" for item in device.requests), 1)
+                self.assertEqual(sum(item["command"] == "product.stop" for item in device.requests), 1)
+        result, device, clock = self.run_case(drop_query=True)
+        self.assertEqual(result["state"], "unknown")
+        self.assertLess(clock.now - device.write_started, 30.1)
+        self.assertEqual(sum(item["command"] == "product.stop" for item in device.requests), 1)
+
+    def testDisconnectedQueryIsUnknownAndCannotResend(self):
+        with mock.patch.object(control, "product_result", side_effect=OSError("closed serial")) as query:
+            result, device, _ = self.run_case()
+        self.assertEqual((result["state"], result["result"]), ("unknown", None))
+        self.assertEqual(query.call_count, 1)
+        self.assertEqual(sum(item["command"] == "product.stop" for item in device.requests), 1)
+
+    def testDefiniteRejectionAndFailedResultNeverRestart(self):
+        for state in ("failed", "expired"):
+            result, device, _ = self.run_case(write_state=state)
+            self.assertEqual(result["state"], state)
+            self.assertEqual([item["command"] for item in device.requests],
+                             ["product.status", "status", "product.stop"])
+        result, device, _ = self.run_case(query_states=("failed",))
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(sum(item["command"] == "product.stop" for item in device.requests), 1)
+        self.assertNotIn("product.start", [item["command"] for item in device.requests])
+
+    def testBindingConflictAndChangedBootRejectBeforeWrite(self):
+        trial = {"product_id": "counter", "product_version": "v0-1-0", "package_sha256": "cd" * 32,
+                 "guest_abi_version": 2, "data_schema_version": 1, "is_trial": True,
+                 "operation_id": self.operation_id}
+        variants = [{"package_sha256": "cd" * 32}, {"package_sha256": None,
+                    "package_guest_abi_version": None, "package_data_schema_version": None},
+                    {"container_sequence": 1}, {"operation_sequence_high_watermark": 7,
+                    "next_operation_sequence": 8, "pending_operation_id": self.operation_id},
+                    {"operation_sequence_high_watermark": 7, "next_operation_sequence": 8,
+                    "pending_operation_id": self.operation_id, "active_product": trial}]
+        for changes in variants:
+            clock = self.Clock()
+            device = self.Device(self, clock, "product.stop", binding_changes=changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                control.product_lifecycle(device, {"device_id": self.device_id, "boot_id": self.boot_id},
+                                          "product.stop", self.operation_id, 4294967295, self.digest)
+            self.assertFalse(any(item["command"] == "product.stop" for item in device.requests))
+        clock = self.Clock()
+        device = self.Device(self, clock, "product.start",
+                             fresh_boot="55555555-5555-4555-8555-555555555555")
+        with self.assertRaises(ValueError):
+            control.product_lifecycle(device, {"device_id": self.device_id, "boot_id": self.boot_id},
+                                      "product.start", self.operation_id, 4294967295, self.digest)
+        self.assertEqual([item["command"] for item in device.requests], ["product.status", "status"])
+
+    def testMalformedOrConflictingResultIsUnknownWithoutResend(self):
+        changes = [{"operation_sequence": 1}, {"operation_sequence": False}, {"kind": []},
+                   {"kind": "start"}, {"container_sequence": True}, {"container_sequence": 0},
+                   {"container_sequence": 4294967296}, {"container_sequence": 1},
+                   {"operation_id": "55555555-5555-4555-8555-555555555555"},
+                   {"package_sha256": self.digest}, {"result_code": 0}]
+        for change in changes:
+            clock = self.Clock()
+            device = self.Device(self, clock, "product.stop", query_states=("succeeded",), query_changes=change)
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "unknown"):
+                control.product_lifecycle(device, {"device_id": self.device_id, "boot_id": self.boot_id},
+                                          "product.stop", self.operation_id, 4294967295, self.digest)
+            self.assertEqual(sum(item["command"] == "product.stop" for item in device.requests), 1)
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            self.run_case(query_states=("expired",))
+        for options in ({"query_boot": "55555555-5555-4555-8555-555555555555"},
+                        {"write_result": {"kind": "stop"}}):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, "unknown"):
+                self.run_case(**options)
+
+    def testInvalidParametersSendNothing(self):
+        for sequence, digest in ((True, self.digest), (0, self.digest), (4294967296, self.digest),
+                                 (1, "0" * 64), (1, "AB" * 32), (1, None)):
+            device = self.Device(self, self.Clock(), "product.stop")
+            with self.subTest(sequence=sequence, digest=digest), self.assertRaises(ValueError):
+                control.product_lifecycle(device, {"device_id": self.device_id, "boot_id": self.boot_id},
+                                          "product.stop", self.operation_id, sequence, digest)
+            self.assertEqual(device.requests, [])
+
+    def testCliCompleteParametersAndPureJson(self):
+        for command in ("product.stop", "product.start"):
+            clock = self.Clock()
+            device = self.Device(self, clock, command, query_states=("succeeded",))
+            argv = ["device_control.py", "--port", "/dev/unused-test", "--device-id", self.device_id,
+                    "--operation-id", self.operation_id, "--expected-container-sequence", "4294967295",
+                    "--expected-package-sha256", self.digest, "--json", command]
+            output = io.StringIO()
+            with (self.subTest(command=command), mock.patch.object(control.sys, "argv", argv),
+                  mock.patch.object(control, "SerialPort", return_value=device),
+                  mock.patch.object(control, "wait_ready"), mock.patch.object(control.sys, "stdout", output),
+                  mock.patch.object(control.time, "monotonic", side_effect=clock.monotonic),
+                  mock.patch.object(control.time, "sleep", side_effect=clock.sleep)):
+                control.main()
+            self.assertEqual(json.loads(output.getvalue())["state"], "succeeded")
+            self.assertTrue(device.closed)
+            self.assertEqual(sum(item["command"] == command for item in device.requests), 1)
+
+    def testCliRejectsPersistentSequenceOrMissingBindingBeforeOpeningPort(self):
+        base = ["device_control.py", "--port", "/dev/unused-test", "--device-id", self.device_id,
+                "--operation-id", self.operation_id]
+        options = [["--operation-sequence", "1", "--expected-container-sequence", "1",
+                    "--expected-package-sha256", self.digest],
+                   ["--expected-container-sequence", "1"], ["--expected-package-sha256", self.digest]]
+        for command in ("product.stop", "product.start"):
+            for extra in options:
+                with (self.subTest(command=command, options=extra),
+                      mock.patch.object(control.sys, "argv", base + extra + [command]),
+                      mock.patch.object(control.sys, "stderr", io.StringIO()),
+                      mock.patch.object(control, "SerialPort") as open_port,
+                      self.assertRaises(SystemExit) as error):
+                    control.main()
+                self.assertEqual(error.exception.code, 2)
+                open_port.assert_not_called()
 
 
 class ProductPackageTests(unittest.TestCase):

@@ -3035,6 +3035,68 @@ esp_base_container_binding_result_t esp_base_container_product_status_snapshot(
     return binding_snapshot(claim, binding, active);
 }
 
+static bool confirmed_running(void)
+{
+    return !s_product.trial_mode && s_product.thread_joinable &&
+        atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+            ESP_BASE_CONTAINER_RUNNING &&
+        atomic_load_explicit(&s_product.instance_active, memory_order_acquire) &&
+        esp_base_container_product_event_accepting();
+}
+
+static bool confirmed_stopped(void)
+{
+    return !s_product.trial_mode && !s_product.thread_joinable &&
+        s_product.stop_succeeded && s_product.native_reclaimed &&
+        s_product.reopen_allowed && !s_product.uninstall_uncertain &&
+        atomic_load_explicit(&s_product.result, memory_order_acquire) ==
+            ESP_BASE_CONTAINER_STOPPED &&
+        !atomic_load_explicit(&s_product.instance_active, memory_order_acquire) &&
+        s_product.event_queue == NULL && s_product.product_version == NULL &&
+        !esp_base_container_product_event_accepting();
+}
+
+esp_base_container_run_result_t esp_base_container_product_set_running(
+    const esp_base_storage_claim_t *claim, bool running, const char boot_id[37],
+    uint32_t expected_sequence, const uint8_t package_sha256[32])
+{
+    uint8_t requested_boot[16];
+    if (!esp_base_storage_claim_active(claim)) return ESP_BASE_CONTAINER_RUN_BUSY;
+    if (!policy_present() || expected_sequence == 0U || package_sha256 == NULL ||
+        !decode_uuid(boot_id, requested_boot) ||
+        memcmp(requested_boot, s_product.boot_id, sizeof requested_boot) != 0 ||
+        s_product.trial_mode || s_product.uninstall_uncertain ||
+        (!confirmed_running() && !confirmed_stopped()))
+        return ESP_BASE_CONTAINER_RUN_REJECTED;
+    esp_base_container_binding_snapshot_t before = {0};
+    const esp_base_container_binding_result_t bound =
+        esp_base_container_product_binding_snapshot(claim, &before);
+    if (bound == ESP_BASE_CONTAINER_BINDING_BUSY) return ESP_BASE_CONTAINER_RUN_BUSY;
+    if (bound != ESP_BASE_CONTAINER_BINDING_OK) return ESP_BASE_CONTAINER_RUN_UNCERTAIN;
+    if (!before.package_present || before.container_sequence != expected_sequence ||
+        memcmp(before.package_sha256, package_sha256, 32) != 0 ||
+        (confirmed_running() &&
+         memcmp(s_product.event_package_sha256, package_sha256, 32) != 0))
+        return ESP_BASE_CONTAINER_RUN_REJECTED;
+    if (running ? !confirmed_running() : !confirmed_stopped()) {
+        if (running) {
+            if (esp_base_container_product_boot(claim, boot_id) != ESP_BASE_CONTAINER_RUNNING)
+                return ESP_BASE_CONTAINER_RUN_UNCERTAIN;
+        } else if (!esp_base_container_product_stop_confirmed(claim)) {
+            return ESP_BASE_CONTAINER_RUN_UNCERTAIN;
+        }
+    }
+    esp_base_container_binding_snapshot_t after = {0};
+    if (esp_base_container_product_binding_snapshot(claim, &after) !=
+            ESP_BASE_CONTAINER_BINDING_OK ||
+        memcmp(&before, &after, sizeof before) != 0 ||
+        !(running ? confirmed_running() : confirmed_stopped()))
+        return ESP_BASE_CONTAINER_RUN_UNCERTAIN;
+    if (running && memcmp(s_product.event_package_sha256, package_sha256, 32) != 0)
+        return ESP_BASE_CONTAINER_RUN_UNCERTAIN;
+    return ESP_BASE_CONTAINER_RUN_COMPLETE;
+}
+
 typedef struct {
     econtainer_package_workspace_t package;
     econtainer_wasm_workspace_t wasm;

@@ -203,6 +203,24 @@ const char *ebase_parse_command(const char *json, size_t length,
         goto done;
     }
     if (!write_identity(root, &out->request)) goto done;
+    if (!strcmp(command->valuestring, "product.stop") ||
+        !strcmp(command->valuestring, "product.start")) {
+        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
+        const char *const keys[] = {"expected_container_sequence", "package_sha256"};
+        if (!allocate_payload(out, sizeof *out->product_run, allocate)) {
+            error = "resource_failure"; goto done;
+        }
+        if (!exact_keys(parameters, keys, 2) ||
+            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "expected_container_sequence"),
+                          UINT32_MAX, &out->product_run->expected_container_sequence) ||
+            !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
+                      out->product_run->package_sha256)) goto done;
+        out->kind = !strcmp(command->valuestring, "product.stop") ?
+            EBASE_PRODUCT_STOP_COMMAND : EBASE_PRODUCT_START_COMMAND;
+        out->product_run->running = out->kind == EBASE_PRODUCT_START_COMMAND;
+        error = NULL;
+        goto done;
+    }
     const bool product_install = !strcmp(command->valuestring, "product.install");
     const bool product_upgrade = !strcmp(command->valuestring, "product.upgrade");
     if (product_install || product_upgrade) {

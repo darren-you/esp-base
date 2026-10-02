@@ -6,7 +6,12 @@
 #include "esp_base_product_package_source.h"
 
 #define EBASE_LINE_LIMIT 9216
-typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT, EBASE_PRODUCT_STATUS, EBASE_PRODUCT_RESULT, EBASE_PRODUCT_UNINSTALL_COMMAND, EBASE_PRODUCT_INSTALL_COMMAND, EBASE_PRODUCT_UPGRADE_COMMAND } ebase_command_kind_t;
+typedef enum { EBASE_STATUS, EBASE_RESTART, EBASE_CONFIG_SET, EBASE_OTA_START, EBASE_OTA_RESULT, EBASE_PRODUCT_STATUS, EBASE_PRODUCT_RESULT, EBASE_PRODUCT_UNINSTALL_COMMAND, EBASE_PRODUCT_INSTALL_COMMAND, EBASE_PRODUCT_UPGRADE_COMMAND, EBASE_PRODUCT_STOP_COMMAND, EBASE_PRODUCT_START_COMMAND } ebase_command_kind_t;
+typedef struct {
+    uint32_t expected_container_sequence;
+    uint8_t package_sha256[32];
+    bool running; /* Decoder-owned action; not an extra wire field. */
+} ebase_product_run_request_t;
 typedef struct {
     char operation_id[ESP_BASE_OTA_OPERATION_ID_BYTES];
     uint32_t operation_sequence;
@@ -39,6 +44,7 @@ typedef struct {
         char *operation_id;
         ebase_product_uninstall_request_t *product_uninstall;
         ebase_product_package_request_t *product_package;
+        ebase_product_run_request_t *product_run;
     };
 } ebase_command_t;
 
