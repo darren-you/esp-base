@@ -1,12 +1,14 @@
 # ESP Base
 
+2026-10-03 C3 公开停止／启动实体切片：USB 与认证 MQTT 各一次 stop/start、停止后重启自动运行 confirmed、旧 boot 原 ID unknown、十二项业务、A/C 字节读回和原代码恢复通过。130/130 下载样本 MQTT／FRP ready，441 个任务快照完整序列化；来源历史 heap 23888 B 仍未达 49152 B，完整容量、两板与生产继续开放，见[实体检查点](docs/operations/product_lifecycle_c3_checkpoint.md)。
+
 2026-10-03 FRP 唯一配置 owner 软件候选：借用 control task 的 canonical 配置并复用已有 work 做完整失败重载，保留 native 深拷贝与销毁重试；两个目标 host、普通／签名 SDK 和官方验签通过。C3 签名普通堆起点前移 2736 B，实体容量仍待复验，见[检查点](docs/operations/frp_canonical_config_owner_checkpoint.md)。
 
 2026-10-02 产品包 HTTPS 共享期限软件候选：读取器改为借用公开 OTA 的唯一 DNS／TCP／TLS 机制，保留 5 秒连接、1 秒单次操作、30 秒无进展与 5 分钟总期限，以及原 URL／长度／HTTP 策略。最终组合包含公开停止／启动改动；正式依赖保存与实板验收边界见[检查点](docs/operations/shared_http_deadline_consumer_checkpoint.md)。
 
 2026-10-02 C3 新 MQTT 任务栈诊断：联合功能及恢复通过，325 份存活任务快照完整；来源历史 heap 22040 B 仍未达 48 KiB，观测开销不回加，正式 Wi-Fi 默认值保持，见[诊断检查点](docs/operations/mqtt_task_stack_diagnostic_checkpoint.md)。
 
-2026-10-02 产品停止／启动软件接入：仅当前启动停止，重启自动运行已确认产品；公开 USB／MQTT 原 ID 查询、重新验签和真实 guest 回收通过双目标组合验证，Tool 全链路软件消费已保存，实体停止／启动与容量仍待验收，见[检查点](docs/operations/public_product_lifecycle_checkpoint.md)。
+2026-10-02 产品停止／启动软件接入：仅当前启动停止，重启自动运行已确认产品；公开 USB／MQTT 原 ID 查询、重新验签和真实 guest 回收通过双目标组合验证，Tool 全链路软件消费已保存，C3 有限实体切片见最新检查点，完整容量与双板仍待验收，见[检查点](docs/operations/public_product_lifecycle_checkpoint.md)。
 
 2026-10-02 MQTT 消息 owner 精确消费：采用公开 `6443b71db761f4d667503f14108687bad5e6b5ee` 和官方生成双目标锁；双目标普通／签名构建、完整 host 与官方验签通过。SDK 双锁、provider 字节及实际编译输入已核对，实板容量未据此验收，见[软件消费检查点](docs/operations/mqtt_sized_message_owner_consumer_checkpoint.md)。
 
