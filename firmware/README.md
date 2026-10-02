@@ -1,6 +1,6 @@
 # ESP Base 固件
 
-公开 `product.stop`／`product.start` 软件候选沿同一 USB／MQTT 控制入口和唯一产品 worker，仅在本 boot 的请求守卫中保存原 ID 结果，不改变已确认包绑定或持久账本。停止需真实回收后才成功，启动重验签并执行 init；异常实例保持阻断，新 boot 自动恢复已确认产品。协议与原 ID 查询边界见[设备协议](../docs/design/device-protocol.md#产品停止与新启动)，真实宿主验证见[测试说明](tests/README.md)。实体板及 Tool 完整消费仍待验收。
+公开 `product.stop`／`product.start` 沿同一 USB／MQTT 控制入口和唯一产品 worker，仅在本 boot 的请求守卫中保存原 ID 结果，不改变已确认包绑定或持久账本。停止需真实回收后才成功，启动重验签并执行 init；异常实例保持阻断，重启后自动运行当前固件已确认的产品，不持久化停止状态。协议与原 ID 查询边界见[设备协议](../docs/design/device-protocol.md#产品停止与新启动)，真实宿主验证见[测试说明](tests/README.md)。C3 已完成有限公开生命周期及恢复切片，容量、全部 native 生命周期、满合法峰值、ESP32 与 Tool 正式交付继续开放，范围以[最新实体检查点](../docs/operations/ota_allocation_diagnostic_checkpoint.md)为准。
 
 2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](../docs/operations/rtc_config_ownership_checkpoint.md)及[前轮 MQTT 消费](../docs/operations/mqtt_owned_config_consumer_checkpoint.md)。
 
@@ -87,11 +87,11 @@ ESP32 产品目标由可设置的 `CONFIG_FREERTOS_UNICORE=y` 选出 SDK 派生�
 
 ESP32 未签名普通编译只允许显式 `-DESP_BASE_ESP32_OFFLINE_PROBE=ON`，并要求关闭硬件 Secure Boot 与签名输出；它只用于离线容量与源码检查，**绝非可刷写候选**。ESP32 签名构建必须提供仓外绝对路径的 P-256 签名键，并在独立 sdkconfig 中启用 `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y`、`CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y`、`CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y`、`CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y` 与 rollback；CMake 会拒绝缺失或错目标。测试键只用于仓外软件验证，不能作为设备首次启动密钥。签名 bin 还必须经固定 SDK 的 `espsecure verify-signature --version 1` 验证，并核对双槽与分区表。旧 ESP-AT 板卡的新启动链、两个已签名 Base 槽、otadata、旧区归档与完整恢复仍待 P7-01 受控实板验收。
 
-[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 依赖由两个 target 专属锁固定；`mqtt` 唯一来源是`esp-mqtt@f32335852d6f823c1a3b130bfbe3a7ac4499e10a`，`esp_ota` 唯一来源是公开 `esp-ota@04acb5e80a744649f8442607fb8d901d30880ca0`，`esp_frp` 唯一来源是`esp-frp@989cc876d92b815aeb0b6806fb861f0ee2b39a86`，`esp_container` 唯一来源是公开 `esp-container@2b93b979b8b0760dcb96b28ac5d13fc52ae547bf`，其 WAMR 固定 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
+[嵌入式标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。测试在 `tests/`，公开主机调用示例在固件根之外的 [tools/](../tools/README.md)。Component Manager 从[设备协议组件清单](components/device_protocol/idf_component.yml)和[产品装配清单](integrations/container_binding/idf_component.yml)解析公开 MQTT／OTA／FRP／Container 的完整提交，分别以 [C3 锁](dependencies.lock)和 [ESP32 锁](dependencies.lock.esp32)固定实际消费；WAMR 由精确 Container 版本声明，README 不另维护版本清单。host tests 使用同一已解析 cJSON、`eota.h` 与 `esp_frp.h`，不读取相邻仓。
 
 当前 FRP 精确锁将 ESP32 的工作流及 TLS 私有对象条件分配至 8BIT IRAM；双目标签名容量、Base host 回归和 ESP32 一条真实 FRPS 工作流的仓外 QEMU 检查见[工作流 IRAM 精确锁检查点](../docs/operations/p6-03-frp-work-iram-precise-lock-checkpoint.md)。正式 Base owner、MQTT／OTA／Container 并发与实体板容量尚未验收。
 
-ESP32 命令／配置临时工作区此前按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；后续正式串口产品卸载暴露 4／6 KiB 控制栈溢出，现将 ESP32 控制任务栈设为 8 KiB，C3 保持 6 KiB，见[签名 QEMU 复测](../docs/operations/product-uninstall-protocol-qemu-checkpoint.md)。双流、三条 MQTT 消息与一次真实配置提交的旧仓外 QEMU 切片仍低于 49,152 B 普通堆门，正式 OTA 与实体板未验收。
+ESP32 命令／配置临时工作区此前按[协议工作区容量检查点](../docs/operations/p6-03-protocol-workspace-iram-checkpoint.md)收敛；随后正式串口产品卸载暴露 4／6 KiB 控制栈溢出，[签名 QEMU 复测](../docs/operations/product-uninstall-protocol-qemu-checkpoint.md)当时将 ESP32 控制栈设为 8 KiB、C3 保持 6 KiB。最新命令 owner 已将两个目标控制栈统一为 8 KiB，见前述[命令内存检查点](../docs/operations/c3-command-memory-checkpoint.md)。双流、三条 MQTT 消息与一次真实配置提交的旧仓外 QEMU 切片仍低于 49,152 B 普通堆门，其读数不代表当前完整调用链或实体板容量。
 
 后续[HTTPS OTA 并发检查点](../docs/operations/p6-03-ota-https-combination-checkpoint.md)在同片签名 ESP32 QEMU 中经严格 HTTPS 将 **1,114,100 B** 独立签名 app 完整准备到备用槽，同时完成双 FRP 工作流与三条 MQTT 消息；普通堆历史最低 **26,416 B**，比不变的容量门低 **22,736 B**。探针未执行正式 Base `ota.start` 收据、Container stage、选槽及实板流程，P6-03/P7-01/P7-02 仍开放。
 

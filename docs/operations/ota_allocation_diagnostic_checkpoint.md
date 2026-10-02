@@ -1,5 +1,21 @@
 # C3 OTA 分配诊断检查点
 
+## 来源最大事件与完整生命周期续验
+
+2026-10-03，沿用 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89` 的运行源码和上一轮冻结的来源 A／目标 C 签名固件，正式 Wi-Fi、TLS、guest、任务栈、MQTT 与 FRP 预算保持。仓外新入口仅在来源产品 confirmed、网络稳态之后、原一次 OTA 之前增加一个最大事件切片；原 132 项纯测试与新增 12 项均通过，Root 独立复验新增项和入口精确差异。原 OTA ID、90 秒循环及 5 秒只读查询语义、最终绑定与恢复 finally 保持。
+
+实际公开发布帧为 **4096 B**：固定前缀 203 B，来源 `counter v0-1-0` 事件 **3893 B**，含零字节，sequence 2 只发布一次。该 guest 按全部事件字节累加，安装代表事件 19 B 后的真实结果为 **3912**；前后 Wi-Fi connected、MQTT／FRP ready，同设备／boot 和完整 confirmed 绑定保持。目标 `counter v0-2-0` 按 body 字节计数，原目标十二项业务预期不变。这是 OTA 前的单个最大事件，不证明八槽队列、outbox 满载或事件与 OTA 并存峰值。
+
+本轮整轮退出 0。一次 WRITE 联合 OTA 持久确认、USB／认证 MQTT 各一次 stop/start、五个生命周期原 ID 各写一次及重复只读、停止后重启自动运行当前固件 confirmed、旧 stop ID 在新 boot 两通道 unknown、十二项业务、卸载和 A/C 逐字节读回通过。原 OTA ID 查询为 28 次 running、2 次 `ota_result_uncertain`、1 次 succeeded；本轮没有观察到 `storage_uncertain/null`。停止只在当前启动有效，不新增持久停止状态；公开 stop 结果仍不替代独立 native join／句柄仪器。
+
+来源下载 **145/145** 样本 MQTT／FRP ready，连续 prepare 诊断保留 **11 条 NEW_HISTORY、dropped=0**，unsupported／ISR 均 0。历史各 heap minimum 合计 **23228 B < 49152 B**，窗口 current 最低 23888 B；异时历史合计不是同时存活峰值。固定记录区 1800 B、堆起点成本 2832 B 与任务采样工作区 1664 B 均保留，不加回读数，也不与旧正式或其它诊断轮相减归因。451 个完整序列化任务快照的 expected／captured 相等，无采样申请失败；13 个已观察名称的栈余量均至少 1024 B，不证明全部生命周期或满合法峰值。
+
+UART 同一 reader 在明确重启前持续捕获，无重开、错误、溢出或 join 超时；715811 B 日志完整保存，已消费 715769 B、结束待消费 42 B，最高队列量 63815／65536 B，完整诊断 parser 通过，不宣称全部字节均已消费。写前安全状态、两份新鲜一致 4 MiB 基线和三个独立原代码区核对通过；结束擦除全部数据，仅恢复原 bootloader／partition／factory 并逐字节读回，不恢复旧／实验 NVS、不写 eFuse。reset／Wi-Fi down ACK、串口、三 fixture、零所属进程与五个实际精确 listener 释放独立通过。
+
+受限且 Git 忽略的 `c3-validation-20261003/c3-source-maximum-event` 保留原 14142 文件软件冷输入、49 member 新入口 overlay 与 194 member 完整实体证据。overlay 摘要 `9c3bc5d7854595fbd2b3800f73b2c46541ca4d55dd00215912eb7735baf5a1a6`，实体归档摘要 `4be67ca4963561722de9f7d77fdd92ee7e1577c9feb94c2665dadf69d0e7143d`，私有索引 `4cc48fdf8ada092d5fc76c62051588468874c757f4cbc8ff0389ba3fa21cad2f`。Root 再次独立核对 194 个归档成员的字节、大小、mode／执行位与 19 份受限拷贝；旧两轮失败、正式 23888 B 和前轮诊断 22164 B 独立保持。
+
+固定 SDK／实际 ELF 的只读网络生命周期复核确认：未连接的默认 HTTP transport 只是 427 B 请求量，512 B 发送缓冲尚可研究缩短生命周期，两项合计 939 B 请求量不是实测收益；动态 TLS 缓冲已按原生规则释放，peer／handshake 与启动栈不能重复计省。FRP 私有 CA 动态对象量仍待实测，嵌入的常驻证书不能回收。当前实际新增节省为 0。P6-03、满合法队列／在途／并存事件、FRP 双流／最大记录／重连、native 全峰值、Flash 最坏成本、百次公开循环、ESP32、断电／72 小时与正式入口继续开放。
+
 ## 连续诊断与公开生命周期复验
 
 2026-10-03，保持上一轮已冻结来源 A／目标 C 的签名固件字节、全部正式资源预算与生产信任不变，仅在仓外驱动的目标确认循环接受两种现有码未决形态：`ota_result_uncertain`／完整原操作元数据，或 `storage_uncertain`／null。后者继续同一原 OTA ID 的只读查询，不产生新 OTA 操作或重发写命令。132 项 pure mocks 通过，Root 独立重跑其中新增 10 项并核对三行精确差异、原恢复代码和全部输入。原单次 5 秒查询与 90 秒循环时序保持，success 先于总 deadline 判定的既有顺序未改，不宣称硬性 90 秒墙钟截断。
