@@ -66,6 +66,8 @@ static char latest_reported[768];
 static unsigned reported_calls;
 static unsigned wifi_apply_calls, config_commit_calls, config_load_calls;
 static bool allow_config_load;
+static esp_err_t config_commit_result, config_load_result;
+static esp_base_remote_config_t config_load_output;
 static const char *fake_frp_state = "stopped";
 static uint32_t fake_free_heap = 1000;
 static esp_base_container_event_observation_result_t fake_event_observation_state;
@@ -219,6 +221,8 @@ static void reset_case(void)
 #endif
     wifi_apply_calls = config_commit_calls = config_load_calls = 0;
     allow_config_load = false;
+    config_commit_result = config_load_result = ESP_OK;
+    config_load_output = (esp_base_remote_config_t){.revision = 7U};
 }
 
 static void start(unsigned request_number)
@@ -1538,6 +1542,32 @@ int main(void)
     assert(iram_work_allocations == 3U);
 #endif
 
+    for (unsigned failed_reload = 0U; failed_reload < 2U; ++failed_reload) {
+        reset_case();
+        s_context.config.revision = 7U;
+        s_context.config.frp.configured = true;
+        strcpy(s_context.config.frp.server_hostname, "admitted-frp.example");
+        s_context.frp_flash_store = &frp_store;
+        const esp_base_remote_config_t admitted = s_context.config;
+        config_set(23U, false, usb_reply, sizeof usb_reply);
+        assert(s_trial_active && s_candidate != NULL);
+        config_commit_result = ESP_BASE_CONFIG_UNCERTAIN;
+        allow_config_load = true;
+        config_load_output = (esp_base_remote_config_t){.revision = 8U};
+        config_load_output.frp.configured = true;
+        strcpy(config_load_output.frp.server_hostname, "reloaded-frp.example");
+        config_load_result = failed_reload ? ESP_ERR_INVALID_STATE : ESP_OK;
+        poll_configuration(1002U);
+        assert(!s_trial_active && s_candidate == NULL && s_config_uncertain &&
+               config_commit_calls == 1U && config_load_calls == 1U);
+        if (failed_reload) {
+            assert(memcmp(&s_context.config, &admitted, sizeof admitted) == 0);
+        } else {
+            assert(memcmp(&s_context.config, &config_load_output,
+                          sizeof config_load_output) == 0);
+        }
+    }
+
     reset_case();
     s_context.config.revision = 7U;
     s_context.config.frp.configured = true;
@@ -2547,6 +2577,7 @@ esp_err_t esp_base_remote_config_commit_verified(const esp_base_remote_config_t 
     assert(s_context.flash_io_owner != NULL &&
            !esp_base_storage_claim(s_context.flash_io_owner, &competing));
     ++config_commit_calls;
+    if (config_commit_result != ESP_OK) return config_commit_result;
     *committed = *candidate;
     committed->revision = expected_revision + 1U;
     return ESP_OK;
@@ -2557,8 +2588,8 @@ esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config)
     esp_base_storage_claim_t competing = {0};
     assert(!esp_base_storage_claim(&owner, &competing));
     ++config_load_calls;
-    *config = (esp_base_remote_config_t){.revision = 7U};
-    return ESP_OK;
+    *config = config_load_output;
+    return config_load_result;
 }
 psa_status_t psa_hash_setup(psa_hash_operation_t *operation, int algorithm)
 {

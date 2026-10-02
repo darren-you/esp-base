@@ -956,7 +956,8 @@ static void poll_configuration(uint64_t now)
         esp_base_storage_claim_t claim = {0};
         if (!claim_config_flash_io(s_context.flash_io_owner, &claim)) return;
         /* The control task is the sole reader/writer of s_context.config after
-         * startup. Network owners copy their config before starting workers. */
+         * startup. The FRP owner borrows this boot-long canonical storage;
+         * native network workers own copies made when they are created. */
         esp_base_remote_config_t *work = protocol_work_alloc(sizeof *work);
         if (work == NULL) {
             const bool released = esp_base_storage_release(&claim);
@@ -976,18 +977,24 @@ static void poll_configuration(uint64_t now)
         esp_err_t error = esp_base_remote_config_commit_verified(
             s_candidate, s_candidate->revision, &s_context.config, work);
         if (!esp_base_storage_release(&claim)) error = ESP_BASE_CONFIG_UNCERTAIN;
-        memset(work, 0, sizeof *work);
-        free(work);
         s_trial_active = false;
         clear_candidate();
+        bool reloaded = false;
+        if (error == ESP_BASE_CONFIG_UNCERTAIN) {
+            /* A write error may follow a durable commit. Decode may also
+             * modify its output before returning an error. Reload into the
+             * existing work and publish only a complete admitted config. */
+            reloaded = load_config_with_flash_io(
+                work, s_context.flash_io_owner) == ESP_OK;
+            if (reloaded) s_context.config = *work;
+        }
+        memset(work, 0, sizeof *work);
+        free(work);
         if (error == ESP_OK) {
             save_outcome(s_trial_slot, "succeeded", NULL, true);
         } else if (error == ESP_BASE_CONFIG_UNCERTAIN) {
             s_config_uncertain = true;
-            /* A write error may follow a durable commit. Reload before selecting
-             * connectivity, never claim the old configuration was restored. */
-            if (load_config_with_flash_io(
-                    &s_context.config, s_context.flash_io_owner) == ESP_OK) {
+            if (reloaded) {
                 restore_committed(now);
             } else {
                 ebase_wifi_config_t disabled = {0};

@@ -22,7 +22,11 @@ typedef struct {
 
 /* The USB control task is the sole caller. A new revision first destroys the
  * previous library instance; ESP_ERR_TIMEOUT means cleanup is still active and
- * the caller must retry without dropping the old handle. */
+ * the caller must retry without dropping the old handle. Config is borrowed
+ * from that same control owner's boot-long canonical storage. The caller may
+ * commit a complete new revision only before configure, then must retry
+ * configure before poll can create a replacement. No worker borrows config;
+ * efrp_create synchronously owns copies for its full native lifetime. */
 esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
                                        const char *device_id,
                                        const efrp_aead_flash_store_t *flash_store);
