@@ -1,5 +1,7 @@
 # ESP Base 固件
 
+2026-10-02 C3 产品／FRP／MQTT／WRITE OTA 组合实测保留失败：来源产品与网络同机下载、目标产品和原 OTA ID 持久确认、C 上 FRP 认证状态均通过；再次重启后 MQTT ready、FRP 登录拒绝，官方 FRPS 报告相同 client_id 仍在线。来源下载 67 份采样均 MQTT/FRP ready，历史最低堆仅 6500 B，低于 48 KiB；该登录错误与容量缺口分别处理。109 份失败证据、数据丢弃、原代码恢复与清理已核对，见[组合缺口](../docs/issues/c3_product_frp_mqtt_ota_capacity.md)。
+
 2026-10-02 C3 空产品的真实 FRP/MQTT 认证管理与一次重启恢复通过。该轮使用原始启动入口、正式分区及私有实验配置，设备 HMAC 经 Tool 原有控制库验证；产品、OTA 并发和资源总门继续开放，见[实板检查点](../docs/operations/c3_frp_mqtt_management_checkpoint.md)。
 
 2026-10-02 C3 公开 WRITE 联合 OTA 实板切片通过：不同签名 message-counter 包的代表事件、原健康门、原 ID 持久成功及重启后恢复、十二项业务检查、卸载和 A／C Flash 字节核对完成。源码与依赖锁保持，私有配置仅实验 CA／timer 授权及一个定时器／目标版本，生产授权未改，见[检查点](../docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。REUSE 与 WRITE 均仅完成 C3 实验切片；生产网络、完整能力、FRP、ESP32、掉电和五能力总门仍开放。
