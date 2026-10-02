@@ -30,13 +30,29 @@ SDK 的 C3 原生调用栈追踪在没有 frame pointer 时只允许深度 0。�
 
 原生 ALL 轮保留下来的较大记录包括 1024、1532、1700 B，但没有调用位置且已发生淘汰，不能直接将后两种大小全部归为 Wi-Fi。原生 LEAKS／ALL 的准备返回完整快照未被串口日志捕获；只记录已实际收到的完整快照和原始不完整行，不补写不存在的阶段证据。
 
+## 网络分配调用位置续验
+
+同日独立网络探针的 231 份私有证据逐项大小与 SHA-256 核对通过，冻结索引为 `a9856435c47441583d4e97d0c6146f96d9d8be385c96ff71b634d74a2d40d428`。窗口仍从 `eota_prepare` 入口到首个正文进度，只统计非 ISR、cache 开启时 1532／1700 B 的原生 malloc／calloc。原日志捕获四个完整保留摘要、八个组记录：Wi-Fi 的 `esf_buf_alloc_dynamic` 为 1700 B／14 次，tcpip 的 `mem_malloc` 为 1532 B／5 次。Wi-Fi 只映射到函数，源码行不可用；lwIP 为固定 SDK `mem.c:209`。这些是调用次数，不记录释放或同时存活，不证明缓冲数量和优化收益。首进度摘要截断、准备返回完整快照未捕获，保持原证据边界。
+
+实际 ELF 和 52 条保留指令独立核对；两个 wrapper、原分配器及 cache 检查均在 IRAM，cache 关闭时直接透传返回，Flash 记录器仅在 cache 开启后进入。记录区为 1024 B，heap trace／frame pointer 关闭，TLS 16384／4096 B 不变。本轮历史最低 heap 为 24956 B，139 份来源下载状态均 MQTT／FRP ready；正常固件 23800 B 保持独立读数，不能加回记录区字节。公开安装、一次 WRITE OTA、一次 MQTT restart、十二项业务、卸载、全量实验 Flash 与 A／C 镜像回读、实验数据清除和三个原代码区逐字节恢复均核验；四服务和串口释放，无 eFuse 写入。该切片仍未通过 48 KiB 门。
+
 ## 联合功能与恢复
 
 每轮都独立核对本次唯一 C3、USB 身份、Flash／安全状态及原三个代码区，完整擦除数据后写入并全量回读实验 Flash。公开安装、一次 WRITE 联合 OTA、一次 MQTT restart、十二项消息计数业务、公开卸载、来源 A 保持及目标 C 镜像回读通过。三轮来源下载分别为 127／130／124 份采样，全部 MQTT／FRP ready；目标和第三 boot 保持新设备身份、revision 3、确认产品及原 OTA 成功。写命令各提交一次。
 
 结束均完整擦除实验数据，只恢复原 bootloader、partition table 和 factory app，三个代码区逐字节核对，原应用 Wi-Fi down ACK、实验 FRPS／网关／HTTPS／MQTT 停止和串口释放均确认。未恢复旧／实验 NVS，未写 eFuse 或生产服务，未操作已拔掉的 ESP32。
 
-## 冻结证据与开放项
+## 原生 Wi-Fi 动态缓冲候选
+
+2026-10-02 在 Base `63ea379bb8dbb0f2ddbee44f525a4a45a9b51d1b` 的同一运行源码上，仓外候选仅将 C3 原生动态 RX 从 32 改为 6、动态 TX 从 32 改为 8；静态 RX／BA 窗口仍为 6。A／C 实际编译配置除这两项及官方版本字段外，与前轮网络输入的 active 配置一致，SDK 未改；TLS、guest、MQTT 队列／outbox 与 FRP 上限保持。仍含既有私有内存采样、实验 CA 与 timer 授权，没有 allocator 记录区。此候选未进入正式默认配置。
+
+独立 verifier 的 584 项检查通过，核对源码归档、44 份 SDK 制品、实际配置／ELF、A／C 官方 RSA v2 验签、完整 Flash 与恢复字节。两个镜像均为 1183744 B，落在正式应用槽内。公开一次安装、一次 WRITE 联合 OTA、一次 MQTT restart、十二项消息计数业务及卸载通过，133／133 份来源下载采样均 MQTT／FRP ready。来源下载历史最低 heap 为 **25180 B**，低于 49152 B；同一采样窗口 free／最大连续块／control 栈最低为 37212／27648／2376 B。control 栈为 8192 B，此读数不覆盖所有任务栈或满合法重叠峰值。
+
+本轮写前取得两份相同的完整 4 MiB 新鲜基线；实验镜像全量回读、来源 A 保持和目标 C 精确回读通过。结束整片擦除实验数据，只恢复原三个代码区并逐字节比较，原应用 Wi-Fi down ACK、四服务和串口释放已核对；旧／实验 NVS 未恢复，无 eFuse 写入。此前两次 esptool 输出形态解析失败均发生在 Flash 写入前，原输入和失败日志分别保留。
+
+307 份私有证据保存在 `wifi-dynamic-buffer-candidate`，冻结索引 SHA-256 为 `61d5d190128e9e7174d18ecd8834c057c3d7cd5345c1686f0cb96943e0219612`；独立证明 SHA-256 为 `7f73d15e14542b483e80784d22d0fe91534f0b7348d98dc267a14890170c6ec2`。正常基线 23800 B 是独立样本，不能把差额全归因于 Wi-Fi 修改，也不能据单次功能通过宣布收益或容量通过，因此正式默认值保持。满负荷、完整峰值、Flash 成本、两板、掉电和长稳仍未验收。
+
+## 冻结诊断证据与开放项
 
 ESP Tool 受限、Git 忽略的 `c3-validation-20261002` 独立保存下列输入、原始日志、ELF／map、官方验签、全量回读和清理记录；全部文件摘要核验，旧索引保持。
 
@@ -45,5 +61,6 @@ ESP Tool 受限、Git 忽略的 `c3-validation-20261002` 独立保存下列输�
 | `ota-native-heap-live-trace` | 205 | `c3c7782ab8c760681424a7e3f7d6e04271f3ab079b2f6d140ba49887e4687d8d` |
 | `ota-native-all-allocation-trace` | 193 | `77e1d2599a839fbc9f05f82ce12992b9fabe32b30b9ccb53a0e55dd184f18da6` |
 | `ota-tls-allocation-callers` | 206 | `40bf3f71d8d9b683e1b60890dde9418de1e61dec7198ec0e3f65ee88644c4601` |
+| `network-allocation-callers` | 231 | `a9856435c47441583d4e97d0c6146f96d9d8be385c96ff71b634d74a2d40d428` |
 
 正常固件仍沿用 [RTC 所有权检查点](rtc_config_ownership_checkpoint.md)的独立读数 23800 B，低于 49152 B 门；不向诊断读数加回记录区字节来标记通过，也不将独立样本差额归给单项修改。其它网络分配来源、满队列／outbox、FRP 双流／预备流／64 KiB 记录、最大输入、全部任务栈和合法重叠峰值、百次整机生命周期、Flash 最坏成本、掉电、72 小时、ESP32 和生产入口继续开放。P6-03 与五能力总门未通过。

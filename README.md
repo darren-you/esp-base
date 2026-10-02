@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-02 MQTT 消息 owner 精确消费：采用公开 `6443b71db761f4d667503f14108687bad5e6b5ee` 和官方生成双目标锁；双目标普通／签名构建、完整 host 与官方验签通过。SDK 双锁、provider 字节及实际编译输入已核对，实板容量未据此验收，见[软件消费检查点](docs/operations/mqtt_sized_message_owner_consumer_checkpoint.md)。
+
 2026-10-02 C3 OTA 分配诊断：三轮联合功能和恢复通过；定向探针捕获 10 笔较大 TLS 分配，实际调用位置及全部释放已核对。原生 ALL 轮溢出，完整峰值仍开放；正常固件历史 heap 23800 B 未达 48 KiB。详见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](docs/operations/rtc_config_ownership_checkpoint.md)及[前轮 MQTT 消费](docs/operations/mqtt_owned_config_consumer_checkpoint.md)。
