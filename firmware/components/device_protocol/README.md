@@ -1,5 +1,7 @@
 # device_protocol
 
+2026-10-02 C3 公开 WRITE 联合 OTA 切片完成：不同签名 message-counter 包在真实代表事件与原健康门后取得原 ID 成功，重启恢复、十二项业务检查、卸载及 A／C Flash 字节核对通过。预期暂停拒绝按 business_failed／负结果与公开发布器退出码 2 消费，运行合同未改；私有 timer 授权和证据见[WRITE 检查点](../../../docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。
+
 2026-10-02 C3 公开 REUSE 联合 OTA 实板切片通过：只发送一次 `ota.start`，沿原 ID 只读查询，经真实代表事件和 30 秒健康门后持久成功；再次重启保留成功与确认产品，公开卸载回读空绑定，A／C Flash 字节精确核对。过程中两次有绑定结果的 unknown 均保留，未重发写命令；实验输入与边界见[联合 OTA 检查点](../../../docs/operations/c3_joint_ota_reuse_checkpoint.md)。
 
 2026-10-02 C3 公开产品切片：原始 Base 经实际 HTTPS 下载验签、代表 MQTT 事件与原 30 秒健康门确认 counter，MQTT 重启后确认绑定和活动产品恢复，再由公开卸载取得持久成功及空绑定。ECS2 1→6→6→7，安装／重启／卸载各发送一次；实验 CA 只进入私有 SDK 构建，源码与生产信任未改，边界见[安装检查点](../../../docs/operations/c3_product_https_install_checkpoint.md)。两板、升级、完整宿主能力、FRP／OTA 与五能力组合仍待验证。

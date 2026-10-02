@@ -1,6 +1,8 @@
 # ESP Base 固件
 
-2026-10-02 原始 C3 Base 的公开 REUSE 联合 OTA 已完成实验实板切片：代表 MQTT 事件、连续 30 秒健康门、原 ID 持久成功、再次重启成功结果与产品恢复、公开卸载及 A／C 字节读回通过。仅私有实验 CA／版本配置变化，范围与失败观察器记录见[检查点](../docs/operations/c3_joint_ota_reuse_checkpoint.md)；下文未验收描述中的 WRITE、生产入口、FRP、ESP32、掉电与五能力总门仍开放。
+2026-10-02 C3 公开 WRITE 联合 OTA 实板切片通过：不同签名 message-counter 包的代表事件、原健康门、原 ID 持久成功及重启后恢复、十二项业务检查、卸载和 A／C Flash 字节核对完成。源码与依赖锁保持，私有配置仅实验 CA／timer 授权及一个定时器／目标版本，生产授权未改，见[检查点](../docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。REUSE 与 WRITE 均仅完成 C3 实验切片；生产网络、完整能力、FRP、ESP32、掉电和五能力总门仍开放。
+
+2026-10-02 前序原始 C3 Base REUSE 实验：代表 MQTT 事件、连续 30 秒健康门、原 ID 持久成功、再次重启成功结果与产品恢复、公开卸载及 A／C 字节读回通过。仅私有实验 CA／版本配置变化，范围与失败观察器记录见[检查点](../docs/operations/c3_joint_ota_reuse_checkpoint.md)。
 
 当前 OTA 收据为 V3、308 字节；来源和目标包字段已编码，内部登记已校验带包目标与来源身份，Container 内部 stage 已能将 `REUSE` 提交为 `PREPARED`、将 `WRITE` 预约为 `WRITING`，独立内部续写入口可在原收据约束下写包、验签授权并读回 `PREPARED`。收据的只读恢复入口可完整返回有效带包 V3 字段。启动现按原收据接通 A 侧回滚、pending C 的带包 trial 与连续在线健康验证，以及已有健康证据的 VALID C 确认恢复；公开 worker 现按包模式核对原收据与来源，准备新固件后停止 guest，复用包重验或严格 HTTPS 写新包，持久 PREPARED／完整传输读回后才选 boot。公开 `ota.start` 已严格解析三种包模式并由客户端生成对应参数；三种模式各自满足来源／容量／授权条件后可登记并执行；不确定保留原操作和 claim，禁止另起升级。旧 V2 长度与不合法带包 V3 均视为存储事实不确定；有效带包 V3 不能仅据只读结果重放或确认，必须完成模式对应的物理／ECS2 对账和终态读回。公开软件入口已接联合恢复和健康协议；真实 HTTPS／MQTT、设备更新、掉电与五能力容量仍待验收。
 

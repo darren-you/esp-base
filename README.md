@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-02 C3 公开 WRITE 联合 OTA 与消息计数切片通过：严格 HTTPS 更新不同签名包至 counter v0-2-0，经代表事件和 30 秒健康门取得原 OTA ID 持久成功，再次重启保留结果及确认产品。十二项真实业务检查、公开卸载和 A／C Flash 字节核对通过，ECS2 1→6→11→11→12；实验镜像仅增加 timer 授权／一个定时器、既有实验 CA 和官方版本设置，生产信任未改。完整边界见[WRITE 检查点](docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。
+
 2026-10-02 C3 公开 REUSE 联合 OTA 切片通过：已确认 counter 从签名固件 A 升级到 C，实际代表事件与 30 秒健康确认后，原 OTA ID 持久成功；再次重启仍成功、产品恢复，公开卸载与 A／C 完整 Flash 字节核对通过，ECS2 1→6→10→10→11。仅私有构建的实验 CA 与官方版本配置不同，生产信任未改；WRITE、FRP、ESP32 与五能力总验收继续开放，见[联合 OTA 检查点](docs/operations/c3_joint_ota_reuse_checkpoint.md)。
 
 2026-10-02 C3 产品公开链实板切片：原始启动入口与正式分区完成一次 HTTPS 签名安装、MQTT 代表事件、实际 30 秒健康确认、一次重启后的确认产品恢复及公开卸载，ECS2 1→6→6→7。该私有镜像仅通过官方 SDK 配置加入既有实验 CA，生产信任未变；ESP32、升级、FRP／OTA 与五能力峰值仍待验收，见[安装检查点](docs/operations/c3_product_https_install_checkpoint.md)。
