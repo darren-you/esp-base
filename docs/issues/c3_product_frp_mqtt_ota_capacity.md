@@ -38,3 +38,7 @@ ESP Tool 私有 `c3-validation-20261002/five-capability-write-first-failed` 保�
 所有独占实验服务已停止；完整擦除实验数据后，仅恢复原 bootloader、partition table 和 factory app，并逐字节核对。旧／实验 NVS 不恢复，原应用 Wi-Fi down 回执与串口释放已确认。没有 eFuse 或生产服务写入。
 
 后续分别验证稳定设备身份下的已鉴权 run ID 移交及完整重启恢复，并按实际内存域／后续申请收敛容量；不能靠延长观察、重发写命令、放宽 TLS／身份或降低 48 KiB 门标记通过。P4-05／P6-03／P6-09 和完整五能力验收继续开放。
+
+## 稳定身份软件修正续进
+
+2026-10-02，Base 已接入公开 FRP 0.2.0 的调用方稳定请求 run ID，并用已有设备 UUID，不增加持久元数据。官方 FRPS 鉴权先于替换的 host 回归、固定 SDK 双目标及 Base owner 回归通过；详情见[接线检查点](../operations/frp_stable_run_id_checkpoint.md)。本页原失败证据保持，实板重测与容量尚未通过。

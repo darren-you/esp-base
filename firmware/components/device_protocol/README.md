@@ -1,5 +1,7 @@
 # device_protocol
 
+2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](../../../docs/operations/frp_stable_run_id_checkpoint.md)。
+
 2026-10-02 C3 的实际 FRPS 管理链路通过：设备 SDK PSA HMAC 的状态／重启响应由 Tool 验证，错误 key 返回空 401，只发送一次 restart 并经 FRP 确认新 boot，USB 与 MQTT 独立核对配置和恢复。该轮为空产品，具体输入及未完成范围见[实板检查点](../../../docs/operations/c3_frp_mqtt_management_checkpoint.md)。
 
 2026-10-02 C3 公开 WRITE 联合 OTA 切片完成：不同签名 message-counter 包在真实代表事件与原健康门后取得原 ID 成功，重启恢复、十二项业务检查、卸载及 A／C Flash 字节核对通过。预期暂停拒绝按 business_failed／负结果与公开发布器退出码 2 消费，运行合同未改；私有 timer 授权和证据见[WRITE 检查点](../../../docs/operations/c3_joint_ota_write_message_counter_checkpoint.md)。

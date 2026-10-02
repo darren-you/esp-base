@@ -18,6 +18,7 @@ bool esp_base_time_ready(void) { return time_ready; }
 efrp_result_t efrp_create(const efrp_config_t *c, efrp_client_t **out)
 {
     assert(c && out && !*out);
+    assert(c->run_id && !strcmp(c->run_id, c->client_id));
     assert(!strcmp(c->server_hostname, "frp.example.test") && c->server_port == 7000);
     assert(c->ca_length == strlen("-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n"));
     assert(c->token_length == strlen("test-frp-token") &&

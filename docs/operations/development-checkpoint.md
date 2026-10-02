@@ -1,5 +1,7 @@
 # 开发检查点
 
+2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](frp_stable_run_id_checkpoint.md)。
+
 ## 2026-10-01 固件根与宿主工具归位
 
 全工作区检查发现固件 README 标准入口漂移，以及主机 Python 构包工具位于固件根。现修正唯一标准链接，将 `container_product_deadline_test.py` 和 NVS QEMU runner 分别归位到 `tools/container_product_deadline_test.py`、`tools/run_nvs_capacity_qemu.py`；生命周期 Shell 入口和 NVS 探针三阶段命令同步使用新路径，旧文件删除，不保留别名。两个脚本的路径推导仍分别绑定本仓固件测试源码和本仓完整 Flash 排除边界，宿主与执行位保持原合同。

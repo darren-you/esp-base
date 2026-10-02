@@ -1,5 +1,7 @@
 # ESP Base 固件
 
+2026-10-02 FRP 稳定请求身份接线：已有设备 UUID 同时用于 client_id 与 run_id，公开组件 0.2.0 的精确提交及 SDK 生成的双目标锁已更新。两目标签名构建、官方验签和 host 回归通过；C3 联合重启恢复与容量继续复测，见[检查点](../docs/operations/frp_stable_run_id_checkpoint.md)。
+
 2026-10-02 C3 产品／FRP／MQTT／WRITE OTA 组合实测保留失败：来源产品与网络同机下载、目标产品和原 OTA ID 持久确认、C 上 FRP 认证状态均通过；再次重启后 MQTT ready、FRP 登录拒绝，官方 FRPS 报告相同 client_id 仍在线。来源下载 67 份采样均 MQTT/FRP ready，历史最低堆仅 6500 B，低于 48 KiB；该登录错误与容量缺口分别处理。109 份失败证据、数据丢弃、原代码恢复与清理已核对，见[组合缺口](../docs/issues/c3_product_frp_mqtt_ota_capacity.md)。
 
 2026-10-02 C3 空产品的真实 FRP/MQTT 认证管理与一次重启恢复通过。该轮使用原始启动入口、正式分区及私有实验配置，设备 HMAC 经 Tool 原有控制库验证；产品、OTA 并发和资源总门继续开放，见[实板检查点](../docs/operations/c3_frp_mqtt_management_checkpoint.md)。
