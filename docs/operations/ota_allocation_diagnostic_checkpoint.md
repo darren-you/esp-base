@@ -1,5 +1,19 @@
 # C3 OTA 分配诊断检查点
 
+## 全 prepare 历史新低诊断与查询暂态失败
+
+2026-10-03，在公开 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89`／OTA `bf11916ab904be4ee9bcdfae213c85336363e96a` 的仓外诊断组合上，捕获范围从实际 `eota_prepare` 入口至返回。固定 1800 B 记录区只保留 `NEW_HISTORY`，连续单 reader 在原一次 OTA 写命令前开启、覆盖来源与目标观测；无 reader 重开、队列溢出或后台错误。观察成本不回加，正式 Wi-Fi、TLS、任务栈与 guest 预算保持。
+
+原始 UART 完整解析出 SUMMARY 与全部 12 条历史触发，dropped、unsupported 和 ISR 均为 0。来源下载 148/148 个 `0 < received < total` 样本 MQTT／FRP ready，历史 minimum 的各 heap 合计为 **22016 B < 49152 B**，窗口 current 最低为 24652 B。两者语义和时点不同；前者不能解释为所有 heap 的同时 live 峰值。实际 A ELF 将首先观察新低的外层 allocator 返回位置映射到 `esf_buf_alloc_dynamic`、`esp_mbedtls_add_tx_buffer`、cJSON 与 RSA 验证；SDK 解锁至 hook 之间允许抢占，PC 不是唯一致因证明，也不能区分不同 TLS 实例。
+
+本轮整体验证失败。目标已启动 pending 产品，一次代表事件返回 guest 结果 2；原 ID 的 27 次只读 OTA 结果中，前 26 次 running，最后一次为代码允许的 `unknown/storage_uncertain/result:null`，过窄驱动断言立即退出。失败后的只读 Flash 快照显示 EOTA v3 308 B 收据仍 PREPARED、ECS2 v2 为 sequence 10／HEALTH_VERIFIED、目标 C 已 VALID；NVS、EOTA、ECS2 与 otadata CRC 及原操作／目标包绑定有效，未发现持久损坏。快照取得晚于查询且经历进入 ROM，不能证明当时是哪次短 Flash I/O claim 失败，也不能证明最终成功。
+
+目标最终确认、后继停止／启动／重启、十二项业务、卸载和 post-OTA A/C 镜像读回均未执行，不复用前轮结果补齐。来源 A 只通过本轮已验签新鲜整片镜像及初次 4 MiB 写后精确读回绑定；目标 C 只绑定冻结输入与原一次 OTA 请求。结束完整擦除实验数据，仅恢复本次独立读取的 bootloader／partition／factory，双新鲜全片基线、三代码区逐字节恢复、reset／Wi-Fi down ACK、串口／三个 fixture／所属进程及四个精确已声明 listener 释放独立通过；旧／实验 NVS 未恢复，无 eFuse 写入。
+
+受限且 Git 忽略的 `c3-validation-20261003/c3-heap-history-partial` 保存完整软件与失败实体证据。源／软件证据归档摘要为 `d2ebb20156cbc4732274f7335323315d4d6800467c6f867ef0ec2824d3e08177`／`f85325e20ac626d57963fb6dee3b5247e8101a81f877ddfd051c70e730918437`，14142 文件全部逐项核验；实体 157 member 归档为 `ad35148cbd3dcf08e05b39c44b36f1687932688ea61cee6e3fe95740842ee161`，私有索引为 `413ecb835748776ec524dc6ec0f77f0d989ec87d0c9b3c50a36ed7f4b333ae49`，Root 独立复核全部字节、大小、mode 与执行位。前轮缺失 SUMMARY 的失败保持独立。
+
+后继仅修仓外驱动：在原 90 秒截止时间内，对现码定义的合法暂态持续查询同一原 ID，不重发写命令、不扩期限、不放宽最终 succeeded 与目标绑定门。只读资源审计尚无实测节省；两个小型 owner 复用方向的未实现上界合计仅 1807 B，不能关闭当前缺口。满合法队列、FRP 双流及最大记录、独立 native 峰值、Flash 成本、百次公开循环、ESP32、断电／72 小时和正式入口继续开放；P6-03 与五能力总门未通过。
+
 ## 2026-10-03 新低水探针：部分记录失败
 
 本轮实际运行源码为公开 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89`，精确消费 MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 OTA `bf11916ab904be4ee9bcdfae213c85336363e96a`；仅在仓外叠加既有实验 CA／授权、任务观测及私有分配探针。SDK／lwIP／provider、原生锁、正式 Wi-Fi 32／32、TLS 16384／4096、guest 64 KiB 及原任务栈预算保持。A／C 都为 1183744 B，分别为 `0.2.0-c3-heap-daf9-a/c`，完整构建和官方 RSA v2 验签通过；实际源 A／目标 C 摘要分别为 `76ea92a85851a9e4d535bd517b13efc2ecbbd8cb9b6066bfb753eb1659244090`／`f26c6896cbc5783271ae6b46c8cfe2a27d33164ca0d9954af2b00af02731abe5`。14289 个冻结文件及两份软件归档逐项字节、大小、模式／执行位核对通过。
