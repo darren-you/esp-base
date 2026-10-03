@@ -1,6 +1,6 @@
 # ESP Base
 
-2026-10-03 C3 TLS owner 压缩续验：同一1800 B记录区无损压缩为15槽，仓外A/C完整构建、验签与34950项冷输入核验通过。联合功能、停止启动／重启自动运行、十二项业务、A/C读回及原三码恢复通过；150/150下载网络ready，463个任务快照完整序列化。TLS保留15条、另9条丢弃，原parser及PC门保持不合格、整轮exit1；历史minimum23620 B仍低于49152 B，不加回观察成本，实际节省0。完整失败证据已保存，满合法峰值、native、Flash实测、ESP32与最终交付继续，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+2026-10-03 C3 同池共享观察器实验：固定1800 B记录区与实际A/C完整构建／验签、34903项冷审通过；本轮20条TLS新低无丢弃、资格与119实际PC区间通过，driver退出0。联合功能、停止启动／重启自动运行、十二项业务、A/C与原三码读回通过，147/147下载网络ready、458任务快照完整；history heap19628 B仍低于49152 B，观察成本不加回、实际节省0。完整217成员现场已受限保存，实体全档独核通过；满合法峰值、native、Flash实测、ESP32与最终交付继续，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-03 C3 来源最大事件与完整生命周期续验：OTA 前单次 4096 B 公开帧／3893 B 事件返回来源累计结果 3912，confirmed 绑定保持；联合 OTA、USB／MQTT 停止启动、重启自动运行、十二项业务、卸载、A/C 读回和原三码恢复通过。145/145 下载网络 ready、11 条历史新低无丢弃；451 个完整任务快照、13 个已观察名称栈余量至少 1024 B。诊断历史 heap 23228 B 仍低于 49152 B，不证明满队列或与 OTA 并存峰值，双板总门继续开放，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
