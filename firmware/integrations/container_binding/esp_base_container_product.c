@@ -1907,6 +1907,26 @@ static bool selected_package_matches(
          memcmp(candidate->package_sha256, receipt->package_sha256, 32) == 0);
 }
 
+/* A historical SUCCEEDED OTA receipt does not own a later product-only
+ * install/upgrade. Only a definite candidate digest mismatch may proceed to
+ * the original product ledger recovery; confirmed references and I/O errors
+ * remain blocking. No candidate is advanced or erased here. */
+static bool later_product_candidate_invalid(
+    const econtainer_slots_state_t *state, econtainer_slots_result_t result,
+    econtainer_slot_boot_decision_t decision, uint32_t confirmed_sequence,
+    const esp_base_ota_receipt_recovery_t *receipt)
+{
+    return result == ECONTAINER_SLOTS_UNTRUSTED &&
+        decision == ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED_CANDIDATE_INVALID &&
+        state->sequence > confirmed_sequence &&
+        !state->operation.firmware_transition &&
+        state->operation.kind == ECONTAINER_SLOT_PACKAGE_WRITE &&
+        state->phase >= ECONTAINER_SLOT_PREPARED &&
+        state->phase <= ECONTAINER_SLOT_HEALTH_VERIFIED &&
+        memcmp(state->operation.target_firmware_sha256,
+               receipt->candidate_sha256, 32) == 0;
+}
+
 static econtainer_slots_result_t reconcile_selected_package(
     const econtainer_slot_firmware_set_t *firmware_set,
     const selected_ota_context_t *selected)
@@ -1929,12 +1949,14 @@ static econtainer_slots_result_t reconcile_selected_package(
          * hide an unresolved firmware transition or change the A/C set. */
         result = econtainer_slots_reconcile(&s_product.provider.io,
             &s_product.provider.geometry, firmware_set, &state, &decision);
-        if (result != ECONTAINER_SLOTS_OK) return result;
+        const bool candidate_invalid = later_product_candidate_invalid(
+            &state, result, decision, confirmed_sequence, receipt);
+        if (result != ECONTAINER_SLOTS_OK && !candidate_invalid) return result;
         return !state.operation.firmware_transition &&
             state.phase != ECONTAINER_SLOT_IDLE &&
             memcmp(state.operation.target_firmware_sha256, receipt->candidate_sha256, 32) == 0 &&
             (decision == ECONTAINER_SLOT_BOOT_CONFIRMED ||
-             decision == ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED) ?
+             decision == ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED || candidate_invalid) ?
             ECONTAINER_SLOTS_OK : ECONTAINER_SLOTS_CONFLICT;
     }
     if (!selected_package_matches(&state, selected,
@@ -2014,9 +2036,11 @@ static econtainer_slots_result_t reconcile_selected_ota(
         const econtainer_slots_result_t reconciled = econtainer_slots_reconcile(
             &s_product.provider.io, &s_product.provider.geometry,
             firmware_set, &current, &decision);
-        if (reconciled != ECONTAINER_SLOTS_OK) return reconciled;
+        const bool candidate_invalid = later_product_candidate_invalid(
+            &current, reconciled, decision, confirmed_sequence, receipt);
+        if (reconciled != ECONTAINER_SLOTS_OK && !candidate_invalid) return reconciled;
         if (decision != ECONTAINER_SLOT_BOOT_CONFIRMED &&
-            decision != ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED)
+            decision != ECONTAINER_SLOT_BOOT_RECOVER_CONFIRMED && !candidate_invalid)
             return ECONTAINER_SLOTS_CONFLICT;
         if (current.sequence < confirmed_sequence) return ECONTAINER_SLOTS_CONFLICT;
         if (current.sequence > confirmed_sequence)

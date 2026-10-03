@@ -51,6 +51,34 @@ if [[ -n "${ESP_OTA_INCLUDE:-}" ]]; then
   fi
 fi
 
+frp_include="${ESP_FRP_INCLUDE:-$firmware_root/managed_components/esp_frp/include}"
+mqtt_include="${ESP_MQTT_INCLUDE:-$firmware_root/managed_components/mqtt/runtime/include}"
+for dependency in frp mqtt; do
+  if [[ "$dependency" == frp ]]; then
+    dependency_include="$frp_include"; component=esp_frp
+    required_header=esp_frp.h; explicit_include="${ESP_FRP_INCLUDE:-}"
+  else
+    dependency_include="$mqtt_include"; component=mqtt
+    required_header=emqtt_contract.h; explicit_include="${ESP_MQTT_INCLUDE:-}"
+  fi
+  if [[ ! -f "$dependency_include/$required_header" ]]; then
+    printf 'container lifecycle test\n  error  Resolve locked %s headers or set its explicit include path.\n' "$component" >&2
+    exit 1
+  fi
+  if [[ -n "$explicit_include" ]]; then
+    locked_dependency_sha="$(awk -v component="$component" -F '"' '
+      $0 ~ "^[[:space:]]*" component ":$" {found=1; next}
+      found && /^[[:space:]]*version: / {print $2; exit}' \
+      "$firmware_root/components/device_protocol/idf_component.yml")"
+    if [[ -z "$locked_dependency_sha" ||
+          "$(git -C "$dependency_include" rev-parse HEAD)" != "$locked_dependency_sha" ||
+          -n "$(git -C "$dependency_include" status --porcelain)" ]]; then
+      printf 'container lifecycle test\n  error  Explicit %s headers must match its clean locked checkout.\n' "$component" >&2
+      exit 1
+    fi
+  fi
+done
+
 build_dir="$(mktemp -d)"
 trap 'rm -rf -- "$build_dir"' EXIT
 read -r -a openssl_cflags <<< "$(pkg-config --cflags openssl)"
@@ -77,19 +105,57 @@ printf 'container lifecycle test\n  Container %s\n  WAMR      %s\n  WAMR lib  %s
 compile_args=(-std=c11 -D_POSIX_C_SOURCE=200809L \
   -D"$target_define"=1 \
   -DCONFIG_ESP_BASE_CONTAINER_OWNER_STACK_BYTES=32768 \
-  -Wall -Wextra -Werror -pthread \
+  -Wall -Wextra -Werror -pthread -ffunction-sections -fdata-sections \
+  -DCONFIG_ESP_BASE_TIME_SERVER=\"time.example.invalid\" -DCONFIG_ESP_CONSOLE_UART_NUM=0 \
   -I "$firmware_root/tests/fakes/container_product" \
+  -I "$firmware_root/integrations/container_binding/include" \
   -I "$firmware_root/tests/fakes" \
+  -I "$firmware_root/tests/fakes/protocol-path" \
+  -I "$firmware_root/tests/fakes/app_main" \
+  -I "$firmware_root/tests/fakes/ota_update" \
+  -I "$firmware_root/components/device_protocol" \
+  -I "$firmware_root/components/device_protocol/include" \
+  -I "$firmware_root/components/device_identity/include" \
+  -I "$firmware_root/components/remote_config/include" \
+  -I "$firmware_root/components/wifi_runtime/include" \
+  -I "$firmware_root/components/time_runtime/include" \
+  -I "$firmware_root/components/safety_runtime/include" \
+  -I "$frp_include" -I "$mqtt_include" \
   -I "$firmware_root/integrations/container_binding" \
   -I "$firmware_root/integrations/container_binding/include" \
   -I "$firmware_root/components/ota_operation/include" \
   -I "$eota_include" -I "$container_include" "${openssl_cflags[@]}" \
   "$firmware_root/tests/container_product_lifecycle_test.c" \
+  "$firmware_root/tests/historical_ota_startup_protocol.c" \
+  "$build_dir/historical_ota_app_main.o" \
+  "$firmware_root/components/device_protocol/product_ledger.c" \
+  "$firmware_root/components/device_protocol/command_guard.c" \
   "$firmware_root/components/ota_operation/esp_base_storage_owner.c" \
   "$firmware_root/integrations/container_binding/esp_base_container_binding.c" \
   "$firmware_root/integrations/container_binding/esp_base_container_no_package.c" \
   "$build_dir/container-build/libesp_container.a" "$wamr_library" \
   "${openssl_libs[@]}" -lm -ldl)
+if [[ "$(uname -s)" == Darwin ]]; then
+  compile_args+=(-Wl,-dead_strip)
+else
+  compile_args+=(-Wl,--gc-sections)
+fi
+
+# Compile the actual startup TU with its logging/platform headers, while
+# retaining the real Container product API rather than app_main's unit fake.
+"${CC:-cc}" -std=c11 -D"$target_define"=1 -Wall -Wextra -Werror \
+  -ffunction-sections -fdata-sections \
+  -I "$firmware_root/integrations/container_binding/include" \
+  -I "$firmware_root/tests/fakes/app_main" -I "$firmware_root/tests/fakes" \
+  -I "$firmware_root/components/device_identity/include" \
+  -I "$firmware_root/components/device_protocol/include" \
+  -I "$firmware_root/components/remote_config/include" \
+  -I "$firmware_root/components/safety_runtime/include" \
+  -I "$firmware_root/components/time_runtime/include" \
+  -I "$firmware_root/components/ota_operation/include" \
+  -I "$eota_include" -I "$frp_include" -I "$container_include" \
+  -c "$firmware_root/apps/esp_base/main/esp_base_main.c" \
+  -o "$build_dir/historical_ota_app_main.o"
 
 "${CC:-cc}" -fsanitize=address,undefined -fno-omit-frame-pointer \
   "${compile_args[@]}" -o "$build_dir/container_product_lifecycle_test"

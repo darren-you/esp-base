@@ -132,6 +132,7 @@ typedef struct {
     unsigned blob_writes;
     unsigned fail_read_after_next_write;
     unsigned read_fail_countdown;
+    uint32_t fail_flash_read_offset;
     unsigned flash_erases;
     unsigned flash_writes;
 } store_t;
@@ -269,6 +270,9 @@ static bool read_flash(void *context, uint32_t offset, uint8_t *bytes, size_t si
 {
     store_t *device = context;
     assert(device->locked && in_range(offset, size));
+    if (device->fail_flash_read_offset != 0U &&
+        offset <= device->fail_flash_read_offset &&
+        (uint64_t)offset + size > device->fail_flash_read_offset) return false;
     memcpy(bytes, device->flash + (offset - FLASH_BASE), size);
     return true;
 }
@@ -3357,6 +3361,8 @@ static void run_public_product_lifecycle(const file_t *key, const file_t *packag
     puts("container_public_lifecycle: exact boot/package/sequence, stop/close/join, fresh RSA verification, events and no persistent writes passed");
 }
 
+#include "historical_ota_startup_test.h"
+
 int main(int argc, char **argv)
 {
     check_event_admission();
@@ -3423,6 +3429,22 @@ int main(int argc, char **argv)
     expected_candidate_version = read_file(argv[1], "p1-version.txt");
     expected_second_version = read_file(argv[1], "p2-version.txt");
     file_t package_v2 = read_file(argv[1], "p2.pkg");
+    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_NO_PACKAGE;
+         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
+        for (unsigned phase = ECONTAINER_SLOT_PREPARED;
+             phase <= ECONTAINER_SLOT_HEALTH_VERIFIED; ++phase)
+            run_historical_ota_startup(&key, &package, &package_v1, "22222222-2222-4222-8222-222222222222",
+                mode, phase, 0U);
+    }
+    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_NO_PACKAGE;
+         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
+        for (unsigned negative = 1U; negative <= 11U; ++negative) {
+            if (negative == 4U && mode == ESP_BASE_OTA_NO_PACKAGE) continue;
+            run_historical_ota_startup(&key, &package, &package_v1,
+                "22222222-2222-4222-8222-222222222222", mode,
+                ECONTAINER_SLOT_TRIAL_STARTED, negative);
+        }
+    }
     configure(&key);
     esp_base_storage_owner_t owner;
     esp_base_storage_owner_init(&owner);
