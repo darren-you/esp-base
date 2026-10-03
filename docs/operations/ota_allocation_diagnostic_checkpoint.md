@@ -1,5 +1,27 @@
 # C3 OTA 分配诊断检查点
 
+## FRP 最大控制记录实测与移除超时
+
+2026-10-03，在下述公开运行源码、精确组件与原正式预算上，仓外叠加 Flash 成本观察器。新来源 A／目标 C 完整 SDK 构建及原测试键官方验签通过，版本为 `0.2.0-c3-flash-cost-a/c`，签名镜像各 1183744 B；目标 C 此次只有软件构建资格。唯一 provider 状态由 64 B 增至 144 B，实际 BSS 和堆起点增加 **80 B**；IRAM 50106 B＋70 B 对齐保持，观察成本不加回。34558 项实际源构建后核对通过；两 provider、两绝对装配路径及 Component Manager 生成的锁 `manifest_hash` 为五项变化，依赖版本和其余源／SDK 字节保持，新实际 ELF 和 PC 重新绑定。
+
+最大合法 65536 B 控制记录先经真实 host TLS／Yamux／原生 session 和 IDF Flash 模型消费、坏认证拒绝；这部分仍是软件。严格 decoder 25 项、当前 driver 30 项、adapter 10 项及单次启动 capture 15 项纯检查通过。最初实物轮省略已验证的 pyserial fresh-boot capture，首 `status` 超时、运行 UART 为 0 B；整轮失败及 79 个完整成员独立保留，后继补回一次 90 秒真实 READY／empty 捕获，关闭后才打开 POSIX 单 reader，原五秒状态查询与恢复逻辑保持。新后继输入包 53 个明确成员核对通过，没有复用失败基线。
+
+第二轮重新读取两份一致 4 MiB 基线和三个独立原代码区，完整写入／读回后实际启动来源 A，公开查询绑定当前固件摘要与空产品。只配置 Wi-Fi 和 FRP，无 MQTT、OTA 或 guest。一个合法最大记录随后到达同 boot、同配置 revision 的唯一 Pong。实际原生观察如下；单位为微秒，调用数与字节均为本轮实测，不能填入其它分段形状。
+
+| 最大记录项目 | 原生调用数 | 申请／读取字节 | 原生累计耗时 us | 原生单次最大耗时 us |
+| --- | ---: | ---: | ---: | ---: |
+| 整区擦除 | 1 | 每次 65536 | 564051 | 564051 |
+| 写入 | 68 | 65536 | 348150 | 11076 |
+| 读取（含回验） | 2435 | 1179648 | 175497 | 1248 |
+
+最大记录 `begin_to_clear` 的 `wall_us=2565029`、`result=0`、`cost_valid=1`、原生失败数为 0；boot recover 另一次擦除为 554330 us、wall 为 554399 us。wall 结束于 guard 解锁后、打印前采样，包含调度与非原生开销，不是独立密码学耗时、整个回调耗时、连续不可抢占时长或最坏上界；500 ms claim 重试也不构成该上界。两项观察不含实验 ROM 整片擦除／恢复磨损。
+
+公开移除配置 revision 3 成功，同 boot 之后 **84 次只读 status 均为 unconfigured**；另有一次移除 ACK，共 85 个 revision 3 回复。driver 未在十秒联合门观察到夹具自然退出，因此 **整轮 exit 1、physical_measurement_qualified=false**，没有放行成本总体资格。Go 最终日志含 FINISHED、退出 0，但没有事件时间戳或实际 SIGTERM 发送记录，只能说明 cleanup 后最终收据看到这些结果，不能证明精确发生先后或取消因果。同精确夹具与原生客户端的两次本机认证联调均自然退出，没有复现 C3 超时；正在取得有限关闭阶段证据，不延长或削弱退出门。
+
+启动 UART 18111 B 与保存摘要一致；运行 UART **162412 B＝consumed 162348 B＋pending 64 B**，无 reader 错误或溢出。结束擦除全部实验数据，仅恢复本轮原 bootloader／partition／factory并逐字节读回；原 boot Wi-Fi down ACK、串口释放、实际夹具 PID／唯一 LAN listener 存活时绑定及最终释放由 Root 直接核对。完整失败现场 85 个成员归档摘要 `3e276ba3f8c6bb0df2def063780c4fcdea65975b133c772724b194f19a115d06`，受限且 Git 忽略的 `c3-validation-20261003/c3-frp-flash-cost-removal-deadline-failure` 保存六份拷贝／澄清，私有索引 `2b55404e152abe0fc19ff57464fe0507b5e35eff6533123bd39d35e9154ba56c`；原首次失败与所有旧轮独立保持。
+
+源码和当前官方普通控制链确认，正常 Pong 是 8 B、4 B 两条短记录，现有独占 4096 B 窗口已在完整认证后消费，**没有 scratch begin／erase**。无失败主路径的每扇区磨损按实际 boot recover 次数 B 与大记录 begin 次数 L 计，不能按十五秒心跳直接推擦除率，也不能将整区十六个 sector再乘作每扇区次数。Y／大记录频率 f 与实物已有磨损仍未确认，本次不计算剩余寿命。实际新增节省仍 **0 B**，没有联合 OTA Flash 争用、五能力容量或完整最坏成本资格；P6-03、满合法峰值／native、ESP32、断电／72 小时与正式交付继续开放。
+
 ## 同池共享状态与完整 TLS 实体诊断
 
 2026-10-03，在下述同一公开运行源码与精确组件版本上，仓外诊断将固定 **1800 B** 观察区改为逐记录20 B与精确状态77 B共享。固定部分344 B、共享池1456 B，容量条件为 `20×N + 77×D <= 1456`；68条只适用于一个状态，不承诺任意68次新低都能保存。新低不被过滤，身份、释放回填、歧义／ISR／溢出失败及原V2字段保持。25组host、ASan/UBSan、两C3单元和独立多身份回填反例通过；正式Wi-Fi RX／TX 32／32、TLS 16384／4096、64 KiB guest、任务栈和协议上限保持。
@@ -14,7 +36,7 @@
 
 结束整片擦除实验数据，仅恢复本轮独立读取的原bootloader／partition／factory并逐字节核对；reset、Wi-Fi down ACK、串口、三fixture与所属进程释放核验通过。FRPS服务与remote proxy端口在存活时直接记录，结束对五个实际listener逐项核验无监听，不恢复旧／实验NVS，不写eFuse。完整现场归档 **206文件／11目录、217成员**，摘要 `f846fade2b04cf933fa5e84ce128a2b77d69b044824d02b95e69ea18b4ef053d`；包含10个实际生成pyc输出，不称源输入或零缓存。首次归档过严“无pyc”断言失败保留，后继完整归档不删除输出。受限且Git忽略的 `c3-validation-20261003/c3-tls-owner-shared-physical` 保存完整归档和11份选中拷贝，私有索引 `4a1dc9a6091cbcdb0d957359c88e4d53dd82d0f972772c79009f726e7e54f705`；完整实体独核及21成员审查归档通过，审查归档摘要 `3392116acffcb41edbc5fced77419ea74bfbeffd651f0062bfa74fcf7d9e309c`，最终审查私存索引 `d2cd0d83e28fca387fdd2f45e8e329479e26513c4d67942f5fcb25432f0f0284`；旧失败不被覆盖。
 
-当前RX生命周期只读核查没有新准入收益：正常空闲已回到24 B，部分密文、未读明文和握手仍有真实消费者。当前confirmed代表Wasm没有data section，data_copy根本未分配，该方向可省0 B。Flash计时观察器两源增量、原5＋新7组host／ASan/UBSan和两C3单元、53选中成员独立代码审通过，但未联合完整SDK或实物计时；Base每实例DRAM增加80 B，wall截止于guard解锁后、printf前采样，可能含调度延迟，不能当精确解锁时刻、完整回调耗时或500ms操作上界。寿命Y/f仍待维护者目标，全部软件模拟不构成时延／寿命通过。
+当前RX生命周期只读核查没有新准入收益：正常空闲已回到24 B，部分密文、未读明文和握手仍有真实消费者。当前confirmed代表Wasm没有data section，data_copy根本未分配，该方向可省0 B。Flash计时观察器两源增量、原5＋新7组host／ASan/UBSan和两C3单元、53选中成员独立代码审通过；该前序检查点仅软件，后继完整SDK与实物有限观察见本页首段。Base每实例DRAM增加80 B，wall截止于guard解锁后、printf前采样，可能含调度延迟，不能当精确解锁时刻、完整回调耗时或500ms操作上界。寿命Y/f仍待维护者目标，全部软件模拟不构成时延／寿命通过。
 
 **完整TLS诊断、有限联合功能与恢复通过，容量仍失败。** P6-03、满合法峰值、native全生命周期、Flash实测及寿命目标、ESP32、断电／72小时和正式交付继续开放。
 
@@ -52,7 +74,7 @@ TLS 原始 UART 的 BEGIN／END 和 12 条保留记录结构完整，但另 **3 
 
 ### Flash 成本与寿命边界
 
-只读源码核验确认，scratch 用于**入站加密控制记录**，不是每 64 KiB TCP 数据的通用缓存。超过 4096 B 的记录 begin 擦除整区一次，每次 boot recover 另擦整区一次；clear、元数据与清理重试不增擦写。C3／ESP32 的 64 KiB scratch 都不按 64 KiB block 对齐，当前 SDK 成功路径分别使用 16 次 4096 B sector erase。最大记录密文／明文为 65536 B，tag 另 16 B；写入 65536 B，正常完整消费的 17 遍读取加 provider 回验总计 **1179648 B**。实际分段次数、物理擦写／密码学时长和 OTA 并存进展仍未实测，不能把 500 ms claim 重试策略当作严格最坏墙钟上界。75 个选中输入及 79 个归档成员独立核验；只证明相关 provider／SDK 子集，未宣称全树或全部实际编译路径。
+只读源码核验确认，scratch 用于**入站加密控制记录**，不是每 64 KiB TCP 数据的通用缓存。超过 4096 B 的记录 begin 擦除整区一次，每次 boot recover 另擦整区一次；clear、元数据与清理重试不增擦写。C3／ESP32 的 64 KiB scratch 都不按 64 KiB block 对齐，当前 SDK 成功路径分别使用 16 次 4096 B sector erase。最大记录密文／明文为 65536 B，tag 另 16 B；写入 65536 B，正常完整消费的 17 遍读取加 provider 回验总计 **1179648 B**。来源A的单记录分段及原生调用时长已在本页首段有限观察；完整最坏、独立密码学耗时与OTA并存进展仍未证明，不能把500 ms claim重试策略当作严格最坏墙钟上界。75 个选中输入及 79 个归档成员独立核验；只证明相关 provider／SDK 子集，未宣称全树或全部实际编译路径。
 
 [ESP32-C3 官方数据表 v2.4](https://documentation.espressif.com/ESP32-C3_Datasheet_en.pdf)第 57 页表 5-10 已公布最少 100000 次 P/E 和 20 年数据保持；不能继续称官方耐久数字完全未知，也不能把保持年限等同连续写入寿命。本台 `20/4016` 仍不能唯一定位具体 Flash 型号，[XMC C](https://www.xmcwh.com/uploads/799/XM25QH32C_Ver2.1.pdf)与[D](https://www.xmcwh.com/uploads/920/XM25QH32D_Ver1.3.pdf)共享该 ID；剩余寿命没有实测绑定。
 

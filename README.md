@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-03 C3 最大FRP控制记录有限实测：实际65536 B单记录与同boot单Pong，wall约2.565秒、整区erase约564毫秒、读1179648 B及native失败0；公开移除后84次只读status为unconfigured，但夹具自然退出十秒联合门未过，整轮与成本总体资格保持失败。两fresh基线、原三码恢复／擦数据、UART和实际listener释放通过，原失败完整保留；普通Pong沿用已有4096 B窗口不擦scratch，不按心跳计算寿命。软件新A/C签名构建及最终输入通过，DRAM观察成本＋80 B、实际节省0；容量、争用、ESP32及交付继续，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+
 2026-10-03 C3 同池共享观察器实验：固定1800 B记录区与实际A/C完整构建／验签、34903项冷审通过；本轮20条TLS新低无丢弃、资格与119实际PC区间通过，driver退出0。联合功能、停止启动／重启自动运行、十二项业务、A/C与原三码读回通过，147/147下载网络ready、458任务快照完整；history heap19628 B仍低于49152 B，观察成本不加回、实际节省0。完整217成员现场已受限保存，实体全档独核通过；满合法峰值、native、Flash实测、ESP32与最终交付继续，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-03 C3 来源最大事件与完整生命周期续验：OTA 前单次 4096 B 公开帧／3893 B 事件返回来源累计结果 3912，confirmed 绑定保持；联合 OTA、USB／MQTT 停止启动、重启自动运行、十二项业务、卸载、A/C 读回和原三码恢复通过。145/145 下载网络 ready、11 条历史新低无丢弃；451 个完整任务快照、13 个已观察名称栈余量至少 1024 B。诊断历史 heap 23228 B 仍低于 49152 B，不证明满队列或与 OTA 并存峰值，双板总门继续开放，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
