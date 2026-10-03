@@ -299,6 +299,7 @@ static bool configure_policy(void)
         .event_instruction_budget = CONFIG_ESP_BASE_CONTAINER_MAX_INSTRUCTIONS,
         .stop_instruction_budget = CONFIG_ESP_BASE_CONTAINER_MAX_INSTRUCTIONS,
         .max_entry_duration_ms = CONFIG_ESP_BASE_CONTAINER_MAX_ENTRY_MS,
+        .max_host_call_timeout_ms = CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS,
         .cancel_requested = product_cancel_requested,
         .cancel_context = &s_product.stop_requested,
     };

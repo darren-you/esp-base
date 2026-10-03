@@ -1,5 +1,7 @@
 # 固件测试
 
+2026-10-04 签名宿主单次期限消费：生命周期夹具显式提供正数 `max_host_call_timeout_ms`，生产策略也使用同一既有平台配置。两目标完整 host 入口与公开签名生命周期实际退出 0，生命周期在精确 Container `ace8ec32`／WAMR `74fd95cc` 下通过期限失败、异步取消、停止回收和百次重开；单次宿主超期的真实签名 min／非累计／四导入／时钟失败回归由 Container 全量 CTest 独立覆盖。测试时钟替换仅位于 Container 的专用测试库，Base 或设备运行没有时钟回调或抢占能力。详见[开发检查点](../../docs/operations/development-checkpoint.md)。
+
 `container_product_lifecycle_test.c` 的事件准入回归计数真实offer分配／释放，覆盖BUSY、错包、八槽全满且另一个事件处理中时零申请、准入后OOM释放锁、最大载荷、复制期间停止后的清零单次释放和同boot旧包隔离；`mqtt_owner_test.c` 验证拒绝不推进序号、原下一序号重复重试和后续成功推进。两目标完整host及真实Container／WAMR签名guest生命周期入口通过；首次Darwin测试宏冲突及修正后复跑分别保留。测试不证明MCU持锁时延或联合容量，见[分配检查点](../../docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 `config_store_test.c` 保持最大 7618 B、v3-only、损坏／冲突和写后不确定回归，新增 C3 load／commit／规范回调的三个 workspace OOM 点：输出保持、无 NVS 写入／commit、回调不执行、工作配置清零及随后恢复；每次释放检查整份 workspace 清零，完整 commit 只拥有一份缓冲，ESP32 无新增 heap 申请。两目标完整 host 和相关 ASan／UBSan 回归通过，见[RTC 检查点](../../docs/operations/rtc_config_ownership_checkpoint.md)。

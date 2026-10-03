@@ -1,5 +1,20 @@
 # 开发检查点
 
+## 2026-10-04 签名宿主单次期限装配
+
+Base 精确消费公开 Container `ace8ec32d709442f09b0018c5a4764908db39ed9`，WAMR 保持 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`，FRP／MQTT／OTA／cJSON 的版本与摘要保持原锁。平台已有 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 现在同时传给运行限制；验签后的清单与平台值取最小值，每次调用独立计时，整个入口期限和指令预算保持。宿主超期结果不交付，进入失败并按唯一产品 owner 回收；新失败原因沿既有普通失败处理，不把它当作异步取消。停止仍只影响本次启动，重启自动运行 confirmed 产品。
+
+Container 的真实 Wasm／签名包回归先在旧行为命中缺失 `HOST_CALL_EXPIRED` 断言；macOS 子进程未及时完成而记为 Timeout，单独超时不作为预算证据。修正后的普通及 ASan/UBSan goto／switch 全量各 10/10，覆盖四导入全部返回路径、签名和平台限额、非累计、旧异常与入口／取消优先级及日志／timer 清退。两目标 Base 完整 host 入口及公开签名生命周期均实际退出 0，完整 host 使用各目标官方生成的 managed 依赖；生命周期包含期限、取消、停止回收和百次重开。两类宿主入口均启用 ASan/UBSan，Flash/NVS 与调度是宿主替身。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c`／lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 的两目标完整构建和官方验签退出 0。仓外复用既有测试键和产品授权，host／entry 额度各 100 ms，原 `0x130000`／`0x120000` 双 app、三包槽、FRP scratch 和 NVS 几何保持；测试授权没有写入公开默认策略。每个目标通过官方 Component Manager 显式使用自己的锁路径、独立缓存生成依赖锁，未手改版本摘要。首次共享缓存 C3 新引用解析失败、ESP32 旧组件缺字段编译失败分别保留；不将其计为通过，也不将修复唯一归因于缓存。
+
+| 目标 | 测试签名 app | 单槽剩余 | app SHA-256 |
+| --- | --- | --- | --- |
+| esp32c3 | `0x121000` | 61440 B | `0a6f84cfab1e7236917e6d467c482cc295ff6d9a3257e37c8a3f7542e6785501` |
+| esp32 | `0x10fff4` | 65548 B | `e9fcfd7e98e1a00d8aec918e6caf59c3445c62fadf2d239db1b5838606954888` |
+
+本轮没有操作 UART、Flash、eFuse 或生产服务。返回后检查不能抢占同步 native，不能证明硬返回上界、管理响应或新源码实板资源；静态签名尺寸相同不代表 RAM 节省。旧 C3 联合实验的历史堆 21,360 B 和 48 KiB 门差 27,792 B 保持为旧源码证据，不外推到本次依赖。满合法峰值、native 全资源、最大连续块、联合 Flash 争用、寿命 Y/f、ESP32 接入、掉电和 72 小时仍未验收，P6-07 保持进行中。
+
 2026-10-04 产品事件准入修正的 C3 联合功能复验通过：真正 driver exit 0，一次 WRITE OTA、USB／MQTT 停止启动、重启自动运行已确认产品、十二项业务、卸载及 A/C 读回完成；原三码精确恢复、实验数据擦除与所属 UART／fixture 释放通过。前两失败和离线归档准备错误分别保留。150/150 下载网络 ready，历史 heap 21360 B 仍距 49152 B 门差 27792 B；213 个完整现场文件及必要材料已受限保存，有限独核通过，新增节省 0。容量取舍待维护者决定，满峰值／native、largest、争用、寿命 Y/f、ESP32及正式交付仍开放，见[分配诊断检查点](ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-04 C3 相同 Wi-Fi 配置修正复验通过：Base 3e8e44e 的真实生命周期与双目标 host 检查通过，新 A/C 完整 SDK 构建及官方验签通过；实板最大合法64KiB记录、同boot单Pong、公开移除及原清理前自然退出门通过，driver exit0。fresh双4MiB、原三码恢复、擦实验数据与所属UART／fixture释放通过。仅此FRP切片取得资格，新增节省0；五能力容量、联合争用、满合法峰值、ESP32与交付仍开放，见[分配诊断检查点](ota_allocation_diagnostic_checkpoint.md)。

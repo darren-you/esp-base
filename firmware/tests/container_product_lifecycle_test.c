@@ -499,6 +499,7 @@ static void configure_product(const file_t *public_key)
         .max_log_bytes = 16, .max_timers = 1,
         .init_instruction_budget = 200000, .event_instruction_budget = 200000,
         .stop_instruction_budget = 200000, .max_entry_duration_ms = 1000,
+        .max_host_call_timeout_ms = 100,
         .cancel_requested = product_cancel_requested,
         .cancel_context = &s_product.stop_requested,
     };

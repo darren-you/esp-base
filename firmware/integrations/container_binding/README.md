@@ -1,5 +1,7 @@
 # Base 与 Container 产品装配
 
+Base 将平台 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 同时写入签名包准入和 `econtainer_runtime_limits_t.max_host_call_timeout_ms`。Container 重新验签后取签名需求与运行授权的较小值，四个宿主导入逐次计时；宿主超期按普通产品失败进入阻断和回收，不能当作请求取消或成功。入口总期限保持独立，未新增持久停止状态。
+
 主应用编译本组件，并在启动时沿唯一 `ota_operation` claim 调用它。默认产品授权输入全部为空，Base 保持无包运行；任一输入出现但合同不全，启动明确阻断并保留 claim。C3 源码表已包含三份 `0x77000` 包槽、独立 FRP scratch 与 11 页 Base NVS；ESP32 源码表包含三份 `0x82000` 包槽、独立 FRP scratch 与六页 Base NVS。两目标布局迁移和实体负载尚未验收，不可据此写板。
 
 
@@ -74,7 +76,7 @@ Container 成功 open 返回本次重新验签包的 SHA-256 与签名 `event_qu
 
 联合固件包内部 trial 入口现消费原 V3 并先持久本 boot trial，再验签启动包，沿唯一 pthread 跟踪代表事件和失败。调用方仍须完成在线窗口；内部健康入口只复核事件依据、空队列与无在途调用，随后冻结 guest、提交并独立读回 HEALTH_VERIFIED。固件 VALID 后确认引用成功才取消 trial 和冻结；持久读回不确定继续阻断。真实 trap 已结束且 native 回收、线程 join 时才允许回滚。主应用已消费此链，原候选准入后控制任务才开放 MQTT 并采集连续 30 秒 Wi-Fi／时间／MQTT 与代表事件健康，主应用依次提交健康、固件 VALID、包绑定与原成功收据。离线保持未决；FRP 和破坏性写门保持关闭。双目标签名 app 已实际链接此链与 WRITE 续写；静态容量不代表真实五能力峰值。
 
-当前清单精确锁定 `esp-container@2b93b979b8b0760dcb96b28ac5d13fc52ae547bf` 与 WAMR `74fd95ccbdc417c3816e04f3308eea8a5473ed34`。既有原子 `stop_requested` 由 guest owner 的取消谓词读取，init／event／timer 取消后必须真实 stop／close 并由调用方 join，失败阻断重开；宿主与实板边界见[取消检查点](../../../docs/operations/async-cancel-checkpoint.md)。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 未配置产品授权，不运行 guest；两目标正式源码均有包分区，但现役设备尚未完成布局迁移。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
+当前清单精确锁定 `esp-container@ace8ec32d709442f09b0018c5a4764908db39ed9` 与 WAMR `74fd95ccbdc417c3816e04f3308eea8a5473ed34`。既有原子 `stop_requested` 由 guest owner 的取消谓词读取，init／event／timer 取消后必须真实 stop／close 并由调用方 join，失败阻断重开；宿主与实板边界见[取消检查点](../../../docs/operations/async-cancel-checkpoint.md)。此前旧 `esp-container@5c807400c49158c3283686f18617b28f0f962868` 的 943,056 字节未签名 ESP32 产品离线 ELF，以及 1,114,100 字节测试键签名 ESP32 镜像和 ECDSA v1 验签，只是历史证据，不代表当前锁的容量。当前软件恢复接线的构建和测试证据见[开发检查点](../../../docs/operations/development-checkpoint.md)。默认 C3 未配置产品授权，不运行 guest；两目标正式源码均有包分区，但现役设备尚未完成布局迁移。ESP32 签名 guest 与 FRP reader 的仓外 QEMU 检查点不包含正式 FRPS 会话或完整五能力资源峰值；没有持久实板包、掉电恢复或实板资源测量，不能宣称五能力运行验收。
 
 历史 Base `3df1c33` 与当时的精确锁曾以仓外测试产品策略完成两目标深链接核验，两个 ELF 都确实包含 `econtainer_product_open` 与 WAMR load/instantiate/call。ESP32 测试键 ECDSA v1 签名镜像为 `0x10fff4`，官方验签通过，双 `0x120000` app 各余 `0x1000c`。C3 仅在隔离副本使用三 `0x82000` 包槽与双 `0x118000` app 的候选表，测试键 RSA v2 签名中间镜像为 `0x121000`，官方容量门判每槽溢出 `0x9000`，所以该布局没有可用构建。证据与隔离改动见[开发检查点](../../../docs/operations/development-checkpoint.md)；没有把测试策略、候选 C3 表或密钥写入本仓。
 
