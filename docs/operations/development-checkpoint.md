@@ -1,5 +1,22 @@
 # 开发检查点
 
+## 2026-10-04 清单必需能力运行授权装配
+
+Base 精确消费 Container `15b74a2172a6ddc1f0ad2748c4c060dfa065c80b`，官方 Component Manager 各自生成 C3／ESP32 目标锁；组件摘要均为 `4317b2e993048a0f357d1544c6fc4545a66428effc3464865a0d15111f88d2c6`。只有主应用 Container 的版本、组件摘要和 manifest 摘要变化，FRP／MQTT／OTA／WAMR／cJSON、完整 Kconfig、原分区及测试授权保持。Base 继续由同一平台策略装配验证层和运行层授权，没有新增生产代码、持久停止状态或授权来源。独立 NVS 容量探针只消费编码器／provider，其原受测锁保持，README 改为明确独立冻结，不外推当前运行授权资格。
+
+Container 在选中包重新验签后、WAMR 装载前检查完整签名必需能力是否属于独立运行授权。真实零导入 counter 的清单声明必需 timer；旧生产行为实际启动并 init 成功，回归主动 close 后正常退出 1。修复返回 slots OK／runtime NOT_AUTHORIZED、空实例及全部零元数据，仍释放映射和槽锁；完整授权可实际完成生命周期。三种普通／ASan/UBSan 分派配置的三个相关 CTest 各 3/3，未声明其他七项或泄漏检测通过。完整软件范围见 [Container 宿主合同](https://github.com/esp-space/esp-container/blob/15b74a2172a6ddc1f0ad2748c4c060dfa065c80b/docs/operations/host-api-checkpoint.md)。
+
+以新精确 clean Container／原 WAMR 和官方生成的 managed 依赖，两目标原完整 host 和公开签名生命周期四入口均实际退出 0。真实签名 guest、历史 OTA／账本恢复、停止／close／join、同 boot 换包、百次重装和原生资源采样继续通过。生命周期产品／协议／账本 TU 使用 ASan/UBSan，组合 app_main TU 与 Container/WAMR 普通编译；另执行原 Darwin 普通资源版。两个目标各自第 10／50／100 次 malloc、虚拟地址用量及区域数持平。Flash/NVS、固件观察和平台仍为宿主替身，不代表 MCU 峰值或物理掉电。
+
+固定 SDK／lwIP 的双目标完整构建与官方 RSA v2／ECDSA v1 验签均退出 0。实际编译命令指向新 Container 源，公开组件的 25 个源码输入逐项核对字节与执行位；两锁除相关字段外相同，配置无差异。与 Base `e924feef` 构建相比，签名 app 尺寸及堆起点保持，只有 `.flash.text` 增加 C3 8 B／ESP32 20 B，其余分配段尺寸保持。 实际 Container `open_selected` 局部 frame 为 C3 560→560 B、ESP32 304→320 B；ESP32 增加 16 B 局部栈，不能用它推算整链栈峰值。
+
+| 目标 | 测试签名 app | 单槽剩余 | app SHA-256 |
+| --- | --- | --- | --- |
+| esp32c3 | `0x121000` | 61440 B | `ea39f0789088e5527a44e6ab99534d915de9cadb0d90ffea5da6f60a8d76ec5a` |
+| esp32 | `0x10fff4` | 65548 B | `7a26318247b687e09aa858614e2e9435bb84b47a8522af17faea8828a8e1e940` |
+
+本轮未测动态 RAM 节省，不能以签名尺寸不变、宿主采样持平或该拒绝分支宣称容量改善。双板、完整 native／栈／最大连续块、48 KiB 门、寿命 Y/f、掉电／72 小时与正式交付仍未验收；停止仅当前启动、重启自动运行 confirmed 产品的已确认裁决保持。
+
 ## 2026-10-04 同产品同版本制品身份
 
 Base 精确消费 Container `be3f393460ff3e24b5231e4f58ff4c99c0c6f355`，官方 Component Manager 分别生成 C3 的 `dependencies.lock` 和 ESP32 的 `dependencies.lock.esp32`；仅 Container 版本／组件摘要和清单摘要变化，FRP／MQTT／OTA／WAMR／cJSON 保持前轮锁。生产 Base 继续通过既有验包回调接线，无新持久字段、版本历史库或停止状态；完整整包 SHA 仍是制品身份。

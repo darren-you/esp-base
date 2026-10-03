@@ -9,7 +9,7 @@
 - 精确锁定的 Container 组件用 `econtainer_slots_initialize` 的正式 ECS2 编码器生成 **288 字节**无包绑定初态；每代只改变 sequence 并重算 CRC，通过真实 IDF provider 向产品键 `base_pkg/slots` 提交，再用 `econtainer_slots_load` 的正式解码器校验。合成分区表提供 `product_pkgs` 几何供 provider 绑定；不读取或执行包。
 - Base 产品操作账本候选 **910 字节**单 blob，按当前八条槽位格式逐代填满最近记录，先写 `PREPARED`，再写 `SUCCEEDED`，每次都经 `base_product/operations` 提交及逐字节读回。这里只验证同一 NVS 分区的容量与页回收；不执行产品写命令、历史幂等裁决或实板磨损验收。
 
-Container 由本项目的 `main/idf_component.yml` 和目标专用 `dependencies.lock`／`dependencies.lock.esp32` 直接从公开源精确解析，版本与 Base 产品锁一致。不使用邻仓相对路径或复制 Container 源码。每个目标与页数必须使用不同的仓外构建目录、`sdkconfig` 和 Flash 文件，避免重用分区表。
+Container 由本项目的 `main/idf_component.yml` 和目标专用 `dependencies.lock`／`dependencies.lock.esp32` 直接从公开源精确解析，独立冻结该探针受测的组件版本；它只消费 ECS2 编码器与 IDF provider，不装载或运行包，不能将结果外推到主应用后来更新的 Container 运行授权合同。不使用邻仓相对路径或复制 Container 源码。每个目标与页数必须使用不同的仓外构建目录、`sdkconfig` 和 Flash 文件，避免重用分区表。
 
 ## 复现
 
