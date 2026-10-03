@@ -236,4 +236,4 @@ fi
   "$ROOT/components/wifi_runtime/esp_base_wifi.c" "$ROOT/components/remote_config/config_codec.c" \
   "$ROOT/tests/wifi_startup_test.c" -o "$BUILD_DIR/wifi_startup_test"
 for stage in {0..11}; do "$BUILD_DIR/wifi_startup_test" "$stage"; done
-printf '  wifi_startup passed (SDK init faults preserve failed state and release resources)\n'
+printf '  wifi_startup passed (init faults, equal-config connection/retry preservation, real changes and recovery)\n'

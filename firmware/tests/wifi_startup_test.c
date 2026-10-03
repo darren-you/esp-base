@@ -13,7 +13,9 @@ const char *WIFI_EVENT = "wifi";
 const char *IP_EVENT = "ip";
 static int failed_stage;
 static int live_loop, live_queue, live_netif, live_wifi, live_handlers;
-static unsigned connect_calls;
+static unsigned connect_calls, config_calls, start_calls, stop_calls;
+static esp_err_t stop_result = ESP_OK;
+static wifi_config_t selected_driver_config;
 static esp_netif_t netif;
 static struct fake_queue { unsigned events[16], head, count; } queue;
 static esp_event_handler_t wifi_handler, ip_handler;
@@ -119,13 +121,14 @@ esp_err_t esp_wifi_set_mode(int mode)
 esp_err_t esp_wifi_set_config(int interface, const wifi_config_t *config)
 {
     assert(interface == WIFI_IF_STA && live_wifi == 1 && config);
-    assert(!memcmp(config->sta.ssid, "test-wifi", 9));
     assert(config->sta.threshold.authmode == WIFI_AUTH_WPA2_PSK);
+    ++config_calls;
+    selected_driver_config = *config;
     return result_for(WIFI_CONFIG_FAILURE);
 }
 esp_err_t esp_wifi_start(void)
-{ assert(live_wifi == 1); return result_for(WIFI_START_FAILURE); }
-esp_err_t esp_wifi_stop(void) { assert(live_wifi == 1); return ESP_OK; }
+{ assert(live_wifi == 1); ++start_calls; return result_for(WIFI_START_FAILURE); }
+esp_err_t esp_wifi_stop(void) { assert(live_wifi == 1); ++stop_calls; return stop_result; }
 esp_err_t esp_wifi_connect(void) { assert(live_wifi == 1); ++connect_calls; return ESP_OK; }
 esp_err_t esp_wifi_disconnect(void) { assert(live_wifi == 1); return ESP_OK; }
 esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *record)
@@ -143,6 +146,179 @@ static void emit(esp_event_base_t base, int32_t id)
     esp_event_handler_t handler = base == WIFI_EVENT ? wifi_handler : ip_handler;
     assert(handler);
     handler(NULL, base, id, NULL);
+}
+
+static void prove_address(const char *ssid, uint64_t now)
+{
+    ap_ssid = ssid;
+    emit(WIFI_EVENT, WIFI_EVENT_STA_START);
+    emit(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED);
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
+    esp_base_wifi_poll(now);
+    assert(esp_base_wifi_ready() && !strcmp(esp_base_wifi_state(), "connected"));
+}
+
+static void check_driver_selection(const ebase_wifi_config_t *config)
+{
+    wifi_config_t expected = {0};
+    memcpy(expected.sta.ssid, config->ssid, strlen(config->ssid));
+    memcpy(expected.sta.password, config->password, strlen(config->password));
+    assert(!memcmp(selected_driver_config.sta.ssid, expected.sta.ssid,
+                   sizeof expected.sta.ssid));
+    assert(!memcmp(selected_driver_config.sta.password, expected.sta.password,
+                   sizeof expected.sta.password));
+}
+
+static void lifecycle(const ebase_wifi_config_t *original)
+{
+    const unsigned initial_config = config_calls, initial_start = start_calls;
+    const unsigned initial_stop = stop_calls;
+    /* Three full device selections model Wi-Fi-only, FRP addition and removal. */
+    ebase_wifi_config_t same = *original;
+    for (unsigned i = 0; i < 3; ++i) {
+        assert(esp_base_wifi_apply(&same, 1100 + i) == ESP_OK);
+        esp_base_wifi_poll(1100 + i);
+        assert(esp_base_wifi_ready() && !strcmp(esp_base_wifi_state(), "connected"));
+    }
+    assert(config_calls == initial_config && start_calls == initial_start && stop_calls == initial_stop);
+
+    ebase_wifi_config_t invalid = *original;
+    invalid.ssid[strlen(invalid.ssid) + 1] = 'x';
+    assert(esp_base_wifi_apply(&invalid, 1199) == ESP_ERR_INVALID_ARG);
+    invalid = *original;
+    memset(invalid.ssid, 'x', sizeof invalid.ssid);
+    assert(esp_base_wifi_apply(&invalid, 1200) == ESP_ERR_INVALID_ARG);
+    invalid = *original; invalid.configured = false;
+    assert(esp_base_wifi_apply(&invalid, 1201) == ESP_ERR_INVALID_ARG);
+    assert(esp_base_wifi_apply(NULL, 1202) == ESP_ERR_INVALID_STATE);
+    assert(esp_base_wifi_ready() && stop_calls == initial_stop);
+
+    /* Keep a scheduled retry and its growing backoff, without inventing IP. */
+    emit(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED);
+    esp_base_wifi_poll(2000);
+    unsigned before_connect = connect_calls;
+    assert(esp_base_wifi_apply(original, 2001) == ESP_OK);
+    assert(esp_base_wifi_apply(original, 2500) == ESP_OK);
+    assert(!esp_base_wifi_ready() && !strcmp(esp_base_wifi_state(), "disconnected"));
+    esp_base_wifi_poll(3000); assert(connect_calls == before_connect);
+    esp_base_wifi_poll(3001); assert(connect_calls == before_connect + 1);
+    assert(esp_base_wifi_apply(original, 3002) == ESP_OK);
+    esp_base_wifi_poll(3003);
+    assert(connect_calls == before_connect + 1 && !esp_base_wifi_ready());
+    emit(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED);
+    esp_base_wifi_poll(3100);
+    assert(esp_base_wifi_apply(original, 3101) == ESP_OK);
+    esp_base_wifi_poll(5100); assert(connect_calls == before_connect + 1);
+    esp_base_wifi_poll(5101); assert(connect_calls == before_connect + 2);
+    assert(stop_calls == initial_stop && config_calls == initial_config && start_calls == initial_start);
+    prove_address(original->ssid, 5102);
+
+    /* Password-only selection must stop, then configure/start after STOP. */
+    ebase_wifi_config_t changed = *original;
+    strcpy(changed.password, "87654321");
+    assert(esp_base_wifi_apply(&changed, 6000) == ESP_OK);
+    assert(stop_calls == initial_stop + 1 && !esp_base_wifi_ready());
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
+    esp_base_wifi_poll(6001);
+    assert(config_calls == initial_config && start_calls == initial_start && !esp_base_wifi_ready());
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(6002);
+    assert(config_calls == initial_config + 1 && start_calls == initial_start + 1);
+    check_driver_selection(&changed);
+    prove_address(changed.ssid, 6003);
+
+    /* A pending stop accepts the latest full selection, including same apply.
+     * Old queued IP must neither restart early nor prove the new SSID. */
+    strcpy(changed.ssid, "new-wifi");
+    assert(esp_base_wifi_apply(&changed, 7000) == ESP_OK);
+    assert(esp_base_wifi_apply(&changed, 7001) == ESP_OK);
+    ebase_wifi_config_t latest = changed;
+    strcpy(latest.ssid, "latest-wifi");
+    strcpy(latest.password, "latest-password");
+    assert(esp_base_wifi_apply(&latest, 7002) == ESP_OK);
+    assert(stop_calls == initial_stop + 2);
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
+    esp_base_wifi_poll(7003);
+    assert(!esp_base_wifi_ready() && config_calls == initial_config + 1);
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(7004);
+    assert(config_calls == initial_config + 2 && start_calls == initial_start + 2);
+    check_driver_selection(&latest);
+    emit(WIFI_EVENT, WIFI_EVENT_STA_START);
+    emit(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED);
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
+    esp_base_wifi_poll(7005);
+    assert(!esp_base_wifi_ready()); /* AP still reports the preceding SSID. */
+    ap_ssid = latest.ssid;
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
+    esp_base_wifi_poll(7006);
+    assert(esp_base_wifi_ready());
+
+    /* Rollback is a real change; an already selected rollback stays online. */
+    assert(esp_base_wifi_apply(original, 8000) == ESP_OK);
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(8001);
+    check_driver_selection(original);
+    prove_address(original->ssid, 8002);
+    unsigned before_stop = stop_calls;
+    assert(esp_base_wifi_apply(original, 8003) == ESP_OK);
+    assert(esp_base_wifi_ready() && stop_calls == before_stop);
+
+    ebase_wifi_config_t disabled = {0};
+    unsigned before_start = start_calls, before_config = config_calls;
+    assert(esp_base_wifi_apply(&disabled, 9000) == ESP_OK);
+    assert(stop_calls == before_stop + 1 && !esp_base_wifi_ready());
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(9001);
+    assert(!strcmp(esp_base_wifi_state(), "unconfigured"));
+    assert(esp_base_wifi_apply(&disabled, 9002) == ESP_OK);
+    assert(start_calls == before_start && config_calls == before_config && stop_calls == before_stop + 1);
+    assert(esp_base_wifi_apply(original, 9003) == ESP_OK);
+    assert(start_calls == before_start + 1 && config_calls == before_config + 1);
+    assert(esp_base_wifi_apply(original, 9004) == ESP_OK);
+    emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
+    esp_base_wifi_poll(9005);
+    assert(!esp_base_wifi_ready()); /* A fresh start still needs association. */
+    prove_address(original->ssid, 9006);
+
+    /* Queue overflow fails the active owner; equal apply must recover it. */
+    for (unsigned i = 0; i < 17; ++i) emit(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED);
+    esp_base_wifi_poll(10000);
+    assert(!strcmp(esp_base_wifi_state(), "failed") && !esp_base_wifi_ready());
+    before_stop = stop_calls;
+    assert(esp_base_wifi_apply(original, 10001) == ESP_OK);
+    assert(stop_calls == before_stop + 1 && !esp_base_wifi_ready());
+    esp_base_wifi_poll(10002); /* Drain old disconnects while stopping. */
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(10003);
+    prove_address(original->ssid, 10004);
+
+    stop_result = ESP_FAIL;
+    assert(esp_base_wifi_apply(&latest, 11000) == ESP_FAIL);
+    assert(!strcmp(esp_base_wifi_state(), "failed") && !esp_base_wifi_ready());
+    stop_result = ESP_OK;
+    before_stop = stop_calls;
+    assert(esp_base_wifi_apply(&latest, 11001) == ESP_OK);
+    assert(stop_calls == before_stop + 1);
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(11002);
+    check_driver_selection(&latest);
+    prove_address(latest.ssid, 11003);
+
+    /* Repeated selection during stopping does not extend the original 2 s. */
+    assert(esp_base_wifi_apply(original, 12000) == ESP_OK);
+    assert(esp_base_wifi_apply(original, 12500) == ESP_OK);
+    esp_base_wifi_poll(13999);
+    assert(strcmp(esp_base_wifi_state(), "failed"));
+    esp_base_wifi_poll(14000);
+    assert(!strcmp(esp_base_wifi_state(), "failed"));
+    emit(WIFI_EVENT, WIFI_EVENT_STA_STOP);
+    esp_base_wifi_poll(14001);
+    before_start = start_calls;
+    assert(!strcmp(esp_base_wifi_state(), "failed"));
+    assert(esp_base_wifi_apply(original, 14002) == ESP_OK);
+    assert(start_calls == before_start + 1 && !esp_base_wifi_ready());
+    prove_address(original->ssid, 14003);
 }
 
 int main(int argc, char **argv)
@@ -173,6 +349,15 @@ int main(int argc, char **argv)
         emit(IP_EVENT, IP_EVENT_STA_GOT_IP);
         esp_base_wifi_poll(1002);
         assert(esp_base_wifi_ready() && !strcmp(esp_base_wifi_state(), "connected"));
+        lifecycle(&config);
+    } else if (failed_stage == WIFI_CONFIG_FAILURE || failed_stage == WIFI_START_FAILURE) {
+        /* Initialized but never active: an equal selection retries start. */
+        unsigned before_config = config_calls;
+        failed_stage = NO_FAILURE;
+        assert(esp_base_wifi_apply(&config, 1000) == ESP_OK);
+        assert(config_calls == before_config + 1 && !esp_base_wifi_ready());
+        check_driver_selection(&config);
+        prove_address(config.ssid, 1001);
     }
     return 0;
 }

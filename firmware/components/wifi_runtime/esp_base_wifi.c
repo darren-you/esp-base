@@ -69,6 +69,15 @@ esp_err_t esp_base_wifi_apply(const ebase_wifi_config_t *config, uint64_t now)
 {
     if (!s_initialized || !config) return ESP_ERR_INVALID_STATE;
     if (!ebase_wifi_config_valid(config)) return ESP_ERR_INVALID_ARG;
+    /* A full device revision can change only MQTT/FRP. Keep the selected
+     * station and its current connection proof or retry in that case. */
+    if (config->configured == s_config.configured &&
+        !strcmp(config->ssid, s_config.ssid) &&
+        !strcmp(config->password, s_config.password) &&
+        !s_stopping && strcmp(s_state, "failed") &&
+        ((s_config.configured && s_active) ||
+         (!s_config.configured && !s_active && !strcmp(s_state, "unconfigured"))))
+        return ESP_OK;
     s_config = *config;
     s_ready = s_associated = s_connecting = false;
     s_retry_at = 0; s_failures = 0;

@@ -1,5 +1,27 @@
 # C3 OTA 分配诊断检查点
 
+## 相同 Wi-Fi 配置的生命周期修正
+
+2026-10-03，真实 Wi-Fi owner 在输入校验后、状态修改前比较 configured／SSID／密码。相同选项且 station 正常运行时，保留已建立的连接证明、连接尝试和重连退避；稳定未配置状态保持。真实字段变化仍停止后重新配置，failed／尚未正常启动仍恢复，停止中接受最新选择且不延长原期限。没有新增状态、任务、缓冲或持久键。
+
+包含真实 runtime 与配置校验器的 ASan／UBSan 12 个启动阶段全部通过，新增生命周期序列覆盖三次同配置提交、连接中与退避保持、SSID／密码／configured 变化、回滚、停止中最新选择、旧 IP 事件、队列溢出、停止错误和原停机期限。C3／ESP32 两个原 host 入口在公开源码与已锁定依赖的独立装配上均 exit 0。直接公开入口缺依赖和首版测试把无效尾部误当有效配置的失败均保留；没有把这些失败改写为通过。有限源码审查 must_fix 为空。当前修正正在构建新签名 A/C，尚未取得实板自然退出、容量或根因闭环资格。
+
+## 原生关闭与同配置 Wi-Fi 重启
+
+2026-10-03，第四轮在原正式预算上，仅仓外增加 C 客户端既有对象、fd、停止 ticket、原 close 返回和即时 errno 的日志。关闭策略、任务、缓冲及期限保持。新的 A/C 完整 SDK 构建与官方 RSA 验签通过；版本 `0.2.0-c3-native-close-a/c`，两个签名镜像各 1183744 B，来源 A 摘要 `85b79e52296ec6c25ae1ab4a0e7c9edd788b366840cce2179428ac67ced7c0f4`。34558 项实际源核对通过，31468 项 SDK 零差异；仅两处 FRP 日志源、两处绝对装配路径与生成的锁摘要变化。实际 ELF code 增加 152 B、rodata 增加 288 B，BSS／IRAM／堆起点不变；两个关闭局部 frame 各增加 32 B，不能据此宣称完整栈或 IRQ 资格。源码、实际构建及 54 个冷输入成员的有限独核通过。驱动只更新镜像身份，不继承新镜像未执行的纯测试或旧 PC 地址资格。
+
+新实体重新读取两份一致 4 MiB 与三个独立原代码区，完整写入／读回、实际启动摘要和空产品绑定通过。最大合法 64 KiB 记录及同 boot 唯一 Pong 成立。record wall **2568064 us**，erase 1 次／590914 us，write 68 次／65536 B／累计 358809 us，read 2435 次／1179648 B／累计 175487 us，原生失败数 0；boot recover 另 scope：wall 572725 us、erase 572654 us。这些有限调用计时包含锁与调度影响，不是纯 Flash、不可抢占或最坏上界。
+
+**整轮 exit 1、physical_measurement_qualified=false。** 原自然退出检查循环再次失败。移除 ACK 为 succeeded／revision 3，FRP 快照 `network_unavailable`；随后 80 次 status 全为 unconfigured，共 81 个 revision 3 回复。211 条命令＝status 207＋config.set 3＋product.status 1。同设备日志中 fd 53 的 close 返回 0，两个采样差 943 us 包含日志与调度，成功时 errno 113 是陈旧值。随后 ticket 0／error -17 仍关联原连接，明确 STOP 的 ticket 1／error -19 到达时连接已为空。不能把前次 close 称为本次显式 STOP 调用，也不能以 close 0 证明对端 FIN／RST 交付。
+
+Host 九条阶段日志仍在 SIGTERM 取消后才出现关键返回和 FINISHED；awaitStop 观察 13502058 us 包含移除前等待，不是设备 stop 耗时。原成功边界门未执行，清理后纯重解析拒绝自然资格。连续 UART **160185 B＝159239 B＋946 B**，无溢出／读取错误，join 正常。结束擦实验数据，仅恢复本轮 fresh 三码并读回；原 boot Wi-Fi down ACK、串口、实际唯一夹具 PID／监听释放经 Root 直接核对。stderr 中 cleanup 最终要求 passed 的异常属于整轮功能失败，不能据此否定已经核实的恢复。
+
+完整 **78 个 regular 成员**归档摘要 `c9b4c1ecf62093d8645edc12c03cd63fb917c82e13eede656d92e270b4896d19`，私有保存目录 `c3-validation-20261003/c3-frp-native-close-failure` 的六份材料索引 `a8f2556a25168b492b6a1728852753625e2b4f38cbdb14fb762a8f7b7aea8b59`。当前失败全78成员有限独核通过，must_fix为空；四成员审查归档a2ad93cc71182e2048a785f6d84d32d72103535ca7ab532b89b59171a7a0e51f及三份拷贝已私存，索引7fc4a2d491eacf2ab303f909e2d26c35fb4151f2d2fdb9d2d5efb383237bc9ef。原失败均保持；恢复和审查通过不提升整轮资格。
+
+后续只读核查确认，三次请求的 Wi-Fi 字段完全相同；Base 完整 config.set 仍先无条件停止 Wi-Fi，待重新建立连接并提交配置后才重配 MQTT／FRP。源码路径与本轮 ticket 0 网络错误先于 ticket 1 明确停止的日志一致，尚未证明远端超时根因。后继已修正 Wi-Fi owner 的相同配置语义并通过宿主检查，见本页首节；正常连接或重试保持原状态，字段变化、失败恢复、停止中最新选择和真实连接证明仍由原流程处理。不增加期限、状态机或关闭策略。修复尚未取得新的 SDK／实体资格。
+
+停止产品策略已确认：仅当前启动停止，重启自动运行 confirmed 产品，不持久化停止状态。新增节省仍 **0 B**；容量、满合法峰值／native、联合 Flash 争用、寿命 Y/f、ESP32、断电／72 小时和正式交付继续开放。
+
 ## FRP 自然退出阶段复验
 
 2026-10-03，继承下述同一签名来源 A、实际 SDK／ELF、正式资源和 80 B Flash 观察成本，仅更新仓外服务端阶段观测及 Python 消费者。Go 新程序仍使用原认证、单条 65536 B 控制记录、15 个 ReqWorkConn 和唯一 Pong，不改变原 `awaitStop`／`mux.Close` 弃错行为；新增日志只含错误分类、单调时间与取消原因。原 16 项端口检查、8 项 race 检查、两次真实 native 回环及有限独审通过；回环没有复现 C3 问题，不能当实板原因。Python 当前 36 项纯验证和最终增量独审通过；父 30 项报告仅为历史。70 个后继归档成员及额外冻结收据独核通过，没有重新编译固件或 SDK。
@@ -14,7 +36,7 @@
 
 连续 UART **160230 B＝159247 B＋983 B**，无溢出／reader 错误，线程 join 正常。结束擦除全部实验数据，只恢复本轮 fresh bootloader／partition／factory 并读回；原 boot Wi-Fi down ACK、串口及实际唯一夹具 PID／监听释放由 Root 核对。完整 **90 个 regular 成员**归档摘要 `d2a0bdee6f3201039d34ea3c73035a20c404c9c5ecd4b6dac01828a4ad9540af`，受限且 Git 忽略的 `c3-validation-20261003/c3-frp-flash-stop-diagnostic-failure` 保存六份材料，私有索引 `2f8e3a7433503e07576a006b345d51e74f470666df8036b9efb154c8065c8d75`。前两次失败完整保持；当前实板全90成员有限独核通过、must_fix为空，六成员审查归档12152955d5d9050faab9a17611b07e0d65510488068a3683dd50aca8820aa5c1及三份审查拷贝已私存，索引f6ea2222b05bfb915a735e3a01b1e0609dc8006dde638f101aca59adc1471f1e；恢复与分项核对不提升整轮资格。
 
-有限32选中源／配置与17实际编译单元、11个来源A完整函数机器码只读追踪未发现work池丢control fd的路径。实际A仅在native close返回0后清fd，TLS／session借用control connection；但本轮没有具体fd／close返回实测。lwIP零linger在有unsent／unacked时才abort，其他分支仍可等待FIN后续输出；源码允许tcp_output错误被忽略、FIN分配不足后等待timer重试。这些只是待区分路径，不能指定为本轮根因。下一最小软件观测限定既有client／control connection／stop ticket绑定与close前后原返回、即时errno和单调时刻，不增加任务、缓冲、关闭策略或延长门。只读六成员审查及三份拷贝已私存，索引c53cbbc2ba050bafcba9d98248304f8293f618e3dc200a054f975d4de5d6996c。
+有限32选中源／配置与17实际编译单元、11个来源A完整函数机器码只读追踪未发现work池丢control fd的路径。实际A仅在native close返回0后清fd，TLS／session借用control connection；但本轮没有具体fd／close返回实测。lwIP零linger在有unsent／unacked时才abort，其他分支仍可等待FIN后续输出；源码允许tcp_output错误被忽略、FIN分配不足后等待timer重试。这些只是待区分路径，不能指定为本轮根因。后继原生关闭观察与同配置 Wi-Fi 核查见本页首节；没有增加任务、缓冲、关闭策略或延长门。只读六成员审查及三份拷贝已私存，索引c53cbbc2ba050bafcba9d98248304f8293f618e3dc200a054f975d4de5d6996c。
 
 产品停止策略保持已确认的“仅当前启动停止，重启自动运行 confirmed 产品”，不增加持久状态。实际新增节省仍 0 B；五能力容量、完整峰值／native、MQTT／OTA Flash 争用、寿命 Y/f、ESP32、断电／72 小时和正式交付仍未完成。
 
