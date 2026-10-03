@@ -1,5 +1,7 @@
 # 固件测试
 
+`container_product_lifecycle_test.c` 的事件准入回归计数真实offer分配／释放，覆盖BUSY、错包、八槽全满且另一个事件处理中时零申请、准入后OOM释放锁、最大载荷、复制期间停止后的清零单次释放和同boot旧包隔离；`mqtt_owner_test.c` 验证拒绝不推进序号、原下一序号重复重试和后续成功推进。两目标完整host及真实Container／WAMR签名guest生命周期入口通过；首次Darwin测试宏冲突及修正后复跑分别保留。测试不证明MCU持锁时延或联合容量，见[分配检查点](../../docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+
 `config_store_test.c` 保持最大 7618 B、v3-only、损坏／冲突和写后不确定回归，新增 C3 load／commit／规范回调的三个 workspace OOM 点：输出保持、无 NVS 写入／commit、回调不执行、工作配置清零及随后恢复；每次释放检查整份 workspace 清零，完整 commit 只拥有一份缓冲，ESP32 无新增 heap 申请。两目标完整 host 和相关 ASan／UBSan 回归通过，见[RTC 检查点](../../docs/operations/rtc_config_ownership_checkpoint.md)。
 
 `command_allocation_test.c` 验证实际缓冲分配、九个扩容失败点、行边界／排空、释放前清零、按类型载荷和复用恢复；`protocol_ota_owner_test.c` 验证配置移交后的独占存活期及两秒半包超时。两目标 ASan/UBSan 回归及实板范围见[检查点](../../docs/operations/c3-command-memory-checkpoint.md)。

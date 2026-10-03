@@ -30,6 +30,7 @@ static emqtt_config_t captured;
 static emqtt_config_t scratch;
 static emqtt_event_t events[40];
 static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands, business_events;
+static unsigned business_event_attempts;
 static bool accept_event = true;
 static emqtt_state_t state = EMQTT_STOPPED;
 static bool fail_stop, fail_publish;
@@ -188,6 +189,7 @@ static bool received_event(const ebase_mqtt_event_view_t *event, void *context)
            !memcmp(event->event, "\x01\x02\x03", 3));
     for (unsigned index = 0; index < 32U; ++index)
         assert(event->package_sha256[index] == 0x11U);
+    ++business_event_attempts;
     if (accept_event) ++business_events;
     return accept_event;
 }
@@ -251,22 +253,45 @@ int main(void)
     assert(!strcmp(last_payload,
         "{\"protocol_version\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"boot_id\":\"33333333-3333-4333-8333-333333333333\",\"state\":\"online\"}"));
 
+    /* A verified frame rejected by the handler consumes no sequence. */
+    accept_event = false;
     push_business_event(1U, false, false);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
-    assert(business_events == 1U && esp_base_mqtt_owner_event_sequence() == 1U);
+    assert(business_events == 0U && business_event_attempts == 1U &&
+           esp_base_mqtt_owner_event_sequence() == 0U);
+    push_business_event(2U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 0U && business_event_attempts == 1U &&
+           esp_base_mqtt_owner_event_sequence() == 0U);
+    push_business_event(1U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 0U && business_event_attempts == 2U &&
+           esp_base_mqtt_owner_event_sequence() == 0U);
+    accept_event = true;
+    push_business_event(1U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 1U && business_event_attempts == 3U &&
+           esp_base_mqtt_owner_event_sequence() == 1U);
     push_business_event(1U, false, false);
     push_business_event(1U, true, false);
     push_business_event(1U, false, true);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
-    assert(business_events == 1U && esp_base_mqtt_owner_event_sequence() == 1U);
+    assert(business_events == 1U && business_event_attempts == 3U &&
+           esp_base_mqtt_owner_event_sequence() == 1U);
     accept_event = false;
     push_business_event(2U, false, false);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
-    assert(business_events == 1U && esp_base_mqtt_owner_event_sequence() == 1U);
+    assert(business_events == 1U && business_event_attempts == 4U &&
+           esp_base_mqtt_owner_event_sequence() == 1U);
+    push_business_event(2U, false, false);
+    esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(business_events == 1U && business_event_attempts == 5U &&
+           esp_base_mqtt_owner_event_sequence() == 1U);
     accept_event = true;
     push_business_event(2U, false, false);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
-    assert(business_events == 2U && esp_base_mqtt_owner_event_sequence() == 2U);
+    assert(business_events == 2U && business_event_attempts == 6U &&
+           esp_base_mqtt_owner_event_sequence() == 2U);
 
     push_command(captured.subscriptions[0].topic, false, false);
     push_command(captured.subscriptions[0].topic, true, false);

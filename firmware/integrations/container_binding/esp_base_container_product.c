@@ -899,17 +899,8 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
     }
     if (!esp_base_container_product_event_accepting() ||
         s_product.event_lock == NULL) return ESP_BASE_CONTAINER_EVENT_UNAVAILABLE;
-    product_event_t *copy = malloc(sizeof(*copy) + size_bytes);
-    if (copy == NULL) return ESP_BASE_CONTAINER_EVENT_NO_MEMORY;
-    copy->size_bytes = size_bytes;
-    copy->event_sequence = event_sequence;
-    memcpy(copy->event_sha256, event_sha256, sizeof copy->event_sha256);
-    memcpy(copy->bytes, event, size_bytes);
-    if (xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE) {
-        memset(copy->bytes, 0, size_bytes);
-        free(copy);
+    if (xSemaphoreTake(s_product.event_lock, 0U) != pdTRUE)
         return ESP_BASE_CONTAINER_EVENT_BUSY;
-    }
     esp_base_container_event_result_t result = ESP_BASE_CONTAINER_EVENT_ACCEPTED;
     if (!esp_base_container_product_event_accepting() ||
         s_product.event_queue == NULL) {
@@ -918,6 +909,26 @@ esp_base_container_event_result_t esp_base_container_product_offer_event(
         result = ESP_BASE_CONTAINER_EVENT_INVALID;
     } else if (s_product.event_count == s_product.event_capacity) {
         result = ESP_BASE_CONTAINER_EVENT_FULL;
+    }
+    /* Reject before creating an owner. Keep the selected package and FIFO
+     * capacity under the same lock until the accepted copy is queued. */
+    if (result != ESP_BASE_CONTAINER_EVENT_ACCEPTED) {
+        xSemaphoreGive(s_product.event_lock);
+        return result;
+    }
+    product_event_t *copy = malloc(sizeof(*copy) + size_bytes);
+    if (copy == NULL) {
+        xSemaphoreGive(s_product.event_lock);
+        return ESP_BASE_CONTAINER_EVENT_NO_MEMORY;
+    }
+    copy->size_bytes = size_bytes;
+    copy->event_sequence = event_sequence;
+    memcpy(copy->event_sha256, event_sha256, sizeof copy->event_sha256);
+    memcpy(copy->bytes, event, size_bytes);
+    /* Cancellation can arrive while allocating or copying with the FIFO
+     * locked. Preserve the post-copy admission check before insertion. */
+    if (!esp_base_container_product_event_accepting()) {
+        result = ESP_BASE_CONTAINER_EVENT_UNAVAILABLE;
     } else {
         const size_t tail = (s_product.event_head + s_product.event_count) %
                             s_product.event_capacity;

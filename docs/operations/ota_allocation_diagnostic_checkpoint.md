@@ -1,10 +1,32 @@
 # C3 OTA 分配诊断检查点
 
+## 产品事件先准入后分配
+
+2026-10-04，真实 `esp_base_container_product_offer_event` 保留参数和初始UNAVAILABLE检查，在既有FIFO锁内核准当前包、准入状态及空位后才malloc／copy。BUSY／INVALID／FULL先于NO_MEMORY硬切；复制后仍检查atomic停止标志，取消副本解锁后清零释放。生产MQTT调用者只消费ACCEPTED，拒绝不推进序号；队列上限、签名包、guest、停止状态和预算保持。该修改消除拒绝路径额外临时owner：合法3893 B MQTT guest载荷加48 B头的旧申请界为3941 B，不能算实测堆收益或闭合约29 KiB容量差。
+
+真实offer生命周期新增八槽全满＋一个处理中、零申请拒绝、准入OOM释放锁、最大载荷、复制中取消的清零／单次释放、旧包隔离；MQTT回归核拒绝后原序号可重试且不允许跳序。C3／ESP32普通full host与真实Container／WAMR签名guest完整入口均exit0，ASan／UBSan、各百次生命周期及Darwin资源检查通过。首次Darwin测试memcpy宏冲突导致末编译单元exit1，修正仅测试include作用域后两完整入口重跑通过，失败日志与收据保留。14份选中源码／结果／日志／收据已私存，索引 `a2bf714a6e66816163b4ded72b7631380aaa14bb39490932cbf0e1567f17f7ed`。
+
+生产源摘要 `85dabcd0c58e4508414b31c4716b7c5a3aebb821e99d8372f77d8ebb2519466a`；新A/C完整SDK构建及官方RSA验签通过，版本 `0.2.0-c3-event-admission-a/c`，signed各1183744 B；34558实际源／31468SDK核通过，仅该函数、两装配路径和生成锁摘要变化，SDK零差异。实际offer代码增加32 B、局部frame保持48 B，BSS、rodata、IRAM和堆起点保持；不能据此增加整体可用堆或证明全调用栈。分配／复制延长已有锁持有区间，最长持锁与MCU调度影响未测；没有新增锁或状态。软件只证明拒绝少一个owner，actual_saving_bytes=0、capacity=false；完整合法峰值、largest连续块和联合OTA／Flash争用仍待实测。
+
 ## 相同 Wi-Fi 配置的生命周期修正
 
 2026-10-03，真实 Wi-Fi owner 在输入校验后、状态修改前比较 configured／SSID／密码。相同选项且 station 正常运行时，保留已建立的连接证明、连接尝试和重连退避；稳定未配置状态保持。真实字段变化仍停止后重新配置，failed／尚未正常启动仍恢复，停止中接受最新选择且不延长原期限。没有新增状态、任务、缓冲或持久键。
 
-包含真实 runtime 与配置校验器的 ASan／UBSan 12 个启动阶段全部通过，新增生命周期序列覆盖三次同配置提交、连接中与退避保持、SSID／密码／configured 变化、回滚、停止中最新选择、旧 IP 事件、队列溢出、停止错误和原停机期限。C3／ESP32 两个原 host 入口在公开源码与已锁定依赖的独立装配上均 exit 0。直接公开入口缺依赖和首版测试把无效尾部误当有效配置的失败均保留；没有把这些失败改写为通过。有限源码审查 must_fix 为空。当前修正正在构建新签名 A/C，尚未取得实板自然退出、容量或根因闭环资格。
+包含真实 runtime 与配置校验器的 ASan／UBSan 12 个启动阶段全部通过，新增生命周期序列覆盖三次同配置提交、连接中与退避保持、SSID／密码／configured 变化、回滚、停止中最新选择、旧 IP 事件、队列溢出、停止错误和原停机期限。C3／ESP32 两个原 host 入口在公开源码与已锁定依赖的独立装配上均 exit 0。直接公开入口缺依赖和首版测试把无效尾部误当有效配置的失败均保留；没有把这些失败改写为通过。有限源码审查 must_fix 为空。公开 Base 已保存推送 `3e8e44e9723fec4a7aaaa334ce9cd7c70cec2eec`；新 A/C 已完成完整 SDK 构建、官方验签与下节有限实体复验，容量与唯一根因资格保持未取得。
+
+## 修正后的最大记录与自然退出切片
+
+2026-10-04，第五轮以公开 Wi-Fi 修正为唯一新执行变更，继承第四轮实际构建的原正式预算与观察器。新版本 `0.2.0-c3-wifi-equal-a/c` 两个签名镜像各1183744 B；完整 SDK 构建与官方 RSA 验签通过。实际源核对仅 Wi-Fi 源、两处绝对装配路径与生成锁摘要变化，SDK源码零差异。A/C的FLASH code各增加160 B，rodata、IRAM、data、BSS及堆起点不变；Wi-Fi配置函数局部frame增加16 B，不据此宣称完整栈、IRQ或容量资格。来源A摘要 `5c87a51e3c3be4641162427d81a5e507d8248a5a7cd25879a19caa2404bbd563`。
+
+重新取得两份一致4MiB和独读原三码，新A完整写入／读回、实际启动版本与摘要、空产品绑定通过。最大合法65536 B控制记录、同boot唯一Pong以及公开移除均成立。移除ACK为succeeded／revision3，FRP快照ready、uptime50748ms；27ms后唯一后续status为unconfigured，共两条revision3回复。158条命令＝154status＋3config.set＋1product.status；不继承第四轮80次status。
+
+**driver exit0、原清理前自然退出门通过、physical_measurement_qualified=true仅属于本C3切片。** 设备明确STOP ticket1／error-19时仍持有原connection，fd53 close返回0；两次日志采样差3258us含UART和调度，成功时errno11为陈旧值。Host raw Read自然EOF，await／mux／device返回时context为none且signal／deadline均false；最后普通defer取消晚于device_return。await观察4828424us含移除前等待，不是公开停止耗时。修正后结果与去掉同Wi-Fi重启的链路一致；没有TCP FIN／RST包级交付或唯一根因证明。
+
+最大记录wall **2544305us**；整区erase1次／65536 B／**591431us**；write68次／65536 B／累计328730us／单次最大10774us；read2435次／1179648 B／累计174923us／最大2671us，native失败0。boot recover另scope：wall540538us、erase540467us。调用计时包含锁／调度，不能当纯Flash、不可抢占或最坏上界。UART **126504 B＝126504 B＋0 B**，overflow0、read error为空、join正常，stderr为空。
+
+结束擦全部实验数据，只恢复当轮fresh三码并逐字节读回；原boot Wi-Fi down ACK、串口和已绑定fixture PID／监听释放由Root直接核实，只声明所属资源。完整 **77 regular成员**归档摘要 `c8781fb32bebfbe594b64eefb2dfe5cf09c8ba67b3f10a03d937b29458afe47d`，私存 `c3-validation-20261003/c3-wifi-equal-physical` 六材料索引 `071cffc3508a607047baeec245dd7405310172ae9321f3d3d270d86b2c0d6dd1`。全77成员有限独核通过、must_fix为空；四成员审查归档摘要 `00edd2c9b47b4f1b8e03abe2192df2194cef1b196afc42ef4dc8360bce34d4bf`，三份私存索引 `89f45327b610d5a7e93bbfde77f9a002a909c9a7cc4d7e4cfa3ba31919630b1e`。审查只核原档，不新增测试或设备操作。前四轮失败保留原资格。该轮没有MQTT、guest或联合OTA，minheap148464 B不能外推五能力；capacity=false、联合争用／峰值／寿命=false、实际新增节省0。
+
+下一修改只处理已有产品事件准入：在现有锁内核准包与队列空间后再分配，保留复制后停止复核及失败清零释放；真实双目标host与签名guest生命周期、MQTT序号回归已通过，新A/C SDK／验签完成，联合实板继续，不提前记容量收益。停止策略继续为仅当前启动停止、重启自动运行confirmed产品。五能力容量、最大合法峰值／native、联合Flash争用、寿命Y/f、ESP32、断电／72小时及正式交付继续开放。
 
 ## 原生关闭与同配置 Wi-Fi 重启
 
@@ -18,7 +40,7 @@ Host 九条阶段日志仍在 SIGTERM 取消后才出现关键返回和 FINISHED
 
 完整 **78 个 regular 成员**归档摘要 `c9b4c1ecf62093d8645edc12c03cd63fb917c82e13eede656d92e270b4896d19`，私有保存目录 `c3-validation-20261003/c3-frp-native-close-failure` 的六份材料索引 `a8f2556a25168b492b6a1728852753625e2b4f38cbdb14fb762a8f7b7aea8b59`。当前失败全78成员有限独核通过，must_fix为空；四成员审查归档a2ad93cc71182e2048a785f6d84d32d72103535ca7ab532b89b59171a7a0e51f及三份拷贝已私存，索引7fc4a2d491eacf2ab303f909e2d26c35fb4151f2d2fdb9d2d5efb383237bc9ef。原失败均保持；恢复和审查通过不提升整轮资格。
 
-后续只读核查确认，三次请求的 Wi-Fi 字段完全相同；Base 完整 config.set 仍先无条件停止 Wi-Fi，待重新建立连接并提交配置后才重配 MQTT／FRP。源码路径与本轮 ticket 0 网络错误先于 ticket 1 明确停止的日志一致，尚未证明远端超时根因。后继已修正 Wi-Fi owner 的相同配置语义并通过宿主检查，见本页首节；正常连接或重试保持原状态，字段变化、失败恢复、停止中最新选择和真实连接证明仍由原流程处理。不增加期限、状态机或关闭策略。修复尚未取得新的 SDK／实体资格。
+后续只读核查确认，三次请求的 Wi-Fi 字段完全相同；Base 完整 config.set 仍先无条件停止 Wi-Fi，待重新建立连接并提交配置后才重配 MQTT／FRP。源码路径与本轮 ticket 0 网络错误先于 ticket 1 明确停止的日志一致，尚未证明远端超时根因。后继已修正 Wi-Fi owner 的相同配置语义并通过宿主检查，见本页首节；正常连接或重试保持原状态，字段变化、失败恢复、停止中最新选择和真实连接证明仍由原流程处理。不增加期限、状态机或关闭策略。以上结论属于修复前第四失败轮；修复后的SDK／有限实体资格见本页首节，不改变该失败轮原资格。
 
 停止产品策略已确认：仅当前启动停止，重启自动运行 confirmed 产品，不持久化停止状态。新增节省仍 **0 B**；容量、满合法峰值／native、联合 Flash 争用、寿命 Y/f、ESP32、断电／72 小时和正式交付继续开放。
 

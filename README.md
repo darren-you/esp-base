@@ -1,6 +1,6 @@
 # ESP Base
 
-2026-10-03 C3 原生关闭复验仍失败：新 A/C 完整 SDK／验签、原正式预算及有限独核通过；实板合法64KiB／同boot单Pong成立，但原自然退出循环超时。fd53 close返回0时，明确STOP尚未到达；STOP到达时连接已为空。三次Wi-Fi字段相同，已修正owner避免无谓重启，并通过C3／ESP32宿主检查；新签名镜像与实板复验进行中。原三码恢复、擦数据与所属资源释放通过；新增节省0、容量及交付未通过，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+2026-10-04 C3 相同 Wi-Fi 配置修正复验通过：Base 3e8e44e 的真实生命周期与双目标 host 检查通过，新 A/C 完整 SDK 构建及官方验签通过；实板最大合法64KiB记录、同boot单Pong、公开移除及原清理前自然退出门通过，driver exit0。fresh双4MiB、原三码恢复、擦实验数据与所属UART／fixture释放通过。仅此FRP切片取得资格，新增节省0；五能力容量、联合争用、满合法峰值、ESP32与交付仍开放，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-03 C3 最大FRP控制记录有限实测：实际65536 B单记录与同boot单Pong，wall约2.565秒、整区erase约564毫秒、读1179648 B及native失败0；公开移除后84次只读status为unconfigured，但夹具自然退出十秒联合门未过，整轮与成本总体资格保持失败。两fresh基线、原三码恢复／擦数据、UART和实际listener释放通过，原失败完整保留；普通Pong沿用已有4096 B窗口不擦scratch，不按心跳计算寿命。软件新A/C签名构建及最终输入通过，DRAM观察成本＋80 B、实际节省0；容量、争用、ESP32及交付继续，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 

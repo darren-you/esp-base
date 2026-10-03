@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,14 +22,69 @@
 #endif
 
 static atomic_bool fail_metadata_allocation;
+static bool observe_event_allocations, stop_during_event_copy;
+static size_t event_allocation_attempts, event_allocation_count, event_release_count;
+static struct {
+    void *pointer;
+    size_t size_bytes;
+    bool released;
+} event_allocations[16];
+static void *event_copy_target;
 static void *test_product_malloc(size_t size_bytes)
 {
-    return atomic_exchange(&fail_metadata_allocation, false) ? NULL : malloc(size_bytes);
+    if (observe_event_allocations) ++event_allocation_attempts;
+    void *memory = atomic_exchange(&fail_metadata_allocation, false) ? NULL : malloc(size_bytes);
+    if (observe_event_allocations && memory != NULL) {
+        assert(event_allocation_count < sizeof event_allocations / sizeof event_allocations[0]);
+        event_allocations[event_allocation_count].pointer = memory;
+        event_allocations[event_allocation_count].size_bytes = size_bytes;
+        event_allocations[event_allocation_count++].released = false;
+        event_copy_target = memory;
+    }
+    return memory;
 }
+static void test_product_free(void *memory);
+static void *test_product_memcpy(void *out, const void *in, size_t length);
 bool test_policy_enabled = true;
 #define malloc test_product_malloc
+#define free test_product_free
+#pragma push_macro("memcpy")
+#undef memcpy
+#define memcpy test_product_memcpy
 #include "esp_base_container_product.c"
 #undef malloc
+#undef free
+#undef memcpy
+#pragma pop_macro("memcpy")
+
+static void test_product_free(void *memory)
+{
+    if (observe_event_allocations && memory != NULL) {
+        for (size_t index = event_allocation_count; index != 0U; --index) {
+            if (event_allocations[index - 1U].pointer != memory) continue;
+            assert(!event_allocations[index - 1U].released);
+            const product_event_t *event = memory;
+            assert(event->size_bytes == event_allocations[index - 1U].size_bytes - sizeof(*event));
+            for (size_t byte = 0; byte < event->size_bytes; ++byte)
+                assert(event->bytes[byte] == 0U);
+            event_allocations[index - 1U].released = true;
+            ++event_release_count;
+            break;
+        }
+    }
+    free(memory);
+}
+
+static void *test_product_memcpy(void *out, const void *in, size_t length)
+{
+    void *result = memcpy(out, in, length);
+    if (observe_event_allocations && stop_during_event_copy &&
+        out == (uint8_t *)event_copy_target + offsetof(product_event_t, bytes)) {
+        stop_during_event_copy = false;
+        atomic_store_explicit(&s_product.stop_requested, true, memory_order_release);
+    }
+    return result;
+}
 
 static bool wait_trial_snapshot(esp_base_container_trial_event_snapshot_t *snapshot)
 {
@@ -471,6 +527,129 @@ static void dispose_product(void)
         free(event_lock);
     }
     memset(&s_product, 0, sizeof s_product);
+}
+
+static void prepare_event_admission_queue(const uint8_t package_sha256[32])
+{
+    assert(s_product.event_queue == NULL && s_product.event_count == 0U);
+    s_product.event_queue = calloc(8U, sizeof(*s_product.event_queue));
+    assert(s_product.event_queue != NULL);
+    s_product.event_capacity = 8U;
+    s_product.limits.max_event_bytes = 4096U;
+    memcpy(s_product.event_package_sha256, package_sha256, 32U);
+    atomic_store(&s_product.result, ESP_BASE_CONTAINER_RUNNING);
+    atomic_store(&s_product.stop_requested, false);
+    atomic_store(&s_product.event_accepting, true);
+}
+
+static void check_event_admission(void)
+{
+    /* The authenticated 4096-byte MQTT frame leaves 3893 guest bytes after
+     * its 203-byte signed prefix. Schedule the real FIFO consumer explicitly. */
+    enum { AUTHENTICATED_EVENT_BYTES = 3893U, RUNTIME_EVENT_BYTES = 4096U };
+    uint8_t event[RUNTIME_EVENT_BYTES + 1U], package_sha256[32], wrong_sha256[32];
+    memset(event, 0x5a, sizeof event);
+    memset(package_sha256, 0x11, sizeof package_sha256);
+    memcpy(wrong_sha256, package_sha256, sizeof wrong_sha256);
+    wrong_sha256[0] ^= 1U;
+    memset(&s_product, 0, sizeof s_product);
+    s_product.event_lock = xSemaphoreCreateMutex();
+    assert(s_product.event_lock != NULL);
+    prepare_event_admission_queue(package_sha256);
+    observe_event_allocations = true;
+    event_allocation_attempts = event_allocation_count = event_release_count = 0U;
+    memset(event_allocations, 0, sizeof event_allocations);
+
+    assert(offer_event(package_sha256, 0U, event, 1U) == ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(offer_event(package_sha256, 1U, event, 0U) == ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(offer_event(package_sha256, 1U, event, sizeof event) == ESP_BASE_CONTAINER_EVENT_INVALID);
+    uint8_t digest[32];
+    assert(SHA256(event, 1U, digest) != NULL);
+    assert(esp_base_container_product_offer_event(NULL, 1U, digest, event, 1U) ==
+           ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(package_sha256, 1U, NULL, event, 1U) ==
+           ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(esp_base_container_product_offer_event(package_sha256, 1U, digest, NULL, 1U) ==
+           ESP_BASE_CONTAINER_EVENT_INVALID);
+    atomic_store(&s_product.event_accepting, false);
+    assert(offer_event(package_sha256, 1U, event, 1U) == ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
+    atomic_store(&s_product.event_accepting, true);
+    atomic_store(&fail_metadata_allocation, true);
+    assert(xSemaphoreTake(s_product.event_lock, 0U) == pdTRUE);
+    assert(offer_event(package_sha256, 1U, event, 1U) == ESP_BASE_CONTAINER_EVENT_BUSY);
+    xSemaphoreGive(s_product.event_lock);
+    assert(offer_event(wrong_sha256, 1U, event, 1U) == ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(event_allocation_attempts == 0U && atomic_load(&fail_metadata_allocation) &&
+           s_product.event_count == 0U && s_product.event_head == 0U);
+    assert(offer_event(package_sha256, 1U, event, 1U) == ESP_BASE_CONTAINER_EVENT_NO_MEMORY);
+    assert(event_allocation_attempts == 1U && s_product.event_count == 0U);
+    assert(xSemaphoreTake(s_product.event_lock, 0U) == pdTRUE);
+    xSemaphoreGive(s_product.event_lock);
+
+    assert(offer_event(package_sha256, 1U, event, RUNTIME_EVENT_BYTES) ==
+           ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    product_event_t *processing = take_event();
+    assert(processing != NULL && processing->size_bytes == RUNTIME_EVENT_BYTES &&
+           !memcmp(processing->bytes, event, RUNTIME_EVENT_BYTES));
+    memset(processing->bytes, 0, processing->size_bytes);
+    test_product_free(processing);
+    assert(finish_guest_work());
+
+    for (uint64_t sequence = 2U; sequence < 10U; ++sequence)
+        assert(offer_event(package_sha256, sequence, event, AUTHENTICATED_EVENT_BYTES) ==
+               ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    processing = take_event();
+    assert(processing != NULL && s_product.guest_call_processing && s_product.event_count == 7U);
+    assert(offer_event(package_sha256, 10U, event, AUTHENTICATED_EVENT_BYTES) ==
+           ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    product_event_t *queue_before[8];
+    memcpy(queue_before, s_product.event_queue, sizeof queue_before);
+    const size_t attempts_before = event_allocation_attempts;
+    const size_t head_before = s_product.event_head;
+    atomic_store(&fail_metadata_allocation, true);
+    assert(offer_event(package_sha256, 11U, event, AUTHENTICATED_EVENT_BYTES) ==
+           ESP_BASE_CONTAINER_EVENT_FULL);
+    assert(offer_event(wrong_sha256, 11U, event, AUTHENTICATED_EVENT_BYTES) ==
+           ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(xSemaphoreTake(s_product.event_lock, 0U) == pdTRUE);
+    assert(offer_event(package_sha256, 11U, event, AUTHENTICATED_EVENT_BYTES) ==
+           ESP_BASE_CONTAINER_EVENT_BUSY);
+    xSemaphoreGive(s_product.event_lock);
+    assert(event_allocation_attempts == attempts_before && atomic_load(&fail_metadata_allocation) &&
+           s_product.event_count == 8U && s_product.event_head == head_before &&
+           s_product.guest_call_processing &&
+           !memcmp(queue_before, s_product.event_queue, sizeof queue_before));
+    for (size_t index = 0; index < 8U; ++index)
+        assert(queue_before[index]->size_bytes == AUTHENTICATED_EVENT_BYTES &&
+               !memcmp(queue_before[index]->bytes, event, AUTHENTICATED_EVENT_BYTES));
+    memset(processing->bytes, 0, processing->size_bytes);
+    test_product_free(processing);
+    assert(finish_guest_work());
+    release_event_queue();
+    assert(event_release_count == event_allocation_count);
+
+    prepare_event_admission_queue(package_sha256);
+    atomic_store(&fail_metadata_allocation, false);
+    stop_during_event_copy = true;
+    const size_t releases_before = event_release_count;
+    assert(offer_event(package_sha256, 12U, event, AUTHENTICATED_EVENT_BYTES) ==
+           ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
+    assert(!stop_during_event_copy && atomic_load(&s_product.stop_requested) &&
+           event_allocation_attempts == attempts_before + 1U &&
+           event_release_count == releases_before + 1U && s_product.event_count == 0U);
+    assert(xSemaphoreTake(s_product.event_lock, 0U) == pdTRUE);
+    xSemaphoreGive(s_product.event_lock);
+    assert(offer_event(package_sha256, 12U, event, 1U) == ESP_BASE_CONTAINER_EVENT_UNAVAILABLE);
+    release_event_queue();
+    prepare_event_admission_queue(wrong_sha256); /* A same-boot package switch. */
+    assert(offer_event(package_sha256, 12U, event, 1U) == ESP_BASE_CONTAINER_EVENT_INVALID);
+    assert(event_allocation_attempts == attempts_before + 1U && s_product.event_count == 0U);
+    release_event_queue();
+    assert(event_release_count == event_allocation_count);
+    observe_event_allocations = false;
+    event_copy_target = NULL;
+    dispose_product();
+    puts("container_event_admission: zero-allocation rejection, full eight plus processing, maximum payload, OOM unlock, copy cancellation and package isolation passed");
 }
 
 static void configure(const file_t *public_key)
@@ -3008,6 +3187,8 @@ static void run_public_product_lifecycle(const file_t *key, const file_t *packag
 
 int main(int argc, char **argv)
 {
+    check_event_admission();
+    if (argc == 2 && strcmp(argv[1], "event-admission") == 0) return 0;
     const uint8_t representative_event[] = {1U, 2U, 3U};
     assert(SHA256(representative_event, sizeof representative_event,
                   trial_event_digest) != NULL);
