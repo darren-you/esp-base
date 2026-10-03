@@ -1,5 +1,7 @@
 # ESP Base
 
+2026-10-03 C3 TLS owner 诊断：仓外真实 A/C 完整软件输入已冻，唯一记录区仍1800 B。联合功能、停止启动／重启自动运行、十二项业务、A/C读回及原三码恢复通过；148/148网络ready，status采样历史minimum23464 B仍低于49152 B。TLS保留12记录、丢弃3条，严格parser及PC门保留不合格，整轮exit1；451完整任务快照只覆盖已观察名称。189成员实体与前序失败独立保全，Flash源码成本及官方系列耐久已核、实板时延／寿命和双板总门继续，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+
 2026-10-03 C3 来源最大事件与完整生命周期续验：OTA 前单次 4096 B 公开帧／3893 B 事件返回来源累计结果 3912，confirmed 绑定保持；联合 OTA、USB／MQTT 停止启动、重启自动运行、十二项业务、卸载、A/C 读回和原三码恢复通过。145/145 下载网络 ready、11 条历史新低无丢弃；451 个完整任务快照、13 个已观察名称栈余量至少 1024 B。诊断历史 heap 23228 B 仍低于 49152 B，不证明满队列或与 OTA 并存峰值，双板总门继续开放，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。
 
 2026-10-03 C3 全 prepare 诊断：连续单 reader 收到 12 条完整历史新低记录，无丢弃，148/148 下载样本 MQTT／FRP ready；历史 heap 22016 B 仍未达 49152 B。目标确认期间驱动拒绝合法 `unknown/storage_uncertain/null`，后继功能未完成；原三码恢复、数据擦除与资源释放独立复核通过，失败证据保持，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。

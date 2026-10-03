@@ -1,5 +1,31 @@
 # C3 OTA 分配诊断检查点
 
+## TLS owner 完整软件冻结与实体历史溢出
+
+2026-10-03，在 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89` 运行源码和 FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee`、OTA `bf11916ab904be4ee9bcdfae213c85336363e96a`、Container `2b93b979b8b0760dcb96b28ac5d13fc52ae547bf` 的精确依赖上，完成仓外 C3 TLS owner 诊断组合。唯一固定记录区仍为 **1800 B**，替换旧探针；公开固件、依赖 pin、Wi-Fi 动态 RX/TX 32/32、TLS 16384/4096、任务栈与 guest 预算保持。私有 SDK 五处注入、四 provider 装配及全部五处实际 SDK guard 共 21 个精确增量；这是显式私有诊断覆盖，不是原 SDK 或生产固件原样构建。
+
+实际 A/C 均完成完整构建和官方测试键签名，镜像各 1183744 B，原 0x130000 槽保留 61440 B。实际 ELF 的唯一 1800 B 状态、IRQ 路径与六个保留 SDK SOURCE 返回位置独立核验；第七处 object 调用被合法 linker GC，没有虚构地址。签名镜像、完整源清单、配置、ELF 与 PC map 精确绑定；C3 堆起点相对旧诊断后移 512 B，只计成本，不加回读数。两份实际配置除版本外相同，原资源和信任策略没有降配。完整冷输入 **46049 项（34625 源输入／11424 软件证据）**逐项及两份归档成员复核，索引摘要 `d8f7832551feeaa8a18ce37a22eff82b181c8536f5c5c9c1ca88123b486518eb`；原历史冷输入均保留。
+
+准备失败各自保全：第一轮漏交付 Wi-Fi 配置和 FRP 控制 probe，只到空产品新固件启动，后续网络／OTA未执行，原三码恢复和数据擦除通过；补齐后新增 37 项必需输入及纯配置检查。第二轮在首写前第二次 4 MiB 基线读取中串口中断，零擦除／写入成立，另行只读复位成功；另一错误执行入口在设备调用前被路径守卫拒绝。三者不混入下述完整功能轮，也不修改原失败树或沿用失败基线。
+
+新完整实体轮重新读取双新鲜一致 4 MiB 基线与三个独立原代码区。单次 4096 B 公开帧／3893 B 来源事件返回 3912，随后原一次 WRITE 联合 OTA 持久确认、USB／认证 MQTT 各一次 stop/start、五原生命周期 ID 各写一次及只读重查、停止后重启自动运行当前固件 confirmed、旧 stop ID 在新 boot unknown、十二项业务、卸载和 A/C 精确读回通过。停止只在当前启动有效，不增加持久停止状态。来源下载 **148/148** 样本 MQTT／FRP ready，status 采样历史 minimum **23464 B < 49152 B**；不与其它轮相减归因，不加回观察成本，不证明最大 FRP 记录、满队列／并存事件或连续块门。
+
+TLS 原始 UART 的 BEGIN／END 和 12 条保留记录结构完整，但另 **3 次 probe 观察新低未保存**：BEGIN `dropped=3`，END `qualified=0/errors=128`。原严格 parser 与 Root 独立重解析完全一致，保持合法 `unqualified_observation`；后置 PC 门返回 2 并保全原对象，未把局部记录提升为完整 TLS owner 或最低堆因果证明。功能分项通过，**整轮 exit 1、TLS 资格与容量均未通过**。后继只能在同一 1800 B 内无损压缩记录，保留原新低触发和严格溢出失败；当前尚无新的编译或实体通过结论。
+
+451 个完整序列化任务快照 expected/captured 相等，无采样申请失败；13 个已观察名称栈余量至少 1024 B，最低 IDLE 1196 B，仅覆盖实际观察范围。UART logged 722383 B = consumed 721169 B + pending 1214 B，最高有界队列 63234/65536 B，无溢出；不声明结束 pending 为零。结束擦除全部实验数据，只恢复本轮独立读取的原 bootloader／partition／factory 并逐字节核对，reset／Wi-Fi down ACK、串口、三 fixture 和零所属进程释放独立通过，不恢复旧／实验 NVS，不写 eFuse。15 组事实审查通过不等于整轮通过。
+
+完整实体 **189 个成员**的字节、size、mode／执行位已核，归档摘要 `5ce3c33a02cf9f1a65cc6ccc5d7a5b0233f7463f4b2b8bc61416bc87468192d0`，索引 `f65f1b31d27fc6569ccd2f3653f29e795a8c05616aa8941a8abe5f9e0f5c5fd5`。受限且 Git 忽略的 `c3-validation-20261003/c3-tls-owner-history-overflow` 保存 23 份精确拷贝及索引 `5e51caba77b32f3c513e31502519eb0a847072e2bd966fb1ea69c2021c59ee98`；完整软件冷输入引用同级 `c3-tls-owner-actual-software` 的独立私有索引。首写前串口失败 85 个成员、两份 Flash 官方／源码成本归档及独立复核也单独保留。
+
+### Flash 成本与寿命边界
+
+只读源码核验确认，scratch 用于**入站加密控制记录**，不是每 64 KiB TCP 数据的通用缓存。超过 4096 B 的记录 begin 擦除整区一次，每次 boot recover 另擦整区一次；clear、元数据与清理重试不增擦写。C3／ESP32 的 64 KiB scratch 都不按 64 KiB block 对齐，当前 SDK 成功路径分别使用 16 次 4096 B sector erase。最大记录密文／明文为 65536 B，tag 另 16 B；写入 65536 B，正常完整消费的 17 遍读取加 provider 回验总计 **1179648 B**。实际分段次数、物理擦写／密码学时长和 OTA 并存进展仍未实测，不能把 500 ms claim 重试策略当作严格最坏墙钟上界。75 个选中输入及 79 个归档成员独立核验；只证明相关 provider／SDK 子集，未宣称全树或全部实际编译路径。
+
+[ESP32-C3 官方数据表 v2.4](https://documentation.espressif.com/ESP32-C3_Datasheet_en.pdf)第 57 页表 5-10 已公布最少 100000 次 P/E 和 20 年数据保持；不能继续称官方耐久数字完全未知，也不能把保持年限等同连续写入寿命。本台 `20/4016` 仍不能唯一定位具体 Flash 型号，[XMC C](https://www.xmcwh.com/uploads/799/XM25QH32C_Ver2.1.pdf)与[D](https://www.xmcwh.com/uploads/920/XM25QH32D_Ver1.3.pdf)共享该 ID；剩余寿命没有实测绑定。
+
+参数化必要关系为 `H + B + 525960 × Y × f + F <= E`：H 为此前每扇区消耗，B 为到达擦除的 boot recover 次数，Y 为使用年数，f 为每分钟成功大控制记录，F 为未计入 f 的失败／取消／重传 begin，E 为适用器件条件下预算；若 f 已含全部 begin，不能重复计 F。维护者的 Y/f 目标仍待答，当前 H／剩余寿命未知，本式不构成寿命通过。官方 19 成员与成本 79 成员均已独立复核，无新持久磨损管理机制。
+
+当前实际新增内存节省仍 **0 B**。CA／config 生命周期复核保留真实 TLS renegotiation 消费，不提前释放仍被引用的配置；原 peer／handshake 和启动栈已释放部分不能重复计省。P6-03、满合法峰值、native 全生命周期、Flash 实板最坏成本、ESP32、断电／72 小时与正式交付继续开放。
+
 ## 来源最大事件与完整生命周期续验
 
 2026-10-03，沿用 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89` 的运行源码和上一轮冻结的来源 A／目标 C 签名固件，正式 Wi-Fi、TLS、guest、任务栈、MQTT 与 FRP 预算保持。仓外新入口仅在来源产品 confirmed、网络稳态之后、原一次 OTA 之前增加一个最大事件切片；原 132 项纯测试与新增 12 项均通过，Root 独立复验新增项和入口精确差异。原 OTA ID、90 秒循环及 5 秒只读查询语义、最终绑定与恢复 finally 保持。

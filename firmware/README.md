@@ -1,5 +1,7 @@
 # ESP Base 固件
 
+2026-10-03 仓外TLS owner诊断组合完成C3完整软件冻结及有限联合功能／恢复；12条历史记录满后另3次新低未保存，原严格parser保持不合格，整轮exit1。148/148下载网络ready，status采样历史minimum23464 B仍未达49152 B；公开固件、依赖与预算保持，后继记录压缩尚未编译或上板，详见[最新分配诊断检查点](../docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+
 公开 `product.stop`／`product.start` 沿同一 USB／MQTT 控制入口和唯一产品 worker，仅在本 boot 的请求守卫中保存原 ID 结果，不改变已确认包绑定或持久账本。停止需真实回收后才成功，启动重验签并执行 init；异常实例保持阻断，重启后自动运行当前固件已确认的产品，不持久化停止状态。协议与原 ID 查询边界见[设备协议](../docs/design/device-protocol.md#产品停止与新启动)，真实宿主验证见[测试说明](tests/README.md)。C3 已完成有限公开生命周期及恢复切片，容量、全部 native 生命周期、满合法峰值、ESP32 与 Tool 正式交付继续开放，范围以[最新实体检查点](../docs/operations/ota_allocation_diagnostic_checkpoint.md)为准。
 
 2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](../docs/operations/rtc_config_ownership_checkpoint.md)及[前轮 MQTT 消费](../docs/operations/mqtt_owned_config_consumer_checkpoint.md)。
