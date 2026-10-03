@@ -1,10 +1,28 @@
 # C3 OTA 分配诊断检查点
 
+## FRP 自然退出阶段复验
+
+2026-10-03，继承下述同一签名来源 A、实际 SDK／ELF、正式资源和 80 B Flash 观察成本，仅更新仓外服务端阶段观测及 Python 消费者。Go 新程序仍使用原认证、单条 65536 B 控制记录、15 个 ReqWorkConn 和唯一 Pong，不改变原 `awaitStop`／`mux.Close` 弃错行为；新增日志只含错误分类、单调时间与取消原因。原 16 项端口检查、8 项 race 检查、两次真实 native 回环及有限独审通过；回环没有复现 C3 问题，不能当实板原因。Python 当前 36 项纯验证和最终增量独审通过；父 30 项报告仅为历史。70 个后继归档成员及额外冻结收据独核通过，没有重新编译固件或 SDK。
+
+驱动保持单次 90 秒 fresh-boot capture、原 5 秒 status 与原 10 秒自然退出检查循环。在公开 unconfigured、进程退出 0／FINISHED 后、清理之前，再要求三个关键返回阶段完整且唯一；拒绝信号、截止时间和底层读超时。正常返回后的普通 defer 取消可以保留。该循环涉及状态查询，不把循环参数当严格硬实时上界；解析失败仍进入原恢复流程。
+
+第三轮实物重新读取双新鲜一致 4 MiB 和三个独立代码区，来源 A 完整写入／读回、实际启动摘要和空产品绑定通过。只配置 Wi-Fi／FRP；最大合法记录及同 boot 单 Pong 成立。移除 ACK 成功、revision 3，其 FRP 快照暂为 `network_unavailable`（uptime 47566 ms）；18 ms 后首次 status 开始，**80 次 status 全为 unconfigured**，总 81 个回复＝ACK 1＋status 80。本轮 212 条命令＝status 208＋config.set 3＋product.status 1，不继承前轮 84 次查询或 ACK 快照。
+
+本轮成本为：最大记录 wall **2578796 us**；整区 erase 1 次／**619128 us**；write 68 次／65536 B／累计 332715 us／单次最大 13858 us；read 2435 次／1179648 B／累计 174220 us／单次最大 1527 us；原生失败数 0。boot recover 另 scope，erase 552684 us、wall 552753 us。调用计时可能包含锁和调度等待，wall 还含非原生开销；两个有限实板样本不构成纯 Flash、密码学、不可抢占或最坏时长，以及联合争用／寿命证据。
+
+**整轮 exit 1、physical_measurement_qualified=false。** 原退出循环未观察到自然结束；Go `await_stop_enter` 至返回观察持续 15118291 us，包含移除前等待，不能称设备 stop 耗时。该轮先记录 `context_done=signal_sigterm`，随后 raw Read 才返回 `connection_closed`，再出现 awaitStop／mux.Close 返回、FINISHED 及仍带 SIGTERM 的 `device_return_context`。这证明当前日志的阶段／取消边界，不能证明设备 fd、FIN／RST 包或网络交付失败原因，也不回写为旧轮取消因果。清理后纯重解析拒绝自然资格；原实体驱动因循环超时没有进入成功边界内的 pre-close 门。仅本地关闭成功不能替代对端终止证据，下一步继续限定设备侧关闭链路核查，不延门或放行。
+
+连续 UART **160230 B＝159247 B＋983 B**，无溢出／reader 错误，线程 join 正常。结束擦除全部实验数据，只恢复本轮 fresh bootloader／partition／factory 并读回；原 boot Wi-Fi down ACK、串口及实际唯一夹具 PID／监听释放由 Root 核对。完整 **90 个 regular 成员**归档摘要 `d2a0bdee6f3201039d34ea3c73035a20c404c9c5ecd4b6dac01828a4ad9540af`，受限且 Git 忽略的 `c3-validation-20261003/c3-frp-flash-stop-diagnostic-failure` 保存六份材料，私有索引 `2f8e3a7433503e07576a006b345d51e74f470666df8036b9efb154c8065c8d75`。前两次失败完整保持；当前实板全90成员有限独核通过、must_fix为空，六成员审查归档12152955d5d9050faab9a17611b07e0d65510488068a3683dd50aca8820aa5c1及三份审查拷贝已私存，索引f6ea2222b05bfb915a735e3a01b1e0609dc8006dde638f101aca59adc1471f1e；恢复与分项核对不提升整轮资格。
+
+有限32选中源／配置与17实际编译单元、11个来源A完整函数机器码只读追踪未发现work池丢control fd的路径。实际A仅在native close返回0后清fd，TLS／session借用control connection；但本轮没有具体fd／close返回实测。lwIP零linger在有unsent／unacked时才abort，其他分支仍可等待FIN后续输出；源码允许tcp_output错误被忽略、FIN分配不足后等待timer重试。这些只是待区分路径，不能指定为本轮根因。下一最小软件观测限定既有client／control connection／stop ticket绑定与close前后原返回、即时errno和单调时刻，不增加任务、缓冲、关闭策略或延长门。只读六成员审查及三份拷贝已私存，索引c53cbbc2ba050bafcba9d98248304f8293f618e3dc200a054f975d4de5d6996c。
+
+产品停止策略保持已确认的“仅当前启动停止，重启自动运行 confirmed 产品”，不增加持久状态。实际新增节省仍 0 B；五能力容量、完整峰值／native、MQTT／OTA Flash 争用、寿命 Y/f、ESP32、断电／72 小时和正式交付仍未完成。
+
 ## FRP 最大控制记录实测与移除超时
 
 2026-10-03，在下述公开运行源码、精确组件与原正式预算上，仓外叠加 Flash 成本观察器。新来源 A／目标 C 完整 SDK 构建及原测试键官方验签通过，版本为 `0.2.0-c3-flash-cost-a/c`，签名镜像各 1183744 B；目标 C 此次只有软件构建资格。唯一 provider 状态由 64 B 增至 144 B，实际 BSS 和堆起点增加 **80 B**；IRAM 50106 B＋70 B 对齐保持，观察成本不加回。34558 项实际源构建后核对通过；两 provider、两绝对装配路径及 Component Manager 生成的锁 `manifest_hash` 为五项变化，依赖版本和其余源／SDK 字节保持，新实际 ELF 和 PC 重新绑定。
 
-最大合法 65536 B 控制记录先经真实 host TLS／Yamux／原生 session 和 IDF Flash 模型消费、坏认证拒绝；这部分仍是软件。严格 decoder 25 项、当前 driver 30 项、adapter 10 项及单次启动 capture 15 项纯检查通过。最初实物轮省略已验证的 pyserial fresh-boot capture，首 `status` 超时、运行 UART 为 0 B；整轮失败及 79 个完整成员独立保留，后继补回一次 90 秒真实 READY／empty 捕获，关闭后才打开 POSIX 单 reader，原五秒状态查询与恢复逻辑保持。新后继输入包 53 个明确成员核对通过，没有复用失败基线。
+最大合法 65536 B 控制记录先经真实 host TLS／Yamux／原生 session 和 IDF Flash 模型消费、坏认证拒绝；这部分仍是软件。严格 decoder 25 项、第二轮 driver 30 项、adapter 10 项及单次启动 capture 15 项纯检查通过；当前第三轮消费者见本页首段。最初实物轮省略已验证的 pyserial fresh-boot capture，首 `status` 超时、运行 UART 为 0 B；整轮失败及 79 个完整成员独立保留，后继补回一次 90 秒真实 READY／empty 捕获，关闭后才打开 POSIX 单 reader，原五秒状态查询与恢复逻辑保持。新后继输入包 53 个明确成员核对通过，没有复用失败基线。
 
 第二轮重新读取两份一致 4 MiB 基线和三个独立原代码区，完整写入／读回后实际启动来源 A，公开查询绑定当前固件摘要与空产品。只配置 Wi-Fi 和 FRP，无 MQTT、OTA 或 guest。一个合法最大记录随后到达同 boot、同配置 revision 的唯一 Pong。实际原生观察如下；单位为微秒，调用数与字节均为本轮实测，不能填入其它分段形状。
 
@@ -16,7 +34,7 @@
 
 最大记录 `begin_to_clear` 的 `wall_us=2565029`、`result=0`、`cost_valid=1`、原生失败数为 0；boot recover 另一次擦除为 554330 us、wall 为 554399 us。wall 结束于 guard 解锁后、打印前采样，包含调度与非原生开销，不是独立密码学耗时、整个回调耗时、连续不可抢占时长或最坏上界；500 ms claim 重试也不构成该上界。两项观察不含实验 ROM 整片擦除／恢复磨损。
 
-公开移除配置 revision 3 成功，同 boot 之后 **84 次只读 status 均为 unconfigured**；另有一次移除 ACK，共 85 个 revision 3 回复。driver 未在十秒联合门观察到夹具自然退出，因此 **整轮 exit 1、physical_measurement_qualified=false**，没有放行成本总体资格。Go 最终日志含 FINISHED、退出 0，但没有事件时间戳或实际 SIGTERM 发送记录，只能说明 cleanup 后最终收据看到这些结果，不能证明精确发生先后或取消因果。同精确夹具与原生客户端的两次本机认证联调均自然退出，没有复现 C3 超时；正在取得有限关闭阶段证据，不延长或削弱退出门。
+公开移除配置 revision 3 成功，同 boot 之后 **84 次只读 status 均为 unconfigured**；另有一次移除 ACK，共 85 个 revision 3 回复。driver 未在十秒联合门观察到夹具自然退出，因此 **整轮 exit 1、physical_measurement_qualified=false**，没有放行成本总体资格。Go 最终日志含 FINISHED、退出 0，但没有事件时间戳或实际 SIGTERM 发送记录，只能说明 cleanup 后最终收据看到这些结果，不能证明精确发生先后或取消因果。同精确夹具与原生客户端的两次本机认证联调均自然退出，没有复现 C3 超时；后继关闭阶段证据见本页首段，不延长或削弱退出门。
 
 启动 UART 18111 B 与保存摘要一致；运行 UART **162412 B＝consumed 162348 B＋pending 64 B**，无 reader 错误或溢出。结束擦除全部实验数据，仅恢复本轮原 bootloader／partition／factory并逐字节读回；原 boot Wi-Fi down ACK、串口释放、实际夹具 PID／唯一 LAN listener 存活时绑定及最终释放由 Root 直接核对。完整失败现场 85 个成员归档摘要 `3e276ba3f8c6bb0df2def063780c4fcdea65975b133c772724b194f19a115d06`，受限且 Git 忽略的 `c3-validation-20261003/c3-frp-flash-cost-removal-deadline-failure` 保存六份拷贝／澄清，私有索引 `2b55404e152abe0fc19ff57464fe0507b5e35eff6533123bd39d35e9154ba56c`；原首次失败与所有旧轮独立保持。
 
