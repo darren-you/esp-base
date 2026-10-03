@@ -1,5 +1,27 @@
 # C3 OTA 分配诊断检查点
 
+## 事件准入修正后的联合实体复验
+
+2026-10-04，使用 Base `96d60df59160f1d7f5cef116f4dbf38a8f93911e` 的产品事件准入修正及本页所列新 A/C 实际完整构建；两轮均重新核对唯一 C3、两份一致 4 MiB、独读原三码，完整写入 A 后经 Wi-Fi／MQTT／FRP、公开安装、来源单次 3893 B 最大事件及唯一 WRITE 联合 OTA 到达持久确认。最大事件在 OTA 前已执行完成，不证明并存峰值。
+
+首轮 driver exit 1，原 `passed=false`、`cleanup_incomplete` 保留。发布器先返回 120，其根因未知；之后收据及部分清理日志明确 ENOSPC。原下载过滤得到 149/149 MQTT／FRP ready，状态采样最低空闲堆 26540 B，来源 boot 历史最低 19820 B；22 条 TLS 记录与当前有限 PC 消费者的 131 个区间仅取得局部资格。原擦除／三码写回与 Wi-Fi down 回执已经执行，Root 再独立读回当轮 fresh 三码一致，没有额外 Flash／eFuse 写入；补证不改写首轮恢复收据中的失败字段。58 成员选中归档及六份材料已受限私存，私存索引 `844e33d69a4af707c5c996f430c6f48399cb6b394a2768fd1f9e7de788cfbff5`。首轮未完成后续生命周期、第三 boot、十二项业务、卸载及最终 A/C 读回。
+
+第二轮 driver exit 1，UART 观察器的有界队列失败在 MQTT 停止／启动后的 USB product.status 查询中暴露。原始日志 634379 B＝已消费 568837 B＋仍待消费 65498 B＋拒绝入队整块 44 B；该块使 65536 B 上限实际超过 6 B。原始字节先写日志再尝试入队，没有删旧队列或当作串口断连重开。USB 停止／启动完整一轮、MQTT 停止及启动原 ID 的成功结果已保存；其后查询失败，第三 boot、十二项业务、卸载与最终 A/C 读回未完成。原下载过滤得到 147/147 网络 ready，状态采样最低空闲堆 30640 B，来源 boot 历史最低 19268 B；1 条合格 TLS 记录和 6 个 PC 区间仅局部通过。原三码精确恢复、擦除实验数据、Wi-Fi down、串口释放及原 fixture close 均通过，清理错误为空；末尾对 `passed` 的失败断言保留整轮失败，不是新增恢复缺口。37 成员选中归档及三份材料已私存，索引 `38b7ea906d8f2ed00d1927dbbb305e8c53750f1ff01a9ddcb37826a38416d6bb`。
+
+以上历史最低水位不是下载阶段局部因果测量；采样最低空闲堆也不是完整峰值。新签名标签不继承旧 IRQ 资格，当前有限 SOURCE/PC 消费者不证明完整 IRQ、全栈峰值、largest 或 native 满峰值。两轮容量均未通过，新增实测节省仍为 0；不将两轮与旧镜像相减推算收益。
+
+当前宿主观察器只将两处 ContinuousUART 调用显式设为 1048576 B，并同步 scope。类及默认 65536 B 保持，溢出仍 fatal，不丢旧队列；设备预算、A/C 镜像、CLI 写序、业务、期限和物理恢复体不变。原 24 项纯测试与新增三项均 exit 0；本轮全部 634379 B 原日志零前台消费重放后 log/FIFO/字节一致，1 MiB 恰满再加 1 B 仍 fatal、旧 FIFO 保留，单 reader 和 join 通过。当前三个差异逆向后与前轮 driver 字节／AST 一致；不继承未重跑的历史 driver contract 全量资格。第三轮已独立完成以下功能切片；纯测试自身仍不提高实体或容量资格。
+
+第三轮真正 driver exit 0：公开一次 WRITE 联合 OTA、USB／MQTT 停止启动、五个原生命周期 ID 各 application 写一次及只读重查、停止后 MQTT 重启自动运行 confirmed 产品、旧 stop ID 在新 boot 经两入口均 unknown、十二项业务（含预期暂停拒绝）、卸载，以及来源 A／目标 C 逐字节读回全部通过。源码仍绑定公开 Base `96d60df5` 及同一新 A/C 签名字节，没有因宿主预算变化重签设备镜像。
+
+原下载过滤 150/150 MQTT／FRP ready；来源 boot 历史最低 21360 B、状态采样 current 最低 31204 B。历史水位距离 49152 B 门差 27792 B，不是阶段局部因果、完整 native 峰值或实测节省。15 条 TLS 记录、drop 0、errors 0、qualification true；保存 UART 严格重解析与原收据整个 observation 相等，当前有限 SOURCE/PC 后置门通过 89 个区间。完整 IRQ／全栈、largest、满队列与 processing、最大事件及 OTA 并存、联合 Flash 争用仍无资格。
+
+连续 UART 共 770858 B＝已消费 769644 B＋结尾待消费 1214 B，overflow 0、reader error 为空、reader 已退出且 join 无超时。本轮最大 pending 63737 B，低于旧 65536 B 门，因此不能将本次成功唯一归因于 1 MiB；前轮积压事实及新预算的严格边界测试继续保留。两份 fresh 原现场只互相比对及匹配独读三码；待刷入 A 候选与写后读回另行核对。首次离线归档脚本误将原现场与候选相等比较，明确拒绝后在新目录修正，首失败脚本及 JSON 原样保留；不是实体失败或重新执行设备测试。
+
+原三码精确恢复、实验数据擦除、原 boot Wi-Fi down 及 UART 释放通过；Root 对实际运行中观测的三个所属进程／四个本地监听逐项核对释放，不作全局零进程声明。213 个完整 runtime regular 文件及必要外部材料组成 222 个 payload、223 个 tar 成员，原现场前后索引不变、逐成员 SHA／size／mode／执行位一致，有限独核 must_fix 为空。单档 SHA `d6ed4edefebac4d6558eb19b8cf6b58dd382d3bab3585a0bbdbbb360e0d6f61e`，选中索引 `a90b7c20ebd22d5a0c73ba5526d7f557f567fbc2e17e9d90cb601b810057c21e`；四份材料受限私存索引 `a0d97fea05e00bc0f98bbd9608a4b599b5dbeb1ca06c446ba219a11a05364e0f`。这是当前 C3 联合功能切片通过，五仓完整目标及容量保持未完成。
+
+最新来源历史最低 21360 B 距离 49152 B 门槛差 27792 B，当前没有已验证的进一步容量优化路径；前两失败轮历史读数各保留原范围，不将同镜像不同轮次相减为收益。已按计划第 12.10 节请求维护者决定硬件／功能约束；无答复不修改 C3 目标、48 KiB 门、严格 TLS／签名、Wasm 或已冻结预算。满合法队列与 processing、largest、联合 Flash 争用、寿命 Y/f、ESP32、断电／72 小时及正式交付保持开放。
+
 ## 产品事件先准入后分配
 
 2026-10-04，真实 `esp_base_container_product_offer_event` 保留参数和初始UNAVAILABLE检查，在既有FIFO锁内核准当前包、准入状态及空位后才malloc／copy。BUSY／INVALID／FULL先于NO_MEMORY硬切；复制后仍检查atomic停止标志，取消副本解锁后清零释放。生产MQTT调用者只消费ACCEPTED，拒绝不推进序号；队列上限、签名包、guest、停止状态和预算保持。该修改消除拒绝路径额外临时owner：合法3893 B MQTT guest载荷加48 B头的旧申请界为3941 B，不能算实测堆收益或闭合约29 KiB容量差。
