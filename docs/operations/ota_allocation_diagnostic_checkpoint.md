@@ -1,5 +1,21 @@
 # C3 OTA 分配诊断检查点
 
+## 十五槽无损压缩与完整实体续验
+
+2026-10-03，在下述同一公开运行源码与精确组件版本上，仅在仓外将固定 **1800 B** 观察区的记录从120 B无损压缩为96 B，共15槽。地址编码覆盖当前C3合法DRAM／IRAM／RTC地址；范围外值、序号耗尽、身份歧义、ISR及溢出仍使资格失效。原V2导出字段、实际SOURCE位置、精确分配身份和释放回填保持，未过滤新低或放宽parser。正式Wi-Fi RX／TX 32／32、TLS 16384／4096、64 KiB guest和任务栈预算保持，不提前停止旧guest。
+
+实际来源A／目标C完整构建与原测试键官方验签通过，版本为`0.2.0-c3-tls15-a/c`，签名镜像各1183744 B，摘要分别为`97a5c5d2e74278479852e8b3ca36e71d4ae427cac2671730994dbda929c4434c`／`6a1313fcf5380be5ddb59750f96757bcb0b4c7674ed08868b88a205fcdd737d1`。完整冷输入34950项（34628源输入／322证据）和两份归档逐项核验，冷索引`369fbe656355fea6cdf8cf5c7bbc274e0c79fb43f971dbe6fe71d1d739b77da2`；实际双ELF及六个SOURCE位置重新绑定，未复用前序PC表。实际IRAM为49086 B加66 B对齐，堆起点较前序12槽诊断后移1024 B，全部计入观察成本，实际节省为0。SDK子模块自动初始化曾改变复制树的lwIP，完整源码守卫在编译前拒绝；失败副本独立保留，后继仅采用SDK已有的显式跳过检查入口，并重新核对全部SDK输入未变。
+
+本轮重新读取双新鲜一致4 MiB基线和三个独立原代码区。来源最大公开事件、原一次WRITE联合OTA持久确认、USB／认证MQTT各一次stop/start、五原ID各写一次及只读重复、停止后重启自动运行confirmed、旧stop ID跨boot unknown、十二项业务、卸载及A/C逐字节读回通过。停止仅当前启动有效，不持久化停止状态。下载150/150状态MQTT／FRP ready，历史minimum **23620 B < 49152 B**；不能与前序23464 B相减归因，不加回成本，不证明满合法峰值或连续块门。
+
+TLS探针尝试留存24个新低，实际保留15条、另9条丢弃；BEGIN／END结构完整，END为`qualified=0/errors=128`。原parser重解析与完整收据相等，保持`unqualified_observation`；重新实例化的实际ELF后置门退出2、eligible区间为0，未提升局部记录的owner或因果资格。Root实体driver会话75593实际退出1；独立报告没有落盘exit文件，诚实保留null，并另记录Root工具会话来源。**功能与恢复通过，整轮、TLS资格和容量均未通过。**
+
+463个任务快照expected/captured相等，无采样申请失败；13个已观察名称栈余量至少1024 B，范围不扩大为全部native生命周期。UART logged与consumed均732176 B，pending为0，最高64967／65536 B，无溢出。结束擦除全部实验数据，仅恢复本轮独立读取的原bootloader／partition／factory并逐字节核对；reset、Wi-Fi down ACK、串口、三fixture及所属进程释放独核通过，不恢复旧／实验NVS，不写eFuse。四个已保存host listener直接复核无占用；FRP remote端口数字未保存，只由所属FRPS关闭及零所属进程限定绑定，不虚构第五端口直接实测。
+
+189个runtime文件与10目录的完整快照归档摘要为`58327b137612d2f22d45725eb759d73ed6dad750d85ba3e94145369b9aced856`，独立审查归档为`71c2e9a7d7fce1c792850c0a71d6edb86b33d38b7f2d4ee4ae0345474d802ea2`；Root逐成员复核字节、大小、mode／执行位与集合。受限且Git忽略的`c3-validation-20261003/c3-tls-owner-history15-physical`保存22份精确拷贝及私有索引`26683226546d413a22490ce25a4f61807e035bd36c2fdc691033096ac0e4fbcd`，引用同级软件与冷输入审查检查点；前序所有失败保持独立。
+
+容量owner与当前Wi-Fi IRAM限定只读复核均无新增节省：9825 B已识别native owner仍有真实消费者，1807 B／939 B方向尚未实施；64 KiB linear申请含8 B guard，不存在第二页。Wi-Fi本机IRAM／RX IRAM／EXTRA／SLP选项已关闭，相关已装载optional段实际位于Flash，不能再算一次迁移收益，IRAM／DRAM共享窗口也不能双算。后继仅研究同池精确状态共享是否值得实现，尚无实施或新容量通过结论。P6-03、满合法峰值、native全生命周期、Flash最坏实测与寿命目标、ESP32、断电／72小时和正式交付继续开放。
+
 ## TLS owner 完整软件冻结与实体历史溢出
 
 2026-10-03，在 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89` 运行源码和 FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee`、OTA `bf11916ab904be4ee9bcdfae213c85336363e96a`、Container `2b93b979b8b0760dcb96b28ac5d13fc52ae547bf` 的精确依赖上，完成仓外 C3 TLS owner 诊断组合。唯一固定记录区仍为 **1800 B**，替换旧探针；公开固件、依赖 pin、Wi-Fi 动态 RX/TX 32/32、TLS 16384/4096、任务栈与 guest 预算保持。私有 SDK 五处注入、四 provider 装配及全部五处实际 SDK guard 共 21 个精确增量；这是显式私有诊断覆盖，不是原 SDK 或生产固件原样构建。
