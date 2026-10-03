@@ -1,5 +1,24 @@
 # 开发检查点
 
+## 2026-10-04 同产品同版本制品身份
+
+Base 精确消费 Container `be3f393460ff3e24b5231e4f58ff4c99c0c6f355`，官方 Component Manager 分别生成 C3 的 `dependencies.lock` 和 ESP32 的 `dependencies.lock.esp32`；仅 Container 版本／组件摘要和清单摘要变化，FRP／MQTT／OTA／WAMR／cJSON 保持前轮锁。生产 Base 继续通过既有验包回调接线，无新持久字段、版本历史库或停止状态；完整整包 SHA 仍是制品身份。
+
+Container 在同一槽锁内比较当前操作仍保留的当前／回退引用，拒绝同产品完整版本异 SHA，包括同清单／Wasm 的随机 PSS 重签；REUSE 只保护退役后仍保留的绑定。引用完整签名、整包摘要和 ABI/schema 按自身绑定复核，不套新固件授权；同 SHA 要求持久元数据一致并复用候选完整验签。验包工作区顺序复用，失败延续原清退／恢复合同。详见[装配说明](../../firmware/integrations/container_binding/README.md)。
+
+旧 Container 的真实 PSS 冲突负例实际 CTest 退出 8，命中错误接受，不是 Timeout。修正后的普通和 ASan/UBSan goto／switch 全量各 10/10；两目标以精确 clean Container／WAMR／OTA 执行原公开 guarded 生命周期入口及完整 host 入口，四次均实际退出 0。新增用例核对冲突拒绝时已确认 guest 继续事件、不同版本原试运行、回退引用，以及 WRITE 保持 WRITING 后原恢复／重开；百次重装、期限／取消与停止回收继续通过。Flash/NVS、调度、固件集合和下载来源仍为宿主替身。前置夹具断言、编译错误和旧全量 Timeout 均保留，失败 runner 的未知退出不补写为成功。
+
+固定 SDK `578cf89c343e388db43ba1f4ddcd602fedcb763c`／lwIP `2758df4cd3666b3b2a5b53830148379326425c0d` 的两目标完整构建和官方验签均退出 0，完整 Kconfig 与前轮相同，原测试授权和分区不变。实际 ELF 只有 `.flash.text` 分别增加 900／704 B，非 debug 的其余段尺寸不变；真实验包函数局部 frame 为 C3 1296→1312 B、ESP32 208→240 B，不能用该局部数代替整链栈峰值或套用另一次禁止 LTO 的诊断。
+
+| 目标 | 测试签名 app | 单槽剩余 | app SHA-256 |
+| --- | --- | --- | --- |
+| esp32c3 | `0x121000` | 61440 B | `3263290c90850cacfc6f70724601066b783bbdbba32199111222fea3610973fd` |
+| esp32 | `0x10fff4` | 65548 B | `4a9f715d4906e44103e302d7803065ba2d60106fcdb085fbfa34a094a0f37eed` |
+
+Tool 同批已保存 `83538b17c42a755bd0caf7c441ee628fca5bdab8`，在原登记表内约束 owner／产品／版本唯一，保持精确摘要幂等；v9 迁移发现旧冲突或非法清单则事务失败、完整保留原数据和授权。73 项相关测试、race、路由、vet 与链接构建通过；未迁移生产数据库或发布服务。
+
+本轮没有设备／UART／Flash／eFuse 或生产操作。签名尺寸未变不代表 RAM 节省；引用复验增加读取和局部栈使用，实板 I/O 时延、联合容量、最大连续块、native 峰值、寿命 Y/f、ESP32 接入、掉电与 72 小时仍未验收。停止只对当前启动有效、重启自动运行已确认产品的裁决保持。
+
 ## 2026-10-04 签名宿主单次期限装配
 
 Base 精确消费公开 Container `ace8ec32d709442f09b0018c5a4764908db39ed9`，WAMR 保持 `74fd95ccbdc417c3816e04f3308eea8a5473ed34`，FRP／MQTT／OTA／cJSON 的版本与摘要保持原锁。平台已有 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 现在同时传给运行限制；验签后的清单与平台值取最小值，每次调用独立计时，整个入口期限和指令预算保持。宿主超期结果不交付，进入失败并按唯一产品 owner 回收；新失败原因沿既有普通失败处理，不把它当作异步取消。停止仍只影响本次启动，重启自动运行 confirmed 产品。

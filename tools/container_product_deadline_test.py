@@ -51,6 +51,17 @@ def main() -> None:
             serialization.Encoding.DER, serialization.PublicFormat.PKCS1))
         normal = (guests / "counter.wasm").read_bytes()
         (temporary / "normal.pkg").write_bytes(signed_package(private, normal, spec))
+        # A fresh PSS salt changes the complete signed package identity while
+        # keeping the exact product/version and Wasm bytes unchanged.
+        identity = signed_package(private, normal, spec)
+        assert identity != (temporary / "normal.pkg").read_bytes()
+        (temporary / "identity.pkg").write_bytes(identity)
+        newer = copy.deepcopy(spec)
+        newer["product_version"] = "v0-1-3"
+        (temporary / "newer.pkg").write_bytes(signed_package(private, normal, newer))
+        (temporary / "normal-version.txt").write_text(spec["product_version"], encoding="ascii")
+        (temporary / "newer-version.txt").write_text(newer["product_version"], encoding="ascii")
+        subprocess.run([str(binary), str(temporary), "identity"], check=True)
         expired = copy.deepcopy(spec)
         expired["product_version"] = "v0-1-1"
         expired["required_capabilities"] = ["log", "timer"]

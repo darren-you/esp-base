@@ -131,6 +131,6 @@ MQTT 装配要求 `CONFIG_MBEDTLS_HAVE_TIME_DATE=y` 和 `CONFIG_MQTT_REPORT_DELE
 
 FRP 组件还要求 `CONFIG_MBEDTLS_MD5_C=y`、`CONFIG_LWIP_SO_LINGER=y` 和至少 12 个 lwIP socket；默认配置与 CMake 同时检查。普通镜像中保留库符号只证明编译组合，不能代替真实管理端点、FRPS/MQTT 同时运行或堆峰值测量。
 
-FRP Flash reader 的 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制。C3／ESP32 产品配置均启用，分别固定 `frp_scratch@0x3e5000/0x10000` 和 `frp_scratch@0x3ea000/0x10000`。启用时公开 FRP provider 核对实际 64 KiB 分区，并在任何 pending OTA 确认前擦除本次启动遗留的密文。FRP 每次物理操作使用独立短 claim，升级事务 claim 不再使它立即返回 BUSY；`clear` 不再次擦除。OTA app、Container 包和 NVS 尚未全部接入同一个短时 I/O 仲裁，FRP 最大记录与正式 OTA 下载的进展、期限和实板 Flash 时延仍未验收。C3 对齐软件候选及 ESP32 新源码几何仍按五仓计划完成容量、迁移与实体运行裁决。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
+FRP Flash reader 的 Base 接线由 `apps/esp_base/main/Kconfig.projbuild` 控制。C3／ESP32 产品配置均启用，分别固定 `frp_scratch@0x3e5000/0x10000` 和 `frp_scratch@0x3ea000/0x10000`。启用时公开 FRP provider 核对实际 64 KiB 分区，并在任何 pending OTA 确认前擦除本次启动遗留的密文。FRP 每次物理操作使用独立短 claim，升级事务 claim 不再使它立即返回 BUSY；`clear` 不再次擦除。OTA app／otadata、Container 包／NVS、收据和配置／身份 NVS 已接入同一个短时 Flash I/O owner；网络等待不持有短 claim。整镜像验签占用、FRP 最大记录与正式 OTA 下载的进展、期限和实板 Flash 时延仍须按实际切片分别验收。C3 对齐软件候选及 ESP32 新源码几何仍按五仓计划完成容量、迁移与实体运行裁决。无已恢复 store 时，USB `config.set` 不写入新的 FRP 配置，旧配置只报告失败。
 
 产品 owner 的原子停止标志已进入 Classic 取消谓词；真实签名 init／event／timer 取消与停止失败阻断的宿主结果见[检查点](../docs/operations/async-cancel-checkpoint.md)。
