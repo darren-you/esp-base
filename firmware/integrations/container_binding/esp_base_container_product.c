@@ -1231,6 +1231,16 @@ static void *product_thread(void *unused)
                              (int)fired);
                     break;
                 }
+                if (fired == ECONTAINER_RUNTIME_OK && guest_result < 0) {
+                    if (xSemaphoreTake(s_product.event_lock, portMAX_DELAY) != pdTRUE)
+                        break;
+                    if (business_trial()) {
+                        if (s_product.trial_failure_count != UINT64_MAX)
+                            ++s_product.trial_failure_count;
+                        s_product.representative_event_sequence = 0U;
+                    }
+                    xSemaphoreGive(s_product.event_lock);
+                }
                 if (!finish_guest_work()) break;
                 continue;
             }

@@ -1,5 +1,7 @@
 # ESP Base
 
+定时回调的负业务返回现在沿用外部事件的试运行失败策略：饱和累计失败并撤销旧代表事件，runtime 继续运行；新代表事件仍按原规则重开完整健康窗口。真实签名 `-7`／`0`／`3` guest 与修复前明确行为红、宿主回归及设备边界见[定时业务健康检查点](docs/operations/timer_business_health_checkpoint.md)。
+
 签名包的宿主单次调用期限已接入 Base 产品运行策略：平台 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 同时约束包准入和运行实例，Container 在重新验签后取平台与清单的较小值。每次导入独立计时，超期失败后清退并显式回收；整个入口期限和停止只影响本次启动的策略保持。双目标软件验证及设备边界见[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-10-04 产品事件准入修正的 C3 联合功能复验通过：真正 driver exit 0，一次 WRITE OTA、USB／MQTT 停止启动、重启自动运行已确认产品、十二项业务、卸载及 A/C 读回完成；原三码精确恢复、实验数据擦除与所属 UART／fixture 释放通过。前两失败和离线归档准备错误分别保留。150/150 下载网络 ready，历史 heap 21360 B 仍距 49152 B 门差 27792 B；213 个完整现场文件及必要材料已受限保存，有限独核通过，新增节省 0。容量取舍待维护者决定，满峰值／native、largest、争用、寿命 Y/f、ESP32及正式交付仍开放，见[分配诊断检查点](docs/operations/ota_allocation_diagnostic_checkpoint.md)。

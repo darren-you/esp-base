@@ -18,3 +18,9 @@ ebase_product_ledger_result_t historical_ota_ledger_begin(
 ebase_product_ledger_result_t historical_ota_ledger_read(
     esp_base_storage_owner_t *flash_io_owner, ebase_product_ledger_t *ledger);
 unsigned historical_ota_ledger_write_count(void);
+
+/* Reuse the actual policy with a real Base product owner; only network facts
+ * and the caller's monotonic poll timestamps are host inputs. */
+bool historical_product_health_window(uint64_t now,
+    const uint8_t package_sha256[32], uint64_t *event_sequence,
+    uint64_t *failure_count, uint64_t *stable_since_ms, uint64_t *last_poll_ms);

@@ -1,5 +1,7 @@
 # 固件测试
 
+`run_container_lifecycle_test.sh` 新增真实签名定时业务结果回归：`-7` 回调在 trial runtime 仍 RUNNING 时记失败并撤销代表事件，旧依据确认拒绝且无写入，新的代表事件通过原 30 秒窗口后可确认；`0`／`3` 保持正常确认。健康 wrapper 直接调用生产协议策略，Wi-Fi／时间／MQTT ready 与采样时刻为宿主替身。修复前自然退出 1 和此前进程终止／ENOSPC 装配失败分别保留；详见[检查点](../../docs/operations/timer_business_health_checkpoint.md)。
+
 2026-10-04 旧成功 OTA 收据与后来未决产品候选恢复：公开 `run_container_lifecycle_test.sh` 同一二进制编译真实 `app_main`、原协议账本恢复与产品实现，使用精确 Container `be3f3934`／WAMR `74fd95cc` 和临时 RSA 签名包。原生产回归明确诊断未到达 READY，fixture／shell 均退出 1；编译装配失败和夹具前置条件失败另行保存，不能作行为红或用超时冒充失败。修正后 C3／ESP32 两目标公开完整生命周期与原完整 host 入口均退出 0。组合每次覆盖三种历史收据模式乘三个候选相位的九项正例，以及三十二项原 ID／序号／新 boot、引用损坏、旧 PREPARED 收据、固件集合、候选读失败、账本摘要及序号边界拒绝；核对原 fingerprint／包 SHA、FAILED 结果 1、精确 ABORTED 序号、保护绑定不变及 EMPTY／真实旧 guest。生命周期产品、协议和账本测试启用 ASan／UBSan，原 app_main TU 与既有 Container/WAMR 库按入口普通编译；Darwin 原非 SAN 百次资源回归同样通过。宿主替身只替代 Flash/NVS、固件观察和平台，不证明实际签名 Base 镜像、掉电原子性、MCU RAM／栈峰值或 Flash 墙钟。详情见[冷启动恢复检查点](../../docs/operations/product-package-cold-recovery-checkpoint.md)。
 
 生命周期夹具新增同产品同版本制品身份分支：既有 RSA-3072 测试键签署完全相同 manifest／Wasm 的两份随机 PSS 包，验证普通 install／upgrade 和带包 WRITE 共同拒绝异整包 SHA。夹具同时覆盖仍保留的回退引用、原候选清退、普通 prepare 拒绝前后已确认 guest 保持运行，以及不同版本的原试运行／放弃／重开。Flash/NVS、固件集合与网络来源仍为宿主替身；不证明设备健康、Flash 墙钟或联合容量。仓外无 Git 的候选验证只复用公开入口的实际编译／执行命令，不能代替最终精确依赖保存后的公开 guarded 入口。

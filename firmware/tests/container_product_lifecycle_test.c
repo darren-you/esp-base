@@ -3363,6 +3363,140 @@ static void run_public_product_lifecycle(const file_t *key, const file_t *packag
 
 #include "historical_ota_startup_test.h"
 
+bool esp_base_wifi_ready(void) { return true; }
+bool esp_base_time_ready(void) { return true; }
+bool esp_base_mqtt_owner_ready(void) { return true; }
+
+static int32_t timer_business_event(const uint8_t package_sha256[32],
+    uint64_t sequence, uint8_t byte)
+{
+    assert(offer_event_when_available(package_sha256, sequence, &byte, 1U) ==
+        ESP_BASE_CONTAINER_EVENT_ACCEPTED);
+    for (unsigned attempt = 0; attempt < 200U; ++attempt) {
+        esp_base_container_event_observation_t observation = {0};
+        if (esp_base_container_product_event_observation(&observation) ==
+                ESP_BASE_CONTAINER_EVENT_OBSERVED &&
+            observation.event_sequence == sequence) {
+            assert(observation.runtime_ok);
+            return observation.guest_result;
+        }
+        vTaskDelay(1U);
+    }
+    assert(!"real guest event did not complete");
+    return 0;
+}
+
+static void run_timer_business_trial(const char *directory, int32_t timer_result)
+{
+    const bool negative = timer_result < 0;
+    file_t key = read_file(directory, "public.der");
+    file_t package = read_file(directory,
+        negative ? "timer-negative.pkg" :
+        timer_result == 0 ? "timer-zero.pkg" : "timer-positive.pkg");
+    configure(&key);
+    esp_base_storage_owner_t owner;
+    esp_base_storage_owner_init(&owner);
+    esp_base_storage_claim_t claim = {0};
+    assert(esp_base_storage_claim(&owner, &claim));
+    const char boot_id[] = "22222222-2222-4222-8222-222222222222";
+    assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_EMPTY);
+    econtainer_slots_state_t initial = {0};
+    assert(econtainer_slots_load(&io, &geometry, &initial) == ECONTAINER_SLOTS_OK);
+    esp_base_container_package_request_t request = {
+        .operation_id = "99999999-9999-4999-8999-999999999997",
+        .expected_sequence = initial.sequence,
+        .package_size_bytes = (uint32_t)package.size,
+        .guest_abi_version = 2U, .data_schema_version = 1U,
+    };
+    assert(SHA256(package.bytes, package.size, request.package_sha256) != NULL);
+    const uint8_t representative = 'R';
+    assert(SHA256(&representative, 1U, trial_event_digest) != NULL);
+    uint32_t prepared_sequence = 0U;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, &package, &prepared_sequence) == ESP_BASE_CONTAINER_PREPARED);
+    assert(esp_base_container_product_start_package_trial(&claim,
+        prepared_sequence, request.operation_id, boot_id, trial_event_digest) ==
+        ESP_BASE_CONTAINER_RUNNING);
+    const uint32_t trial_sequence = prepared_sequence + 1U;
+    uint64_t sequence = 1U;
+    assert(timer_business_event(request.package_sha256, sequence, 'R') == 7);
+    uint64_t window_event = 0U, window_failure = 0U, stable_since = 0U, last_poll = 0U;
+    for (uint64_t now = 1000U; now <= 10000U; now += 1000U)
+        assert(!historical_product_health_window(now, request.package_sha256,
+            &window_event, &window_failure, &stable_since, &last_poll));
+    assert(window_event == 1U && stable_since == 1000U && window_failure == 0U);
+    assert(timer_business_event(request.package_sha256, ++sequence, 'T') == 0);
+    int32_t timer_count = 0;
+    for (unsigned attempt = 0; attempt < 200U && timer_count == 0; ++attempt) {
+        timer_count = timer_business_event(request.package_sha256, ++sequence, 'Q');
+        if (timer_count == 0) vTaskDelay(1U);
+    }
+    assert(timer_count == 1);
+    esp_base_container_trial_event_snapshot_t snapshot = {0};
+    assert(wait_trial_snapshot(&snapshot));
+    assert(atomic_load(&s_product.result) == ESP_BASE_CONTAINER_RUNNING &&
+        atomic_load(&s_product.instance_active) &&
+        esp_base_container_product_event_accepting());
+    const unsigned writes_before = store.blob_writes;
+    uint32_t confirmed_sequence = 0U;
+    esp_base_container_trial_confirm_result_t stale = ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED;
+    for (unsigned attempt = 0; attempt < 200U &&
+         stale == ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED; ++attempt) {
+        stale = esp_base_container_product_confirm_package_trial(&claim,
+            trial_sequence, request.operation_id, 1U, trial_event_digest, 0U,
+            &confirmed_sequence);
+        if (stale == ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED) vTaskDelay(1U);
+    }
+    fprintf(stderr, "timer_business result=%d runtime_running=1 calls=%d representative=%llu failures=%llu stale_confirm=%d writes=%u\n",
+        timer_result, timer_count,
+        (unsigned long long)snapshot.representative_event_sequence,
+        (unsigned long long)snapshot.failure_count, (int)stale,
+        store.blob_writes - writes_before);
+    if (negative) {
+        if (stale != ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED ||
+            confirmed_sequence != 0U || store.blob_writes != writes_before) {
+            fprintf(stderr, "container_timer_business: FAIL negative timer retained stale health and allowed confirmation\n");
+            exit(1);
+        }
+        assert(snapshot.representative_event_sequence == 0U && snapshot.failure_count == 1U);
+        assert(!historical_product_health_window(11000U, request.package_sha256,
+            &window_event, &window_failure, &stable_since, &last_poll));
+        assert(window_event == 0U && stable_since == 0U && window_failure == 1U);
+        assert(timer_business_event(request.package_sha256, ++sequence, 'R') == 7);
+        assert(wait_trial_snapshot(&snapshot) && snapshot.failure_count == 1U &&
+            snapshot.representative_event_sequence == sequence);
+        for (uint64_t now = 12000U; now < 42000U; now += 1000U)
+            assert(!historical_product_health_window(now, request.package_sha256,
+                &window_event, &window_failure, &stable_since, &last_poll));
+        assert(stable_since == 12000U && window_event == sequence);
+        bool healthy = false;
+        for (unsigned attempt = 0; attempt < 200U && !healthy; ++attempt) {
+            healthy = historical_product_health_window(42000U,
+                request.package_sha256, &window_event, &window_failure,
+                &stable_since, &last_poll);
+            if (!healthy) vTaskDelay(1U);
+        }
+        assert(healthy && window_failure == 1U);
+        for (unsigned attempt = 0; attempt < 200U &&
+             stale == ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED; ++attempt) {
+            stale = esp_base_container_product_confirm_package_trial(&claim,
+                trial_sequence, request.operation_id, window_event,
+                trial_event_digest, window_failure, &confirmed_sequence);
+            if (stale == ESP_BASE_CONTAINER_CONFIRM_NOT_STARTED) vTaskDelay(1U);
+        }
+    } else {
+        assert(snapshot.representative_event_sequence == 1U && snapshot.failure_count == 0U);
+    }
+    assert(stale == ESP_BASE_CONTAINER_CONFIRM_CONFIRMED &&
+        confirmed_sequence == trial_sequence + 2U);
+    assert(esp_base_container_product_stop_confirmed(&claim));
+    assert(esp_base_storage_release(&claim));
+    dispose_product();
+    assert(pthread_mutex_destroy(&store.mutex) == 0);
+    free(package.bytes);
+    free(key.bytes);
+}
+
 int main(int argc, char **argv)
 {
     check_event_admission();
@@ -3370,6 +3504,13 @@ int main(int argc, char **argv)
     const uint8_t representative_event[] = {1U, 2U, 3U};
     assert(SHA256(representative_event, sizeof representative_event,
                   trial_event_digest) != NULL);
+    if (argc == 3 && strcmp(argv[2], "timer-business") == 0) {
+        run_timer_business_trial(argv[1], -7);
+        run_timer_business_trial(argv[1], 0);
+        run_timer_business_trial(argv[1], 3);
+        puts("container_timer_business: real signed negative timer, trial timer failure accounting while runtime RUNNING, stale confirmation refusal, fresh 30-second policy window and zero/positive timer passed");
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[2], "deadline") == 0) {
         run_deadline_product(argv[1]);
         return 0;

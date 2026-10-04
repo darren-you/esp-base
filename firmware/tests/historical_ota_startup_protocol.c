@@ -28,6 +28,14 @@
 
 #include "historical_ota_startup_protocol.h"
 
+bool historical_product_health_window(uint64_t now,
+    const uint8_t package_sha256[32], uint64_t *event_sequence,
+    uint64_t *failure_count, uint64_t *stable_since_ms, uint64_t *last_poll_ms)
+{
+    return observe_business_trial_window(now, package_sha256, event_sequence,
+        failure_count, stable_since_ms, last_poll_ms);
+}
+
 static uint8_t historical_ledger_bytes[EBASE_PRODUCT_LEDGER_BYTES];
 static bool historical_ledger_present;
 static unsigned historical_ledger_writes;

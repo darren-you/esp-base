@@ -168,6 +168,8 @@ fi
   "$wasi_sdk_root" "$build_dir/container-build/runtime-guests"
 "${TEST_PYTHON:-python3}" "$firmware_root/../tools/container_product_cancel_test.py" \
   "$build_dir/container_product_lifecycle_test" "$container_source" "$wasi_sdk_root"
+"${TEST_PYTHON:-python3}" "$firmware_root/../tools/container_product_timer_business_test.py" \
+  "$build_dir/container_product_lifecycle_test" "$container_source" "$wasi_sdk_root"
 
 if [[ "$(uname -s)" == Darwin ]]; then
   "${CC:-cc}" -D_DARWIN_C_SOURCE=1 -DESP_BASE_TEST_RESOURCE_STATS=1 \
