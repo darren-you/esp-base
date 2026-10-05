@@ -1,5 +1,7 @@
 # C3 产品、FRP、MQTT 与联合 OTA 组合缺口
 
+2026-10-05 当前合同与新缺口：双目标普通内部 8BIT 历史堆门已由维护者确认改为 16 KiB，连续块保持 24 KiB。最新 C3 最大事件突发与 OTA 重叠实验的历史堆 3,396 B、事件准入连续块 3,840 B 仍失败；功能与恢复通过，详见[当前实测](../operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-最大事件突发与-write-ota-重叠实测)。以下 48 KiB 数值与当时裁决保留为历史，不作为现行门。
+
 诊断续进：[OTA 分配检查点](../operations/ota-allocation-diagnostic-checkpoint.md)保留三轮成功联测及恢复；10 笔指定窗口内较大 TLS 分配与释放已映射实际 ELF。原生 ALL 轮溢出，其余任务与小分配未完整归因，正常固件 23800 B 低水和容量缺口保持。
 
 最新进展：[MQTT 所有权消费](../operations/mqtt-owned-config-consumer-checkpoint.md)和[RTC 配置所有权](../operations/rtc-config-ownership-checkpoint.md)完成两轮联合功能、十二项业务及代码恢复。最新来源 OTA 历史 heap 为 23800 B、采样连续块 28672 B、控制栈余量 2400 B；48 KiB 门和全部合法瞬时峰值仍未通过。各轮输入、失败和索引分别保留，不将独立样本差额全部归因于单项修改。
