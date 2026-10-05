@@ -1,5 +1,21 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-06 TLS 接收边界与容量续验
+
+双目标普通内部 8BIT 历史最低堆门统一为 **16,384 B**，连续块 **24,576 B**、各任务栈余量 **1,024 B**、五能力并存与原预算保持。真正最大事件／WRITE OTA 轮的历史堆 **3,396 B**、准入后连续块 **3,840 B** 失败不改判，`whole_capacity_passed=false` 保持。
+
+本轮实际运行源码仍绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 和原精确组件／SDK。仓外在已冻结 WORKRX 输入上加入 24 字段、96 B 的 TLS_GATE 观察；FRP 原 186 文件与 Base 三个接入文件反向恢复精确，MQTT 325 文件不变。A/C `0.2.0-c3-frp-tls-gate-a/c` 均为 1,183,744 B，签名镜像摘要分别为 `8a15e01b164692c497a79f9b0367a902b8d52d4b427e20b7346bbe26e3e1e279`／`912a0af11a412f4be26d6807c9d06a32f8c0110e3ec4eb2a95da0641b3c5f987`；完整构建、RSA 验签与 SDK 31,468 个原文件的 SHA／长度／模式／链接核对通过。实际 LTO 相对 WORKRX 的 BSS／堆起点增 **96 B**、text 增 772 B、rodata 增 472 B，trace／helper／snapshot 入口帧为 208／32／0 B；没有完整 callee 栈资格，观察成本不加回。
+
+新鲜 C3 轮 driver exit 1：提交 FRP 配置后，网关在等待首响应头阶段约 **3,002.079 ms** 超时，未到产品安装、队列峰值或 OTA。`upstream_response_headers` 阶段行表示进入 `getresponse()`，不是已收到响应头。schema4 的 133 项软件测试通过；三份原 UART 完整严格解析得到 **66** 个同 boot、五类 native 完整周期，错误 0。首次误指定“排除未绑定前段”，实际前段已有绑定，解析拒绝的 7 条错误原样保留；取消排除后重新解析全部原日志通过，parser 和原日志未改。
+
+工作流仍为已读 **8 B** 帧头、声明正文 **116 B**、正文已收 **0 B**；帧头不能识别 type8。收到帧头后的两次采样只跨 **1,001 ms**，不称完整十秒部分帧期限已验证。两次采样的 TLS OPEN／pending／library error 为 1／0／0，SDK read 调用及返回由 2,494 增至 3,294，最新 raw 为 WANT_READ（-26,880）、原映射为 WOULD_BLOCK（1）；BIO recv 调用及返回由 2,538 增至 3,338，最新返回 1。read pending gate 的累计值保持 122；write 成功／排空各 20，WANT_READ／WANT_WRITE／crypto pending 均 0。它们是 boot 聚合、非事务观察，不能据单行差值判 hang 或绑定同一 TLS session；本轮未证明持续 pending TX 是正文缺失根因，也未取得 socket／TCP 到达或 SDK 内部消费因果。实际编译的 native recv 源码中，BIO WOULD_BLOCK 只来自真实 socket 负返回且 errno 为 EAGAIN／EWOULDBLOCK／EINTR，连接状态错误为不同返回；聚合记录尚不能确定本轮具体 errno 或正文去向。type8／local create／step 均 0，监听器实际 accepted 为 0。
+
+fresh 双 4 MiB 与独读原三码、实验全片回读及 finally 恢复通过。Root 独核 bootloader 21,232 B、partition 3,072 B、factory 1,048,576 B 的 before／restored／两份全片对应区四方字节一致；实验数据擦除、旧／实验 NVS 不保留、Wi-Fi down、串口释放和 cleanup errors 0。连续 UART 源前段记录并消费 268,895 B，pending／overflow 0，最大 pending 57,583 B、容量 1 MiB，reader 正常停止并完成 join；36 个所属进程和 4 个监听均释放。运行合同中两项 SDK current role 引用在触板前修正，旧合同与 prior 字段保留；修正发生于夹具预检后、launch 前，57 项预检静态输入未变。原失败不抹除。
+
+仅严格合法 native 行被过滤后，66 个内存样本和 66 个完整任务快照的低负载最低值为历史堆／连续块／control 栈／已观察任务栈 **143,192／114,688／2,888／1,196 B**；不与前轮相减计节省，不取得完整峰值或 native 生命周期资格。软件 165 payload 归档 `4d6bce469654cd2ad1399147831fd89e65a3fa3ce188d972046a0f3c476bfddb`、索引 `ef0995dd083e8a1d7765255cb08050d77ea1f1526d5bba18e38db95b4e9c2f6a`；现场 165 payload 归档 `532f725dc557969f8bbab581b0eff207826857f1a7a3b217a05e641a6af66b6d`、索引 `d1c8823de3db22b722c3761e2883ae017164802dfe5aea59d3a0494bbd5983cf`，受限私存于 Tool 已有忽略目录。软件复用已验证 WORKRX／SDK 父档的精确成员，只保存本轮实际变更和必要执行材料；完整离线复现资格为 false。完整成员核验与源前后稳定通过。
+
+正文缺失原因仍待接收路径定位；完整队列 8+processing、分域最大申请、FRP 最大记录／双流与 OTA 峰值、Flash 争用／寿命、实体百次、ESP32、断电／双板 72 小时和正式交付继续开放。
+
 ## 2026-10-06 工作帧正文接收检查点
 
 后继仓外实验仍绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 与前轮精确组件组合，在冻结 CONTROL 候选上仅新增 WORK_RX 30 个原子数值字段，分别记录原 work 的发送／等待、可读／读取、wire reader、共享 JSON、type8 和本地连接结果。原工作对象 2,192 B／set 104 B 不变；185 个 FRP 原文件及 Base 三处接线 marker 反向逐字节恢复前轮，新头单独可逆。数值 stream_id 保留为原临时协议编号，结果／gauge 为最近值，八个计数为 boot／组件累计；各字段独立读取，不构成事务快照或全局唯一 work 序号。原任务、锁对象、动态缓冲、socket／clock 调用、预算及全部期限保持。
