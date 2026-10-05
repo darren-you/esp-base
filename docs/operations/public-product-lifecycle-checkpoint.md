@@ -32,10 +32,10 @@
 
 ## 2026-10-03 软件消费者续接
 
-ESP Tool 全链路已公开保存为 `579b9556420aab714d0a9e831afa5055f70cfe2d`；Go／SQLite v8、Swift、Web、两份 OpenAPI 与本地 Bridge 消费同一 boot 的停止／启动合同。完整冷复测及包链六项通过，详细计数和证据见[Tool 检查点](../../../esp-tool/docs/operations/product_lifecycle_checkpoint.md)。对应 15 项 Bruno 请求已重新生成并通过一致性检查；Bruno 共享工作树仍含其他任务变更，未将其整仓保存状态计为本批交付。
+ESP Tool 全链路已公开保存为 `579b9556420aab714d0a9e831afa5055f70cfe2d`；Go／SQLite v8、Swift、Web、两份 OpenAPI 与本地 Bridge 消费同一 boot 的停止／启动合同。完整冷复测及包链六项通过，详细计数和证据见[Tool 检查点](../../../esp-tool/docs/operations/product-lifecycle-checkpoint.md)。对应 15 项 Bruno 请求已重新生成并通过一致性检查；Bruno 共享工作树仍含其他任务变更，未将其整仓保存状态计为本批交付。
 
-本续接仅关闭 Tool 软件消费者边界，实体停止／启动、完整容量、两板与生产验收保持开放。FRP 配置去重与事务重载的软件验证见[唯一配置 owner 检查点](frp_canonical_config_owner_checkpoint.md)。
+本续接仅关闭 Tool 软件消费者边界，实体停止／启动、完整容量、两板与生产验收保持开放。FRP 配置去重与事务重载的软件验证见[唯一配置 owner 检查点](frp-canonical-config-owner-checkpoint.md)。
 
 ## 2026-10-03 C3 公开入口实体续验
 
-公开 `daf9cd8` 的 USB／认证 MQTT 停止和启动、原 ID 只读重复、停止后新 boot 自动运行与旧 ID unknown 已按维护者裁决实际通过；十二项业务、卸载、签名 A/C 读回及原代码恢复完成。证据与剩余仪器边界见[C3 实体检查点](product_lifecycle_c3_checkpoint.md)。来源历史 heap 23888 B 仍低于 49152 B；有限切片不关闭满合法峰值、百次公开循环、ESP32、断电、72 小时或生产总门。
+公开 `daf9cd8` 的 USB／认证 MQTT 停止和启动、原 ID 只读重复、停止后新 boot 自动运行与旧 ID unknown 已按维护者裁决实际通过；十二项业务、卸载、签名 A/C 读回及原代码恢复完成。证据与剩余仪器边界见[C3 实体检查点](product-lifecycle-c3-checkpoint.md)。来源历史 heap 23888 B 仍低于 49152 B；有限切片不关闭满合法峰值、百次公开循环、ESP32、断电、72 小时或生产总门。

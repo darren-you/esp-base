@@ -291,4 +291,4 @@ ESP Tool 受限、Git 忽略的 `c3-validation-20261002` 独立保存下列输�
 | `ota-tls-allocation-callers` | 206 | `40bf3f71d8d9b683e1b60890dde9418de1e61dec7198ec0e3f65ee88644c4601` |
 | `network-allocation-callers` | 231 | `a9856435c47441583d4e97d0c6146f96d9d8be385c96ff71b634d74a2d40d428` |
 
-- [ ] 正常固件仍沿用 [RTC 所有权检查点](rtc_config_ownership_checkpoint.md)的独立读数 23800 B，低于 49152 B 门；不向诊断读数加回记录区字节来标记通过，也不将独立样本差额归给单项修改。其它网络分配来源、满队列／outbox、FRP 双流／预备流／64 KiB 记录、最大输入、全部任务栈和合法重叠峰值、百次整机生命周期、Flash 最坏成本、掉电、72 小时、ESP32 和生产入口继续开放。P6-03 与五能力总门未通过。
+- [ ] 正常固件仍沿用 [RTC 所有权检查点](rtc-config-ownership-checkpoint.md)的独立读数 23800 B，低于 49152 B 门；不向诊断读数加回记录区字节来标记通过，也不将独立样本差额归给单项修改。其它网络分配来源、满队列／outbox、FRP 双流／预备流／64 KiB 记录、最大输入、全部任务栈和合法重叠峰值、百次整机生命周期、Flash 最坏成本、掉电、72 小时、ESP32 和生产入口继续开放。P6-03 与五能力总门未通过。

@@ -51,13 +51,13 @@ Container 的真实 Wasm／签名包回归先在旧行为命中缺失 `HOST_CALL
 
 本轮没有操作 UART、Flash、eFuse 或生产服务。返回后检查不能抢占同步 native，不能证明硬返回上界、管理响应或新源码实板资源；静态签名尺寸相同不代表 RAM 节省。旧 C3 联合实验的历史堆 21,360 B 和 48 KiB 门差 27,792 B 保持为旧源码证据，不外推到本次依赖。满合法峰值、native 全资源、最大连续块、联合 Flash 争用、寿命 Y/f、ESP32 接入、掉电和 72 小时仍未验收，P6-07 保持进行中。
 
-2026-10-04 产品事件准入修正的 C3 联合功能复验通过：真正 driver exit 0，一次 WRITE OTA、USB／MQTT 停止启动、重启自动运行已确认产品、十二项业务、卸载及 A/C 读回完成；原三码精确恢复、实验数据擦除与所属 UART／fixture 释放通过。前两失败和离线归档准备错误分别保留。150/150 下载网络 ready，历史 heap 21360 B 仍距 49152 B 门差 27792 B；213 个完整现场文件及必要材料已受限保存，有限独核通过，新增节省 0。容量取舍待维护者决定，满峰值／native、largest、争用、寿命 Y/f、ESP32及正式交付仍开放，见[分配诊断检查点](ota_allocation_diagnostic_checkpoint.md)。
+2026-10-04 产品事件准入修正的 C3 联合功能复验通过：真正 driver exit 0，一次 WRITE OTA、USB／MQTT 停止启动、重启自动运行已确认产品、十二项业务、卸载及 A/C 读回完成；原三码精确恢复、实验数据擦除与所属 UART／fixture 释放通过。前两失败和离线归档准备错误分别保留。150/150 下载网络 ready，历史 heap 21360 B 仍距 49152 B 门差 27792 B；213 个完整现场文件及必要材料已受限保存，有限独核通过，新增节省 0。容量取舍待维护者决定，满峰值／native、largest、争用、寿命 Y/f、ESP32及正式交付仍开放，见[分配诊断检查点](ota-allocation-diagnostic-checkpoint.md)。
 
-2026-10-04 C3 相同 Wi-Fi 配置修正复验通过：Base 3e8e44e 的真实生命周期与双目标 host 检查通过，新 A/C 完整 SDK 构建及官方验签通过；实板最大合法64KiB记录、同boot单Pong、公开移除及原清理前自然退出门通过，driver exit0。fresh双4MiB、原三码恢复、擦实验数据与所属UART／fixture释放通过。仅此FRP切片取得资格，新增节省0；五能力容量、联合争用、满合法峰值、ESP32与交付仍开放，见[分配诊断检查点](ota_allocation_diagnostic_checkpoint.md)。
+2026-10-04 C3 相同 Wi-Fi 配置修正复验通过：Base 3e8e44e 的真实生命周期与双目标 host 检查通过，新 A/C 完整 SDK 构建及官方验签通过；实板最大合法64KiB记录、同boot单Pong、公开移除及原清理前自然退出门通过，driver exit0。fresh双4MiB、原三码恢复、擦实验数据与所属UART／fixture释放通过。仅此FRP切片取得资格，新增节省0；五能力容量、联合争用、满合法峰值、ESP32与交付仍开放，见[分配诊断检查点](ota-allocation-diagnostic-checkpoint.md)。
 
-2026-10-03 C3 最大FRP控制记录有限实测：实际65536 B单记录与同boot单Pong，wall约2.565秒、整区erase约564毫秒、读1179648 B及native失败0；公开移除后84次只读status为unconfigured，但夹具自然退出十秒联合门未过，整轮与成本总体资格保持失败。两fresh基线、原三码恢复／擦数据、UART和实际listener释放通过，原失败完整保留；普通Pong沿用已有4096 B窗口不擦scratch，不按心跳计算寿命。软件新A/C签名构建及最终输入通过，DRAM观察成本＋80 B、实际节省0；容量、争用、ESP32及交付继续，见[分配诊断检查点](ota_allocation_diagnostic_checkpoint.md)。
+2026-10-03 C3 最大FRP控制记录有限实测：实际65536 B单记录与同boot单Pong，wall约2.565秒、整区erase约564毫秒、读1179648 B及native失败0；公开移除后84次只读status为unconfigured，但夹具自然退出十秒联合门未过，整轮与成本总体资格保持失败。两fresh基线、原三码恢复／擦数据、UART和实际listener释放通过，原失败完整保留；普通Pong沿用已有4096 B窗口不擦scratch，不按心跳计算寿命。软件新A/C签名构建及最终输入通过，DRAM观察成本＋80 B、实际节省0；容量、争用、ESP32及交付继续，见[分配诊断检查点](ota-allocation-diagnostic-checkpoint.md)。
 
-2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](rtc_config_ownership_checkpoint.md)及[前轮 MQTT 消费](mqtt_owned_config_consumer_checkpoint.md)。
+2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](rtc-config-ownership-checkpoint.md)及[前轮 MQTT 消费](mqtt-owned-config-consumer-checkpoint.md)。
 
 2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](c3-command-memory-checkpoint.md)。
 

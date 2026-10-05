@@ -43,6 +43,6 @@ MQTT 私有 runtime 从 8056 降至 2416 字节，另持有实际长度加一的
 
 MQTT canonical 软件 71 份索引 `30b98062d38f197c1887fdc485eb1a1a7a318f091d4e409128506ef3cbfaafc8`、前序命令／控制栈与分配观察证据保持。设备身份、密码、密钥、签名私钥及恢复字节留在受控私有证据中，不进入公开仓。
 
-命名批次后，Base `737b4e7c0a4d683983a81214842a8dbc0f0c46a4` 已采用 MQTT `f32335852d6f823c1a3b130bfbe3a7ac4499e10a` 及 SDK 生成的双目标锁。其实际运行、公开头文件和构建输入与本轮受测 `9d0495b...` 逐字节一致；本页原始版本与冻结索引保留，后续 RTC 所有权与当前依赖复核见[RTC 检查点](rtc_config_ownership_checkpoint.md)。
+命名批次后，Base `737b4e7c0a4d683983a81214842a8dbc0f0c46a4` 已采用 MQTT `f32335852d6f823c1a3b130bfbe3a7ac4499e10a` 及 SDK 生成的双目标锁。其实际运行、公开头文件和构建输入与本轮受测 `9d0495b...` 逐字节一致；本页原始版本与冻结索引保留，后续 RTC 所有权与当前依赖复核见[RTC 检查点](rtc-config-ownership-checkpoint.md)。
 
 完整证据现保存于 ESP Tool 受限、Git 忽略的 `c3-validation-20261002/mqtt-owned-config-base-consumer`，原索引与全部文件摘要逐项核对，未改写拒绝旧依赖的失败收据。

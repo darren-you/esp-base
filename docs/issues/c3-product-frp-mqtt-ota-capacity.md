@@ -1,8 +1,8 @@
 # C3 产品、FRP、MQTT 与联合 OTA 组合缺口
 
-诊断续进：[OTA 分配检查点](../operations/ota_allocation_diagnostic_checkpoint.md)保留三轮成功联测及恢复；10 笔指定窗口内较大 TLS 分配与释放已映射实际 ELF。原生 ALL 轮溢出，其余任务与小分配未完整归因，正常固件 23800 B 低水和容量缺口保持。
+诊断续进：[OTA 分配检查点](../operations/ota-allocation-diagnostic-checkpoint.md)保留三轮成功联测及恢复；10 笔指定窗口内较大 TLS 分配与释放已映射实际 ELF。原生 ALL 轮溢出，其余任务与小分配未完整归因，正常固件 23800 B 低水和容量缺口保持。
 
-最新进展：[MQTT 所有权消费](../operations/mqtt_owned_config_consumer_checkpoint.md)和[RTC 配置所有权](../operations/rtc_config_ownership_checkpoint.md)完成两轮联合功能、十二项业务及代码恢复。最新来源 OTA 历史 heap 为 23800 B、采样连续块 28672 B、控制栈余量 2400 B；48 KiB 门和全部合法瞬时峰值仍未通过。各轮输入、失败和索引分别保留，不将独立样本差额全部归因于单项修改。
+最新进展：[MQTT 所有权消费](../operations/mqtt-owned-config-consumer-checkpoint.md)和[RTC 配置所有权](../operations/rtc-config-ownership-checkpoint.md)完成两轮联合功能、十二项业务及代码恢复。最新来源 OTA 历史 heap 为 23800 B、采样连续块 28672 B、控制栈余量 2400 B；48 KiB 门和全部合法瞬时峰值仍未通过。各轮输入、失败和索引分别保留，不将独立样本差额全部归因于单项修改。
 
 后续进展：稳定 run_id 已闭合[第三 boot 登录冲突](../operations/c3-five-capability-run-id-checkpoint.md)。[命令内存与控制栈第二轮](../operations/c3-command-memory-checkpoint.md)的联合功能及原代码恢复通过，控制栈最低余量 2400 B；来源 OTA 历史 heap 11404 B／采样连续块 16384 B 仍不足。以下保留原始失败输入和结果，不覆盖旧收据。
 

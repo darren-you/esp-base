@@ -1,6 +1,6 @@
 # 固件测试
 
-`run_container_lifecycle_test.sh` 新增真实签名定时业务结果回归：`-7` 回调在 trial runtime 仍 RUNNING 时记失败并撤销代表事件，旧依据确认拒绝且无写入，新的代表事件通过原 30 秒窗口后可确认；`0`／`3` 保持正常确认。健康 wrapper 直接调用生产协议策略，Wi-Fi／时间／MQTT ready 与采样时刻为宿主替身。修复前自然退出 1 和此前进程终止／ENOSPC 装配失败分别保留；详见[检查点](../../docs/operations/timer_business_health_checkpoint.md)。
+`run_container_lifecycle_test.sh` 新增真实签名定时业务结果回归：`-7` 回调在 trial runtime 仍 RUNNING 时记失败并撤销代表事件，旧依据确认拒绝且无写入，新的代表事件通过原 30 秒窗口后可确认；`0`／`3` 保持正常确认。健康 wrapper 直接调用生产协议策略，Wi-Fi／时间／MQTT ready 与采样时刻为宿主替身。修复前自然退出 1 和此前进程终止／ENOSPC 装配失败分别保留；详见[检查点](../../docs/operations/timer-business-health-checkpoint.md)。
 
 2026-10-04 旧成功 OTA 收据与后来未决产品候选恢复：公开 `run_container_lifecycle_test.sh` 同一二进制编译真实 `app_main`、原协议账本恢复与产品实现，使用精确 Container `be3f3934`／WAMR `74fd95cc` 和临时 RSA 签名包。原生产回归明确诊断未到达 READY，fixture／shell 均退出 1；编译装配失败和夹具前置条件失败另行保存，不能作行为红或用超时冒充失败。修正后 C3／ESP32 两目标公开完整生命周期与原完整 host 入口均退出 0。组合每次覆盖三种历史收据模式乘三个候选相位的九项正例，以及三十二项原 ID／序号／新 boot、引用损坏、旧 PREPARED 收据、固件集合、候选读失败、账本摘要及序号边界拒绝；核对原 fingerprint／包 SHA、FAILED 结果 1、精确 ABORTED 序号、保护绑定不变及 EMPTY／真实旧 guest。生命周期产品、协议和账本测试启用 ASan／UBSan，原 app_main TU 与既有 Container/WAMR 库按入口普通编译；Darwin 原非 SAN 百次资源回归同样通过。宿主替身只替代 Flash/NVS、固件观察和平台，不证明实际签名 Base 镜像、掉电原子性、MCU RAM／栈峰值或 Flash 墙钟。详情见[冷启动恢复检查点](../../docs/operations/product-package-cold-recovery-checkpoint.md)。
 
@@ -8,9 +8,9 @@
 
 2026-10-04 签名宿主单次期限消费：生命周期夹具显式提供正数 `max_host_call_timeout_ms`，生产策略也使用同一既有平台配置。两目标完整 host 入口与公开签名生命周期实际退出 0，生命周期在精确 Container `ace8ec32`／WAMR `74fd95cc` 下通过期限失败、异步取消、停止回收和百次重开；单次宿主超期的真实签名 min／非累计／四导入／时钟失败回归由 Container 全量 CTest 独立覆盖。测试时钟替换仅位于 Container 的专用测试库，Base 或设备运行没有时钟回调或抢占能力。详见[开发检查点](../../docs/operations/development-checkpoint.md)。
 
-`container_product_lifecycle_test.c` 的事件准入回归计数真实offer分配／释放，覆盖BUSY、错包、八槽全满且另一个事件处理中时零申请、准入后OOM释放锁、最大载荷、复制期间停止后的清零单次释放和同boot旧包隔离；`mqtt_owner_test.c` 验证拒绝不推进序号、原下一序号重复重试和后续成功推进。两目标完整host及真实Container／WAMR签名guest生命周期入口通过；首次Darwin测试宏冲突及修正后复跑分别保留。测试不证明MCU持锁时延或联合容量，见[分配检查点](../../docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+`container_product_lifecycle_test.c` 的事件准入回归计数真实offer分配／释放，覆盖BUSY、错包、八槽全满且另一个事件处理中时零申请、准入后OOM释放锁、最大载荷、复制期间停止后的清零单次释放和同boot旧包隔离；`mqtt_owner_test.c` 验证拒绝不推进序号、原下一序号重复重试和后续成功推进。两目标完整host及真实Container／WAMR签名guest生命周期入口通过；首次Darwin测试宏冲突及修正后复跑分别保留。测试不证明MCU持锁时延或联合容量，见[分配检查点](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)。
 
-`config_store_test.c` 保持最大 7618 B、v3-only、损坏／冲突和写后不确定回归，新增 C3 load／commit／规范回调的三个 workspace OOM 点：输出保持、无 NVS 写入／commit、回调不执行、工作配置清零及随后恢复；每次释放检查整份 workspace 清零，完整 commit 只拥有一份缓冲，ESP32 无新增 heap 申请。两目标完整 host 和相关 ASan／UBSan 回归通过，见[RTC 检查点](../../docs/operations/rtc_config_ownership_checkpoint.md)。
+`config_store_test.c` 保持最大 7618 B、v3-only、损坏／冲突和写后不确定回归，新增 C3 load／commit／规范回调的三个 workspace OOM 点：输出保持、无 NVS 写入／commit、回调不执行、工作配置清零及随后恢复；每次释放检查整份 workspace 清零，完整 commit 只拥有一份缓冲，ESP32 无新增 heap 申请。两目标完整 host 和相关 ASan／UBSan 回归通过，见[RTC 检查点](../../docs/operations/rtc-config-ownership-checkpoint.md)。
 
 `command_allocation_test.c` 验证实际缓冲分配、九个扩容失败点、行边界／排空、释放前清零、按类型载荷和复用恢复；`protocol_ota_owner_test.c` 验证配置移交后的独占存活期及两秒半包超时。两目标 ASan/UBSan 回归及实板范围见[检查点](../../docs/operations/c3-command-memory-checkpoint.md)。
 
@@ -26,7 +26,7 @@
 
 `product_ledger_test.c` 使用内存持久层验证最近 8 条固定窗口、重启未决阻断、旧序号拒绝、同 ID 冲突、缺失键拒绝直接写入、写入/读回不确定与 CRC 损坏。`product_ledger_nvs_test.c` 验证实际 NVS 适配代码的短时 Flash I/O 租约、精确 blob 长度和提交失败释放。它们不代替 IDF NVS 的实板容量、掉电和磨损测试。
 
-`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器及公开 OTA 的同一期限源码，注入 HTTP／transport／单调时钟假件，检查可信时间和借用 transport 的装配、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。分配、transport 创建、HTTP 初始化、打开和慢响应失败分别核对 HTTP cleanup、transport destroy、期限 owner release 的顺序；最后一段成功读取也先释放 TLS 再进入离线 Flash 校验。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，真实 mbedTLS 机制由公开 OTA 回环测试单独核对，见[共享期限消费检查点](../../docs/operations/shared_http_deadline_consumer_checkpoint.md)。
+`product_package_source_test.c` 编译真实产品包 HTTPS 顺序读取器及公开 OTA 的同一期限源码，注入 HTTP／transport／单调时钟假件，检查可信时间和借用 transport 的装配、固定响应长度、无重定向、连续 offset、超时及正文未完整拒绝。分配、transport 创建、HTTP 初始化、打开和慢响应失败分别核对 HTTP cleanup、transport destroy、期限 owner release 的顺序；最后一段成功读取也先释放 TLS 再进入离线 Flash 校验。C3／ESP32 入口均运行；它不建立真实 TLS 会话，也不测试公开安装命令，真实 mbedTLS 机制由公开 OTA 回环测试单独核对，见[共享期限消费检查点](../../docs/operations/shared-http-deadline-consumer-checkpoint.md)。
 
 `command_decoder_test` 另检查只读 `product.status`／`product.result` 精确 JSON 字段与非法输入；`protocol_ota_owner_test` 在 C3／ESP32 两目标假件下走真实查询处理，覆盖空账本的 `unknown`、持久序号与绑定快照、成功记录的结果序列化，以及绑定观察不确定后保留存储 claim。公开 Python 串口工具的伪设备测试核对原 ID 查询、窗口外 `unknown`、序号与可选包摘要；真实签名 guest 生命周期测试覆盖空绑定、已安装和卸载后的 ECS2 快照。正式受管 cJSON、IDF 和板上查询仍待精确依赖回归。
 

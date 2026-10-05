@@ -43,4 +43,4 @@
 
 ESP Tool 忽略目录 `provisioning/receipts/private/c3-validation-20261003/public-product-lifecycle-c3` 保存两归档及九项回执／复核／最终任务名与 boot 归属补验；11 项文件索引 SHA-256 `84c375424e292614a02f1a70ab9f9dd06b5038cd31c0ea759328a142de3fa609`，目录 0700、文件 0600。完整基线、身份、凭据与拓扑不进入公开仓。
 
-ESP32 当前未连接；百次公开重装、全部合法并发峰值、完整连续块与全任务栈、Flash 成本、迟到回调与故障矩阵、真实断电、72 小时、Tool 正式会话与生产交付继续开放。P6-03、P6-09 与总门不据本次有限功能切片勾选。软件合同见[公开生命周期检查点](public_product_lifecycle_checkpoint.md)与[FRP 唯一配置 owner](frp_canonical_config_owner_checkpoint.md)。
+ESP32 当前未连接；百次公开重装、全部合法并发峰值、完整连续块与全任务栈、Flash 成本、迟到回调与故障矩阵、真实断电、72 小时、Tool 正式会话与生产交付继续开放。P6-03、P6-09 与总门不据本次有限功能切片勾选。软件合同见[公开生命周期检查点](public-product-lifecycle-checkpoint.md)与[FRP 唯一配置 owner](frp-canonical-config-owner-checkpoint.md)。

@@ -35,7 +35,7 @@ flowchart LR
 
 `container_product_cancel_test.py` 由同一生命周期入口调用，使用临时 RSA 测试键构造 init／event／timer 长循环及 stop 失败包，验证正式 Base owner 的原子停止、真实 guest stop／close／join 与失败阻断；不用生产凭据或设备。结果见[取消检查点](../docs/operations/async-cancel-checkpoint.md)。
 
-`container_product_timer_business_test.py` 由同一入口使用固定 wasi-sdk 编译真实定时 guest，以临时 RSA 测试键签署 `-7`、`0`、`3` 三种业务返回。正式 Base owner 与生产健康策略核对试运行失败记账、旧确认拒绝、原完整窗口重开及非负返回；不用设备或生产凭据，详见[定时业务健康检查点](../docs/operations/timer_business_health_checkpoint.md)。
+`container_product_timer_business_test.py` 由同一入口使用固定 wasi-sdk 编译真实定时 guest，以临时 RSA 测试键签署 `-7`、`0`、`3` 三种业务返回。正式 Base owner 与生产健康策略核对试运行失败记账、旧确认拒绝、原完整窗口重开及非负返回；不用设备或生产凭据，详见[定时业务健康检查点](../docs/operations/timer-business-health-checkpoint.md)。
 
 `run_nvs_capacity_qemu.py` 在宿主调用所选 Espressif QEMU，使用显式构建目录和仓外合成 Flash；仍拒绝仓内 Flash 路径。完整三阶段命令见 [NVS 容量探针](../firmware/tests/nvs-capacity-probe/README.md)。
 

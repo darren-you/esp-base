@@ -1,10 +1,10 @@
 # ESP Base 固件
 
-2026-10-03 仓外TLS owner同池共享观察器在固定1800 B内保留本轮20条完整新低，drop0/errors0，原严格parser与实际ELF后置门通过；C3 A/C完整SDK／验签与34903项冷审通过，原驱动实体退出0。147/147下载网络ready、458任务快照完整；联合功能、停止启动／重启自动运行、十二项业务、A/C与原三码恢复通过。history heap19628 B仍未达49152 B，IRAM成本使堆起点较15槽再后移1024 B，不加回、实际节省0。完整现场独核通过；公开固件、依赖与预算保持，详见[最新分配诊断检查点](../docs/operations/ota_allocation_diagnostic_checkpoint.md)。
+2026-10-03 仓外TLS owner同池共享观察器在固定1800 B内保留本轮20条完整新低，drop0/errors0，原严格parser与实际ELF后置门通过；C3 A/C完整SDK／验签与34903项冷审通过，原驱动实体退出0。147/147下载网络ready、458任务快照完整；联合功能、停止启动／重启自动运行、十二项业务、A/C与原三码恢复通过。history heap19628 B仍未达49152 B，IRAM成本使堆起点较15槽再后移1024 B，不加回、实际节省0。完整现场独核通过；公开固件、依赖与预算保持，详见[最新分配诊断检查点](../docs/operations/ota-allocation-diagnostic-checkpoint.md)。
 
-公开 `product.stop`／`product.start` 沿同一 USB／MQTT 控制入口和唯一产品 worker，仅在本 boot 的请求守卫中保存原 ID 结果，不改变已确认包绑定或持久账本。停止需真实回收后才成功，启动重验签并执行 init；异常实例保持阻断，重启后自动运行当前固件已确认的产品，不持久化停止状态。协议与原 ID 查询边界见[设备协议](../docs/design/device-protocol.md#产品停止与新启动)，真实宿主验证见[测试说明](tests/README.md)。C3 已完成有限公开生命周期及恢复切片，容量、全部 native 生命周期、满合法峰值、ESP32 与 Tool 正式交付继续开放，范围以[最新实体检查点](../docs/operations/ota_allocation_diagnostic_checkpoint.md)为准。
+公开 `product.stop`／`product.start` 沿同一 USB／MQTT 控制入口和唯一产品 worker，仅在本 boot 的请求守卫中保存原 ID 结果，不改变已确认包绑定或持久账本。停止需真实回收后才成功，启动重验签并执行 init；异常实例保持阻断，重启后自动运行当前固件已确认的产品，不持久化停止状态。协议与原 ID 查询边界见[设备协议](../docs/design/device-protocol.md#产品停止与新启动)，真实宿主验证见[测试说明](tests/README.md)。C3 已完成有限公开生命周期及恢复切片，容量、全部 native 生命周期、满合法峰值、ESP32 与 Tool 正式交付继续开放，范围以[最新实体检查点](../docs/operations/ota-allocation-diagnostic-checkpoint.md)为准。
 
-2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](../docs/operations/rtc_config_ownership_checkpoint.md)及[前轮 MQTT 消费](../docs/operations/mqtt_owned_config_consumer_checkpoint.md)。
+2026-10-02 C3 配置所有权：长期 context 的 7640 B 移入 RTC，启动先清空再从 NVS 恢复；临时 7618 B 编解码 owner 按需申请并清零释放，ESP32 保持原策略。最新精确依赖下双目标普通／签名构建、官方验签及完整 host 回归通过；C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务、卸载和原代码恢复通过。124 份下载采样均 MQTT／FRP ready，来源历史 heap 23800 B 仍低于 48 KiB；完整容量未通过，见[RTC 检查点](../docs/operations/rtc-config-ownership-checkpoint.md)及[前轮 MQTT 消费](../docs/operations/mqtt-owned-config-consumer-checkpoint.md)。
 
 2026-10-02 命令载荷按类型分配、串口缓冲按实际长度增长并清零回收，已准入配置转交试运行 owner；两个目标控制栈统一 8192 B。双目标签名／官方验签及 ASan/UBSan 回归通过，C3 一次 WRITE 联合 OTA、MQTT restart、十二项业务和恢复通过。141 份下载采样均 MQTT/FRP ready，控制栈最低余量 2400 B；历史 heap 11404 B、采样连续块 16384 B 仍未达门，见[命令内存检查点](../docs/operations/c3-command-memory-checkpoint.md)。
 
@@ -26,7 +26,7 @@
 
 普通 Base 两目标统一要求 `CONFIG_ESP_MAIN_TASK_STACK_SIZE >= 6144`；默认值为 6,144 B，签名固件观察和 Container 持久恢复都由该任务执行。ESP32 默认 3,584 B 曾在正式签名应用的带包回退恢复中溢出；修后 REUSE／WRITE 的离线 pending、旧包恢复和幂等二启通过，恢复最低栈余量 2,324／2,308 B。该 SDK 的非 nano 格式另加 512 B，不能将 TCB 对齐后的观测跨度当作配置值。C3 保持原有 6,144 B；后续独立 UART／ADC2 适配诊断也通过两模式离线 pending、恢复与二启，回退主栈最低余 2,260 B。正式 USB 产品已签名构建，USB 实体通路和同一实板场景仍未验。完整测试授权的 C3／ESP32 app 为 `0x121000`／`0x10fff4` B；旧 ESP32 空授权 `0xffff4` B 不代表完整产品容量。输入和边界见[开发检查点](../docs/operations/development-checkpoint.md)。
 
-产品包 HTTPS 的 `product_package_source` 现在保有调用方期限对象，并将公开 OTA 的同一 custom transport 借给 SDK HTTP client；默认 CA、证书日期与主机名验证位于 OTA 机制层，包授权、长度、Flash 和持久化继续位于 Base。末段读取成功即依序清理 HTTP 与 TLS，后续离线包校验不继续占用 TLS。详见[共享期限消费检查点](../docs/operations/shared_http_deadline_consumer_checkpoint.md)。
+产品包 HTTPS 的 `product_package_source` 现在保有调用方期限对象，并将公开 OTA 的同一 custom transport 借给 SDK HTTP client；默认 CA、证书日期与主机名验证位于 OTA 机制层，包授权、长度、Flash 和持久化继续位于 Base。末段读取成功即依序清理 HTTP 与 TLS，后续离线包校验不继续占用 TLS。详见[共享期限消费检查点](../docs/operations/shared-http-deadline-consumer-checkpoint.md)。
 
 ## 架构拓扑
 

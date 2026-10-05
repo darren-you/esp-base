@@ -2,7 +2,7 @@
 
 拥有完整配置、单调 revision 和 NVS 提交边界。候选验证由单一控制任务调度，本组件只在连接证明成立后提交。
 
-C3 在一次 load、规范字节消费或完整 commit 中只申请一份 7618 B 编解码缓冲，commit 的前值读取、编码、写入和独立读回复用同一 owner；返回前清零释放。OOM 不开始 NVS 操作，读取与 committed 输出保持，工作配置清零。ESP32 保留已有 RTC 缓冲。C3 长期 context 由 device_protocol 放在 RTC，并在每次启动加载前清空、从 NVS 恢复；RTC 不作为持久事实。双目标故障回归及 C3 实板边界见[RTC 检查点](../../../docs/operations/rtc_config_ownership_checkpoint.md)。
+C3 在一次 load、规范字节消费或完整 commit 中只申请一份 7618 B 编解码缓冲，commit 的前值读取、编码、写入和独立读回复用同一 owner；返回前清零释放。OOM 不开始 NVS 操作，读取与 committed 输出保持，工作配置清零。ESP32 保留已有 RTC 缓冲。C3 长期 context 由 device_protocol 放在 RTC，并在每次启动加载前清空、从 NVS 恢复；RTC 不作为持久事实。双目标故障回归及 C3 实板边界见[RTC 检查点](../../../docs/operations/rtc-config-ownership-checkpoint.md)。
 
 ## 架构拓扑
 

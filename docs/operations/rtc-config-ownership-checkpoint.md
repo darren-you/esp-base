@@ -53,4 +53,4 @@ ESP Tool 受限、Git 忽略的 `c3-validation-20261002/rtc-config-ownership-c3`
 
 ## 后续分配诊断
 
-三轮仓外探针在当前精确基线上完成 C3 联合功能及恢复，指定较大 TLS 分配、真实调用位置和释放已有新证据；原生 ALL 轮溢出，完整资源总门继续开放。详见[OTA 分配诊断](ota_allocation_diagnostic_checkpoint.md)。本页正常固件的独立实测和原索引保持。
+三轮仓外探针在当前精确基线上完成 C3 联合功能及恢复，指定较大 TLS 分配、真实调用位置和释放已有新证据；原生 ALL 轮溢出，完整资源总门继续开放。详见[OTA 分配诊断](ota-allocation-diagnostic-checkpoint.md)。本页正常固件的独立实测和原索引保持。
