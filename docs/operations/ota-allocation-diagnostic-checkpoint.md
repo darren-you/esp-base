@@ -1,5 +1,21 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-06 协作 C3 功能复验与容量阶段边界
+
+Tool 在已协调的唯一串口窗口完成新鲜 native recv 六字段轮，报告 launcher／driver exit 0：USB／Wi-Fi、严格 TLS MQTT、认证 FRP 与错误密钥拒绝、HTTPS 产品安装确认、WRITE OTA 确认、USB／MQTT 停启、软重启持久状态、十二项 counter 业务、卸载及 source／target 槽字节检查通过。**这是实验功能切片，不是完整容量或生产迁入资格。** 本轮没有复现此前首响应头超时；原失败和 SDK 首次／第二调用单元原件保留，不能把未复现当作根因已解决。native errno 为跨连接累计，不能把末次 EAGAIN 或高水当作某一 TLS session 的因果证据。
+
+容量解析仍有 **513** 个 memory／task 样本及 **1** 条坏行，历史最低堆／周期当前连续块最低 **4,796／21,504 B**，均低于双目标 **16,384／24,576 B** 门；control／已观察任务栈最低为 2,392／1,196 B。512 个 memory 帧有同 uptime 的严格 native 绑定，CLI 末尾一个完整资源帧没有对应 native 帧；原坏行及未绑定帧均保留，不补造或删除。容量资格保持 false。
+
+严格 `INTERNAL|8BIT` 的 history 在来源 A Boot 1 的 uptime **166,603→167,604 ms** 更新为 4,796 B；后一个时点当前空闲已经为 **53,932 B**。周期连续块 21,504 B 出现在 **172,623 ms**，当时当前空闲为 28,976 B。SDK history 是各匹配 heap region 各自历史 minimum 的和，不对应已证明的单一瞬时 owner 图；两项最低值也不能拼成一个瞬时峰值。普通 status 的 DEFAULT 数字不替代严格容量域。
+
+最大事件与 OTA 正文下载重叠时，queued／live 高水为 4、offers 为 6；四个最大事件的载荷合计请求下界为 15,572 B，但只对应 boot 内高水，不能绑定上述最低值的时点。MQTT owner 高水为 2／8,736 B；报告记录 **48** 次消息分配失败及 overflow／fail_closed、MQTT connecting 与任务退出后重建。MQTT 分配后累计观察的连续块低至 3,200 B、产品准入累计低至 **3,840 B**；它们来自不同 API 的顺序读取和各自累计，不构成原子元组或完整分配账本。没有满八队列加处理中事件的资格，Broker PUBACK 不证明设备准入。
+
+既有真实 WAMR 探针只证明 native 输入复制到 guest buffer 后可不再被 consumer 读取；生产转交合同未实施，实际 saving=0。最大 native 事件请求为 **48+3,893=3,941 B**，不能把它作为净空闲或连续块收益加回，也没有证据闭合 **16,384−4,796=11,588 B** 历史门差。常驻 `s_event` 的 4,388 B 同样有真实消费者：原 `emqtt_poll` 先复制到它、释放动态 slot，Base 随后才验证和分发。直接改为指针会破坏原有效期；延长原消息寿命又会增加与命令解析／产品复制的重叠，删除常驻量不等于同额峰值收益。原队列、guest、TLS／签名、栈与期限预算保持。
+
+Tool 原运行收据的功能成功、数据丢弃、串口释放与 cleanup errors 0 已读取。Root 从冻结主档另核 **9** 个成员的 SHA／长度／模式：双新鲜 4 MiB 逐字节一致，bootloader 21,232 B／partition 3,072 B／factory 1,048,576 B 的 before、restored 与两全片对应区四方一致；随后非阻塞重获并释放原 inode 48262417，新唯一锁目录有效，旧目录不存在，没有打开 UART。Tool 主档位于受限忽略目录 `production_delivery_20261005/native_recv_c3_20261006`，payload manifest `8b6fa2d2b83634f50cf25e0413aaf09a6f9af65edf94d3ddb912d415488331ae`，主档自核 17,120 payload；Root 本次没有重新核全部成员。容量阶段只读报告 manifest `d3af5451c834d135a5fe2609c34096c6b236131771d188a11d1d96dac282ddc8` 的四成员已核对。
+
+完整容量、8+processing／native 分域申请、联合 Flash／寿命、百次实体、ESP32、断电／双板 72 小时和正式交付继续开放；后继物理轮仍须全新基线，不能复用本轮全片或运行目录。
+
 ## 2026-10-06 TLS 接收边界与容量续验
 
 双目标普通内部 8BIT 历史最低堆门统一为 **16,384 B**，连续块 **24,576 B**、各任务栈余量 **1,024 B**、五能力并存与原预算保持。真正最大事件／WRITE OTA 轮的历史堆 **3,396 B**、准入后连续块 **3,840 B** 失败不改判，`whole_capacity_passed=false` 保持。
