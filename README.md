@@ -2,11 +2,13 @@
 
 当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
 
+2026-10-05 映射只读修正后的新鲜 C3 联合轮通过：Base `f2f9ad24`／Container `7f25647a`，真正 driver exit 0；公开 WRITE OTA、USB／MQTT 生命周期、重启自动运行、十二项业务、卸载与 A/C 读回完成，原三码精确恢复、实验数据擦除与所属资源释放通过。457 个完整快照中历史堆／连续块／控制栈／已观察任务栈最低 23,464／27,648／2,392／1,196 B，当前周期观察门通过。34,644 成员软件／固定 SDK 和 193 成员完整现场已私存逐项核对；满合法峰值、完整 native、联合 Flash、ESP32 及完整交付仍开放，见[检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#修正后的-c3-新鲜联合轮)。
+
 定时回调的负业务返回现在沿用外部事件的试运行失败策略：饱和累计失败并撤销旧代表事件，runtime 继续运行；新代表事件仍按原规则重开完整健康窗口。真实签名 `-7`／`0`／`3` guest 与修复前明确行为红、宿主回归及设备边界见[定时业务健康检查点](docs/operations/timer-business-health-checkpoint.md)。
 
 签名包的宿主单次调用期限已接入 Base 产品运行策略：平台 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 同时约束包准入和运行实例，Container 在重新验签后取平台与清单的较小值。每次导入独立计时，超期失败后清退并显式回收；整个入口期限和停止只影响本次启动的策略保持。双目标软件验证及设备边界见[开发检查点](docs/operations/development-checkpoint.md)。
 
-2026-10-04 产品事件准入修正的 C3 联合功能复验通过：真正 driver exit 0，一次 WRITE OTA、USB／MQTT 停止启动、重启自动运行已确认产品、十二项业务、卸载及 A/C 读回完成；原三码精确恢复、实验数据擦除与所属 UART／fixture 释放通过。前两失败和离线归档准备错误分别保留。150/150 下载网络 ready，历史 heap 21360 B 仍距 49152 B 门差 27792 B；213 个完整现场文件及必要材料已受限保存，有限独核通过，新增节省 0。容量取舍待维护者决定，满峰值／native、largest、争用、寿命 Y/f、ESP32及正式交付仍开放，见[分配诊断检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md)。
+2026-10-04 产品事件准入修正的 C3 联合功能复验通过：真正 driver exit 0，一次 WRITE OTA、USB／MQTT 停止启动、重启自动运行已确认产品、十二项业务、卸载及 A/C 读回完成；原三码精确恢复、实验数据擦除与所属 UART／fixture 释放通过。前两失败和离线归档准备错误分别保留。150/150 下载网络 ready，历史 heap 21360 B 仍距 49152 B 门差 27792 B；213 个完整现场文件及必要材料已受限保存，有限独核通过，新增节省 0。当轮等待容量取舍，现行合同已按页首双目标 16 KiB 更新；满峰值／native、largest、争用、寿命 Y/f、ESP32及正式交付仍开放，见[分配诊断检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md)。
 
 2026-10-04 C3 相同 Wi-Fi 配置修正复验通过：Base 3e8e44e 的真实生命周期与双目标 host 检查通过，新 A/C 完整 SDK 构建及官方验签通过；实板最大合法64KiB记录、同boot单Pong、公开移除及原清理前自然退出门通过，driver exit0。fresh双4MiB、原三码恢复、擦实验数据与所属UART／fixture释放通过。仅此FRP切片取得资格，新增节省0；五能力容量、联合争用、满合法峰值、ESP32与交付仍开放，见[分配诊断检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md)。
 
