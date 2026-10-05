@@ -22,6 +22,10 @@ fresh 双 4 MiB 与独读原三码、实验全片回读及 finally 恢复通过�
 
 原 SDK 未修改；四个实际编译的核心／dynamic 源与精确父档一致，31,468 个 SDK 文件在单元后再次逐 SHA／长度／模式／链接与父档及核验前后一致。IN=16,384／OUT=4,096、TLS 1.2／dynamic 配置保持；该最小工程不是五能力 Base 镜像。QEMU 制品由固定 SDK tools manifest 校验。首次缺少既有实验 CA 文件的构建失败、数次无控制台完成标记的运行及首次 monitor 文件名解析失败均保留；最终直接读取内存结果，不把早期失败改判为通过。未连接物理 UART 或网络，没有实现 SDK 修正。
 
+后继独立无网单元进一步验证第二调用：九例包含完整五字节 fresh 对照、四个 1–4 字节前缀的立即续接、四个前缀在续接前调用一次使用 512 B 零值局部数组的普通函数。第二 BIO 只提供原帧头的 `5−k` 字节后缀，没有重送前缀。fresh 与四个立即续接都逐字节相等；四个插入普通函数的续接均将已收前缀变为零，后缀正确，SDK 仍返回 0、`in_left`=5、当前 owner 有效、owner payload 449 B。九例 live owner 内的内容、调用数与全部清理后的完成标记由本地 monitor 导出逐值核对，合成 Flash 不变、所属进程正常退出。**这取得该精确构建／API 单元的跨调用前缀保存不稳证据**，不再仅是首次指针归属推测；仍只有初次 setup 的 NULL owner 路径，没有 16 B idle owner、真实握手／解密或实板 8+116 因果资格。四个实际编译的 SDK 核心／dynamic 源与原父档一致，SDK 源未修改。
+
+第二调用的必要 26 payload 私存于 `c3-validation-20261005/sdk_rx_resume_software`，归档 `c67886307816cd33cfde9d53d732b88f90fec66971b81b1a1eebe25a001d393a`、索引 `16836b1479490efe110b67d10ae69e0a47d871ceb87df4058e8cbb66c10d0e70`；全部成员 SHA／长度／模式／集合和源前后稳定核验通过。SDK／QEMU 复用既有精确父材料，不重复打包，完整离线复现资格为 false；容量失败与其他开放项保持。
+
 真实冻结 Container／WAMR 的宿主单元另确认：完整 3,893 B 输入复制到既有 guest event buffer 后，清零并释放单个模拟 Base owner 的八项成功／失败／取消／拒绝边界通过；复制前释放的反例被 ASan 检出 UAF。峰值 A/C ELF 的事件头均为 48 B，最大 native malloc 请求为 **3,941 B**。该探针没有修改生产 API 或 Base 返回后释放合同，实际节省为 0；复制／并发准入期间仍可能有九份 owner，不能把 8+processing 的峰值直接减为八份。完整所有权接口改造子任务被工具安全审查以“可能涉及网络安全风险”拦截，未执行。
 
 原生 recv 六字段、24 B 的仓外观察候选已完成；原 recv 返回与 errno 保存／恢复、四文件逆向、固定正反例及 ASan／UBSan 通过。C3 独立对象新增 text／rodata／BSS 为 356／145／24 B，recv 局部帧 16→32 B；没有完整 SDK 链接、LTO、atomic callee、堆或实板资格，尚未用于设备，不形成 TCP 原因结论。
