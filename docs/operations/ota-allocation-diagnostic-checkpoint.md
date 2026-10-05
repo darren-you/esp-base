@@ -1,5 +1,27 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-05 原生 FRP 请求与本地监听续验
+
+本轮绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020`、FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 Container `7f25647a5380953dfd40efcef281014660ff9530`，在前轮静默候选上只加仓外 listener 计数和既有 FRP status 数值导出。监听器原 socket 调用、处理条件及两秒期限不变；work 每周期最多读取一次原已发布快照，复用原锁，没有新任务、锁对象或动态缓冲。两类观察块删除后逐字节恢复原静默源；实际组件装配路径和官方生成 manifest hash 单独核对，其他依赖、SDK、配置和预算保持。当前 31,468 个 SDK tracked 输入逐项 SHA／长度／权限／链接与既有全量父档一致，不重复包装 SDK，不把文档提交当作固件来源。
+
+完整固定 SDK 构建和官方 RSA v2 验签通过。A/C 版本为 `0.2.0-c3-frp-io-a/c`，签名 app 各 1,183,744 B，摘要分别为 `a585dee606012b027b3a80b2bcb453deb0771e0e94b08fdc11837e7c7123fa71`／`c3a3af4ec956485b61bf54a2e246d56a7909643d66ec091241d959d9390e2e3a`。相对静默候选实际 ELF：bss／普通堆起点各增加 112 B，Flash text +1,048 B、rodata +656 B；work 导出函数的 C3 局部栈帧为 592 B。成本不加回，局部帧不证明完整调用栈。原 listener 回环、owner 生命周期、额外数值映射的 ASan／UBSan 和严格 warning 检查通过。
+
+**新鲜 C3 轮 driver exit 1，仍在产品／突发／OTA 前失败。** 全程沿用 Bridge 同一串口租约；唯一授权 C3、ROM 身份、4 MiB 和安全状态核对后，取得本轮双份一致全片及独读原三码，实验 A 全片写入／读回通过。USB 首配、严格 TLS MQTT 就绪、认证查询／负例和远程配置写门通过。FRP 登记就绪后，首外侧查询在原三秒上游响应头期限失败，记录为 **3,002.381 ms**；完整查询八秒与设备期限保持，没有增加重发或等待。
+
+原始 UART 的 69 个同 boot 数值周期严格重解析通过，CLI 占 65 个；40 项解析边界测试覆盖损坏、重复／未知字段、范围、绑定冲突、缺周期与计数回退。绑定至少一个同 uptime 的既有 MQTT owner／产品队列 boot，所有存在绑定必须一致；首启动周期只有 MQTT 绑定也可唯一识别。旧双重绑定规则的失败保留。原资源消费者把新增 FRP 行当未知格式并明确拒绝（138 行），该失败也保留；只有在全部原 native 行独立严格校验后，才派生移除这 138 行的资源视图并用原消费者重解析，原日志未修改。69 个内存样本和 69 个任务快照完整，无损坏／缺失；低负载历史堆／连续块／控制栈／已观察任务栈最低为 138,144／114,688／2,888／1,196 B，不取得完整容量或所有 native 资格。
+
+监听器累计 poll **6,293**、accept 调用 **607**，但 accepted／rejected／accept error、recv／send、response／close 全为 0；原传入 now 的最大 poll 间隙 **769 ms**，不直接解释为 UART 阻塞时间。7 个可用 work 快照中 5 个为 READY，请求、排队／活动／清退、本地双向字节和错误计数全为 0。本轮 FRPS 只有登录、代理登记、心跳和一个用户连接，没有工作连接登记或 join；不套用上一轮约 49 ms join 的证据。源码确认 work.requests 仅在控制流成功接受 ReqWorkConn 后增加，READY 每步仍发布快照。因此本轮尚未观察到工作请求或本地 HTTP 接入，原因仍未证明；下一步核同轮 FRPS 的请求投递与设备 TLS 接收、Yamux 控制流和 AEAD／wire 消息三个边界，不改变期限或预算。
+
+结束时仅恢复当轮原 bootloader／partition／factory，Root 独立核其与双新鲜全片及恢复读回逐字节相同；实验数据擦除、Wi-Fi down、串口释放通过，cleanup errors 为空。UART 190,180 B 全部记录／消费，pending／overflow 0、最高 pending 34,344／1,048,576 B，reader error／join timeout 均无。运行中实际绑定的 36 个所属子进程和 4 个 TCP listener 均释放，仅声明这些所属资源。恢复末尾的 passed 断言仍拒绝整轮功能失败，不是新恢复缺口；没有 eFuse 或生产服务修改。
+
+完整软件 3,105 payload 归档摘要 `b8608213cfa028a184fcaa6a8eab117ca246ee971c82c878e9acbfbb5a1a0265`、索引 `e8185246658189fe80558a59de57baed1cf5c6c2ad6f68ae764ca667a5025c32`；现场 132 payload 归档 `7ef39a7fcdab36291bf4bb5061a80a85ac26867f46a2b6772b3ca1e1bfb72966`、索引 `9782925b167c899e823df8b257796894e90528e87e5a170bc5a4991961f3a8d9`。两档逐成员 SHA／长度／权限／集合与源前后不变核对通过，受限私存于 Tool 既有忽略目录 `c3-validation-20261005/native_frp_io_software`／`native_frp_io_device_timeout`。原最大事件／OTA 堆 3,396 B 和准入后连续块 3,840 B 的失败保持，`whole_capacity_passed=false`；完整峰值／native、Flash 争用与寿命、百次实体生命周期、ESP32、真实断电、双板 72 小时及正式交付继续开放。
+
+### 满八队列与处理中事件的软件输入准备
+
+真实 Container／WAMR host 上准备了单独有限 timer 压力 guest，保留计数业务语义，只以有限 N 次单 timer start／同 handle cancel 延长成功事件处理；ABI2、64 KiB、4096 B guest 栈、queue8、100000 指令、100 ms 入口／单导入、timer1／log0／capability `0x4` 保持。N=6000 与 6248 各完成同实例 100 次事件调用且每次 timer 清空、stop／close 成功；6249 命中原指令上限。N=6000 host 最大 1,040 µs，不能外推 C3 时长。独立候选 `v0-1-1-timer-n-6000` 的 Wasm 为 643 B，摘要 `20110d66b9d8a7d9fa4478e82cfee33d854a7b113b5e57c306870a8198709464`；尚未签包或实板校准，不复用旧版本，不计作八槽加一处理中、百次生命周期或容量通过，也没有改变本轮 FRP 输入。
+
+189 份原软件输出和冻结源共 2,279 payload 已逐项归档到 `c3-validation-20261005/finite_timer_pressure_software`，归档摘要 `4d745b16dadbc27e1dd2884c26f56aef3ea5bca9581b7f6f7a3d83272acd8f25`、索引 `0c6fd04adaf4ae9c91a698aa741bb518d55aedd9e0764c18116f2116f3054984`。既有 live_max 还包含 timer／排日志工作，后续必须区分真正外部事件处理种类并验证实际存活，不能只用 live=9 或 PUBACK 关闭峰值门。
+
 ## 2026-10-05 FRP 响应头宿主定位与真实主机协议链
 
 本轮沿用前节静默 A/C 的精确字节、持续 UART reader 和原设备调用／恢复体，仅在宿主 HTTPS 转发夹具添加阶段记录并开启官方 FRPS debug。真实 TLS 正例的字节／认证头保持、延迟上游负例仍在原三秒响应头期限失败，宿主阶段观察先行通过；固件构建源仍为 Base `b677868cc6a772351c22019818f02cbf8bcda020`，不能用后来的文档提交改写来源。
