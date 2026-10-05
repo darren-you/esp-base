@@ -2,6 +2,8 @@
 
 当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
 
+2026-10-05 后继满队列观察与 OTA 内最大事件突发软件已完成，实际观察成本 32 B 不加回。三轮新鲜 C3 在 FRP 认证首查失败，第三轮定位网关响应头等待 3,001 ms；尚未到产品安装或峰值阶段。三轮原三码恢复／数据擦除／Wi-Fi down／串口释放通过、失败全档已私存；继续原期限下设备监听器 I/O 定位，详见[队列续验检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#产品队列峰值观察输入与-frp-首查前失败)。
+
 2026-10-05 最大事件突发与 WRITE OTA 重叠续验：功能、十二项业务和原代码恢复 exit 0；458 完整资源快照确认历史内部堆最低 3,396 B、周期连续块 21,504 B，事件准入点连续块最低 3,840 B，当前 16 KiB／24 KiB 容量门失败。来源 queued／live 高水仅 4；32 个 PUBACK 不证明满八队列／processing，MQTT 下载观察含重连。完整现场与软件已私存核对，继续所有权与峰值归因，见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-最大事件突发与-write-ota-重叠实测)。
 
 2026-10-05 映射只读修正后的新鲜 C3 联合轮通过：Base `f2f9ad24`／Container `7f25647a`，真正 driver exit 0；公开 WRITE OTA、USB／MQTT 生命周期、重启自动运行、十二项业务、卸载与 A/C 读回完成，原三码精确恢复、实验数据擦除与所属资源释放通过。457 个完整快照中历史堆／连续块／控制栈／已观察任务栈最低 23,464／27,648／2,392／1,196 B，当前周期观察门通过。34,644 成员软件／固定 SDK 和 193 成员完整现场已私存逐项核对；满合法峰值、完整 native、联合 Flash、ESP32 及完整交付仍开放，见[检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#修正后的-c3-新鲜联合轮)。

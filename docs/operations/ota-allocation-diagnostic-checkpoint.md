@@ -84,6 +84,23 @@ ESP Tool 的受限、Git 忽略 `c3-validation-20261005/capacity16-mapped-read-s
 
 该轮关闭本组合的候选启动与有限联合功能复验，容量完整门保持开放：合法满队列及 processing、MQTT 满槽／在途／outbox、FRP 双流／预备流／64 KiB 记录与 OTA 相遇、完整 native／所有任务／分域最大申请、联合 Flash 最坏时延与寿命 Y/f、实体百次生命周期、ESP32、真实断电、双板 72 小时及正式交付仍待完成。
 
+
+### 产品队列峰值观察输入与 FRP 首查前失败
+
+在公开 Base `41c0eeec5ad828ab311594d639e831858bd3ddc0`／同一 Container `7f25647a` 上，仓外增加产品队列高水、原 OOM／FULL 次数和入队后普通内部连续块观察；写方复用原队列锁，周期读取快照后解锁再打印，并绑定真实 boot。反向删除全部观察增量后产品源码逐字等于公开输入。原申请、准入、队列、调度优先级与期限保持；SDK／provider 无私改。实际 ELF 固定观察区 **24 B**，`.dram0.data` 增加 24 B、`.flash.text`／`.flash.rodata` 增加 248／160 B、`_heap_start` 后移 **32 B**；全部成本计入本轮读数、不加回。
+
+A/C 版本 `0.2.0-c3-queue-peak-a/c` 完整固定 SDK 构建与官方 RSA v2 验签通过，签名 app 仍各 **1,183,744 B**；SHA-256 为 `bafee24c4838b53f215cf6d80e6ca3b401349bdd23b56e01afdf720e298a7832`／`845dad1bdcfba2c403f8dcc23c20c347798ea9cb8125e553b7dda7d3de17f12d`。与前节 A 的实际 sdkconfig 仅软件版本标签不同，数字预算及原实验 CA／策略保持。来源突发驱动只在同 boot、已确认原 counter、前两事件完成、正式 OTA 正文已经开始时触发一次 **32** 条 QoS1／非 retained 最大事件，guest／wire 长度 **3,893／4,096 B**，连续序号 3–34 各应用发布一次；PUBACK 不当入队／执行证明，超时不重发。发布器与高水解析器 **8 项**边界测试通过；首版 mock 全零 key 被公开协议正确拒绝的两个错误保留，修正仅 mock 数据。原主写序、原异常捕获与恢复体、单 reader 和 1 MiB 宿主队列核对通过；新主流程仅增加已声明的来源事件突发。
+
+**三轮 driver 均 exit 1，均未到产品安装、事件突发或 OTA。** 每轮重新枚举、确认 ROM 身份／4 MiB／安全状态，取得两份一致 fresh 全片和独读三码，再完整写入／回读同一 A。USB 配置、严格 MQTT、FRP 配置 revision 3 与 ready 观察后，原首个 FRP 认证 status 未取得可验证结果，夹具网关报 `TimeoutError`。第二轮保持同一签名字节与期限独立重跑，原失败复现；第三轮只在原网关记录原生 I/O 阶段，明确 **response_headers／3,001 ms／未收到 HTTP 响应头**。设备 listener 总期限仍 2,000 ms、网关 socket 仍 3 s，未增加请求重发或延长期限。设备 USB 失败只读状态继续报告 Wi-Fi／MQTT／FRP ready；尚不能证明请求已到达设备监听器，不能归因于堆、打印或 FRP 单一实现。
+
+三轮完整任务快照分别 **62／52／59**，对应历史堆最低 **150,376／147,312／150,216 B**、连续块均 **114,688 B**、控制栈 **2,800／2,888／2,800 B**、已观察任务栈 **1,196／1,260／1,196 B**。队列高水及处理中均 0、未发生产品申请或 FULL，连续块的入队后观察为 null；产品尚未运行，这些读数不是五能力容量。完整合法峰值、事件与 OTA 重叠资格和节省仍为 0／未取得。
+
+三轮原 finally 擦实验数据，只恢复 fresh 独读原三码并逐字节回读；Root 再核对恢复字节与三码及对应新鲜全片一致，Wi-Fi down、串口释放、已构造的两夹具 close 和清理错误为空。运行中所属 PID／监听绑定没有在清理前捕获，不补写独立逐进程释放资格；HTTPS 产品夹具尚未构造。首轮原收据缺单独产品观察 bool，实际冻结 manifest 与 boot 绑定日志明确包含观察；后继准备器只修正该声明，原首轮收据不改写。
+
+受限、Git 忽略的 `c3-validation-20261005/capacity16-product-queue-peak-software` 已存 **34,658** 个成员（固定 SDK **31,468** 项），归档 SHA-256 `a67334175cf0dd0e0c4c4cc5d8e70f524a751ff35fbd6d75bf156b33e23e251c`，索引 `2ea3c600551fe90a0ef39b038e4ab9af0c95a2004fdee1bb2b709ac47748ef19`。三个失败完整 runtime 各 **141** 文件＋1 索引；前两档 SHA 为 `f0924e4cf36a49cfef5ef81051e0872d1322c619759d77d24e243ffb387900b1`／`a878181e35e3caad5448b5f24771776b01167f9b2d61479c5c523c1359e48f4b`，分别位于 `capacity16-queue-observer-frp-preflight-failure`／`capacity16-queue-observer-frp-preflight-second-failure`；第三档 SHA 为 `0cbb8792356039d9680cea9734af0e27adc439ff14b9c61a1c4d7605c5071f03`、索引 `d3d464a1bf5f049e4ec02f7bff0b90397e0ad908fa9a4953a00a2008130681a8`，位于 `capacity16-queue-observer-frp-header-diagnostic-failure`。各档逐成员 SHA／size／mode／集合及原现场前后不变核对通过，失败不被后继重跑覆盖。
+
+下一步只为重现的 FRP 首查记录设备监听器 accept／recv／send 与关闭阶段，继续原期限与原恢复合同，先证明数据面到达及返回；不把 ready 当认证管理通过。完整合法满队列、MQTT 槽／在途／outbox、最大 FRP／双流与 OTA 相遇、全部 native／分域申请／任务栈、Flash 时延／寿命、实体百次、ESP32、断电／72 小时与正式交付保持开放。
+
 ## 事件准入修正后的联合实体复验
 
 ✅ 只覆盖该行明确命名的源码、软件回归或 C3 有限切片；历史失败原样保留，容量、双板与总验收分别保持未完成。
