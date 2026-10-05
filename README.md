@@ -2,7 +2,7 @@
 
 当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
 
-2026-10-06 TLS 接收诊断：新鲜 C3 在首响应头等待约3,002.079 ms超时；66严格周期仍确认工作帧头8 B、声明正文116 B、正文0。收到帧头后的两采样发送pending0，SDK/BIO接收继续调用、最新WANT_READ／WOULD_BLOCK；不称TCP或SDK根因。恢复和所属资源释放通过，新增96 B观察成本不加回；低负载资源观察不替代真正峰值失败。完整软件／现场私存与续验范围见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-tls-接收边界与容量续验)。
+2026-10-06 TLS 接收诊断：新鲜 C3 在首响应头等待约3,002.079 ms超时；66严格周期仍确认工作帧头8 B、声明正文116 B、正文0。收到帧头后的两采样发送pending0，SDK/BIO接收继续调用、最新WANT_READ／WOULD_BLOCK；不称TCP或SDK根因。恢复和所属资源释放通过，新增96 B观察成本不加回；低负载资源观察不替代真正峰值失败。完整软件／现场私存与续验范围见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-tls-接收边界与容量续验)。无网SDK单元确认1–4字节帧头遇WANT_READ后的持久owner缺口，尚未验证重试／解密或实板因果；单个processing提前释放仅有宿主边界证据，生产未改、节省0。
 
 2026-10-05 控制流续验确认两条 FRP 工作请求已到达并调用 work_request，同轮官方 FRPS 已注册／get／join；首响应头仍在 3,002.893 ms 超时，设备工作流未建立本地接入。新鲜双全片与原三码精确恢复、实验数据清除及所属资源释放通过；观察新增 96 B 成本不加回，全档已私存。继续工作流读取／type8／local connect 定位，真正最大事件／OTA 容量失败保持，见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-frp-控制请求已到与工作握手续验)。
 

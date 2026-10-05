@@ -14,6 +14,20 @@ fresh 双 4 MiB 与独读原三码、实验全片回读及 finally 恢复通过�
 
 仅严格合法 native 行被过滤后，66 个内存样本和 66 个完整任务快照的低负载最低值为历史堆／连续块／control 栈／已观察任务栈 **143,192／114,688／2,888／1,196 B**；不与前轮相减计节省，不取得完整峰值或 native 生命周期资格。软件 165 payload 归档 `4d6bce469654cd2ad1399147831fd89e65a3fa3ce188d972046a0f3c476bfddb`、索引 `ef0995dd083e8a1d7765255cb08050d77ea1f1526d5bba18e38db95b4e9c2f6a`；现场 165 payload 归档 `532f725dc557969f8bbab581b0eff207826857f1a7a3b217a05e641a6af66b6d`、索引 `d1c8823de3db22b722c3761e2883ae017164802dfe5aea59d3a0494bbd5983cf`，受限私存于 Tool 已有忽略目录。软件复用已验证 WORKRX／SDK 父档的精确成员，只保存本轮实际变更和必要执行材料；完整离线复现资格为 false。完整成员核验与源前后稳定通过。
 
+### 无网络 SDK 单元与峰值所有权边界
+
+固定 SDK 的 `heap_caps_get_minimum_free_size` 累加各匹配 heap region 各自的历史最低值；**3,396 B 不能对应为某一单一时点的 live owner 图**。原历史指标与双目标 **16,384 B** 门保持，准入后连续块 3,840 B 仍失败。现有周期采样与累计队列高水不足以建立 allocation/free 时间线，不按其他轮的分配或周期差值认领节省。
+
+独立、无网络的 C3 QEMU 单元直接编入原 SDK 的 dynamic RX 和真实 MbedTLS `fetch_input`。初次 `ssl_setup` 后，内存 BIO 给出合法五字节 TLS 1.2 帧头的 1–4 字节前缀，随后返回 WANT_READ：实际 raw=-26,880、`in_left`=对应前缀、BIO 调用两次，但 `in_buf` 为 NULL，帧头指针没有持久 RX owner；完整五字节前缀则返回 0、`in_left`=5、owner 有效、BIO 调用一次。五例在释放前写入结果表，全部清理后写入完成标记；QEMU 本地 monitor 导出并逐值核对通过，合成 Flash 不变，所属进程正常回收。该地址所有权不变量不读取已失效帧头字节；**没有跨第二次读取、TLS 握手／解密或实板 8+116 因果资格**，不能据此认定正文缺失根因。
+
+原 SDK 未修改；四个实际编译的核心／dynamic 源与精确父档一致，31,468 个 SDK 文件在单元后再次逐 SHA／长度／模式／链接与父档及核验前后一致。IN=16,384／OUT=4,096、TLS 1.2／dynamic 配置保持；该最小工程不是五能力 Base 镜像。QEMU 制品由固定 SDK tools manifest 校验。首次缺少既有实验 CA 文件的构建失败、数次无控制台完成标记的运行及首次 monitor 文件名解析失败均保留；最终直接读取内存结果，不把早期失败改判为通过。未连接物理 UART 或网络，没有实现 SDK 修正。
+
+真实冻结 Container／WAMR 的宿主单元另确认：完整 3,893 B 输入复制到既有 guest event buffer 后，清零并释放单个模拟 Base owner 的八项成功／失败／取消／拒绝边界通过；复制前释放的反例被 ASan 检出 UAF。峰值 A/C ELF 的事件头均为 48 B，最大 native malloc 请求为 **3,941 B**。该探针没有修改生产 API 或 Base 返回后释放合同，实际节省为 0；复制／并发准入期间仍可能有九份 owner，不能把 8+processing 的峰值直接减为八份。完整所有权接口改造子任务被工具安全审查以“可能涉及网络安全风险”拦截，未执行。
+
+原生 recv 六字段、24 B 的仓外观察候选已完成；原 recv 返回与 errno 保存／恢复、四文件逆向、固定正反例及 ASan／UBSan 通过。C3 独立对象新增 text／rodata／BSS 为 356／145／24 B，recv 局部帧 16→32 B；没有完整 SDK 链接、LTO、atomic callee、堆或实板资格，尚未用于设备，不形成 TCP 原因结论。
+
+必要软件材料 166 payload 受限私存于 Tool 已有忽略目录 `c3-validation-20261005/sdk_rx_lifetime_software`；归档 `f65b0b4d89fa46e5e46782527c9220c121d6839eff7d5b19d67f074fa617b259`，索引 `f5bd71909004213fc0dcade940e86b11661957977c64d0cdabdc7c582e85e650`。逐成员 SHA／长度／模式／集合及源前后稳定通过，复用精确 SDK／组件父源，完整离线复现资格为 false。Tool 的本地 App 只读轮已释放 C3；Root 非阻塞重获同 inode 的新唯一串口锁，不打开 UART，历史归档保持原样。整体容量与其余开放项不改判。
+
 正文缺失原因仍待接收路径定位；完整队列 8+processing、分域最大申请、FRP 最大记录／双流与 OTA 峰值、Flash 争用／寿命、实体百次、ESP32、断电／双板 72 小时和正式交付继续开放。
 
 ## 2026-10-06 工作帧正文接收检查点
