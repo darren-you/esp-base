@@ -1,5 +1,27 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-05 MQTT 消息所有权诊断前置失败
+
+为归因此前最大事件／OTA 的堆缺口，仓外诊断取公开 Base `b677868cc6a772351c22019818f02cbf8bcda020`、原 Container 与 MQTT `6443b71db761f4d667503f14108687bad5e6b5ee`。MQTT 实际编译输入显式指向独立实验组件，只添加 48 B 原子消息 owner／错误计数；释放开始前撤销计数，不能用它证明 native free 完成。队列、载荷、分配、优先级、协议与期限保持。另通过私有 CMake 令 SDK 既有两类动态 TLS 日志可见，SDK 源码未改。最终实际 ELF 相对前轮：data +48 B、bss +8 B、Flash text +8,832 B、rodata +2,056 B、普通堆起点 +48 B，观察成本不加回；此前 owner-only 成本记录不能替代此最终日志配置。
+
+两份实验 A/C 均为 1,183,744 B，版本 `0.2.0-c3-mqtt-owner-a/c`，完整签名摘要为 `33bde2d61432f954fd317c1d031f255adbf38b146fa9671c0385999711a2a325`／`903fe67ff830d185ebb1f1293259d9c240939b1b41f0fbbb3a11d0f8f436bfd7`；完整 SDK 构建、官方实验键验签与 ASan／UBSan host 计数平衡检查通过，不取得生产实板资格。
+
+**两轮 driver exit 1，均在首个 MQTT status 查询的五秒宿主期限处失败，尚未执行突发或 OTA。** 后到回执逐项证明同请求、同设备、同 boot 的 succeeded，不能再描述为设备未返回结果。第一轮只在后继 OTA 阶段准备持续 reader；第二轮改为从首个 USB 查询开始单 reader，OTA 前顺序交接、重启后继续采集，设备调用 AST、原失败捕获与恢复体保持。第二轮 logged／consumed 均 131,676 B、pending 0、峰值 25,167 B、overflow／reader error／join timeout 均无；仍复现超时，停止读取不能单独解释该现象。详细日志的时序影响尚待隔离，不能据此认定前轮峰值中的 MQTT 重连原因。
+
+每轮均重新核对唯一 C3／4 MiB／安全状态，以本轮两份一致全片和独读原三码建立恢复基线；实验镜像全片读回通过。两轮结束均擦实验数据、精确恢复原 bootloader／partition／factory、确认 Wi-Fi down、所属夹具关闭与串口释放，cleanup errors 为空，没有 eFuse 或生产配置变更。80／51 条同 boot 消息 owner 周期行均为零峰值且申请点仍为未观察哨兵，不能作峰值占用或回收结论。
+
+失败材料在 Tool 既有 Git 忽略目录中独立私存，目录 0700／文件 0600，逐成员 SHA／长度／权限核对通过：第一轮 180 payload，归档 `820e1e7a65a266994428cd73c16a852cc3b39bc312d8e24556cc7b02e35aa9cc`；最终源码补件 14 payload，归档 `9b1731f40de8516d2935e53e342f7b99180dbeae5136e6996317be6d3ad154e0`；第二轮 189 payload，归档 `75c81378ed03335d2e9b08c6f19fd332639833ffacede922867cf78d0d4cb090`。原最大事件／OTA 的容量失败保持；下一轮仅保留消息计数、关闭详细 TLS 日志，并继续使用新目录、新鲜双基线和原恢复合同。
+
+### 关闭详细 TLS 日志后的消息 owner 实板续验
+
+独立静默候选移除私有 SDK 日志编译参数和两个运行日志级别设置，仅保留消息计数与原周期资源观察。公开源码逐文件核对，固件差异严格限于已声明的观察、实验策略和实际本地组件装配；首轮发现三个旧文档输入后按声明的公开提交重新取回，固件构建输入保持。实际 MQTT 编译目录、C3 的 A/C 配置标签、SDK 源码和官方实验验签通过。A/C 均 1,183,744 B，版本 `0.2.0-c3-mqtt-quiet-a/c`，摘要 `0ac9d7acf9699637fcd65f49adcceedd2b6bc4a6e3c3501de60f69110c54868f`／`da593513360a378bb4667ee8119983e0bc6266eb522b6225c2cca2b9cd9a7b89`。相对前轮 queue-only ELF，data +48 B、Flash text +628 B、rodata +312 B、普通堆起点 +48 B，其余分配段保持；成本不加回。
+
+**本轮越过前两轮的 MQTT 失败点，但整轮 driver exit 1。** 新鲜双全片、原三码独读和完整实验镜像读回通过；公开 USB Wi-Fi／MQTT 首配、严格 TLS 就绪、MQTT status／product.status、坏 HMAC／QoS0 拒绝后的合法同 ID 查询，以及远程 config.set 的 physical_usb_required 拒绝通过。随后 revision 3 的 USB 状态已报告 FRP／MQTT ready，首个外侧 FRP status 探针仍不可验证：私有 HTTPS 转发夹具记录其本地 FRPS 上游 TimeoutError，未得到设备响应。具体停在哪个网络阶段及其原因尚未取得证据；保持原三秒响应头、八秒完整查询与设备期限，下一步补齐宿主上游阶段观察。
+
+62 条严格消息 owner 观察中峰值为 1 个／2,154 B，所列 allocation／满槽／notice／poll 错误计数为 0；产品队列准入仍为 0，尚未安装产品、触发突发或执行 OTA。62 个完整任务快照及 62 个周期内存样本无损坏／缺失；这些低负载读数不替代既有最大事件／OTA 的容量失败或完整 native 资格。详细日志的时序影响仍需独立核对，原容量轮的 MQTT 重连原因继续未证明。
+
+UART 138,341 B 全部记录和消费，pending 0、峰值 20,622 B、overflow／reader error／join timeout 均无；单 reader 已退出。原三码由本轮新鲜全片独立复核与恢复字节完全相同；实验数据擦除、Wi-Fi down、串口及夹具释放通过，cleanup errors 为空。静默软件 43 payload 归档 SHA `480bc8029ebb9563b02ac87ad33e6d3bdd21f52cc77903bc465dcd974ff2f1b7`，完整现场 137 payload 归档 SHA `6976ad5f86f55f11072156bf3a88e552b4c2c82ff064c6ba031f5679a85fb9b1`，各自逐成员 SHA／长度／权限核对通过，继续受限私存于 Tool 的既有忽略目录。生产材料、完整容量及迁移资格保持原边界。
+
 ## 2026-10-05 当前容量合同与续验范围
 
 维护者在本轮明确确认：ESP32-C3 与 ESP32-D0WD-V3 均保持 Wi-Fi、MQTT、FRP、OTA 和 Wasm 五能力并存，普通内部 8BIT 堆的历史最低门槛统一改为 **16,384 B（16 KiB）**。普通堆最大连续块至少 **24,576 B**、各任务栈余量至少 **1,024 B**，并按实际能力域的后续最大申请验证连续空间；严格 TLS／签名、标准 Wasm、队列、包槽、期限及既有功能预算保持。
