@@ -1,5 +1,33 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-05 FRP 控制请求已到与工作握手续验
+
+本轮继续绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 与前轮相同的精确组件组合，在已冻结的 native IO 候选上新增仓外控制流计数。FRP 通过独立本地组件覆盖显式装配，实际编译路径、原源码可逆差异和其他依赖字段单独核对；SDK 的 31,468 个 tracked 输入与既有父档逐项相同。24 个原子数值字段占 96 B，记录原 TLS read、Yamux feed／control read、AEAD 认证、wire 回调和 ReqWorkConn 准入结果。计数按 boot／组件累计，phase 和 error 则为最近值；各字段顺序采样，不构成同一 session 的事务快照；没有新增任务、锁对象、动态缓冲、socket 或时钟调用。另补齐 MQTT 两处原 free-slot return 失败漏计，复用已有 48 B 计数区，原释放／失败行为保持，不增加首故障时间或顺序记录。
+
+完整固定 SDK 构建和官方 RSA v2 验签通过。A/C 为 `0.2.0-c3-frp-control-a/c`，signed app 各 1,183,744 B，摘要分别为 `ecd4fcf935f59d4bdd6be3165edbbb08c2b1bc1954945d7146a1ff8a351fb62e`／`ab29c69ad747a6a593dced0db542e3eb35b68c302ab8c2c022f31da50bea2967`。相对前轮 native IO 的实际 ELF：bss／普通堆起点各 +96 B、Flash text +896 B、rodata +432 B；新增输出函数的 C3 局部栈帧 208 B，计数 helper 局部帧 32 B，snapshot 无新增局部帧。原成本脚本误查不存在的 helper 符号所得空片段保留，后继按实际 `lab_control_add.part.0.lto_priv.0` 符号独立核对 A/C 的 32 B 帧并保存反汇编；局部帧不证明完整 callee 栈。前轮 listener 112 B 和 work 输出帧 592 B 仍在，全部观察成本不加回。初版真实 FRP host 10/10 通过；最终两处计数修订的受影响固定测试重新通过，包括 ASan／UBSan、并发计数和实际 ReqWorkConn 回调的正例／删 hook 反例；MQTT 两个真实注册回调的漏计反例由红转绿，不能据此声称已复现 SDK API 锁下的死锁。
+
+**新鲜 C3 轮 driver exit 1，仍未进入产品／突发／OTA。** USB 首配、严格 TLS MQTT 就绪及认证／配置写门通过；首 FRP 查询在原三秒上游响应头期限失败，实测 **3,002.893 ms**。59 个同 boot 完整 native 周期（4 个 fresh、55 个 CLI）严格解析通过：末段已观察 TLS 接收 713 B、Yamux 消费 713 B、control read 501 B、AEAD 完整认证 8 条、wire 控制帧 4 条，ReqWorkConn seen／admitted 均为 **2**，各层错误计数为 0。admitted 仅表示已调用原 work_request，不能代替工作槽或本地 socket 准入。已发布 work 为 requests 2、pending 1、waiting 1、active／cleaning 0、本地双向字节 0；listener accept 调用 561 次、实际接入 0，poll 最大间隙 760 ms。不能用 `713−501` 推导工作帧字节，也不把 poll 间隙当 UART 阻塞时间。
+
+同轮官方 FRPS 精确登录／用户连接／工作连接注册／get／join 各一次；后三阶段在用户连接后约 72 ms。官方源码的 join 分支位于 StartWorkConn 成功 WriteMsg 之后，固定 Yamux 写入等待底层 TLS Write 返回；这证明本轮服务端成功写出握手，不能证明设备收取／解析了 type 8。设备 waiting 同时包含 SENDING／WAITING，当前公开快照无法区分工作帧读取、完整握手和本地 connect；原因尚未证明。下一步只补工作流可读／读取结果、wire reader 进度、type8 与本地连接边界，保持原三秒／八秒查询、设备两秒 HTTP 和十秒部分工作帧期限，不加重试或缓冲，不改判前轮 requests 0。
+
+严格 parser 的 67 项边界测试通过。原资源消费者明确拒绝新增的 177 条 native 行，失败原样保存；只有完整 native 校验通过后，才派生移除这些已验证行的资源视图，原 UART 不改写。原消费者得到 59 个内存样本和 59 个完整任务快照，损坏／缺失均为 0；低负载历史堆／连续块／控制栈／已观察任务栈最低 **143,476／114,688／2,864／1,196 B**，仅属该前置窗口。
+
+结束时擦除实验数据，只恢复当轮原 bootloader／partition／factory；Root 独立核对与两份一致的新鲜 4 MiB 全片及恢复读回逐字节相同。Wi-Fi down、串口释放、cleanup errors 空；UART **186,417 B** 全记录／消费，pending／overflow 0、最高 pending 29,555／1,048,576 B，reader error／join timeout 均无。运行中绑定的 36 个所属子进程和 4 个 listener 均释放，不宣称全局无进程；无 eFuse 或生产服务修改。
+
+软件 4,567 payload 归档 `6b8e4236fb327c2e1702f92e3c7f4f4b997885521488e3d3ddeaccb41879ed27`、索引 `7dd268419e3dd5bd0f9147cc58b1468d556456b894440c317178db3a6e91d741`，实际执行归档脚本为 `ca887c57`。执行后添加 static review 的 `67bc2b3b` 后版未执行到该目录，另以 9 成员补件保存（归档 `3b7af9ace601d9cac743c3325d4ca581018f8121b6f538fb602186d087f15d83`）；原档不覆盖，原归档内脚本与索引逐项相同。现场 161 payload 归档 `c3421544fb9dc0a6e95e5e46d7de9ad42b0bdd4cbadbf57211679085635c1798`、索引 `052bb83b0663800bcce81186de1296e0a0b2d837d43bce19fdb42aa93301b838`；逐成员 SHA／长度／模式／集合和源前后不变核对通过，受限私存于 Tool 已有忽略目录 `c3-validation-20261005/native_frp_control_software`／`native_frp_control_device_timeout`。双目标历史堆门继续为 16,384 B；真正最大事件／OTA 的 3,396 B 堆和准入后 3,840 B 连续块失败保持，`whole_capacity_passed=false`。
+
+### 宿主发送观察的有限证据
+
+官方 FRPS 的 ReqWorkConn 发送没有逐次日志，Send 队列满时阻塞，后台 WriteMsg 错误被原实现忽略；原三秒网关可以在服务端十秒等待告警前结束，因此缺日志不能证明未投递。另冻结只改 dispatcher 数值日志的私有 host 候选，保持原 Send／WriteMsg 返回、队列和期限。520 份官方 0.71.0 module 源逐项 reverse 相同；候选使用 Go 1.26.1 与上游 `frps,noweb` 标签，原官方 binary 使用 Go 1.25.12，不能称官方 binary 已被观测。真实 TLS／HMAC host 链三次查询及错误 key 401 通过，type7 Send／Write 各有五次成功返回；该候选没有用于本轮 C3，也不覆盖直接写 StartWorkConn 的工作连接。
+
+宿主档共 1,150 成员，归档 `a0a2e9bd674cf881c5afcb064d5672071a5ff4c52a175729590686de590430f3`、索引 `9a105d9fbda8ede201aae4e78a5f5518653fd77b6a978280937e1d1aa6c7165a`，逐成员及源前后核对通过，私存 `c3-validation-20261005/frps_dispatch_observer_host`。原 receipt 字节保持：独立回绑只覆盖 management／gateway／local 三端口，remote proxy 第四端口没有独立检查；FRPS 同 Popen owner 的 wait／poll 停止有据，但未单存 wait exit code。初次 ANSI 解析失败仅保留实际现存日志／未完成 receipt，缺失的旧 parser 源码和 traceback 不补造，不回写旧失败为成功。
+
+### 最大事件阶段的 MQTT 后续边界
+
+原真正峰值轮在最大事件突发窗口先有设备主动 DISCONNECT，约六秒后重连；`TLS -0x004C` 在约三十秒后，不能归因为首断。当前 SDK 先同步调用 publish callback，再写 PUBACK；回调为 void，runtime 的 OOM／满槽退出后 core 仍可 ACK。产品层 OOM／FULL 为零不能排除 MQTT owner 的原生拒绝，控制器至 Broker 的 PUBACK 也不证明设备准入。
+
+原 MQTT task 在递归 API 锁内运行 callback，control owner 的 stop／提交路径又需要该锁。直接在 callback 等 free slot 有互相等待路径；仅凭源码不能称实测死锁，已有漏计补全也不证明首故障顺序。后续若研究背压，必须在下一 transport read 前、无该 API 锁持有时验证 stop／destroy 可取消及既有在途保留；目前没有实施生产背压或新增缓冲／重试。有限 timer 压力 guest 和完整峰值、native／分域最大申请、Flash 争用／寿命、百次实体生命周期、ESP32、真实断电、双板 72 小时与正式交付仍开放。
+
 ## 2026-10-05 原生 FRP 请求与本地监听续验
 
 本轮绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020`、FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 Container `7f25647a5380953dfd40efcef281014660ff9530`，在前轮静默候选上只加仓外 listener 计数和既有 FRP status 数值导出。监听器原 socket 调用、处理条件及两秒期限不变；work 每周期最多读取一次原已发布快照，复用原锁，没有新任务、锁对象或动态缓冲。两类观察块删除后逐字节恢复原静默源；实际组件装配路径和官方生成 manifest hash 单独核对，其他依赖、SDK、配置和预算保持。当前 31,468 个 SDK tracked 输入逐项 SHA／长度／权限／链接与既有全量父档一致，不重复包装 SDK，不把文档提交当作固件来源。

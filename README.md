@@ -2,6 +2,8 @@
 
 当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
 
+2026-10-05 控制流续验确认两条 FRP 工作请求已到达并调用 work_request，同轮官方 FRPS 已注册／get／join；首响应头仍在 3,002.893 ms 超时，设备工作流未建立本地接入。新鲜双全片与原三码精确恢复、实验数据清除及所属资源释放通过；观察新增 96 B 成本不加回，全档已私存。继续工作流读取／type8／local connect 定位，真正最大事件／OTA 容量失败保持，见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-frp-控制请求已到与工作握手续验)。
+
 2026-10-05 原生 FRP 诊断新鲜轮：原期限下首响应头再次超时（3,002.381 ms）；69 个严格周期证明监听器 607 次 accept 未接入，已发布工作请求计数为零，同轮 FRPS 也没有工作连接登记／join。原三码恢复、数据擦除及所属资源释放通过，新增 112 B 观察成本不加回；继续控制流定位，完整容量仍失败，见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-原生-frp-请求与本地监听续验)。
 
 2026-10-05 后继满队列观察与 OTA 内最大事件突发软件已完成，实际观察成本 32 B 不加回。三轮新鲜 C3 在 FRP 认证首查失败，第三轮定位网关响应头等待 3,001 ms；尚未到产品安装或峰值阶段。三轮原三码恢复／数据擦除／Wi-Fi down／串口释放通过、失败全档已私存；继续原期限下设备监听器 I/O 定位，详见[队列续验检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#产品队列峰值观察输入与-frp-首查前失败)。
