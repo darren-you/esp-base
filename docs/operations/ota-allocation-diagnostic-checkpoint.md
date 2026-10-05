@@ -1,5 +1,17 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-05 FRP 响应头宿主定位与真实主机协议链
+
+本轮沿用前节静默 A/C 的精确字节、持续 UART reader 和原设备调用／恢复体，仅在宿主 HTTPS 转发夹具添加阶段记录并开启官方 FRPS debug。真实 TLS 正例的字节／认证头保持、延迟上游负例仍在原三秒响应头期限失败，宿主阶段观察先行通过；固件构建源仍为 Base `b677868cc6a772351c22019818f02cbf8bcda020`，不能用后来的文档提交改写来源。
+
+**新鲜 C3 轮 driver exit 1，失败定位到等待上游 HTTP 响应头 3,002.625 ms。** 请求已写入本地 FRPS；官方 FRPS 同轮日志确认已登录、登记代理、收到心跳，用户连接后约 49 ms 登记工作连接并 join。没有观察到 HTTP 响应头或正文，尚缺设备监听器 accept／recv／send 和工作流字节／错误计数，原因未证明。MQTT 认证前置通过，产品准入仍为零，未安装产品、触发突发或执行 OTA。60 条严格消息 owner 观察峰值为 1 个／2,154 B，所列错误计数为零；这些低负载读数不改变既有峰值容量失败。
+
+本轮重新枚举 C3、核对安全状态／4 MiB，以两份一致的新鲜全片及原 bootloader／partition／factory 独读建立恢复基线。实验 A 完整写入／读回，结束擦除实验数据；原三码由独立读回逐字节确认，Wi-Fi down、串口租约与所属夹具释放通过，cleanup errors 为空。首次启动因其他任务占用串口在打开前拒绝，等待该轮恢复释放后才执行；没有并行设备写入、eFuse 或生产配置修改。
+
+另以实际固定 FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、Base 监听器／network_auth、Mbed TLS 4.1.0、PSA HMAC、官方 FRPS 0.71.0 和 Tool 原 CLI 完成真实主机协议链。三次认证查询分别约 867.692／23.648／24.303 ms，同期错误管理 key 返回 401；ASan／UBSan、native exit 0、停止／fd 与夹具释放通过。状态业务回调及 Flash 明确为 host fixture，固定测试身份不代表设备；直接 IPv4、单 owner loop 不覆盖 SDK DNS、FreeRTOS、实板时序或容量。初次 CMake 装配错误和修正后的构建日志保留。
+
+完整现场、实际源码／宿主测试／协议链共 213 payload 已受限归档到 Tool 既有 Git 忽略目录 `provisioning/receipts/private/c3-validation-20261005/frp_header_host_observation/`，逐项 SHA／长度／模式核对通过，目录 0700／文件 0600。归档 SHA-256 `17b243a34653cfcb58a51e310b034a544fd572b5ebfb451558e57f7b2aa2ede4`，索引 `00a4d76fdc0b226a03fe8c9be42ea9a2cd460c28d7b05b9d905c47b415de6f37`。维护者已授权向“完成 ESP 容量与双目标验证”共享资料并协调 C3；后续设备 I/O 诊断由该容量目标继续，本 Tool 目标暂不并行刷写。原三秒／八秒期限、16／24 KiB 门及永久迁入前置保持，`whole_capacity_passed=false`。
+
 ## 2026-10-05 MQTT 消息所有权诊断前置失败
 
 为归因此前最大事件／OTA 的堆缺口，仓外诊断取公开 Base `b677868cc6a772351c22019818f02cbf8bcda020`、原 Container 与 MQTT `6443b71db761f4d667503f14108687bad5e6b5ee`。MQTT 实际编译输入显式指向独立实验组件，只添加 48 B 原子消息 owner／错误计数；释放开始前撤销计数，不能用它证明 native free 完成。队列、载荷、分配、优先级、协议与期限保持。另通过私有 CMake 令 SDK 既有两类动态 TLS 日志可见，SDK 源码未改。最终实际 ELF 相对前轮：data +48 B、bss +8 B、Flash text +8,832 B、rodata +2,056 B、普通堆起点 +48 B，观察成本不加回；此前 owner-only 成本记录不能替代此最终日志配置。
