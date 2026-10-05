@@ -1,5 +1,29 @@
 # C3 OTA 分配诊断检查点
 
+## 2026-10-06 工作帧正文接收检查点
+
+后继仓外实验仍绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 与前轮精确组件组合，在冻结 CONTROL 候选上仅新增 WORK_RX 30 个原子数值字段，分别记录原 work 的发送／等待、可读／读取、wire reader、共享 JSON、type8 和本地连接结果。原工作对象 2,192 B／set 104 B 不变；185 个 FRP 原文件及 Base 三处接线 marker 反向逐字节恢复前轮，新头单独可逆。数值 stream_id 保留为原临时协议编号，结果／gauge 为最近值，八个计数为 boot／组件累计；各字段独立读取，不构成事务快照或全局唯一 work 序号。原任务、锁对象、动态缓冲、socket／clock 调用、预算及全部期限保持。
+
+初版真实 host 六项正负矩阵所用 FRP 的 186 个成员字节／长度与最终源相同；Root 新头仅收紧为 0600，原 scope 为 0644 且父目录私有，最后 Base 接线 marker 位置修订未重跑该矩阵。最终固定红绿、真实 U32_MAX advertised 长度的 reader 容量错误、ASan／UBSan／TSan 计数与 errno／饱和边界通过。完整固定 SDK A/C 构建和官方 RSA v2 验签通过，版本 `0.2.0-c3-frp-work-rx-a/c`，signed app 各 1,183,744 B，摘要 `9c4845fe34e3337c86c31efd3ac8004ae456565b85cd467ca52ab408dd8a3d68`／`c252751b69831a237e6fb332b615444e66a312d9a1f4c91238b23aa717b134da`。31,468 个 SDK tracked 输入与父档 SHA／长度／权限／链接及前后集合一致；实际编译路径、配置仅版本差异、依赖及 provider 字段已独核。
+
+相对 native CONTROL 的最终 A/C ELF：观察声明 120 B，实际 bss／普通堆起点 **+128 B**，Flash text +820 B、rodata +584 B；输出局部帧 272 B、CAS helper 32 B、snapshot／gauge 0 B。局部帧不证明完整 callee 栈，原子内部 IRQ／临界区成本不宣称为零，全部观察成本不加回。完整软件 4,518 payload／4,519 tar 成员归档 `71b43fea8cfce130604a7399d9ec7ff92ece493d54f333d421e04bec5a5fb272`、索引 `0882df9afd42b11cf96f7a9170c04b820309cc47d4304576422cf1bce89be43c`，逐项与源前后不变核对通过，SDK 只精确引用父档，私存 `c3-validation-20261005/native_frp_work_rx_software`。
+
+首次启动被摘要守卫拒绝：Root 在旧夹具预检后完成 SDK／历史事实标签修正，使 manifest 摘要过期。拒绝位于 USB 枚举、串口租约和 driver 创建之前；只有一个所属进程、无 listener，已释放，没有设备动作。实际现存材料和分析说明保留，缺原 stderr 文件不补造。随后从完整 57 项静态合同创建全新目录，仅更换授权 round_id；在所有 metadata 定稿后重新预检，三夹具构造／ready／close 通过，启动前再核全摘要相等。原 driver／recovery／fixture／controller 与预算字节保持。
+
+**2026-10-05 夜间新鲜 C3 轮 driver exit 1，仍未进入产品／突发／OTA。** 原唯一 USB／ROM 身份、安全状态和 4 MiB 核对后，本轮两份新鲜全片一致，原三码独读匹配，实验全片写入／读回通过；USB、严格 TLS MQTT 及认证／配置写门通过。首外侧 FRP 查询等待上游响应头 **3,001.984 ms** 超时，原三秒／八秒与设备期限保持。
+
+63 个同 boot 完整 IO／WORK／CONTROL／WORK_RX 周期严格解析通过，102 项 parser 边界测试与最终头／生成器摘要绑定。控制层 TLS read／Yamux consumed／control read 仍为 713／713／501 B，两个 ReqWorkConn 均已调用原 work_request，各层错误为 0。同轮官方 FRPS 登录、用户连接、工作注册、get、join 精确各一次。工作流累计实际 read **8 B**，reader header_used 8、payload_expected **116 B**、payload_used 0、partial_header 1，共享 4 KiB JSON 一次分配成功；随后读取返回 WOULD_BLOCK。8 B wire 头只给出 frame kind 和声明长度；type8 需完整 payload 中的 `[0,8]` 前缀，此时尚不能识别为 type8。type8 seen／started、本地 create／step 均 0；work waiting 1／pending 1／active 0，listener accept 580 次／接入 0，最大 poll 间隙 768 ms。首次已收头采样 uptime 61,663 ms，末采样 62,664 ms，只约一秒观察跨度，不声称已等待完整十秒部分帧期限。源端成功写出不证明正文交付；不能用控制层字节相减代替工作 read，也不能把未发生的 JSON／本地连接指认为根因。
+
+结束时擦实验数据、仅恢复当轮原 bootloader／partition／factory；Root 与两新鲜全片及独立恢复读回逐字节核同，Wi-Fi down、串口释放、cleanup errors 空。UART **230,783 B** 全记录／消费，pending／overflow 0、最高 pending 41,283／1,048,576 B，reader error／join timeout 均无；实际绑定的 36 个所属子进程和 4 个 listener 全释放。
+
+原资源消费者明确拒绝 252 条新增 native 行，失败原样保存；四类 native 原行完整独立校验后，仅派生移除这些行的资源视图，原 UART 不变。63 个内存样本和 63 个任务快照完整，损坏／缺失 0；低负载历史堆／连续块／控制栈／已观察任务栈最低 **141,992／114,688／2,800／1,196 B**，只限本前置窗口。完整成功恢复现场与先期无设备拒绝材料 248 payload 归档 `4691316f901398b5ea428bf3bbf7d1d96120092836601c3592d7c55fd0dd3aa7`、索引 `dcc9f6ce43bc4c54bcddb826239fcb1d7ad32a37933fb0bc23c899a6b199519c`，源集合／SHA／长度／模式及全 tar 成员核对通过，私存 `c3-validation-20261005/native_frp_work_rx_device_timeout`。
+
+下一边界是正文进入 TLS／Yamux 工作流的进展。源码允许 native TLS 在 pending TX 时直接使 read 返回 WOULD_BLOCK；这仍缺本轮 pending／socket／SDK 返回事实，只作为待证路径，不称根因、不修改协议或重试。双目标历史堆门 16,384 B、largest 24,576 B、任务栈 1,024 B 和五能力并存保持；真正最大事件／OTA 的历史堆 3,396 B、准入连续块 3,840 B 失败及 `whole_capacity_passed=false` 保持，完整峰值／native、Flash 争用／寿命、实体百次、ESP32、断电／双板 72 小时及正式交付仍开放。
+
+### 已排除的两个简单回收假设
+
+真正峰值 A/C 的实际 SDK 编译为 TLS 1.2，dynamic RX 对普通正长度 wire body R 的 allocator 请求为 R+341 B，消费完回 24 B idle；它们不等于同时净占用，普通小记录并非每次固定申请 16 KiB。源码的 TLS 1.3 CCS 最大 RX 特判未进入该实际编译，不能用于解释本轮；未消费 record 后缀仍有消费者，当前未发现可直接释放 12,988 B 缺口的重复 owner。另一单点核真正峰值的最大第一方固定普通 DRAM 对象 `s_event` 为 4,388 B，承接 MQTT poll、验证和事件复制，生命周期有真实消费者；没有证明维持现合同的删除或无损表示收益。两点 actual saving 均为 0，不作为已完成优化。
+
 ## 2026-10-05 FRP 控制请求已到与工作握手续验
 
 本轮继续绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 与前轮相同的精确组件组合，在已冻结的 native IO 候选上新增仓外控制流计数。FRP 通过独立本地组件覆盖显式装配，实际编译路径、原源码可逆差异和其他依赖字段单独核对；SDK 的 31,468 个 tracked 输入与既有父档逐项相同。24 个原子数值字段占 96 B，记录原 TLS read、Yamux feed／control read、AEAD 认证、wire 回调和 ReqWorkConn 准入结果。计数按 boot／组件累计，phase 和 error 则为最近值；各字段顺序采样，不构成同一 session 的事务快照；没有新增任务、锁对象、动态缓冲、socket 或时钟调用。另补齐 MQTT 两处原 free-slot return 失败漏计，复用已有 48 B 计数区，原释放／失败行为保持，不增加首故障时间或顺序记录。
