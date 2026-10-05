@@ -1,5 +1,7 @@
 # ESP Base
 
+当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
+
 定时回调的负业务返回现在沿用外部事件的试运行失败策略：饱和累计失败并撤销旧代表事件，runtime 继续运行；新代表事件仍按原规则重开完整健康窗口。真实签名 `-7`／`0`／`3` guest 与修复前明确行为红、宿主回归及设备边界见[定时业务健康检查点](docs/operations/timer-business-health-checkpoint.md)。
 
 签名包的宿主单次调用期限已接入 Base 产品运行策略：平台 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 同时约束包准入和运行实例，Container 在重新验签后取平台与清单的较小值。每次导入独立计时，超期失败后清退并显式回收；整个入口期限和停止只影响本次启动的策略保持。双目标软件验证及设备边界见[开发检查点](docs/operations/development-checkpoint.md)。

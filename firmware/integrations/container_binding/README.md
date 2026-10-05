@@ -1,5 +1,7 @@
 # Base 与 Container 产品装配
 
+当前精确消费 Container `7f25647a` 的映射租约只读修正：同一任务复验保留包时沿当前 map 租约读取，正确 unmap 后单次释放；其它任务与写入保持原获取规则。双目标软件验证通过，新鲜 C3 联合复验与完整实板范围见[当前检查点](../../../docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-新组合联合续验与映射只读修正)。
+
 普通 `product.install`／`product.upgrade` 的包写入与联合 `ota.start(WRITE)` 共用 Container 的引用身份门，公开启动及 `REUSE` 也使用同一门：完整整包 SHA-256 是制品身份，同产品完整版本的不同 SHA（包括随机 PSS 重签）拒绝。只比较当前操作仍真实引用的当前／回退包；REUSE 退役的旧 inactive 包不再保护。引用完整签名、整包摘要和 ABI/schema 按其自身持久绑定复验，不把当前运行固件的授权套给旧回退包；同 SHA 先匹配大小／ABI/schema，再复用候选完整验签。普通 prepare 拒绝不停止已确认 guest；WRITE 的原显式停止、清退及恢复顺序保持。无历史版本库或新持久字段，实板时延与容量仍须独立验证。
 
 Base 将平台 `CONFIG_ESP_BASE_CONTAINER_MAX_HOST_CALL_MS` 同时写入签名包准入和 `econtainer_runtime_limits_t.max_host_call_timeout_ms`。Container 重新验签后取签名需求与运行授权的较小值，四个宿主导入逐次计时；宿主超期按普通产品失败进入阻断和回收，不能当作请求取消或成功。入口总期限保持独立，未新增持久停止状态。

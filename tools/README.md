@@ -17,6 +17,7 @@ flowchart LR
     checker <-->|"严格 TLS / 新消息往返"| broker["本机隔离 Broker"]
     broker <-->|"in / extra / out / status"| lab["MQTT 集成实验应用"]
     lab -->|"串口原始资源日志"| report["mqtt_resource_report.py：逐轮完整性、计数与栈"]
+    capacity_uart["实验 UART：周期堆 / 任务快照 / worker 退出"] --> capacity["capacity_observation.py：16 KiB / 连续块 / 栈观察"]
     sdk_lock["../sdk-lock.json：IDF / lwIP 提交"] --> sdk_check["check_sdk.py：源码核对"]
     idf["独立 ESP-IDF checkout"] --> sdk_check
     sdk_check --> build["firmware：C3 / ESP32 独立目标构建"]
@@ -28,6 +29,17 @@ flowchart LR
     frp_probe --> frp_qemu["仓外签名 ESP32 QEMU：RUNNING guest / FRP Flash reader"]
     at_backup["两份 ESP32 旧 AT 完整 Flash 备份"] --> at_archive["archive_esp32_at.py：旧 NVS / at_customize 无损归档"]
 ```
+
+## 五能力资源观察
+
+`capacity_observation.py` 读取实验镜像已有的 `ESP_BASE_LAB_MEMORY` 与任务快照／退出行。按维护者 2026-10-05 最新裁决，C3 与 ESP32 的普通内部 8BIT 历史最低堆门统一为 16,384 B；连续块至少 24,576 B，各任务栈余量至少 1,024 B。两个 target 都必须显式选择；无记录、格式损坏、重复任务或不完整快照不会得到对应观察资格，原生任务名中的空格按真实格式解析。
+
+```bash
+python3 tools/capacity_observation.py --target esp32c3 --uart-log /absolute/private/cli_serial.log --uart-log /absolute/private/ota_boot_serial.log
+python3 -m unittest discover -s tools -p 'test_capacity_observation.py' -v
+```
+
+默认终端输出块状摘要，`--json` 输出无装饰的纯 JSON。输出只评价实际保留的周期采样和 worker 退出观察，分别返回堆、连续块和栈的观察门结果；计数、输入摘要及不完整／损坏记录均保留。读数依序取得，不代表原子快照、所有瞬时峰值或完整 native 生命周期；观察成本不加回。旧日志重放不修改历史收据或旧轮判定，最终验收仍要求本次冻结源码的合法满负载、物理恢复、Flash 争用／寿命与双板结果。
 
 ## 真实签名 guest 与 NVS 宿主测试
 

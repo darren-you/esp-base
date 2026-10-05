@@ -1,5 +1,7 @@
 # ESP Base 固件
 
+当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](../docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
+
 2026-10-03 仓外TLS owner同池共享观察器在固定1800 B内保留本轮20条完整新低，drop0/errors0，原严格parser与实际ELF后置门通过；C3 A/C完整SDK／验签与34903项冷审通过，原驱动实体退出0。147/147下载网络ready、458任务快照完整；联合功能、停止启动／重启自动运行、十二项业务、A/C与原三码恢复通过。history heap19628 B仍未达49152 B，IRAM成本使堆起点较15槽再后移1024 B，不加回、实际节省0。完整现场独核通过；公开固件、依赖与预算保持，详见[最新分配诊断检查点](../docs/operations/ota-allocation-diagnostic-checkpoint.md)。
 
 公开 `product.stop`／`product.start` 沿同一 USB／MQTT 控制入口和唯一产品 worker，仅在本 boot 的请求守卫中保存原 ID 结果，不改变已确认包绑定或持久账本。停止需真实回收后才成功，启动重验签并执行 init；异常实例保持阻断，重启后自动运行当前固件已确认的产品，不持久化停止状态。协议与原 ID 查询边界见[设备协议](../docs/design/device-protocol.md#产品停止与新启动)，真实宿主验证见[测试说明](tests/README.md)。C3 已完成有限公开生命周期及恢复切片，容量、全部 native 生命周期、满合法峰值、ESP32 与 Tool 正式交付继续开放，范围以[最新实体检查点](../docs/operations/ota-allocation-diagnostic-checkpoint.md)为准。
