@@ -28,14 +28,6 @@ else()
     message(FATAL_ERROR "Unknown ESP_BASE_APP")
 endif()
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/apps/${ESP_BASE_APP}/main")
-if(ESP_BASE_APP STREQUAL "esp_base")
-    set(WAMR_BUILD_INSTRUCTION_METERING 1 CACHE BOOL "Bound guest instructions" FORCE)
-    set(WAMR_BUILD_CLASSIC_WALL_CLOCK_LIMIT 1 CACHE BOOL "Bound guest entry time" FORCE)
-    set(WAMR_BUILD_BULK_MEMORY 0 CACHE BOOL "Avoid implicit constructor invocation" FORCE)
-    set(WAMR_BUILD_SHARED_MEMORY 0 CACHE BOOL "Disallow guest shared memory" FORCE)
-    set(WAMR_BUILD_SHRUNK_MEMORY 0 CACHE BOOL "Preserve standard Wasm page sizes" FORCE)
-    list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/integrations/container_binding")
-endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 if(IDF_TARGET STREQUAL "esp32")
     idf_build_set_property(DEPENDENCIES_LOCK "${CMAKE_CURRENT_LIST_DIR}/dependencies.lock.esp32")
@@ -70,7 +62,7 @@ if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     message(FATAL_ERROR "ESP Base C3 requires six static Wi-Fi RX buffers, BA window six and both Wi-Fi IRAM optimizations disabled")
 endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND CONFIG_ESP_MAIN_TASK_STACK_SIZE LESS 6144)
-    message(FATAL_ERROR "ESP Base requires a 6144-byte main task stack for signed firmware and Container startup/recovery")
+    message(FATAL_ERROR "ESP Base requires a 6144-byte main task stack for signed firmware startup/recovery")
 endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
@@ -80,22 +72,6 @@ if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_LABEL STREQUAL "frp_scratch" OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET EQUAL 0x3e5000))
     message(FATAL_ERROR "ESP Base C3 requires the 4 MiB product partition and dedicated FRP scratch")
-endif()
-if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
-    NOT CONFIG_ESP_BASE_CONTAINER_PRODUCT_ID STREQUAL "" AND
-    (NOT CONFIG_ESP_BASE_CONTAINER_PACKAGE_LABEL STREQUAL "product_pkgs" OR
-    NOT CONFIG_ESP_BASE_CONTAINER_PACKAGE_OFFSET EQUAL 0x280000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_PACKAGE_SIZE EQUAL 0x165000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_SLOT_0_OFFSET EQUAL 0x280000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_SLOT_0_SIZE EQUAL 0x77000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_SLOT_1_OFFSET EQUAL 0x2f7000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_SLOT_1_SIZE EQUAL 0x77000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_SLOT_2_OFFSET EQUAL 0x36e000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_SLOT_2_SIZE EQUAL 0x77000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_NVS_LABEL STREQUAL "base_store" OR
-    NOT CONFIG_ESP_BASE_CONTAINER_NVS_OFFSET EQUAL 0x3f5000 OR
-    NOT CONFIG_ESP_BASE_CONTAINER_NVS_SIZE EQUAL 0xb000))
-    message(FATAL_ERROR "ESP Base C3 product policy must match the three 0x77000 package slots and base_store")
 endif()
 if(IDF_TARGET STREQUAL "esp32" AND (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
     NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/esp32-partition-table.csv" OR
@@ -144,22 +120,3 @@ if(IDF_TARGET STREQUAL "esp32")
     endif()
 endif()
 
-# Keep the C3 product image within its signed A/B slot without changing the
-# guest, network or verification feature set. ESP-IDF disables project-wide
-# LTO because SDK IRAM/DRAM section types conflict. WAMR, MQTT and FRP cross
-# the signed image size threshold with the fixed SDK and scratch candidate.
-if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
-    CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT AND
-    NOT CONFIG_ESP_BASE_CONTAINER_PRODUCT_ID STREQUAL "")
-    idf_component_get_property(esp_base_wamr_lib wasm-micro-runtime COMPONENT_LIB)
-    idf_component_get_property(esp_base_mqtt_lib mqtt COMPONENT_LIB)
-    idf_component_get_property(esp_base_frp_lib esp_frp COMPONENT_LIB)
-    idf_component_get_property(esp_base_container_binding_lib container_binding COMPONENT_LIB)
-    idf_component_get_property(esp_base_container_lib esp_container COMPONENT_LIB)
-    target_compile_options(${esp_base_wamr_lib} PRIVATE -flto)
-    target_compile_options(${esp_base_mqtt_lib} PRIVATE -flto)
-    target_compile_options(${esp_base_frp_lib} PRIVATE -flto)
-    target_compile_options(${esp_base_container_binding_lib} PRIVATE -flto)
-    target_compile_options(${esp_base_container_lib} PRIVATE -flto)
-    target_link_options(${PROJECT_NAME}.elf PRIVATE -flto)
-endif()

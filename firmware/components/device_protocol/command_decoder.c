@@ -182,15 +182,16 @@ const char *ebase_parse_command(const char *json, size_t length,
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (end != json + length || !cJSON_IsObject(root) || !cJSON_IsNumber(version) || version->valuedouble != 1 || !cJSON_IsString(command)) goto done;
     bool status = !strcmp(command->valuestring, "status");
-    bool product_status = !strcmp(command->valuestring, "product.status");
+    bool firmware_status = !strcmp(command->valuestring, "firmware.status");
+    bool business_status = !strcmp(command->valuestring, "business.status");
     bool ota_result = !strcmp(command->valuestring, "ota.result");
-    bool product_result = !strcmp(command->valuestring, "product.result");
-    const bool query = ota_result || product_result;
-    if (!exact_keys(root, (status || product_status) ? status_keys : query ? query_keys : write_keys,
-                    (status || product_status) ? 3 : query ? 4 : 7)) goto done;
+    const bool query = ota_result;
+    if (!exact_keys(root, (status || firmware_status || business_status) ? status_keys : query ? query_keys : write_keys,
+                    (status || firmware_status || business_status) ? 3 : query ? 4 : 7)) goto done;
     if (!copy_id(root, "request_id", out->request.request_id)) goto done;
     if (status) { out->kind = EBASE_STATUS; error = NULL; goto done; }
-    if (product_status) { out->kind = EBASE_PRODUCT_STATUS; error = NULL; goto done; }
+    if (firmware_status) { out->kind = EBASE_FIRMWARE_STATUS; error = NULL; goto done; }
+    if (business_status) { out->kind = EBASE_BUSINESS_STATUS; error = NULL; goto done; }
     if (query) {
         if (!allocate_payload(out, ESP_BASE_OTA_OPERATION_ID_BYTES, allocate)) {
             error = "resource_failure"; goto done;
@@ -198,161 +199,26 @@ const char *ebase_parse_command(const char *json, size_t length,
         const char *const keys[] = {"operation_id"};
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         if (!exact_keys(parameters, keys, 1) || !copy_id(parameters, "operation_id", out->operation_id)) goto done;
-        out->kind = ota_result ? EBASE_OTA_RESULT : EBASE_PRODUCT_RESULT;
+        out->kind = EBASE_OTA_RESULT;
         error = NULL;
         goto done;
     }
     if (!write_identity(root, &out->request)) goto done;
-    if (!strcmp(command->valuestring, "product.stop") ||
-        !strcmp(command->valuestring, "product.start")) {
-        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
-        const char *const keys[] = {"expected_container_sequence", "package_sha256"};
-        if (!allocate_payload(out, sizeof *out->product_run, allocate)) {
-            error = "resource_failure"; goto done;
-        }
-        if (!exact_keys(parameters, keys, 2) ||
-            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "expected_container_sequence"),
-                          UINT32_MAX, &out->product_run->expected_container_sequence) ||
-            !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
-                      out->product_run->package_sha256)) goto done;
-        out->kind = !strcmp(command->valuestring, "product.stop") ?
-            EBASE_PRODUCT_STOP_COMMAND : EBASE_PRODUCT_START_COMMAND;
-        out->product_run->running = out->kind == EBASE_PRODUCT_START_COMMAND;
-        error = NULL;
-        goto done;
-    }
-    const bool product_install = !strcmp(command->valuestring, "product.install");
-    const bool product_upgrade = !strcmp(command->valuestring, "product.upgrade");
-    if (product_install || product_upgrade) {
-        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
-        const char *const keys[] = {"operation_id", "operation_sequence",
-            "expected_container_sequence", "previous_package_sha256",
-            "package_url", "package_sha256", "trial_event_sha256", "package_size_bytes",
-            "guest_abi_version", "data_schema_version"};
-        if (!allocate_payload(out, sizeof *out->product_package, allocate)) {
-            error = "resource_failure"; goto done;
-        }
-        ebase_product_package_request_t *request = out->product_package;
-        if (!exact_keys(parameters, keys, 10) ||
-            !copy_id(parameters, "operation_id", request->operation_id) ||
-            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "operation_sequence"),
-                          UINT32_MAX, &request->operation_sequence) ||
-            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "expected_container_sequence"),
-                          UINT32_MAX - 5U, &request->expected_container_sequence) ||
-            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "package_size_bytes"),
-                          INT_MAX, &request->package_size_bytes) ||
-            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "guest_abi_version"),
-                          UINT32_MAX, &request->guest_abi_version) ||
-            !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "data_schema_version"),
-                          UINT32_MAX, &request->data_schema_version) ||
-            !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
-                      request->package_sha256) ||
-            !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "trial_event_sha256"),
-                      request->trial_event_sha256)) goto done;
-        const cJSON *previous = cJSON_GetObjectItemCaseSensitive(parameters,
-                                                                   "previous_package_sha256");
-        if (product_install ? !cJSON_IsNull(previous) :
-            !digest32(previous, request->previous_package_sha256)) goto done;
-        request->previous_package_present = product_upgrade;
-        const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "package_url");
-        if (!cJSON_IsString(url)) goto done;
-        const size_t url_size = strlen(url->valuestring);
-        if (url_size == 0U || url_size > ESP_BASE_PRODUCT_PACKAGE_URL_BYTES ||
-            strncmp(url->valuestring, "https://", 8U) != 0) goto done;
-        memcpy(request->package_url, url->valuestring, url_size + 1U);
-        out->kind = product_install ? EBASE_PRODUCT_INSTALL_COMMAND :
-                                      EBASE_PRODUCT_UPGRADE_COMMAND;
-        error = NULL;
-        goto done;
-    }
-    if (!strcmp(command->valuestring, "product.uninstall")) {
-        if (!allocate_payload(out, sizeof *out->product_uninstall, allocate)) {
-            error = "resource_failure"; goto done;
-        }
-        const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
-        const char *const keys[] = {"operation_id", "operation_sequence",
-                                    "expected_container_sequence", "package_sha256"};
-        if (!exact_keys(parameters, keys, 4) ||
-            !copy_id(parameters, "operation_id", out->product_uninstall->operation_id)) goto done;
-        const cJSON *sequence = cJSON_GetObjectItemCaseSensitive(parameters,
-                                                                  "operation_sequence");
-        const cJSON *container_sequence = cJSON_GetObjectItemCaseSensitive(parameters,
-                                                                            "expected_container_sequence");
-        const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256");
-        if (!cJSON_IsNumber(sequence) || !isfinite(sequence->valuedouble) ||
-            sequence->valuedouble < 1 || sequence->valuedouble > UINT32_MAX ||
-            floor(sequence->valuedouble) != sequence->valuedouble ||
-            !cJSON_IsNumber(container_sequence) || !isfinite(container_sequence->valuedouble) ||
-            container_sequence->valuedouble < 1 || container_sequence->valuedouble >= UINT32_MAX ||
-            floor(container_sequence->valuedouble) != container_sequence->valuedouble ||
-            !cJSON_IsString(digest) || strlen(digest->valuestring) != 64) goto done;
-        uint8_t nonzero = 0U;
-        for (size_t index = 0; index < 32U; ++index) {
-            const int upper = hex_digit(digest->valuestring[index * 2U]);
-            const int lower = hex_digit(digest->valuestring[index * 2U + 1U]);
-            if (upper < 0 || lower < 0) goto done;
-            out->product_uninstall->package_sha256[index] =
-                (uint8_t)((upper << 4) | lower);
-            nonzero |= out->product_uninstall->package_sha256[index];
-        }
-        if (nonzero == 0U) goto done;
-        out->product_uninstall->operation_sequence = (uint32_t)sequence->valuedouble;
-        out->product_uninstall->expected_container_sequence =
-            (uint32_t)container_sequence->valuedouble;
-        out->kind = EBASE_PRODUCT_UNINSTALL_COMMAND;
-        error = NULL;
-        goto done;
+    if (!strcmp(command->valuestring, "business.pause") ||
+        !strcmp(command->valuestring, "business.resume")) {
+        if (!exact_keys(cJSON_GetObjectItemCaseSensitive(root, "parameters"), NULL, 0)) goto done;
+        out->kind = !strcmp(command->valuestring, "business.pause") ? EBASE_BUSINESS_PAUSE : EBASE_BUSINESS_RESUME;
+        error = NULL; goto done;
     }
     if (!strcmp(command->valuestring, "ota.start")) {
         if (!allocate_payload(out, sizeof *out->ota, allocate)) {
             error = "resource_failure"; goto done;
         }
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
-        const char *const no_package_keys[] = {"operation_id", "image_url", "sha256",
-            "image_size_bytes", "target", "signature", "package_mode"};
-        const char *const reuse_keys[] = {"operation_id", "image_url", "sha256",
-            "image_size_bytes", "target", "signature", "package_mode",
-            "package_sha256", "trial_event_sha256", "package_size_bytes",
-            "guest_abi_version", "data_schema_version"};
-        const char *const write_keys[] = {"operation_id", "image_url", "sha256",
-            "image_size_bytes", "target", "signature", "package_mode",
-            "package_sha256", "trial_event_sha256", "package_size_bytes",
-            "guest_abi_version", "data_schema_version", "package_url"};
-        const cJSON *mode = cJSON_GetObjectItemCaseSensitive(parameters, "package_mode");
-        if (!cJSON_IsString(mode)) goto done;
-        if (!strcmp(mode->valuestring, "no_package")) {
-            if (!exact_keys(parameters, no_package_keys, 7U)) goto done;
-            out->ota->package_mode = ESP_BASE_OTA_NO_PACKAGE;
-        } else if (!strcmp(mode->valuestring, "reuse")) {
-            if (!exact_keys(parameters, reuse_keys, 12U)) goto done;
-            out->ota->package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
-        } else if (!strcmp(mode->valuestring, "write")) {
-            if (!exact_keys(parameters, write_keys, 13U)) goto done;
-            out->ota->package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
-        } else goto done;
-        if (!copy_id(parameters, "operation_id", out->ota->operation_id)) goto done;
-        if (out->ota->package_mode != ESP_BASE_OTA_NO_PACKAGE &&
-            (!digest32(cJSON_GetObjectItemCaseSensitive(parameters, "package_sha256"),
-                       out->ota->package_sha256) ||
-             !digest32(cJSON_GetObjectItemCaseSensitive(parameters, "trial_event_sha256"),
-                       out->ota->trial_event_sha256) ||
-             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "package_size_bytes"),
-                           INT_MAX, &out->ota->package_size_bytes) ||
-             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "guest_abi_version"),
-                           UINT32_MAX, &out->ota->guest_abi_version) ||
-             !positive_u32(cJSON_GetObjectItemCaseSensitive(parameters, "data_schema_version"),
-                           UINT32_MAX, &out->ota->data_schema_version))) goto done;
-        if (out->ota->package_mode == ESP_BASE_OTA_PACKAGE_WRITE) {
-            const cJSON *package_url = cJSON_GetObjectItemCaseSensitive(
-                parameters, "package_url");
-            if (!cJSON_IsString(package_url)) goto done;
-            const size_t package_url_size = strlen(package_url->valuestring);
-            if (package_url_size <= 8U ||
-                package_url_size > ESP_BASE_OTA_PACKAGE_URL_BYTES ||
-                strncmp(package_url->valuestring, "https://", 8U) != 0) goto done;
-            memcpy(out->ota->package_url, package_url->valuestring,
-                   package_url_size + 1U);
-        }
+        const char *const keys[] = {"operation_id", "image_url", "sha256",
+            "image_size_bytes", "target", "signature"};
+        if (!exact_keys(parameters, keys, 6U) ||
+            !copy_id(parameters, "operation_id", out->ota->operation_id)) goto done;
         const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "image_url");
         const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "sha256");
         const cJSON *size = cJSON_GetObjectItemCaseSensitive(parameters, "image_size_bytes");

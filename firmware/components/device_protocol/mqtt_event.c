@@ -6,7 +6,7 @@
 #include "esp_base_command_guard.h"
 #include "esp_base_mqtt_command.h"
 
-static const uint8_t domain[] = "esp-base-product-event-v1\n";
+static const uint8_t domain[] = "esp-base-business-event-v1\n";
 
 static int lower_hex_digit(uint8_t value)
 {
@@ -25,7 +25,7 @@ bool ebase_mqtt_verified_event(
     *out = (ebase_mqtt_event_view_t){0};
     char expected_topic[EBASE_MQTT_TOPIC_BYTES];
     enum { TAG_HEX_BYTES = 64, TAG_FRAME_BYTES = 65, UUID_BYTES = 36 };
-    const size_t header_bytes = sizeof domain - 1U + UUID_BYTES * 2U + 32U + 8U;
+    const size_t header_bytes = sizeof domain - 1U + UUID_BYTES * 2U + 8U;
     if (key == NULL || topic == NULL || payload == NULL ||
         !ebase_is_uuid(device_id) || !ebase_is_uuid(boot_id) ||
         qos != 1U || retained || payload_length <= TAG_FRAME_BYTES + header_bytes ||
@@ -50,11 +50,6 @@ bool ebase_mqtt_verified_event(
     cursor += UUID_BYTES;
     if (memcmp(cursor, boot_id, UUID_BYTES) != 0) return false;
     cursor += UUID_BYTES;
-    uint8_t digest_or = 0;
-    for (size_t index = 0; index < 32U; ++index) digest_or |= cursor[index];
-    if (digest_or == 0U) return false;
-    memcpy(out->package_sha256, cursor, 32U);
-    cursor += 32U;
     uint64_t sequence = 0;
     for (size_t index = 0; index < 8U; ++index) {
         sequence = (sequence << 8U) | cursor[index];

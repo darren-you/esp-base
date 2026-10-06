@@ -1,6 +1,6 @@
 # ESP Base
 
-当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
+2026-10-06 维护者已将后续目标改为原生业务＋FRP＋MQTT＋通过设备 FRP 的固件 OTA，并要求彻底删除 Container／WAMR 设计与对应自有仓库；Mac App 内 Bridge 的本机及远程信息获取、控制与 OTA，以及本机有线刷写与恢复继续保留。双目标容量门仍为 16,384／24,576／1,024 B。当前仅完成计划修订，生产源码、依赖和下述架构拓扑仍是待改造现状；代码、删仓、实板与发布均未执行，旧五能力失败保持。当前范围和 R1–R7 清单见[原生业务与双目标验证计划](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-当前目标与执行边界)。下列日期记录保留其当轮事实，不能当作新目标的验收结论。
 
 2026-10-06 WRITE 验包工作区改为来源下载结束后申请，OTA 请求直接转交唯一 owner；双目标公开 host 与真实签名 guest 生命周期通过。完整签名构建及静态成本、初次装配失败和私存范围见[软件检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-write-工作区与-ota-请求所有权软件改动)。尚无本候选实板节省，原容量失败保持。
 

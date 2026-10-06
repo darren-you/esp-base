@@ -12,7 +12,7 @@
 #include "freertos/task.h"
 
 #include "esp_base_identity.h"
-#include "esp_base_container_product.h"
+#include "esp_base_ota_firmware.h"
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
 #include "esp_frp_idf_flash_store.h"
 #endif
@@ -124,12 +124,7 @@ static void stop_after_local_failure(eota_current_t *ota, bool pending_boot,
                                      const char *check, esp_err_t failure)
 {
     ESP_LOGE(TAG, "ESP_BASE_LOCAL_CHECK_FAILED check=%s error=%s", check, esp_err_to_name(failure));
-    esp_base_protocol_end_firmware_package_verification();
     if (!pending_boot) {
-        return;
-    }
-    if (!esp_base_container_product_stop_trial(&s_boot_storage_claim)) {
-        ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED candidate guest still active");
         return;
     }
     if (ota->state != EOTA_STATE_PENDING_VERIFY) {
@@ -159,32 +154,24 @@ static esp_err_t wait_for_control_start(void)
     return ESP_OK;
 }
 
-/* The durable receipt is the only authority for a target-slot cleanup after
- * reset. No Container guest has been started in this boot and the startup
- * claim still serializes all app, otadata and package state changes. */
-static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id,
+/* Only the durable original intent authorizes target cleanup after reset.
+ * The startup claim excludes both OTA entry points until reconciliation. */
+static bool reconcile_interrupted_ota(const char *device_id,
                                      bool *needs_success_receipt,
                                      esp_base_ota_receipt_recovery_t *receipt)
 {
     *needs_success_receipt = false;
     *receipt = (esp_base_ota_receipt_recovery_t){0};
-    if (!eota_available())
-        return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
+    if (!eota_available()) return true;
     const esp_base_ota_receipt_result_t loaded =
         esp_base_ota_receipt_load_for_recovery(device_id, receipt);
-    if (loaded == ESP_BASE_OTA_RECEIPT_NOT_FOUND)
-        return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
-    if (loaded != ESP_BASE_OTA_RECEIPT_OK) return false;
-    if (receipt->container_enabled != esp_base_container_product_configured())
-        return false;
-    if (receipt->status == ESP_BASE_OTA_RECEIPT_FAILED)
-        return esp_base_container_product_without_ota_receipt(&s_boot_storage_claim);
-    if ((receipt->status != ESP_BASE_OTA_RECEIPT_PREPARED &&
-         receipt->status != ESP_BASE_OTA_RECEIPT_SUCCEEDED) ||
-        receipt->container_enabled != esp_base_container_product_configured()) {
-        return false;
+    if (loaded == ESP_BASE_OTA_RECEIPT_NOT_FOUND) {
+        esp_base_ota_firmware_set_t firmware = {0};
+        return esp_base_ota_observe_firmware_set(
+            ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, &firmware) ==
+            ESP_BASE_OTA_FIRMWARE_OK;
     }
-
+    if (loaded != ESP_BASE_OTA_RECEIPT_OK) return false;
     const eota_policy_t policy = esp_base_ota_policy(false);
     eota_slots_t slots = {0};
     if (eota_observe_slots(&policy, &slots) != EOTA_UPDATE_OK ||
@@ -192,12 +179,18 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
         slots.running_address_bytes != slots.boot_address_bytes) {
         return false;
     }
+    if (receipt->status == ESP_BASE_OTA_RECEIPT_FAILED) {
+        esp_base_ota_receipt_view_t view = {0};
+        return esp_base_ota_receipt_query(device_id, receipt->operation_id, false, &view) ==
+            ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_FAILED;
+    }
     if (slots.running_subtype == receipt->target_subtype) {
         if (slots.running_state == EOTA_STATE_VALID &&
             wait_for_control_start() != ESP_OK) return false;
         /* A selected C belongs to pending trial or confirmed recovery. Never
          * erase it as though it were an interrupted inactive download. */
         uint8_t digest[EOTA_SHA256_BYTES] = {0};
+        esp_base_ota_firmware_set_t firmware = {0};
         if ((slots.running_state != EOTA_STATE_PENDING_VERIFY &&
              slots.running_state != EOTA_STATE_VALID) ||
             (receipt->status == ESP_BASE_OTA_RECEIPT_SUCCEEDED &&
@@ -205,8 +198,13 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
             eota_sha256_running(&policy, receipt->image_size_bytes, digest) !=
                 EOTA_UPDATE_OK ||
             memcmp(digest, receipt->candidate_sha256, sizeof digest) != 0 ||
-            !esp_base_container_product_reconcile_selected_ota(
-                &s_boot_storage_claim, receipt, slots.running_state)) {
+            esp_base_ota_observe_firmware_set(
+                slots.running_state == EOTA_STATE_PENDING_VERIFY ?
+                ESP_BASE_OTA_FIRMWARE_PENDING_TRIAL : ESP_BASE_OTA_FIRMWARE_CONFIRMED,
+                NULL, &firmware) != ESP_BASE_OTA_FIRMWARE_OK ||
+            firmware.bootable_count != 2U ||
+            memcmp(firmware.running_firmware_sha256, receipt->candidate_sha256, 32) != 0 ||
+            memcmp(firmware.bootable_firmware_sha256[1], receipt->source_sha256, 32) != 0) {
             return false;
         }
         *needs_success_receipt =
@@ -221,11 +219,6 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
                              receipt->source_sha256) != EOTA_UPDATE_OK) {
         return false;
     }
-    if (esp_base_container_product_recover_retired_firmware(
-            &s_boot_storage_claim, receipt, boot_id) !=
-        ESP_BASE_CONTAINER_RETIRE_COMPLETE) {
-        return false;
-    }
     return esp_base_ota_receipt_record_failure(
         device_id, receipt->operation_id,
         EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK;
@@ -233,8 +226,7 @@ static bool reconcile_interrupted_ota(const char *device_id, const char *boot_id
 
 void app_main(void)
 {
-    /* Hold the same owner as OTA and the optional Container adapter through
-     * startup's storage operations. The guest's lifetime is not a claim. */
+    /* Startup recovery uses the same upgrade owner as both OTA entries. */
     esp_base_storage_owner_init(&s_storage_owner);
     esp_base_storage_owner_init(&s_flash_io_owner);
     s_ota_flash_claim = (esp_base_storage_claim_t){0};
@@ -246,7 +238,6 @@ void app_main(void)
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED Flash I/O gate unavailable");
         return;
     }
-    esp_base_container_product_set_flash_io_owner(&s_flash_io_owner);
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     /* Recover interrupted ciphertext before any pending OTA slot can be
      * confirmed. Keep physical I/O distinct from the long upgrade claim. */
@@ -351,7 +342,6 @@ void app_main(void)
 
     bool needs_success_receipt = false;
     if (!reconcile_interrupted_ota(identity.device_id,
-                                   esp_base_protocol_boot_id(),
                                    &needs_success_receipt, &s_boot_ota_receipt)) {
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED original receipt or slot recovery uncertain");
         stop_after_local_failure(&ota, pending_boot, "ota_recovery",
@@ -363,31 +353,6 @@ void app_main(void)
     const esp_err_t time_status = esp_base_time_start(CONFIG_ESP_BASE_TIME_SERVER);
     if (time_status != ESP_OK) {
         ESP_LOGW(TAG, "ESP_BASE_TIME_UNAVAILABLE error=%s", esp_err_to_name(time_status));
-    }
-
-    const bool container_configured = esp_base_container_product_configured();
-    const bool pending_package = pending_boot &&
-        s_boot_ota_receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE;
-    esp_base_container_boot_result_t product = ESP_BASE_CONTAINER_NOT_CONFIGURED;
-    if (pending_boot && container_configured) {
-        product = pending_package ?
-            esp_base_container_product_start_firmware_package_trial(
-                &s_boot_storage_claim, &s_boot_ota_receipt, esp_base_protocol_boot_id()) :
-            esp_base_container_product_start_trial(
-                &s_boot_storage_claim, esp_base_protocol_boot_id());
-        if (product == ESP_BASE_CONTAINER_BLOCKED ||
-            (pending_package && product != ESP_BASE_CONTAINER_RUNNING)) {
-            stop_after_local_failure(&ota, true, "container_trial", ESP_ERR_INVALID_STATE);
-            return;
-        }
-    }
-
-    if (pending_package &&
-        (!container_configured ||
-         !esp_base_protocol_begin_firmware_package_verification(
-             &s_boot_storage_claim, s_boot_ota_receipt.package_sha256))) {
-        stop_after_local_failure(&ota, true, "business_admission", ESP_ERR_INVALID_STATE);
-        return;
     }
 
     if (pending_boot) {
@@ -437,37 +402,6 @@ void app_main(void)
             stop_after_local_failure(&ota, pending_boot, "control_boundary", ESP_ERR_TIMEOUT);
             return;
         }
-        if (pending_package) {
-            /* Offline or missing representative event keeps this boot pending.
-             * The control task observes the real MQTT owner; this task alone
-             * holds the original operation claim and performs durable commits. */
-            for (;;) {
-                if (!esp_base_protocol_control_healthy() ||
-                    !esp_base_container_product_event_accepting()) {
-                    stop_after_local_failure(&ota, true, "business_progress", ESP_ERR_TIMEOUT);
-                    return;
-                }
-                esp_base_protocol_firmware_package_health_t health = {0};
-                if (esp_base_protocol_firmware_package_health_snapshot(&health)) {
-                    const esp_base_container_trial_health_result_t verified =
-                        esp_base_container_product_verify_firmware_package_health(
-                            &s_boot_storage_claim, &s_boot_ota_receipt,
-                            health.event_sequence, health.failure_count);
-                    if (verified == ESP_BASE_CONTAINER_HEALTH_VERIFIED) break;
-                    if (verified == ESP_BASE_CONTAINER_HEALTH_UNCERTAIN) {
-                        /* A HEALTH_VERIFIED commit may already exist. Do not
-                         * confirm otadata from an unproved persistence result. */
-                        stop_after_local_failure(&ota, true, "business_health", ESP_ERR_INVALID_STATE);
-                        return;
-                    }
-                }
-                vTaskDelay(pdMS_TO_TICKS(100));
-            }
-        } else if (container_configured &&
-                   !esp_base_container_product_mark_healthy(&s_boot_storage_claim)) {
-            stop_after_local_failure(&ota, true, "container_health", ESP_ERR_INVALID_STATE);
-            return;
-        }
         now_ms = uptime_ms();
         const esp_err_t confirm_status = now_ms >= stable_started_ms &&
             now_ms - stable_started_ms >= ESP_BASE_OTA_STABLE_WINDOW_MS ?
@@ -476,52 +410,18 @@ void app_main(void)
             stop_after_local_failure(&ota, pending_boot, "confirm", confirm_status);
             return;
         }
-        if (container_configured) {
-            eota_current_t confirmed = {0};
-            if (inspect_with_flash_io(&confirmed) != ESP_OK ||
-                confirmed.state != EOTA_STATE_VALID ||
-                confirmed.running_partition == NULL || ota.running_partition == NULL ||
-                strcmp(confirmed.running_partition, ota.running_partition) != 0 ||
-                !esp_base_container_product_confirm_firmware(&s_boot_storage_claim)) {
-                ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED VALID/container confirmation readback incomplete");
-                esp_base_protocol_end_firmware_package_verification();
-                (void)esp_base_container_product_stop_trial(&s_boot_storage_claim);
-                return;
-            }
+        eota_current_t confirmed = {0};
+        if (inspect_with_flash_io(&confirmed) != ESP_OK ||
+            confirmed.state != EOTA_STATE_VALID ||
+            confirmed.running_partition == NULL || ota.running_partition == NULL ||
+            strcmp(confirmed.running_partition, ota.running_partition) != 0) {
+            ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED VALID confirmation readback incomplete");
+            return;
         }
-    }
-    if (!pending_boot && container_configured &&
-        !esp_base_protocol_recover_product_package(&s_boot_storage_claim)) {
-        ESP_LOGE(TAG, "ESP_BASE_PRODUCT_RECOVERY_BLOCKED original operation unresolved");
-        return;
-    }
-    if (!pending_boot) product = esp_base_container_product_boot(
-        &s_boot_storage_claim, esp_base_protocol_boot_id());
-    if (product == ESP_BASE_CONTAINER_BLOCKED) {
-        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED startup claim retained");
-        return;
-    }
-    if (!pending_boot && container_configured &&
-        product != ESP_BASE_CONTAINER_EMPTY &&
-        product != ESP_BASE_CONTAINER_RUNNING) {
-        ESP_LOGE(TAG, "ESP_BASE_CONTAINER_BLOCKED configured product has no admitted binding");
-        return;
-    }
-    if (container_configured &&
-        !esp_base_protocol_prepare_product_ledger(
-            &s_boot_storage_claim, product == ESP_BASE_CONTAINER_EMPTY)) {
-        if (product == ESP_BASE_CONTAINER_RUNNING)
-            (void)esp_base_container_product_stop_confirmed(&s_boot_storage_claim);
-        esp_base_protocol_end_firmware_package_verification();
-        ESP_LOGE(TAG, "ESP_BASE_PRODUCT_LEDGER_BLOCKED binding or ledger uncertain");
-        return;
     }
     if (needs_success_receipt &&
         esp_base_ota_receipt_record_success(identity.device_id) !=
             ESP_BASE_OTA_RECEIPT_OK) {
-        esp_base_protocol_end_firmware_package_verification();
-        if (product == ESP_BASE_CONTAINER_RUNNING)
-            (void)esp_base_container_product_stop_confirmed(&s_boot_storage_claim);
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED success receipt not durable");
         return;
     }
@@ -530,8 +430,5 @@ void app_main(void)
         return;
     }
     esp_base_protocol_set_ota_verification_pending(false);
-    esp_base_protocol_end_firmware_package_verification();
-    ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required container=%s",
-             product == ESP_BASE_CONTAINER_RUNNING ? "running" :
-             product == ESP_BASE_CONTAINER_EMPTY ? "empty" : "not_configured");
+    ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required business=native");
 }

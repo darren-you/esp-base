@@ -37,25 +37,14 @@ typedef struct {
     uint8_t sha256[32];
     uint32_t image_size_bytes;
     uint8_t target_subtype;
-    esp_base_ota_package_mode_t package_mode;
-    uint8_t package_sha256[32];
 } esp_base_ota_receipt_view_t;
 
-/* Captured under the app/otadata storage owner immediately before registering
- * the write intent. Digests are the distinct signed Base identities returned
- * by CONFIRMED observation: inactive is zero for an A-only set, including two
- * physical slots containing the same signed image. A configured Container
- * supplies its reconciled ECS2 sequence from that same owner interval. */
+/* Captured under the app/otadata owner immediately before intent registration.
+ * Identities are the verified distinct signed Base firmware set; a zero inactive
+ * digest denotes an A-only set. */
 typedef struct esp_base_ota_receipt_snapshot {
     uint8_t source_sha256[EOTA_SHA256_BYTES];
     uint8_t inactive_sha256[EOTA_SHA256_BYTES];
-    bool container_enabled;
-    uint32_t container_sequence;
-    bool source_package_present;
-    uint8_t source_package_sha256[EOTA_SHA256_BYTES];
-    uint32_t source_package_size_bytes;
-    uint32_t source_guest_abi_version;
-    uint32_t source_data_schema_version;
 } esp_base_ota_receipt_snapshot_t;
 
 typedef enum {
@@ -73,52 +62,26 @@ typedef struct {
     uint8_t inactive_sha256[EOTA_SHA256_BYTES];
     uint8_t candidate_sha256[EOTA_SHA256_BYTES];
     uint32_t image_size_bytes;
-    bool container_enabled;
-    uint32_t container_sequence;
-    esp_base_ota_package_mode_t package_mode;
-    uint8_t package_sha256[EOTA_SHA256_BYTES];
-    uint8_t trial_event_sha256[EOTA_SHA256_BYTES];
-    uint32_t package_size_bytes;
-    uint32_t guest_abi_version;
-    uint32_t data_schema_version;
-    bool source_package_present;
-    uint8_t source_package_sha256[EOTA_SHA256_BYTES];
-    uint32_t source_package_size_bytes;
-    uint32_t source_guest_abi_version;
-    uint32_t source_data_schema_version;
 } esp_base_ota_receipt_recovery_t;
 
-/* One latest operation is retained in base_store/base_ota/operation. V3 stores
- * the source, old distinct inactive and requested candidate identities plus
- * the current ECS2 sequence and package metadata in that same blob. The
- * internal register and read-only recovery load validate all three package
- * modes; selected-C startup admits receipt-bound package trials and VALID
- * recovery. Public worker execution validates all three package modes.
- * Interrupted package transitions can recover on their source A.
- * The caller holds the storage claim and supplies a reconciled Container
- * snapshot; register independently rechecks the signed Base firmware set
- * before commit/readback. A candidate with the running firmware's signed
- * digest is rejected before any receipt
- * write or inactive-slot retirement. A new operation may replace only a
- * terminal result; the same ID never downloads twice. */
+/* V4 retains one firmware-only operation in base_store/base_ota/operation.
+ * Commit and byte-for-byte readback precede target retirement. New operations
+ * replace only proven terminal results; the same ID never starts twice.
+ * Old V1/V2/V3 and corrupt records are uncertain, never absent. Their migration
+ * must be resolved explicitly in the first wired layout assembly. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const char *device_id, const esp_base_ota_request_t *request,
     const esp_base_ota_receipt_snapshot_t *snapshot);
-/* Read the complete original V3 intent, including package modes. A read does
- * not authorize erasure or boot advancement: the caller must prove the
- * mode-specific physical/Container state first. FAILED is terminal and never
- * authorizes replay. A corrupt or older-format record is uncertain, not absent. */
+/* Load the exact V4 intent. Reading never authorizes erasure or advancement;
+ * the caller must prove the receipt-bound physical state. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
     const char *device_id, esp_base_ota_receipt_recovery_t *recovery);
-/* Record failure after either no app/Container mutation occurred or the
- * original PREPARED receipt has driven complete physical/ECS2 reconciliation.
- * This function cannot itself prove the caller's Container state. */
+/* Record failure after no app mutation or complete receipt-bound physical
+ * reconciliation. The caller holds the upgrade owner throughout. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_failure(
     const char *device_id, const char *operation_id, eota_result_t error);
-/* The caller must first prove OTA VALID and, when Container is configured,
- * persistent Container confirmation, including original-receipt cold VALID
- * package recovery. This independently rechecks C's signed
- * identity, then commits and reads back the success marker. */
+/* The caller proves local initialization and OTA VALID. This independently
+ * verifies the signed running candidate identity before durable success. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_success(
     const char *device_id);
 esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
