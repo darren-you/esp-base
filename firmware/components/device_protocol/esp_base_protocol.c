@@ -110,7 +110,9 @@ static struct {
 } s_firmware_health;
 static bool s_pending_mqtt_active;
 static size_t s_ota_slot;
-static esp_base_ota_request_t s_ota_request;
+/* The accepted command transfers its existing request to the control owner.
+ * The worker borrows it until publishing completion; queries never replace it. */
+static esp_base_ota_request_t *s_ota_request;
 static atomic_bool s_ota_done;
 static atomic_bool s_ota_stage_uncertain;
 static atomic_int s_ota_result;
@@ -330,7 +332,7 @@ static void reported(void)
         time_ready ? "true" : "false", esp_base_mqtt_owner_state(), frp.state,
         frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
-        s_ota_active ? s_ota_request.image_size_bytes : 0);
+        s_ota_active ? s_ota_request->image_size_bytes : 0);
     esp_base_container_event_observation_t event = {0};
     const esp_base_container_event_observation_result_t observed =
         esp_base_container_product_event_observation(&event);
@@ -374,7 +376,7 @@ static status_snapshot_t snapshot(void)
         .free_heap = esp_get_free_heap_size(),
         .minimum_free_heap = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
         .ota_received = (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
-        .ota_total = s_ota_active ? s_ota_request.image_size_bytes : 0,
+        .ota_total = s_ota_active ? s_ota_request->image_size_bytes : 0,
         .wifi = esp_base_wifi_state(), .mqtt = esp_base_mqtt_owner_state(),
         .frp = esp_base_frp_owner_snapshot().state,
         .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
@@ -1013,6 +1015,15 @@ static void poll_configuration(uint64_t now)
     }
 }
 
+static void clear_ota_request(void)
+{
+    if (s_ota_request == NULL) return;
+    volatile unsigned char *bytes = (volatile unsigned char *)s_ota_request;
+    for (size_t index = 0; index < sizeof *s_ota_request; ++index) bytes[index] = 0U;
+    free(s_ota_request);
+    s_ota_request = NULL;
+}
+
 static void ota_progress(uint32_t received, uint32_t total, void *context)
 {
     (void)total;
@@ -1023,7 +1034,7 @@ static void ota_progress(uint32_t received, uint32_t total, void *context)
 static void ota_task(void *argument)
 {
     (void)argument;
-    if (!esp_base_container_product_ota_ready(s_ota_request.package_mode)) {
+    if (!esp_base_container_product_ota_ready(s_ota_request->package_mode)) {
         atomic_store_explicit(&s_ota_result, EOTA_UPDATE_RESOURCE_FAILURE,
                               memory_order_relaxed);
         atomic_store_explicit(&s_ota_done, true, memory_order_release);
@@ -1032,22 +1043,22 @@ static void ota_task(void *argument)
     }
     const eota_policy_t policy = esp_base_ota_policy(true);
     eota_image_t image = {
-        .image_url = s_ota_request.image_url,
-        .image_size_bytes = s_ota_request.image_size_bytes,
+        .image_url = s_ota_request->image_url,
+        .image_size_bytes = s_ota_request->image_size_bytes,
     };
-    memcpy(image.sha256, s_ota_request.sha256, sizeof image.sha256);
+    memcpy(image.sha256, s_ota_request->sha256, sizeof image.sha256);
     esp_base_ota_receipt_recovery_t receipt = {0};
     eota_result_t result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
     if (esp_base_ota_receipt_load_for_recovery(
             s_context.device_id, &receipt) != ESP_BASE_OTA_RECEIPT_OK ||
         receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED ||
-        receipt.package_mode != s_ota_request.package_mode ||
-        memcmp(receipt.package_sha256, s_ota_request.package_sha256, 32) != 0 ||
-        memcmp(receipt.trial_event_sha256, s_ota_request.trial_event_sha256, 32) != 0 ||
-        receipt.package_size_bytes != s_ota_request.package_size_bytes ||
-        receipt.guest_abi_version != s_ota_request.guest_abi_version ||
-        receipt.data_schema_version != s_ota_request.data_schema_version ||
-        strcmp(receipt.operation_id, s_ota_request.operation_id) != 0 ||
+        receipt.package_mode != s_ota_request->package_mode ||
+        memcmp(receipt.package_sha256, s_ota_request->package_sha256, 32) != 0 ||
+        memcmp(receipt.trial_event_sha256, s_ota_request->trial_event_sha256, 32) != 0 ||
+        receipt.package_size_bytes != s_ota_request->package_size_bytes ||
+        receipt.guest_abi_version != s_ota_request->guest_abi_version ||
+        receipt.data_schema_version != s_ota_request->data_schema_version ||
+        strcmp(receipt.operation_id, s_ota_request->operation_id) != 0 ||
         receipt.image_size_bytes != image.image_size_bytes ||
         memcmp(receipt.candidate_sha256, image.sha256, sizeof image.sha256) != 0) {
         /* A missing or changed durable intent cannot authorize app erasure. */
@@ -1056,7 +1067,7 @@ static void ota_task(void *argument)
         if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) {
             esp_base_ota_receipt_snapshot_t source = {0};
             if (!esp_base_container_product_snapshot_for_ota(
-                    &s_ota_storage_claim, &s_ota_request, &source) ||
+                    &s_ota_storage_claim, s_ota_request, &source) ||
                 source.container_enabled != receipt.container_enabled ||
                 source.container_sequence != receipt.container_sequence ||
                 memcmp(source.source_sha256, receipt.source_sha256, 32) != 0 ||
@@ -1109,7 +1120,7 @@ static void ota_task(void *argument)
         if (receipt.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
             stage == ESP_BASE_CONTAINER_STAGE_WRITING) {
             esp_base_product_package_source_t *source = esp_base_time_ready() ?
-                esp_base_product_package_source_open(s_ota_request.package_url,
+                esp_base_product_package_source_open(s_ota_request->package_url,
                     receipt.package_size_bytes, true) : NULL;
             if (source != NULL) {
                 stage = esp_base_container_product_write_staged_firmware_package(
@@ -1151,7 +1162,7 @@ static void poll_ota(void)
         s_ota_active = false;
         atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
         save_outcome(s_ota_slot, "unknown", "storage_uncertain", false);
-        memset(&s_ota_request, 0, sizeof s_ota_request);
+        clear_ota_request();
         return;
     }
     if (result == EOTA_UPDATE_OK) {
@@ -1167,14 +1178,14 @@ static void poll_ota(void)
         ESP_LOGE("base_ota", "ESP_BASE_OTA_RECOVERY_REQUIRED selector readback unavailable; avoid resetting device");
     } else {
         const esp_base_ota_receipt_result_t saved = esp_base_ota_receipt_record_failure(
-            s_context.device_id, s_ota_request.operation_id, result);
+            s_context.device_id, s_ota_request->operation_id, result);
         if (saved != ESP_BASE_OTA_RECEIPT_OK) {
             s_config_uncertain = true;
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
             atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
             save_outcome(s_ota_slot, "unknown", "storage_uncertain", false);
-            memset(&s_ota_request, 0, sizeof s_ota_request);
+            clear_ota_request();
             return;
         }
         if (!esp_base_storage_release(&s_ota_storage_claim)) {
@@ -1183,7 +1194,7 @@ static void poll_ota(void)
             s_ota_active = false;
             atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
             save_outcome(s_ota_slot, "unknown", "storage_uncertain", false);
-            memset(&s_ota_request, 0, sizeof s_ota_request);
+            clear_ota_request();
             return;
         }
     }
@@ -1192,7 +1203,7 @@ static void poll_ota(void)
     atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
     save_outcome(s_ota_slot, result == EOTA_UPDATE_BOOT_STATE_UNKNOWN ? "unknown" : "failed",
                  eota_error(result), false);
-    memset(&s_ota_request, 0, sizeof s_ota_request);
+    clear_ota_request();
 }
 
 static bool product_binding_unchanged(
@@ -2015,7 +2026,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     }
     if (command->kind == EBASE_OTA_RESULT) {
         esp_base_ota_receipt_view_t view;
-        const bool active = s_ota_active && !strcmp(s_ota_request.operation_id, command->operation_id);
+        const bool active = s_ota_active && !strcmp(s_ota_request->operation_id, command->operation_id);
         const esp_base_ota_receipt_result_t result = esp_base_ota_receipt_query(
             s_context.device_id, command->operation_id, active, &view);
         if (result == ESP_BASE_OTA_RECEIPT_OK) reply_ota_result(command->request.request_id, &view);
@@ -2180,7 +2191,9 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
                          uncertain ? "storage_uncertain" : receipt_error, false);
             return;
         }
-        s_ota_request = *command->ota;
+        s_ota_request = command->ota;
+        command->payload = NULL;
+        command->payload_size_bytes = 0U;
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
@@ -2190,10 +2203,12 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         if (xTaskCreate(ota_task, "base_ota", 12288, NULL, 4, NULL) != pdPASS) {
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
-            memset(&s_ota_request, 0, sizeof s_ota_request);
-            if (esp_base_ota_receipt_record_failure(s_context.device_id, command->ota->operation_id,
-                    EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
-                esp_base_storage_release(&s_ota_storage_claim)) {
+            const bool failed = esp_base_ota_receipt_record_failure(
+                s_context.device_id, s_ota_request->operation_id,
+                EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
+                esp_base_storage_release(&s_ota_storage_claim);
+            clear_ota_request();
+            if (failed) {
                 save_outcome(slot, "failed", "resource_failure", false);
             } else {
                 s_config_uncertain = true;

@@ -1,5 +1,7 @@
 # Base 与 Container 产品装配
 
+普通安装／升级与联合固件 WRITE 的验包工作区由原 validator 回调晚申请：来源下载、Flash 写入和整包摘要完成后，完整复验签名、Wasm、保留引用与版本身份，再释放临时工作区。原 C3 请求为5640 B，policy／metadata 指针不逃逸；REUSE和open_selected保持。晚OOM沿原ABORTED独立读回或WRITING／UNCERTAIN恢复，不能报成写前BUSY。双目标真实签名生命周期软件回归和实板范围见[工作区检查点](../../../docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-write-工作区与-ota-请求所有权软件改动)。
+
 当前精确消费 Container `7f25647a` 的映射租约只读修正：同一任务复验保留包时沿当前 map 租约读取，正确 unmap 后单次释放；其它任务与写入保持原获取规则。双目标软件验证通过，新鲜 C3 联合复验与完整实板范围见[当前检查点](../../../docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-新组合联合续验与映射只读修正)。
 
 普通 `product.install`／`product.upgrade` 的包写入与联合 `ota.start(WRITE)` 共用 Container 的引用身份门，公开启动及 `REUSE` 也使用同一门：完整整包 SHA-256 是制品身份，同产品完整版本的不同 SHA（包括随机 PSS 重签）拒绝。只比较当前操作仍真实引用的当前／回退包；REUSE 退役的旧 inactive 包不再保护。引用完整签名、整包摘要和 ABI/schema 按其自身持久绑定复验，不把当前运行固件的授权套给旧回退包；同 SHA 先匹配大小／ABI/schema，再复用候选完整验签。普通 prepare 拒绝不停止已确认 guest；WRITE 的原显式停止、清退及恢复顺序保持。无历史版本库或新持久字段，实板时延与容量仍须独立验证。

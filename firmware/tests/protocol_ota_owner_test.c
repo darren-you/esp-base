@@ -6,7 +6,24 @@
 #include <unistd.h>
 
 /* Exercise the real command branch and its asynchronous completion branch. */
+static void protocol_test_free(void *data);
+#define free protocol_test_free
 #include "../components/device_protocol/esp_base_protocol.c"
+#undef free
+
+static unsigned ota_request_releases;
+static void *last_decoded_ota_request;
+
+static void protocol_test_free(void *data)
+{
+    if (data != NULL && data == s_ota_request) {
+        const unsigned char *bytes = data;
+        for (size_t index = 0; index < sizeof *s_ota_request; ++index)
+            assert(bytes[index] == 0U);
+        ++ota_request_releases;
+    }
+    free(data);
+}
 
 struct esp_base_product_package_source { unsigned marker; };
 
@@ -56,7 +73,7 @@ static esp_base_container_stage_result_t stage_result;
 static esp_base_container_retire_result_t product_retire_result;
 static bool product_configured, product_ota_ready, ota_ready_after_first, snapshot_ok;
 static unsigned ota_ready_calls;
-static bool worker_created;
+static bool worker_created, defer_ota_worker;
 static unsigned register_calls, failure_record_calls, task_calls, prepare_calls, stage_calls, select_calls, restart_calls;
 static unsigned snapshot_calls, load_receipt_calls, retire_calls,
     product_retire_calls, validate_calls, query_calls;
@@ -182,7 +199,9 @@ static void reset_case(void)
     atomic_store(&s_product_done, false);
     atomic_store(&s_product_result, PRODUCT_WORK_UNCERTAIN);
     atomic_store(&s_product_resolved_sequence, 0U);
-    memset(&s_ota_request, 0, sizeof s_ota_request);
+    clear_ota_request();
+    ota_request_releases = 0U;
+    last_decoded_ota_request = NULL;
     s_config_uncertain = s_ota_boot_uncertain = s_ota_active = s_trial_active = false;
     atomic_store(&s_ota_done, false);
     atomic_store(&s_ota_stage_uncertain, false);
@@ -199,6 +218,7 @@ static void reset_case(void)
     ota_ready_after_first = true;
     ota_ready_calls = 0;
     worker_created = true;
+    defer_ota_worker = false;
     register_calls = failure_record_calls = task_calls = prepare_calls = stage_calls = select_calls = restart_calls = 0;
     snapshot_calls = load_receipt_calls = retire_calls = product_retire_calls = 0;
     loaded_package_mode = ESP_BASE_OTA_NO_PACKAGE;
@@ -1338,8 +1358,65 @@ static void check_frp_restart(void)
     expect_frp_restart(request, 409, "failed", "resource_failure");
 }
 
+static void check_ota_request_ownership(void)
+{
+    reset_case();
+    defer_ota_worker = true;
+    prepare_result = EOTA_UPDATE_RESOURCE_FAILURE;
+    start(120U);
+    esp_base_ota_request_t *accepted = s_ota_request;
+    assert(accepted != NULL && accepted == last_decoded_ota_request &&
+           s_ota_active && ota_request_releases == 0U);
+    /* The synchronous command has already been released. A result query and
+     * a rejected second write must neither replace nor release this owner. */
+    ota_result(120U);
+    start(121U);
+    assert(s_ota_request == accepted && s_ota_active &&
+           accepted->image_size_bytes == 4096U &&
+           strstr(accepted->operation_id, "000000000120") != NULL &&
+           ota_request_releases == 0U);
+    ota_task(NULL);
+    assert(atomic_load(&s_ota_done) && s_ota_request == accepted &&
+           ota_request_releases == 0U);
+    poll_ota();
+    assert(s_ota_request == NULL && !s_ota_active &&
+           ota_request_releases == 1U && s_config_uncertain &&
+           esp_base_storage_claim_active(&s_ota_storage_claim));
+    poll_ota();
+    assert(ota_request_releases == 1U);
+
+    reset_case();
+    defer_ota_worker = true;
+    ota_ready_after_first = false;
+    start(122U);
+    assert(s_ota_request == last_decoded_ota_request && s_ota_request != NULL);
+    ota_task(NULL);
+    assert(s_ota_request != NULL && ota_request_releases == 0U);
+    poll_ota();
+    assert(s_ota_request == NULL && !s_ota_active &&
+           ota_request_releases == 1U && failure_record_calls == 1U &&
+           !esp_base_storage_claim_active(&s_ota_storage_claim));
+
+    reset_case();
+    worker_created = false;
+    start(123U);
+    assert(s_ota_request == NULL && !s_ota_active &&
+           ota_request_releases == 1U && failure_record_calls == 1U &&
+           !esp_base_storage_claim_active(&s_ota_storage_claim));
+
+    reset_case();
+    worker_created = false;
+    failure_record_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+    start(124U);
+    assert(s_ota_request == NULL && !s_ota_active &&
+           ota_request_releases == 1U && s_config_uncertain &&
+           esp_base_storage_claim_active(&s_ota_storage_claim));
+    reset_case();
+}
+
 int main(void)
 {
+    check_ota_request_ownership();
     check_mqtt_restart();
     check_frp_restart();
     check_firmware_package_health();
@@ -1931,6 +2008,7 @@ const char *ebase_parse_command(const char *line, size_t length,
             "https://packages.example.test/a.pkg");
         return NULL;
     }
+    last_decoded_ota_request = out->ota;
     snprintf(out->ota->operation_id, sizeof out->ota->operation_id,
              "44444444-4444-4444-8444-%012u", number);
     strcpy(out->ota->image_url, "https://example.invalid/signed.bin");
@@ -2146,27 +2224,27 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
         .status = ESP_BASE_OTA_RECEIPT_PREPARED,
         .source_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0,
         .target_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1,
-        .image_size_bytes = s_ota_request.image_size_bytes,
+        .image_size_bytes = s_ota_request->image_size_bytes,
         .container_enabled = product_configured,
         .container_sequence = 7,
         .package_mode = loaded_package_mode,
     };
-    memcpy(receipt->operation_id, s_ota_request.operation_id,
+    memcpy(receipt->operation_id, s_ota_request->operation_id,
            sizeof receipt->operation_id);
     memcpy(receipt->source_sha256,
            (uint8_t[32]){0xa0}, sizeof receipt->source_sha256);
-    memcpy(receipt->candidate_sha256, s_ota_request.sha256,
+    memcpy(receipt->candidate_sha256, s_ota_request->sha256,
            sizeof receipt->candidate_sha256);
-    memcpy(receipt->package_sha256, s_ota_request.package_sha256, 32);
-    memcpy(receipt->trial_event_sha256, s_ota_request.trial_event_sha256, 32);
-    receipt->package_size_bytes = s_ota_request.package_size_bytes;
-    receipt->guest_abi_version = s_ota_request.guest_abi_version;
-    receipt->data_schema_version = s_ota_request.data_schema_version;
+    memcpy(receipt->package_sha256, s_ota_request->package_sha256, 32);
+    memcpy(receipt->trial_event_sha256, s_ota_request->trial_event_sha256, 32);
+    receipt->package_size_bytes = s_ota_request->package_size_bytes;
+    receipt->guest_abi_version = s_ota_request->guest_abi_version;
+    receipt->data_schema_version = s_ota_request->data_schema_version;
     if (ota_package_receipt_changed) receipt->trial_event_sha256[0] ^= 1U;
     receipt->source_package_present = ota_source_package_present;
     if (ota_source_package_present) {
         memset(receipt->source_package_sha256,
-               s_ota_request.package_mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x7b : 0x7a, 32);
+               s_ota_request->package_mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x7b : 0x7a, 32);
         receipt->source_package_size_bytes = 10240U;
         receipt->source_guest_abi_version = 2U;
         receipt->source_data_schema_version = 1U;
@@ -2188,6 +2266,7 @@ BaseType_t xTaskCreate(void (*task)(void *), const char *name, uint32_t stack_de
     (void)name; (void)stack_depth; (void)priority; (void)handle;
     ++task_calls;
     if (!worker_created) return pdFALSE;
+    if (task == ota_task && defer_ota_worker) return pdPASS;
     task(argument);
     return pdPASS;
 }
@@ -2285,7 +2364,7 @@ esp_base_container_retire_result_t esp_base_container_product_retire_inactive(
     assert(esp_base_storage_claim_active(claim) &&
            receipt && receipt->container_enabled == product_configured &&
            receipt->container_sequence == 7U && receipt->source_sha256[0] == 0xa0 &&
-           receipt->package_mode == s_ota_request.package_mode);
+           receipt->package_mode == s_ota_request->package_mode);
     ++product_retire_calls;
     return product_retire_result;
 }
@@ -2556,8 +2635,13 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
     esp_base_ota_receipt_view_t *view)
 {
-    assert(device_id && operation_id && view && !worker_active &&
-           !strcmp(operation_id, "44444444-4444-4444-8444-000000000022"));
+    assert(device_id && operation_id && view);
+    if (worker_active) {
+        assert(s_ota_request != NULL &&
+               !strcmp(operation_id, s_ota_request->operation_id));
+    } else {
+        assert(!strcmp(operation_id, "44444444-4444-4444-8444-000000000022"));
+    }
     ++query_calls;
     return ESP_BASE_OTA_RECEIPT_NOT_FOUND;
 }

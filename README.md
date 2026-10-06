@@ -2,6 +2,8 @@
 
 当前容量验收按 2026-10-05 维护者裁决执行：C3／ESP32 普通内部 8BIT 历史最低堆统一 ≥16 KiB；连续块 ≥24 KiB、各任务栈余量 ≥1 KiB及五能力并存、原功能预算保持。历史失败不重新判定，新源码仍需完整实测，见[当前容量合同](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-05-当前容量合同与续验范围)。
 
+2026-10-06 WRITE 验包工作区改为来源下载结束后申请，OTA 请求直接转交唯一 owner；双目标公开 host 与真实签名 guest 生命周期通过。完整签名构建及静态成本、初次装配失败和私存范围见[软件检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-write-工作区与-ota-请求所有权软件改动)。尚无本候选实板节省，原容量失败保持。
+
 2026-10-06 协作 C3 新鲜功能复验通过且未复现 FRP 超时，完整容量仍失败：最大事件与 WRITE OTA 重叠的历史堆4,796 B／周期连续块21,504 B，准入累计连续块3,840 B，MQTT有分配失败／overflow并重连；满8+processing未达，资源坏行保留。双目标门16,384／24,576／1,024 B与原预算保持，Root另核双全片／原三码四方恢复及同inode锁释放，详见[本轮边界](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-协作-c3-功能复验与容量阶段边界)。
 
 2026-10-06 TLS 接收诊断：新鲜 C3 在首响应头等待约3,002.079 ms超时；66严格周期仍确认工作帧头8 B、声明正文116 B、正文0。收到帧头后的两采样发送pending0，SDK/BIO接收继续调用、最新WANT_READ／WOULD_BLOCK；不称TCP或SDK根因。恢复和所属资源释放通过，新增96 B观察成本不加回；低负载资源观察不替代真正峰值失败。完整软件／现场私存与续验范围见[本轮检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-tls-接收边界与容量续验)。无网SDK后继九例验证第二调用：立即续接保留前缀，插入普通局部数组调用后四例前缀变零而SDK返回成功；仍无idle owner／真实握手解密或实板因果资格；单个processing提前释放仅有宿主边界证据，生产未改、节省0。

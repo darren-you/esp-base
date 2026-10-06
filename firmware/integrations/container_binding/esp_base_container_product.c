@@ -392,6 +392,26 @@ typedef struct {
     econtainer_package_info_t info;
 } firmware_stage_workspace_t;
 
+static econtainer_slot_validation_result_t validate_written_package(
+    void *context, const econtainer_slot_operation_t *operation,
+    econtainer_slot_read_fn read_fn, void *read_context,
+    size_t package_size_bytes, const econtainer_slot_references_t *references)
+{
+    /* WRITE source/Flash/digest work is complete. These callers return only
+     * the validation outcome, so no manifest or verified-info pointer escapes. */
+    firmware_stage_workspace_t *workspace = calloc(1, sizeof *workspace);
+    if (workspace == NULL) return ECONTAINER_SLOT_VALIDATION_IO_FAILED;
+    econtainer_package_slot_validation_t validation =
+        *(const econtainer_package_slot_validation_t *)context;
+    validation.package_workspace = &workspace->package;
+    validation.wasm_workspace = &workspace->wasm;
+    validation.verified_info = &workspace->info;
+    const econtainer_slot_validation_result_t result = econtainer_package_slot_validate(
+        &validation, operation, read_fn, read_context, package_size_bytes, references);
+    free(workspace);
+    return result;
+}
+
 static bool stage_receipt_valid(const esp_base_ota_receipt_recovery_t *receipt)
 {
     if (receipt->source_package_present ?
@@ -566,7 +586,7 @@ static econtainer_slots_result_t write_staged_firmware_package(
     result = econtainer_slots_write_and_prepare(
         &s_product.provider.io, &s_product.provider.geometry, writing_sequence,
         write->source_fn, write->source_context,
-        econtainer_package_slot_validate, &write->validation, &state);
+        validate_written_package, &write->validation, &state);
     if (result != ECONTAINER_SLOTS_OK) return result;
     econtainer_slots_state_t readback = {0};
     result = econtainer_slots_load(&s_product.provider.io,
@@ -608,24 +628,16 @@ esp_base_container_stage_result_t esp_base_container_product_write_staged_firmwa
          atomic_load_explicit(&s_product.instance_active, memory_order_acquire)) :
         guest_state != ESP_BASE_CONTAINER_EMPTY)
         return ESP_BASE_CONTAINER_STAGE_REJECTED;
-    firmware_stage_workspace_t *workspace = calloc(1, sizeof *workspace);
-    if (workspace == NULL) return ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
     firmware_write_context_t write = {
         .receipt = receipt,
         .source_fn = source_fn, .source_context = source_context,
         .validation = s_product.validation,
     };
-    if (!decode_uuid(receipt->operation_id, write.operation_id)) {
-        free(workspace);
+    if (!decode_uuid(receipt->operation_id, write.operation_id))
         return ESP_BASE_CONTAINER_STAGE_REJECTED;
-    }
-    write.validation.package_workspace = &workspace->package;
-    write.validation.wasm_workspace = &workspace->wasm;
-    write.validation.verified_info = &workspace->info;
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_PREPARED_CANDIDATE, prepared,
         write_staged_firmware_package, &write);
-    free(workspace);
     if (result == ECONTAINER_SLOTS_OK) return ESP_BASE_CONTAINER_STAGE_PREPARED;
     if (!write.write_started && (result == ECONTAINER_SLOTS_CONFLICT ||
                                  result == ECONTAINER_SLOTS_INVALID ||
@@ -3144,12 +3156,6 @@ esp_base_container_run_result_t esp_base_container_product_set_running(
 }
 
 typedef struct {
-    econtainer_package_workspace_t package;
-    econtainer_wasm_workspace_t wasm;
-    econtainer_package_info_t info;
-} package_prepare_workspace_t;
-
-typedef struct {
     const esp_base_container_package_request_t *request;
     econtainer_slot_source_fn source_fn;
     void *source_context;
@@ -3274,7 +3280,7 @@ static econtainer_slots_result_t package_prepare_with_firmware(
     result = econtainer_slots_write_and_prepare(&s_product.provider.io,
         &s_product.provider.geometry, reserved_sequence,
         prepare->source_fn, prepare->source_context,
-        econtainer_package_slot_validate, &prepare->validation, &state);
+        validate_written_package, &prepare->validation, &state);
     if (result == ECONTAINER_SLOTS_OK) {
         econtainer_slots_state_t readback = {0};
         result = econtainer_slots_load(&s_product.provider.io,
@@ -3333,8 +3339,6 @@ esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
         !package_prepare_guest_ready(request->previous_package_present)) {
         return ESP_BASE_CONTAINER_PREPARE_REJECTED;
     }
-    package_prepare_workspace_t *workspace = calloc(1, sizeof *workspace);
-    if (workspace == NULL) return ESP_BASE_CONTAINER_PREPARE_BUSY;
     package_prepare_context_t prepare = {
         .request = request, .source_fn = source_fn,
         .source_context = source_context,
@@ -3342,13 +3346,9 @@ esp_base_container_prepare_result_t esp_base_container_product_prepare_package(
         .outcome = ESP_BASE_CONTAINER_PREPARE_UNCERTAIN,
     };
     memcpy(prepare.operation_id, operation_id, sizeof operation_id);
-    prepare.validation.package_workspace = &workspace->package;
-    prepare.validation.wasm_workspace = &workspace->wasm;
-    prepare.validation.verified_info = &workspace->info;
     const econtainer_slots_result_t result = esp_base_container_with_firmware_set(
         claim, ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL,
         package_prepare_with_firmware, &prepare);
-    free(workspace);
     if (result == ECONTAINER_SLOTS_UNCERTAIN) return ESP_BASE_CONTAINER_PREPARE_UNCERTAIN;
     if (result == ECONTAINER_SLOTS_BUSY) return ESP_BASE_CONTAINER_PREPARE_BUSY;
     if (result == ECONTAINER_SLOTS_OK &&

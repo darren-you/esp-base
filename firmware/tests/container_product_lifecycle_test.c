@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "esp_container_package_slot.h"
 #ifdef ESP_BASE_TEST_RESOURCE_STATS
 #include <malloc/malloc.h>
 #include <mach/mach.h>
@@ -45,20 +46,121 @@ static void *test_product_malloc(size_t size_bytes)
 }
 static void test_product_free(void *memory);
 static void *test_product_memcpy(void *out, const void *in, size_t length);
+static void *test_product_calloc(size_t count, size_t size_bytes);
+static econtainer_slot_validation_result_t test_written_package_validate(
+    void *context, const econtainer_slot_operation_t *operation,
+    econtainer_slot_read_fn read_fn, void *read_context, size_t package_size_bytes,
+    const econtainer_slot_references_t *references);
 bool test_policy_enabled = true;
 #define malloc test_product_malloc
+#define calloc test_product_calloc
 #define free test_product_free
+#define econtainer_package_slot_validate test_written_package_validate
 #pragma push_macro("memcpy")
 #undef memcpy
 #define memcpy test_product_memcpy
 #include "esp_base_container_product.c"
 #undef malloc
+#undef calloc
 #undef free
+#undef econtainer_package_slot_validate
 #undef memcpy
 #pragma pop_macro("memcpy")
 
+/* Observe only the Base translation unit's per-WRITE workspace. Container's
+ * real signature/Wasm validator and all test fixture allocations stay real. */
+static struct {
+    bool active, fail_allocation, fail_aborted_readback, source_complete;
+    size_t source_bytes, callback_allocation_attempts, allocations, releases;
+    unsigned core_validator_calls, reference_read_mask, corrupt_reference_mask;
+    firmware_stage_workspace_t *live;
+    econtainer_package_workspace_t *policy_package;
+    econtainer_wasm_workspace_t *policy_wasm;
+    econtainer_package_info_t *policy_info;
+} write_workspace_observation;
+
+static void begin_write_workspace_observation(bool fail_allocation,
+                                               bool fail_aborted_readback)
+{
+    assert(!write_workspace_observation.active && write_workspace_observation.live == NULL);
+    memset(&write_workspace_observation, 0, sizeof write_workspace_observation);
+    write_workspace_observation.active = true;
+    write_workspace_observation.fail_allocation = fail_allocation;
+    write_workspace_observation.fail_aborted_readback = fail_aborted_readback;
+    write_workspace_observation.policy_package = s_product.validation.package_workspace;
+    write_workspace_observation.policy_wasm = s_product.validation.wasm_workspace;
+    write_workspace_observation.policy_info = s_product.validation.verified_info;
+}
+
+static void end_write_workspace_observation(size_t callback_allocation_attempts,
+                                            unsigned core_validator_calls,
+                                            unsigned reference_read_mask)
+{
+    assert(write_workspace_observation.active && write_workspace_observation.live == NULL);
+    assert(write_workspace_observation.callback_allocation_attempts == callback_allocation_attempts &&
+           write_workspace_observation.core_validator_calls == core_validator_calls &&
+           write_workspace_observation.reference_read_mask == reference_read_mask);
+    const size_t allocated = write_workspace_observation.fail_allocation ? 0U :
+                             callback_allocation_attempts;
+    assert(write_workspace_observation.allocations == allocated &&
+           write_workspace_observation.releases == allocated);
+    assert(s_product.validation.package_workspace == write_workspace_observation.policy_package &&
+           s_product.validation.wasm_workspace == write_workspace_observation.policy_wasm &&
+           s_product.validation.verified_info == write_workspace_observation.policy_info);
+    write_workspace_observation.active = false;
+}
+
+static bool read_observed_reference(void *context, unsigned index, size_t offset,
+                                    uint8_t *bytes, size_t size)
+{
+    const econtainer_slot_references_t *references = context;
+    assert(write_workspace_observation.active && write_workspace_observation.live != NULL &&
+           index < ECONTAINER_SLOT_BINDING_COUNT && size > 0U && size <= 512U);
+    const econtainer_slot_binding_t *binding = &references->bindings[index];
+    assert(binding->present && binding->package_present &&
+           offset <= binding->package_size_bytes &&
+           size <= binding->package_size_bytes - offset);
+    write_workspace_observation.reference_read_mask |= 1U << index;
+    if (!references->read(references->context, index, offset, bytes, size)) return false;
+    /* Fault only the validator's bounded reference read, after the slot engine
+     * checked its digest. The real package/signature verifier must reject it. */
+    if (offset == 0U && (write_workspace_observation.corrupt_reference_mask & (1U << index)))
+        bytes[0] ^= 1U;
+    return true;
+}
+
+static econtainer_slot_validation_result_t test_written_package_validate(
+    void *context, const econtainer_slot_operation_t *operation,
+    econtainer_slot_read_fn read_fn, void *read_context, size_t package_size_bytes,
+    const econtainer_slot_references_t *references)
+{
+    if (!write_workspace_observation.active)
+        return econtainer_package_slot_validate(context, operation, read_fn,
+            read_context, package_size_bytes, references);
+    econtainer_package_slot_validation_t *validation = context;
+    firmware_stage_workspace_t *workspace = write_workspace_observation.live;
+    assert(workspace != NULL && validation != &s_product.validation &&
+           validation->package_workspace == &workspace->package &&
+           validation->wasm_workspace == &workspace->wasm &&
+           validation->verified_info == &workspace->info &&
+           write_workspace_observation.source_complete && references != NULL);
+    assert(++write_workspace_observation.core_validator_calls == 1U);
+    econtainer_slot_references_t observed = *references;
+    observed.read = read_observed_reference;
+    observed.context = (void *)references;
+    return econtainer_package_slot_validate(context, operation, read_fn,
+        read_context, package_size_bytes, &observed);
+}
+
 static void test_product_free(void *memory)
 {
+    if (write_workspace_observation.active && memory != NULL &&
+        memory == write_workspace_observation.live) {
+        assert(write_workspace_observation.allocations == 1U &&
+               write_workspace_observation.releases == 0U);
+        write_workspace_observation.live = NULL;
+        ++write_workspace_observation.releases;
+    }
     if (observe_event_allocations && memory != NULL) {
         for (size_t index = event_allocation_count; index != 0U; --index) {
             if (event_allocations[index - 1U].pointer != memory) continue;
@@ -141,6 +243,26 @@ typedef struct { uint8_t *bytes; size_t size; } file_t;
 
 static file_t expected_confirmed_version, expected_candidate_version, expected_second_version;
 static store_t store;
+static void *test_product_calloc(size_t count, size_t size_bytes)
+{
+    if (!write_workspace_observation.active || count != 1U ||
+        size_bytes != sizeof(firmware_stage_workspace_t)) return calloc(count, size_bytes);
+    /* This allocation is the private WRITE callback's first statement; its
+     * count does not claim that the core validator ran on allocation failure. */
+    assert(++write_workspace_observation.callback_allocation_attempts == 1U &&
+           write_workspace_observation.live == NULL &&
+           write_workspace_observation.source_complete);
+    if (write_workspace_observation.fail_allocation) {
+        if (write_workspace_observation.fail_aborted_readback)
+            store.fail_read_after_next_write = 2U;
+        return NULL;
+    }
+    void *memory = calloc(count, size_bytes);
+    assert(memory != NULL);
+    write_workspace_observation.live = memory;
+    ++write_workspace_observation.allocations;
+    return memory;
+}
 static esp_base_storage_owner_t flash_io_owner;
 static econtainer_package_workspace_t test_package_workspace;
 static econtainer_wasm_workspace_t test_wasm_workspace;
@@ -346,8 +468,27 @@ static file_t read_file(const char *directory, const char *name)
 static bool read_source(void *context, size_t offset, uint8_t *bytes, size_t size)
 {
     const file_t *file = context;
+    if (write_workspace_observation.active) {
+        assert(write_workspace_observation.callback_allocation_attempts == 0U &&
+               write_workspace_observation.live == NULL &&
+               offset == write_workspace_observation.source_bytes);
+    }
     if (offset > file->size || size > file->size - offset) return false;
     memcpy(bytes, file->bytes + offset, size);
+    if (write_workspace_observation.active) {
+        write_workspace_observation.source_bytes += size;
+        write_workspace_observation.source_complete = offset + size == file->size;
+    }
+    return true;
+}
+
+static bool read_failed_source(void *context, size_t offset, uint8_t *bytes, size_t size)
+{
+    if (!read_source(context, offset, bytes, size)) return false;
+    if (offset != 0U) {
+        write_workspace_observation.source_complete = false;
+        return false;
+    }
     return true;
 }
 
@@ -1658,11 +1799,29 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     assert(esp_base_container_with_firmware_set(&claim,
         ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
         ECONTAINER_SLOTS_OK);
+    /* Keep two real signed references: the candidate matches the fallback's
+     * digest, while the running firmware's different package must be read and
+     * verified through the bounded reference reader. */
+    const esp_base_ota_firmware_set_t source_firmware_set = physical;
+    memcpy(physical.running_firmware_sha256,
+           source_firmware_set.bootable_firmware_sha256[1], 32);
+    memcpy(physical.bootable_firmware_sha256[0], physical.running_firmware_sha256, 32);
+    memcpy(physical.bootable_firmware_sha256[1],
+           source_firmware_set.running_firmware_sha256, 32);
+    install.package = candidate_package;
+    install.operation_marker = 0x92;
+    assert(esp_base_container_with_firmware_set(&claim,
+        ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, install_signed, &install) ==
+        ECONTAINER_SLOTS_OK);
+    physical = source_firmware_set;
     assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
     econtainer_slots_state_t original = {0};
     assert(econtainer_slots_load(&io, &geometry, &original) == ECONTAINER_SLOTS_OK);
     const int index = binding_index(&original, physical.running_firmware_sha256);
     assert(index >= 0 && original.bindings[index].package_present);
+    const int fallback_index = binding_index(&original, physical.bootable_firmware_sha256[1]);
+    assert(fallback_index >= 0 && fallback_index != index &&
+           original.bindings[fallback_index].package_present);
     const uint8_t original_slot = original.bindings[index].slot;
     uint8_t *original_bytes = malloc(confirmed_package->size);
     assert(original_bytes != NULL);
@@ -1688,9 +1847,11 @@ static void run_prepare_preserves_confirmed(const file_t *key,
         assert(SHA256(conflicting_package->bytes, conflicting_package->size,
                       conflict.package_sha256) != NULL);
         assert(memcmp(conflict.package_sha256, request.previous_package_sha256, 32) != 0);
+        begin_write_workspace_observation(false, false);
         assert(esp_base_container_product_prepare_package(&claim, &conflict,
             read_source, (void *)conflicting_package, &prepared_sequence) ==
             ESP_BASE_CONTAINER_PREPARE_REJECTED);
+        end_write_workspace_observation(1U, 1U, (1U << index) | (1U << fallback_index));
         econtainer_slots_state_t conflict_state = {0};
         assert(econtainer_slots_load(&io, &geometry, &conflict_state) == ECONTAINER_SLOTS_OK &&
                conflict_state.phase == ECONTAINER_SLOT_ABORTED &&
@@ -1717,15 +1878,38 @@ static void run_prepare_preserves_confirmed(const file_t *key,
     }
     const unsigned writes_before_wrong_binding = store.blob_writes;
     request.previous_package_sha256[0] ^= 0x01U;
+    begin_write_workspace_observation(false, false);
     assert(esp_base_container_product_prepare_package(&claim, &request,
         read_source, (void *)candidate_package,
         &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_REJECTED);
+    end_write_workspace_observation(0U, 0U, 0U);
     assert(prepared_sequence == 0U &&
            store.blob_writes == writes_before_wrong_binding);
     request.previous_package_sha256[0] ^= 0x01U;
+    memcpy(request.operation_id,
+           "99999999-9999-4999-8999-999999999998", sizeof request.operation_id);
+    begin_write_workspace_observation(false, false);
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_failed_source, (void *)candidate_package,
+        &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_REJECTED);
+    end_write_workspace_observation(0U, 0U, 0U);
+    econtainer_slots_state_t source_rejected = {0};
+    assert(econtainer_slots_load(&io, &geometry, &source_rejected) == ECONTAINER_SLOTS_OK &&
+           source_rejected.phase == ECONTAINER_SLOT_ABORTED &&
+           source_rejected.sequence == request.expected_sequence + 2U &&
+           prepared_sequence == source_rejected.sequence &&
+           same_binding(&original.bindings[0], &source_rejected.bindings[0]) &&
+           same_binding(&original.bindings[1], &source_rejected.bindings[1]) &&
+           esp_base_storage_claim_active(&claim) &&
+           esp_base_container_product_event_accepting());
+    request.expected_sequence = source_rejected.sequence;
+    memcpy(request.operation_id,
+           "99999999-9999-4999-8999-999999999999", sizeof request.operation_id);
+    begin_write_workspace_observation(false, false);
     assert(esp_base_container_product_prepare_package(&claim, &request,
         read_corrupt_source, (void *)candidate_package,
         &prepared_sequence) == ESP_BASE_CONTAINER_PREPARE_REJECTED);
+    end_write_workspace_observation(0U, 0U, 0U);
     assert(prepared_sequence == request.expected_sequence + 2U);
     econtainer_slots_state_t rejected = {0};
     assert(econtainer_slots_load(&io, &geometry, &rejected) == ECONTAINER_SLOTS_OK);
@@ -1739,12 +1923,64 @@ static void run_prepare_preserves_confirmed(const file_t *key,
         confirmed_package->size) == 0);
     assert(esp_base_container_product_event_accepting());
 
+    request.expected_sequence = rejected.sequence;
+    memcpy(request.operation_id,
+           "99999999-9999-4999-8999-999999999990", sizeof request.operation_id);
+    begin_write_workspace_observation(false, false);
+    write_workspace_observation.corrupt_reference_mask = 1U << index;
+    assert(esp_base_container_product_prepare_package(&claim, &request,
+        read_source, (void *)candidate_package, &prepared_sequence) ==
+        ESP_BASE_CONTAINER_PREPARE_REJECTED);
+    end_write_workspace_observation(1U, 1U, 1U << index);
+    assert(econtainer_slots_load(&io, &geometry, &rejected) == ECONTAINER_SLOTS_OK &&
+           rejected.phase == ECONTAINER_SLOT_ABORTED &&
+           rejected.sequence == request.expected_sequence + 2U &&
+           prepared_sequence == rejected.sequence &&
+           same_binding(&original.bindings[0], &rejected.bindings[0]) &&
+           same_binding(&original.bindings[1], &rejected.bindings[1]) &&
+           esp_base_storage_claim_active(&claim) &&
+           esp_base_container_product_event_accepting() &&
+           memcmp(original_bytes,
+               store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
+               confirmed_package->size) == 0);
+
+    for (unsigned independent_readback_failure = 0U;
+         independent_readback_failure < 2U; ++independent_readback_failure) {
+        request.expected_sequence = rejected.sequence;
+        memcpy(request.operation_id, independent_readback_failure == 0U ?
+            "99999999-9999-4999-8999-999999999996" :
+            "99999999-9999-4999-8999-999999999997", sizeof request.operation_id);
+        begin_write_workspace_observation(true, independent_readback_failure != 0U);
+        assert(esp_base_container_product_prepare_package(&claim, &request,
+            read_source, (void *)candidate_package, &prepared_sequence) ==
+            (independent_readback_failure == 0U ? ESP_BASE_CONTAINER_PREPARE_REJECTED :
+                                               ESP_BASE_CONTAINER_PREPARE_UNCERTAIN));
+        end_write_workspace_observation(1U, 0U, 0U);
+        /* The second case fails Base's independent ABORTED readback only:
+         * Container's commit readback succeeded and the durable record exists. */
+        assert(econtainer_slots_load(&io, &geometry, &rejected) == ECONTAINER_SLOTS_OK &&
+               rejected.phase == ECONTAINER_SLOT_ABORTED &&
+               rejected.sequence == request.expected_sequence + 2U &&
+               prepared_sequence == (independent_readback_failure == 0U ? rejected.sequence : 0U) &&
+               same_binding(&original.bindings[0], &rejected.bindings[0]) &&
+               same_binding(&original.bindings[1], &rejected.bindings[1]) &&
+               esp_base_storage_claim_active(&claim) && s_product.thread_joinable &&
+               !s_product.stop_succeeded && atomic_load(&s_product.instance_active) &&
+               esp_base_container_product_event_accepting() &&
+               memcmp(original_bytes,
+                   store.flash + geometry.slots[original_slot].offset_bytes - FLASH_BASE,
+                   confirmed_package->size) == 0);
+        check_active_product(&claim, &expected_confirmed_version, false, NULL);
+    }
+
     memcpy(request.operation_id,
            "99999999-9999-4999-8999-999999999992", sizeof request.operation_id);
     request.expected_sequence = rejected.sequence;
+    begin_write_workspace_observation(false, false);
     assert(esp_base_container_product_prepare_package(&claim, &request,
         read_source, (void *)candidate_package,
         &prepared_sequence) == ESP_BASE_CONTAINER_PREPARED);
+    end_write_workspace_observation(1U, 1U, 1U << index);
     econtainer_slots_state_t prepared = {0};
     assert(econtainer_slots_load(&io, &geometry, &prepared) == ECONTAINER_SLOTS_OK);
     assert(prepared_sequence == rejected.sequence + 2U &&
@@ -2521,8 +2757,12 @@ static void run_firmware_package_stage_internal(const file_t *key, const file_t 
                                        const char boot_id[37],
                                        esp_base_ota_package_mode_t mode,
                                        bool corrupt_write, bool recover_before_stage,
-                                       bool recover_valid, unsigned live_trial, bool source_only)
+                                       bool recover_valid, unsigned live_trial, bool source_only,
+                                       unsigned write_failure)
 {
+    assert(write_failure <= 2U && (write_failure == 0U ||
+        (mode == ESP_BASE_OTA_PACKAGE_WRITE && conflicting_package == NULL &&
+         !corrupt_write && !recover_before_stage && !recover_valid && live_trial == 0U)));
     configure(key);
     if (source_only) {
         physical.bootable_count = 1U;
@@ -2671,9 +2911,11 @@ static void run_firmware_package_stage_internal(const file_t *key, const file_t 
         const unsigned before_write_flash_writes = store.flash_writes;
         esp_base_ota_receipt_recovery_t wrong = receipt;
         strcpy(wrong.operation_id, "99999999-9999-4999-8999-999999999996");
+        begin_write_workspace_observation(false, false);
         assert(esp_base_container_product_write_staged_firmware_package(
             &claim, &prepared, &wrong, read_source, (void *)package) ==
             ESP_BASE_CONTAINER_STAGE_REJECTED);
+        end_write_workspace_observation(0U, 0U, 0U);
         assert(store.flash_erases == before_write_erases &&
                store.flash_writes == before_write_flash_writes);
         const uint32_t target_offset = geometry.slots[state.operation.slot].offset_bytes -
@@ -2682,9 +2924,11 @@ static void run_firmware_package_stage_internal(const file_t *key, const file_t 
             /* WRITE has already stopped/reclaimed the source by its existing
              * contract. The new admission gate must leave WRITING unresolved,
              * preserve the source and use the original recovery path. */
+            begin_write_workspace_observation(false, false);
             assert(esp_base_container_product_write_staged_firmware_package(
                 &claim, &prepared, &receipt, read_source, (void *)conflicting_package) ==
                 ESP_BASE_CONTAINER_STAGE_UNCERTAIN);
+            end_write_workspace_observation(1U, 1U, 1U << source_index);
             assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
                    state.phase == ECONTAINER_SLOT_WRITING &&
                    state.sequence == retired_sequence + 1U &&
@@ -2722,13 +2966,20 @@ static void run_firmware_package_stage_internal(const file_t *key, const file_t 
             assert(esp_base_container_product_stop_confirmed(&claim));
             goto finished;
         }
-        if (corrupt_write) {
+        if (corrupt_write || write_failure != 0U) {
+            begin_write_workspace_observation(write_failure == 1U, false);
             assert(esp_base_container_product_write_staged_firmware_package(
-                &claim, &prepared, &receipt, read_corrupt_source, (void *)package) ==
+                &claim, &prepared, &receipt,
+                write_failure == 1U ? read_source :
+                write_failure == 2U ? read_failed_source : read_corrupt_source,
+                (void *)package) ==
                 ESP_BASE_CONTAINER_STAGE_UNCERTAIN);
+            end_write_workspace_observation(write_failure == 1U ? 1U : 0U, 0U, 0U);
             assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
                    state.phase == ECONTAINER_SLOT_WRITING &&
                    state.sequence == retired_sequence + 1U &&
+                   same_binding(&source, &state.bindings[source_index]) &&
+                   esp_base_storage_claim_active(&claim) &&
                    store.flash_erases == before_write_erases + 1U &&
                    store.flash_writes > before_write_flash_writes &&
                    memcmp(store.flash + source_offset, package->bytes,
@@ -2747,11 +2998,20 @@ static void run_firmware_package_stage_internal(const file_t *key, const file_t 
                    store.flash_writes == recovery_flash_writes &&
                    memcmp(store.flash + source_offset, package->bytes,
                           package->size) == 0);
+            const int retained = binding_index(&state, receipt.source_sha256);
+            assert(retained >= 0 && same_binding(&source, &state.bindings[retained]) &&
+                   esp_base_storage_claim_active(&claim));
+            assert(esp_base_container_product_without_ota_receipt(&claim));
+            assert(esp_base_container_product_boot(&claim, boot_id) == ESP_BASE_CONTAINER_RUNNING);
+            check_active_product(&claim, &expected_confirmed_version, false, NULL);
+            assert(esp_base_container_product_stop_confirmed(&claim));
             goto finished;
         }
+        begin_write_workspace_observation(false, false);
         assert(esp_base_container_product_write_staged_firmware_package(
             &claim, &prepared, &receipt, read_source, (void *)package) ==
             ESP_BASE_CONTAINER_STAGE_PREPARED);
+        end_write_workspace_observation(1U, 1U, 0U);
         assert(econtainer_slots_load(&io, &geometry, &state) == ECONTAINER_SLOTS_OK &&
                state.phase == ECONTAINER_SLOT_PREPARED &&
                state.sequence == retired_sequence + 2U &&
@@ -3062,7 +3322,7 @@ static void run_firmware_package_stage(const file_t *key, const file_t *package,
                                        bool recover_valid, unsigned live_trial, bool source_only)
 {
     run_firmware_package_stage_internal(key, package, NULL, boot_id, mode,
-        corrupt_write, recover_before_stage, recover_valid, live_trial, source_only);
+        corrupt_write, recover_before_stage, recover_valid, live_trial, source_only, 0U);
 }
 
 static void run_package_identity_fallback(const file_t *key, const file_t *confirmed,
@@ -3552,7 +3812,7 @@ int main(int argc, char **argv)
         run_package_identity_fallback(&key, &confirmed, &conflicting, boot_id);
         run_prepare_preserves_confirmed(&key, &confirmed, &newer, &conflicting, boot_id);
         run_firmware_package_stage_internal(&key, &confirmed, &conflicting, boot_id,
-            ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, 0U, true);
+            ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, 0U, true, 0U);
         free(expected_confirmed_version.bytes);
         free(expected_candidate_version.bytes);
         free(newer.bytes);
@@ -3690,6 +3950,9 @@ int main(int argc, char **argv)
                                ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, 0U, false);
     run_firmware_package_stage(&key, &package, boot_id,
                                ESP_BASE_OTA_PACKAGE_WRITE, true, false, false, 0U, false);
+    for (unsigned write_failure = 1U; write_failure <= 2U; ++write_failure)
+        run_firmware_package_stage_internal(&key, &package, NULL, boot_id,
+            ESP_BASE_OTA_PACKAGE_WRITE, false, false, false, 0U, false, write_failure);
     run_firmware_package_stage(&key, &package, boot_id,
                                ESP_BASE_OTA_PACKAGE_REUSE, false, false, true, 0U, false);
     run_firmware_package_stage(&key, &package, boot_id,
