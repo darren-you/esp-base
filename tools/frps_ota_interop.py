@@ -152,7 +152,7 @@ def main() -> int:
     image_data, source_data = bounded_image(image_original, args.target), bounded_image(source_original, args.target)
     if image_data == source_data:
         raise ValueError("源A与候选C必须不同且完整候选在app槽内")
-    fixture = Path(__file__).resolve().parents[1] / "firmware/tests/frps_ota_interop"
+    fixture = Path(__file__).resolve().parents[1] / "firmware/tests/frps-ota-interop"
     scenario = Path(__file__).resolve().with_name("frps_ota_scenario.py")
     inputs = output / "inputs"; inputs.mkdir()
     image, source_image = inputs / "candidate.bin", inputs / "source.bin"

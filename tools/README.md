@@ -87,7 +87,7 @@ python3 tools/capacity_observation.py --target esp32c3 --uart-log /absolute/priv
 
 ## 官方 FRPS 宿主互操作
 
-[frps_ota_scenario.py](frps_ota_scenario.py) 是 macOS／Linux 主机消费者，与 `frp_ota.py` 同目录导入；固件测试目录只保存 C／Go 联调夹具。构建器收据分别记录夹具清单和该主机场景的精确路径、摘要。
+[frps_ota_scenario.py](frps_ota_scenario.py) 是 macOS／Linux 主机消费者，与 `frp_ota.py` 同目录导入；[frps-ota-interop](../firmware/tests/frps-ota-interop/) 是 C／Go 主机联调夹具的职责目录，保留各语言文件名；构建器只读取该最终路径。构建器收据分别记录夹具清单和该主机场景的精确路径、摘要。
 
 [run_frps_ota_interop_test.sh](../firmware/tests/run_frps_ota_interop_test.sh) 在本机回环启动 catalog 精确版本的官方 FRPS，链接冻结 efrp／eota 与 Base 实际 listener、handler、owner 和 V4 收据。双目标完整 signed 输入、成功／写入失败／NVS不确定六场景、真实流预算及替身范围见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md#官方-frps-与原生-ota-宿主联调检查点)。它不安装生产 FRPS，不访问设备；POSIX／RAM Flash／SDK替身不能授予公网、实板或bootloader资格。
 
