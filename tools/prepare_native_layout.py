@@ -567,12 +567,12 @@ def prepare(args):
                       preserved_records={"/".join(k): digest(v) for k, (_, v) in records.items()})
         private_output_directory(args.output_directory)
         # Archive+readback precedes creation of the candidate that retires old runtime keys.
-        write_verified(args.output_directory / "source_flash.bin", flash)
+        write_verified(args.output_directory / "source-flash.bin", flash)
         encoded = (json.dumps(report, sort_keys=True, ensure_ascii=False, indent=2) + "\n").encode()
-        write_verified(args.output_directory / "migration_receipt.json", encoded)
+        write_verified(args.output_directory / "migration-receipt.json", encoded)
         if old_at is not None:
-            write_verified(args.output_directory / "at_old_raw.bin", old_at)
-        write_verified(args.output_directory / "candidate_flash.bin", candidate)
+            write_verified(args.output_directory / "at-old-raw.bin", old_at)
+        write_verified(args.output_directory / "candidate-flash.bin", candidate)
     return report
 
 

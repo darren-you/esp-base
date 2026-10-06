@@ -217,7 +217,7 @@ class NativeMigrationTests(unittest.TestCase):
 
     def arguments(self, flash, layout):
         target = migration.LAYOUTS[layout]["target"]
-        paths = (self.directory / "backup_a.bin", self.directory / "backup_b.bin")
+        paths = (self.directory / "backup_a.bin", self.directory / "backup-b.bin")
         for path in paths:
             path.write_bytes(flash)
             path.chmod(0o600)
@@ -235,9 +235,9 @@ class NativeMigrationTests(unittest.TestCase):
                 args = self.arguments(flash, layout_name)
                 args.output_directory = self.directory / layout_name
                 report = migration.prepare(args)
-                candidate = (args.output_directory / "candidate_flash.bin").read_bytes()
-                self.assertEqual((args.output_directory / "source_flash.bin").read_bytes(), flash)
-                receipt = json.loads((args.output_directory / "migration_receipt.json").read_text())
+                candidate = (args.output_directory / "candidate-flash.bin").read_bytes()
+                self.assertEqual((args.output_directory / "source-flash.bin").read_bytes(), flash)
+                receipt = json.loads((args.output_directory / "migration-receipt.json").read_text())
                 self.assertEqual(receipt, report)
                 self.assertEqual(report["old_operation"], {"operation_id": OPERATION, "state": "succeeded"})
                 self.assertEqual(report["old_operation_runtime_result"], "unknown_after_wired_identity_change")
@@ -358,7 +358,7 @@ class NativeMigrationTests(unittest.TestCase):
         args.source_verification_key = None
         report = migration.prepare(args)
         self.assertEqual(report["config_revision"], 42)
-        candidate = (args.output_directory / "candidate_flash.bin").read_bytes()
+        candidate = (args.output_directory / "candidate-flash.bin").read_bytes()
         records = migration.legacy.nvs_records(candidate, "base_store", 0x3f5000, 0xb000,
             migration.legacy.load_nvs_parser(self.components), {migration.CONFIG_KEY})
         self.assertEqual(records[migration.CONFIG_KEY], ("blob", migration.legacy.convert_v1_wifi_only(config)))
@@ -387,8 +387,8 @@ class NativeMigrationTests(unittest.TestCase):
         args.source_efuse_mac = "01:02:03:04:05:06"
         report = migration.prepare(args)
         self.assertNotIn("device_id", report)
-        candidate = (args.output_directory / "candidate_flash.bin").read_bytes()
-        old_at = (args.output_directory / "at_old_raw.bin").read_bytes()
+        candidate = (args.output_directory / "candidate-flash.bin").read_bytes()
+        old_at = (args.output_directory / "at-old-raw.bin").read_bytes()
         self.assertEqual(candidate[0x3e6000:0x3ea000], old_at)
         self.assertEqual(old_at, flash[0x12000:0x14000] + flash[0x20000:0x22000])
         self.assertEqual(candidate[0x9000:0xf000], b"\xff" * 0x6000)
@@ -415,13 +415,13 @@ class NativeMigrationTests(unittest.TestCase):
         original_read = migration.read_file
         def fail_archive_readback(path, **options):
             raw = original_read(path, **options)
-            return raw[:-1] + bytes((raw[-1] ^ 1,)) if Path(path).name == "source_flash.bin" else raw
+            return raw[:-1] + bytes((raw[-1] ^ 1,)) if Path(path).name == "source-flash.bin" else raw
         with mock.patch.object(migration, "read_file", side_effect=fail_archive_readback):
             with self.assertRaises(migration.MigrationError):
                 migration.prepare(args)
-        self.assertTrue((args.output_directory / "source_flash.bin").exists())
-        self.assertFalse((args.output_directory / "migration_receipt.json").exists())
-        self.assertFalse((args.output_directory / "candidate_flash.bin").exists())
+        self.assertTrue((args.output_directory / "source-flash.bin").exists())
+        self.assertFalse((args.output_directory / "migration-receipt.json").exists())
+        self.assertFalse((args.output_directory / "candidate-flash.bin").exists())
 
 
 if __name__ == "__main__":

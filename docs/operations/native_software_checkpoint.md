@@ -4,6 +4,10 @@
 
 同日职责调整初次记录：ESP Tool Mac App 只做本机 ESP 管理，删除 App 内置 FRP／frpc 与远程 Bridge。当时只调整文档并回写R3待办；此前涉及Bridge的软件与测试结果仍是范围调整前真实记录。后继删除与Rust精确消费的软件结果见文末各节，旧阶段数字不赋予新阶段资格。设备自身FRP／MQTT和Server／Web直接面向设备的远程职责保持。
 
+## 离线输入物理名称候选
+
+2026-10-07 命名硬切源码将当前生成器输出统一为 `source-flash.bin`、`candidate-flash.bin`、`migration-receipt.json` 和必要的 `at-old-raw.bin`，与 ESP Tool Go 签名器及 Swift 消费者同批修改；签名 manifest 使用 `wired-flash-manifest.json`。JSON 字段、状态值、`at_old_raw` 等 ESP 分区标签、完整 Flash 和原身份保持。本轮按 `sdk-lock.json` 精确 IDF 提交重取官方分区与 NVS 宿主工具，生成器现有九项离线回归通过；只证明当前软件输出，未访问串口或修改实际材料。既有受限归档和下文旧输出名保留历史原文，仍待同一停写窗口完成实际输入／恢复材料与原安装迁移；本批完整清单由工作区命名硬切方案记录。
+
 ## 已实现的软件合同
 
 Base 的原生业务由既有控制 owner 同步执行认证 MQTT 二进制事件，保留计数、暂停／恢复、状态查询、非延期 100 ms 窗口与重启清零语义。输入不再携带业务包摘要；完整 MQTT 帧仍最多 4096 B，原生业务输入最多 3924 B。没有新增业务线程、队列或输入副本。报送明确区分认证接受、业务执行结果与 Broker PUBACK。
