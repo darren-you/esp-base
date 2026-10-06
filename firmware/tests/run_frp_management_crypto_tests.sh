@@ -20,7 +20,7 @@ read -r -a openssl_libs <<< "$(pkg-config --libs openssl)"
   -I "$cjson_dir" -c "$cjson_dir/cJSON.c" -o "$build_dir/cjson.o"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$target_define"=1 \
   -Wall -Wextra -Werror -fsanitize=address,undefined "${openssl_cflags[@]}" \
-  -I "$test_root/tests/fakes/network_auth" -I "$test_root/tests/fakes" \
+  -I "$test_root/tests/fakes/network-auth" -I "$test_root/tests/fakes" \
   -I "$test_root/components/device_protocol/include" -I "$test_root/components/remote_config/include" \
   -I "$test_root/components/ota_operation/include" -I "$components_dir/esp_ota/include" -I "$cjson_dir" \
   "$test_root/components/device_protocol/network_auth.c" \
@@ -50,12 +50,12 @@ cat > "$build_dir/psa_openssl_port.c" <<'PSA_PORT'
 PSA_PORT
 for source in network_auth frp_management_listener; do
   "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror \
-    -fsanitize=address,undefined -I "$test_root/tests/fakes/network_auth" \
+    -fsanitize=address,undefined -I "$test_root/tests/fakes/network-auth" \
     -I "$test_root/components/device_protocol/include" -I "$test_root/components/remote_config/include" \
     -c "$test_root/components/device_protocol/$source.c" -o "$build_dir/$source.o"
 done
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined "${openssl_cflags[@]}" \
-  -I "$test_root/tests/fakes/network_auth" -I "$test_root/tests/fakes" \
+  -I "$test_root/tests/fakes/network-auth" -I "$test_root/tests/fakes" \
   -c "$build_dir/psa_openssl_port.c" -o "$build_dir/psa_openssl_port.o"
 "${CC:-cc}" -std=c11 -D"$target_define"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections \
@@ -70,7 +70,7 @@ done
   -c "$test_root/components/remote_config/config_codec.c" -o "$build_dir/config_codec_real.o"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$target_define"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${protocol_link_gc[@]}" "${openssl_cflags[@]}" \
-  -I "$test_root/tests/fakes/protocol-path" -I "$test_root/tests/fakes/ota_update" -I "$test_root/tests/fakes" \
+  -I "$test_root/tests/fakes/protocol-path" -I "$test_root/tests/fakes/ota-update" -I "$test_root/tests/fakes" \
   -I "$test_root/components/device_protocol/include" -I "$test_root/components/device_protocol" \
   -I "$test_root/components/device_identity/include" -I "$test_root/components/remote_config/include" \
   -I "$test_root/components/wifi_runtime/include" -I "$test_root/components/time_runtime/include" \

@@ -38,3 +38,5 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_frp_management_crypto_tests.s
 通用HTTPS／有界输入流、完整镜像／签名／Flash／slot机制回归归属于精确esp-ota组件，不保留第二份实现。旧Container生命周期、包source／账本、guest与专属探针测试已退役；历史证据继续保存，但没有现役编译入口。
 
 宿主Python控制、FRP客户端、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。官方 FRPS 的 Python 场景消费者也位于 `tools/frps_ota_scenario.py`；C／Go 主机联调夹具归入 [frps-ota-interop](frps-ota-interop/)，本目录保留 Shell 入口；它不是 ESP-IDF 组件或 Go import 包。本轮输入／实际结果见[原生软件检查点](../../docs/operations/native_software_checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
+
+SDK 假件职责目录统一为 `fakes/app-main`、`fakes/network-auth`、`fakes/ota-firmware`、`fakes/ota-update` 和 `fakes/wifi-runtime`。完整读取入口是本目录的 `run_host_tests.sh`、`run_frp_management_crypto_tests.sh` 与 `frps-ota-interop/CMakeLists.txt`；它们不属于 ESP-IDF 组件，内部 SDK 头文件及 `psa/crypto.h` 等入口保持原合同。

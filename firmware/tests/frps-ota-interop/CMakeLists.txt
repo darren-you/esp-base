@@ -23,7 +23,7 @@ add_subdirectory("${BASE_COMPONENTS}/esp_frp" "efrp")
 set(base_includes
   "${MBEDTLS_SOURCE}/tf-psa-crypto/include" "${MBEDTLS_SOURCE}/include"
   "${FIXTURE_INPUT}/fakes" "${BASE_ROOT}/firmware/tests/fakes/protocol-path"
-  "${BASE_ROOT}/firmware/tests/fakes/ota_update" "${BASE_ROOT}/firmware/tests/fakes"
+  "${BASE_ROOT}/firmware/tests/fakes/ota-update" "${BASE_ROOT}/firmware/tests/fakes"
   "${BASE_ROOT}/firmware/components/device_protocol/include"
   "${BASE_ROOT}/firmware/components/device_protocol"
   "${BASE_ROOT}/firmware/components/device_identity/include"

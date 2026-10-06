@@ -21,7 +21,7 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
   -o "$BUILD_DIR/native_business_test"
 "$BUILD_DIR/native_business_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/network_auth" -I "$ROOT/components/device_protocol/include" \
+  -I "$ROOT/tests/fakes/network-auth" -I "$ROOT/components/device_protocol/include" \
   "$ROOT/components/device_protocol/network_auth.c" \
   "$ROOT/components/device_protocol/mqtt_command.c" \
   "$ROOT/components/device_protocol/mqtt_event.c" \
@@ -92,13 +92,13 @@ printf '  hardware       not used\n'
   "$ROOT/tests/config_store_test.c" -o "$BUILD_DIR/config_store_test"
 "$BUILD_DIR/config_store_test"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
+  -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" "$ROOT/components/ota_operation/esp_base_ota_receipt.c" \
   "$ROOT/tests/ota_receipt_test.c" \
   -o "$BUILD_DIR/ota_receipt_test"
 "$BUILD_DIR/ota_receipt_test"
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/ota_firmware" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/ota-firmware" -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" \
   "$ROOT/components/ota_operation/esp_base_ota_firmware.c" \
@@ -116,7 +116,7 @@ else
 fi
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
-  -I "$ROOT/tests/fakes/app_main" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$ROOT/components/remote_config/include" -I "$ROOT/components/safety_runtime/include" \
   -I "$ROOT/components/time_runtime/include" -I "$ROOT/components/ota_operation/include" \
@@ -138,7 +138,7 @@ fi
   -c "$ROOT/components/remote_config/config_codec.c" -o "$BUILD_DIR/config_codec_real.o"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
-  -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota_update" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/device_protocol" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/wifi_runtime/include" -I "$ROOT/components/time_runtime/include" \
@@ -157,7 +157,7 @@ fi
   -o "$BUILD_DIR/control_state_test"
 "$BUILD_DIR/control_state_test"
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/app_main" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$EOTA_DIR/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/safety_runtime/include" -I "$ROOT/components/time_runtime/include" \
@@ -176,7 +176,7 @@ fi
   -DCONFIG_ESP_BASE_FRP_SCRATCH_LABEL=\"frp_scratch\" \
   -DCONFIG_ESP_BASE_FRP_SCRATCH_OFFSET="$SCRATCH_OFFSET" \
   -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/app_main" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_identity/include" \
   -I "$ROOT/components/device_protocol/include" -I "$EOTA_DIR/include" \
   -I "$COMPONENTS_DIR/esp_frp/include" \
@@ -194,7 +194,7 @@ fi
   -o "$BUILD_DIR/time_runtime_test"
 "$BUILD_DIR/time_runtime_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/wifi_runtime" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/tests/fakes/wifi-runtime" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/wifi_runtime/include" -I "$ROOT/components/remote_config/include" \
   "$ROOT/components/wifi_runtime/esp_base_wifi.c" "$ROOT/components/remote_config/config_codec.c" \
   "$ROOT/tests/wifi_startup_test.c" -o "$BUILD_DIR/wifi_startup_test"
