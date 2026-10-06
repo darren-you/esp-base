@@ -39,7 +39,7 @@ typedef enum {
  * signature rejection alone cannot rule out bootloader fallback. An ambiguous
  * inactive image or any inconsistent SDK observation yields no set. The
  * caller must serialize all app Flash and otadata writers through the entire
- * call and while using the result; this function neither takes a product lock
+ * call and while using the result; this function neither acquires that claim
  * nor changes Flash, otadata, NVS or eFuse. The first entry is always running.
  * Equal signed images in both slots have one distinct identity. */
 esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(

@@ -18,7 +18,7 @@
 
 ## 2026-09-27：此前三记录容量验证
 
-2026-09-27，以 Base `2af15411c27d585361f516b03a38ec6a70d7d776` 建立独立工作树，扩展[现有容量探针](../../firmware/tests/nvs-capacity-probe/README.md)，在 `mac-work-1` 的仓外 4 MiB 合成 Flash 上运行。固定 ESP-IDF 为 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，esp-lwIP 为 `2758df4cd3666b3b2a5b53830148379326425c0d`；Espressif Xtensa QEMU 为 `9.2.2 (esp_develop_9.2.2_20260417)`，`-machine help` 明确包含 `esp32`。目标专用依赖锁解析公开 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc` 与 `wasm-micro-runtime@26c235e53e29acd8b43abe7f3b524577bd4d1ae5`。本测试没有接触板卡、私有 Flash 或真实配置。
+2026-09-27，以 Base `2af15411c27d585361f516b03a38ec6a70d7d776` 建立独立工作树，扩展[现有容量探针](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/tests/nvs-capacity-probe/README.md)，在 `mac-work-1` 的仓外 4 MiB 合成 Flash 上运行。固定 ESP-IDF 为 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，esp-lwIP 为 `2758df4cd3666b3b2a5b53830148379326425c0d`；Espressif Xtensa QEMU 为 `9.2.2 (esp_develop_9.2.2_20260417)`，`-machine help` 明确包含 `esp32`。目标专用依赖锁解析公开 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc` 与 `wasm-micro-runtime@26c235e53e29acd8b43abe7f3b524577bd4d1ae5`。本测试没有接触板卡、私有 Flash 或真实配置。
 
 合成分区表经固定 SDK 生成和回读：`product_pkgs@0x260000/0x186000`、`at_old_raw@0x3e6000/0x4000`、`frp_scratch@0x3ea000/0x10000`、`base_store@0x3fa000/0x6000` 与 ESP32 条件几何的尾部一致；测试专用 `factory@0x10000/0x100000` 取代产品双 OTA app。生成表 SHA-256 为 `f7c2b9acde45620cac0a81e6177567ad39f476b696a48722df8e5a3d4181d2fa`。生成 `sdkconfig` 核对为 `esp32`、4 MiB、自定义表、UART0 控制台，NVS 加密未启用。正式 ESP32 CSV、签名启动链和设备均未修改。
 

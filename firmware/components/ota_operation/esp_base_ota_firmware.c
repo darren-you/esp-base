@@ -56,7 +56,7 @@ static bool prepared_candidate_valid(const eota_prepared_t *prepared,
 }
 
 /* The OTA library deliberately reports signed image identity without product
- * authorization. A rollback image offered to Container must also be a Base
+ * authorization. A rollback image reported to the native firmware owner must also be a Base
  * image for this chip, or a valid signature from another product could enter
  * the bootable firmware set. The caller holds the app/otadata write owner. */
 static bool matching_base_image(const eota_policy_t *policy, uint8_t subtype,
@@ -70,28 +70,43 @@ static bool matching_base_image(const eota_policy_t *policy, uint8_t subtype,
 
     esp_image_header_t header = {0};
     esp_app_desc_t description = {0};
-    return esp_partition_read(partition, 0, &header, sizeof header) == ESP_OK &&
+    if (!policy->flash_io.acquire(policy->flash_io.context)) return false;
+    const bool matches = esp_partition_read(partition, 0, &header, sizeof header) == ESP_OK &&
            header.magic == ESP_IMAGE_HEADER_MAGIC &&
            header.chip_id == policy->chip_id &&
            esp_ota_get_partition_description(partition, &description) == ESP_OK &&
            description.magic_word == ESP_APP_DESC_MAGIC_WORD &&
            strncmp(description.project_name, policy->project_name,
                    sizeof description.project_name) == 0;
+    const bool released = policy->flash_io.release(policy->flash_io.context);
+    return released && matches;
 }
 
 /* App-side signature rejection cannot establish that the bootloader will
  * skip an inactive image: C3 RSA update verification has no signed-on-boot
  * equivalent in this fixed SDK. A physically erased image header does. */
-static bool erased_inactive_image(uint8_t subtype, uint32_t address, uint32_t size)
+static bool erased_inactive_image(const eota_policy_t *policy, uint8_t subtype,
+                                  uint32_t address, uint32_t size)
 {
     const esp_partition_t *partition = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, subtype, NULL);
     uint8_t magic = 0;
-    return partition != NULL && partition->type == ESP_PARTITION_TYPE_APP &&
-           partition->subtype == subtype && partition->address == address &&
-           partition->size == size &&
-           esp_partition_read(partition, 0, &magic, sizeof magic) == ESP_OK &&
-           magic == 0xffU;
+    if (partition == NULL || partition->type != ESP_PARTITION_TYPE_APP ||
+        partition->subtype != subtype || partition->address != address ||
+        partition->size != size ||
+        !policy->flash_io.acquire(policy->flash_io.context)) return false;
+    const bool erased = esp_partition_read(partition, 0, &magic, sizeof magic) == ESP_OK &&
+                        magic == 0xffU;
+    const bool released = policy->flash_io.release(policy->flash_io.context);
+    return released && erased;
+}
+
+static bool rollback_possible_with_flash_io(const eota_policy_t *policy)
+{
+    if (!policy->flash_io.acquire(policy->flash_io.context)) return false;
+    const bool possible = esp_ota_check_rollback_is_possible();
+    const bool released = policy->flash_io.release(policy->flash_io.context);
+    return released && possible;
 }
 
 esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
@@ -133,7 +148,7 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
         before.target_state != EOTA_STATE_UNTRACKED &&
         before.target_state != EOTA_STATE_INVALID &&
         before.target_state != EOTA_STATE_ABORTED) return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
-    if (has_rollback && !esp_ota_check_rollback_is_possible()) {
+    if (has_rollback && !rollback_possible_with_flash_io(&policy)) {
         return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
     }
 
@@ -162,7 +177,7 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
             return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
         }
     } else if (target_result != EOTA_UPDATE_IMAGE_INVALID ||
-               !erased_inactive_image(before.target_subtype,
+               !erased_inactive_image(&policy, before.target_subtype,
                                       before.target_address_bytes,
                                       before.target_size_bytes)) {
         return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
@@ -171,9 +186,9 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
     eota_slots_t after;
     if (eota_observe_slots(&policy, &after) != EOTA_UPDATE_OK ||
         !same_slots(&before, &after) ||
-        (has_rollback && !esp_ota_check_rollback_is_possible()) ||
+        (has_rollback && !rollback_possible_with_flash_io(&policy)) ||
         (!has_rollback && !prepared_candidate &&
-         !erased_inactive_image(after.target_subtype,
+         !erased_inactive_image(&policy, after.target_subtype,
                                 after.target_address_bytes,
                                 after.target_size_bytes))) {
         return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;

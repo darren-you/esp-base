@@ -124,6 +124,26 @@ class PreflightTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("不一致", result.stderr)
 
+    def test_fifo_backup_blocks_without_waiting_for_writer(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fifo_backup_", dir=self.work) as directory:
+            work = Path(directory)
+            regular = work / "regular.bin"
+            regular.write_bytes(b"\xff" * 0x400000)
+            regular.chmod(0o600)
+            output = work / "candidate.bin"
+            for name in ("backup-a", "backup-b"):
+                with self.subTest(input=name):
+                    fifo = work / (name + ".fifo")
+                    os.mkfifo(fifo, 0o600)
+                    first, second = (fifo, regular) if name == "backup-a" else (regular, fifo)
+                    result = subprocess.run([sys.executable, str(PREFLIGHT),
+                        "--backup-a", str(first), "--backup-b", str(second), "--idf-path", str(self.idf),
+                        "--device-id", DEVICE_ID, "--output-base-store", str(output)],
+                        text=True, capture_output=True, check=False, timeout=5)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("普通文件", result.stderr)
+                    self.assertFalse(output.exists())
+
     def test_unknown_nvs_key_blocks(self) -> None:
         store = self.store(extra="unexpected,data,u8,1\n")
         result = self.run_preflight(self.full_flash(store=store))

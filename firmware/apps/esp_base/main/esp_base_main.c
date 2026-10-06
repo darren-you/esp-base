@@ -49,14 +49,25 @@ static bool claim_flash_io(esp_base_storage_owner_t *owner,
 
 static bool ota_flash_acquire(void *context)
 {
-    return context == &s_flash_io_owner &&
-           claim_flash_io(context, &s_ota_flash_claim);
+    if (context != &s_flash_io_owner) return false;
+    /* Only the holder may touch the shared handoff. BUSY callers retry with
+     * their own claim; the owner's acquire/release orders the handoff bytes. */
+    esp_base_storage_claim_t claim = {0};
+    if (!claim_flash_io(context, &claim)) return false;
+    s_ota_flash_claim = claim;
+    return true;
 }
 
 static bool ota_flash_release(void *context)
 {
-    return context == &s_flash_io_owner &&
-           esp_base_storage_release(&s_ota_flash_claim);
+    if (context != &s_flash_io_owner) return false;
+    esp_base_storage_claim_t claim = s_ota_flash_claim;
+    /* Clear the handoff before publishing an idle owner. The release helper
+     * then clears only this task's local copy, never the next holder's claim. */
+    s_ota_flash_claim = (esp_base_storage_claim_t){0};
+    if (esp_base_storage_release(&claim)) return true;
+    s_ota_flash_claim = claim;
+    return false;
 }
 
 static esp_err_t inspect_with_flash_io(eota_current_t *ota)

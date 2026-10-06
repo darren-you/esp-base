@@ -1,35 +1,56 @@
 # ota_operation
 
-Base 自有的 OTA 产品约束、持久 operation 收据和只读固件集合观察。两个 target 均固定项目 `esp_base`：C3 使用 `esp32c3/esp_base`、RSA v2、双 `0x130000` 应用槽；ESP32 使用 `esp32/esp_base`、ECDSA v1、双 `0x120000` 应用槽。芯片 ID、槽地址与下载期限由编译目标决定，`ota.start` 请求不能修改这些约束。收据保存在 `base_store/base_ota/operation`，首次目标槽写入前必须 commit 并逐字节读回。同 operation ID 不重新下载，前次结果未决时不覆盖唯一收据。
+Base 自有的固件 OTA 约束、持久操作收据及只读签名固件集合观察。两个 target 都固定项目 `esp_base`，双 `0x1e0000` app 槽分别位于 `0x20000`、`0x200000`。C3 使用 `esp32c3/esp_base` 与 RSA v2；ESP32 使用 `esp32/esp_base` 与 ECDSA v1。请求不能修改芯片、签名方案、分区几何或期限。业务是原生固件代码，OTA 不再登记或下载动态业务包。
 
-同一 NVS key 的 V3 收据还保存签名运行 A、原独立备用 B（A-only 或两槽同一签名身份时为零）、目标 C 的摘要，A/B 物理 subtype、C 长度、配置 Container 时已对账的 ECS2 sequence，以及包模式、目标包、代表事件与来源包身份。内部登记现校验 `NO_PACKAGE`／`REUSE`／`WRITE` 的目标字段、来源包身份和 data schema，同 ID 请求须保持固件与包字段一致；只读恢复入口完整返回合法带包 V3，公开 worker 与目标 C 启动裁决按三种包模式核对完整原收据；A 侧启动恢复可消费带包原收据，必须先完成物理退役与 ECS2 对账再写失败终态。注册使用已持有的串行 owner，消费产品装配提供的 ECS2 snapshot，并立即重复 Base 的 `CONFIRMED` 签名固件集合观察；任一字段不一致就拒绝登记，不擦除任何 app 槽。目标 C 的完整 signed bin 摘要若与已复核的运行 A 相同，返回 `SAME_IMAGE`，在写 V3 收据、退役旧 B 或创建下载任务前结束；原有终态收据保持不变。启动端通过 `esp_base_ota_receipt_load_for_recovery` 读取原 `PREPARED` 意图；无包及带包路径均须完成原收据限定的物理/ECS2 对账才能据其清理确切 inactive 槽；目标 C 的带包试运行由主应用先准入，再由 MQTT 真实 owner 采集连续在线证据并按联合顺序确认。`FAILED` 是目标槽写入前可证明失败，或写入后完成本地中断清理和 ECS2 对账的终态，不授权再次擦槽。旧 V1/V2、损坏或读失败的 blob 一律返回存储不确定，不能当作空 key 或自动写入新操作。`ota.result` 不因目标 otadata 单独变为 `INVALID`／`ABORTED` 就推断失败；活跃 worker 或已选 pending C 的 `PREPARED` 只报告 running，VALID 但尚无持久成功仍为 unknown；A 侧未清理意图保持 unknown，新操作继续被阻断。
+`device_protocol` 的 USB/MQTT `ota.start` 提供 HTTPS URL；设备 FRP 公网入口登记同一固件意图，再通过已认证的上传连接流式收取完整 signed bin。`inbound_stream` 只是内存来源标志，不属于 wire 字段。两条入口共用唯一升级事务 owner，写前完成静态请求校验、已确认固件集合复核及持久收据 commit/逐字节读回。收到相同操作 ID 不重新下载或重新创建任务；来源等待、下载、选槽和启动确认期间，另一入口不能获得升级事务。
 
-## 架构拓扑
+## V4 收据与恢复
 
-```mermaid
-flowchart LR
-    protocol["device_protocol：ota.start / ota.result"] --> operation["ota_operation：产品约束 / NVS 收据"]
-    operation -->|"preflight / 槽与镜像事实"| library["公开 esp-ota：eota_ 组件"]
-    operation <-->|"operation / 设备 / 槽 / 摘要"| nvs["base_store：base_ota/operation"]
-    operation -->|"原 V3 意图限定退役对象"| retire["旧 B 物理擦除 / otadata 失效"]
-    retire --> binding["Container：A-only 持久对账"]
-    library --> idf["ESP-IDF：HTTPS / app_update / 分区"]
-    app["esp_base_main：30 秒本地自检"] -->|"确认或拒绝 pending"| library
-    firmware_set["esp_base_ota_observe_firmware_set：只读集合"] -->|"槽状态 / 验签摘要"| library
-    firmware_set -->|"回滚资格"| idf
-    owner["esp_base_storage_owner：启动与 OTA 串行 claim"] --> operation
-    owner --> firmware_set
-    binding -->|"已持有 claim + 集合映射"| firmware_set
+唯一收据仍在 `base_store/base_ota/operation`，为固定 182 字节 `EOTA` V4：状态、A/C 物理 subtype、失败码、保留字节、C 完整签名长度、设备 UUID、原操作 UUID、C 摘要、A 摘要和原备用 B 摘要。备用 B 不存在或两个槽属于同一签名身份时，其摘要为零。删除了 V3 中包模式、包摘要、代表事件及 ECS2 sequence。V1/V2/V3、错误长度、保留位非零、损坏或读取失败均返回存储不确定，不能当成键缺失，也不能用清空 NVS 继续启动。
+
+登记时重新观察物理槽与 `CONFIRMED` 签名固件集合；A 必须已 `VALID` 且也是 boot selector。C 与 A 同一完整签名摘要会在收据写入和退役 B 之前被拒绝。只有可证实终态收据可以被新操作替换；未决收据阻断新操作。
+
+应用写入前先按原收据退役确切 inactive 槽。失败后只有未改 app，或完成原意图限定的 inactive 物理清理、来源 A 验签/摘要和选槽核对，才能持久写 `FAILED`；读回不确定仍为 unknown。FRP 上传在等待连接时取消不会先擦槽；完整 prepare 后取消也在 select 前被复核，清理候选 C 后保留原 ID 失败终态。已选择 pending C 的进度不能被当作失败清理目标。
+
+上传 worker 完成时只返回准备进度 `running/202` 或尚未形成持久结果的 `unknown/200`，`result` 为 null。失败提交和精确读回由控制 owner 随后执行，提交证实后才形成 `failed`；上传响应不能提前声称终态。宿主收到上传 unknown、断链或任何未经原 ID 收据证实的上传状态时，继续查询同一 `operation_id`，不重发上传或另起操作。
+
+C 的启动确认独立于 Broker、FRPS 和业务消息：本地 NVS、身份、安全状态、配置和控制任务自检健康满 30 秒，并经过窗口边界后的下一次本地检查，再调用 IDF 确认和读回同槽 `VALID`。需复核 C 完整签名身份与原收据、A 回滚身份及集合稳定性；成功收据 commit/读回完成前保持升级门禁。A 侧中断恢复先核对来源、原 ID 与精确 inactive 槽，完成清理后写失败终态。缺收据只允许首次有线装配产生的已确认 `VALID` 签名基座；无原收据的 pending 固件被拒绝。
+
+`ota.result` 查询原 ID，返回固件 SHA-256、完整长度、target 和目标槽。活跃 worker 或原收据限定的 pending C 为 running；C 已 `VALID`、签名与摘要匹配且 `SUCCEEDED` 持久终态存在才 succeeded。失败须有真实已确认 A 与来源摘要匹配的 `FAILED` 终态。VALID、INVALID、ABORTED 等 otadata 状态单独不能证明升级结果，其他不确定状态返回 unknown，查询不改收据或选槽。
+
+## 签名集合与 Flash 所有权
+
+`esp_base_ota_observe_firmware_set` 只读观察 `CONFIRMED`、`PENDING_TRIAL` 或显式 `PREPARED_CANDIDATE`。运行槽和 boot selector 必须相同；每个涉及镜像都经 `eota_sha256_verified_image` 验签，再核对 Base 项目、芯片、完整长度和分区几何。同一 signed bin 摘要合并为同一固件身份。没有另一受管固件时，IDF 必须明确拒绝该镜像且 inactive 首字节为 `0xff`，才能报告单固件集合。prepared 只允许本次 `eota_prepare` 的精确收据，选槽前再次证明 A/C 完整身份和稳定状态。
+
+通用 HTTPS/stream 收取、镜像头/完整摘要、IDF 验签、槽观察、退役、确认和 rollback 由锁定 `esp-ota` 组件提供。唯一 `esp_base_storage_owner` 升级事务跨任务转交，网络等待期间保留事务 owner；app/otadata、配置/身份 NVS、操作收据与 FRP scratch 的实际物理访问共用独立短时 Flash I/O owner，网络等待不持有此短 claim。该串行化不替代实体 Flash 最坏时延、堆栈容量和寿命验证。
+
+## 首次有线布局迁入
+
+应用 OTA 不修改分区表。一次性离线工具 [prepare_native_layout.py](../../../tools/prepare_native_layout.py) 从两份独立、相同的私有 4 MiB 新鲜恢复件生成仓外完整候选，使用固定 SDK 的官方分区/NVS 工具和 `espsecure` 验签。输入还需本轮独立核对的 Base UUID，或旧 ESP-AT 的 eFuse MAC；旧/新固件均绑定明确目标与验签公钥。工具不打开串口、不操作 eFuse、不写设备。
+
+支持精确 `c3_product`、`esp32_product` 旧包布局、保留的 `c3_v1` 配置布局，以及已核对空 Wi-Fi 的 `esp32_at`。其他布局、未知 NVS 键、重复记录/CRC 失效、加密分区、otadata NEW/PENDING、EOTA PREPARED、ECS2 写入/试运行/中断和未决产品账本均阻断。旧 v1/v2 配置只在保留的 C3 一次性路径转换为 V3，UUID、revision 和已配置字段保留；现役 V3 配置原 blob 字节保留。
+
+旧 V3 终态需与真实 VALID 双槽签名身份、长度、ECS2 绑定、包原字节和账本终态共同核对。工具先把完整原 Flash、原操作 ID、V3/ECS2/账本原 blob 和核对结果写入 0700 仓外目录内的 0600 文件并精确读回，再生成退役旧操作/包键的候选 NVS。身份、配置、revision、凭据及仍活动 SDK 记录保留；默认 NVS、PHY、诊断区、现役 scratch 和 ESP32 `at_old_raw@0x3e6000/0x4000` 保持原字节。旧 C3 的 `base_store@0x3e0000` 整体归档后搬到新位置，覆盖到新 scratch 的原旧 NVS 不作为现役 scratch 内容保留。候选装入两个同信任新签名 app，并生成两个 VALID 选槽记录；选择 `ota_1`。候选 NVS 的页历史会重建，证明范围是仍活动记录的精确类型和值。
+
+普通应用 OTA 在原 ID 下保留可核对持久结果；**首次有线更换布局与固件身份的旧 ID 此后在设备上返回 unknown**，历史终态从私有 `migration_receipt.json` 与 `source_flash.bin` 核对。不能把旧 ID 改绑新镜像摘要冒充原升级成功。候选删除运行时键是已证实旧终态的明确退役，PREPARED、损坏或未知记录不允许删除。
+
+旧 ESP-AT 没有 Base UUID，工具不从 MAC 生成身份。旧 NVS 与 `at_customize` 的完整原分区通过已有 16 KiB 归档器无损重建并放入 `at_old_raw`；有非空尾页或非空旧 Wi-Fi 字段时拒绝。新 Base 的身份在首次真实启动按既有 UUIDv4 路径产生，配置通过获授权的物理 `config.set` 提供；这不是旧 AT 配置或身份映射。
+
+示例仅生成软件候选，须在固定 SDK Python 环境执行，所有路径都指向已审核的仓外输入：
+
+```bash
+python tools/prepare_native_layout.py \
+  --source-layout c3_product \
+  --backup-a <第一份新鲜完整Flash> --backup-b <第二份新鲜完整Flash> \
+  --idf-path "$IDF_PATH" --device-id <本轮已核对UUID> \
+  --source-verification-key <旧运行链验签公钥> \
+  --app <新完整签名esp_base.bin> --bootloader <新bootloader.bin> \
+  --partition-table <新目标分区表.bin> --verification-key <新验签公钥> \
+  --output-directory <0700仓外父目录中的尚未存在目录>
 ```
 
-通用 HTTPS 下载、镜像头/完整摘要、SDK 验签、槽观察、物理退役与确认/回滚均由锁定的 `esp-ota` 维护。`eota_validate_image_request` 与下载准备共用 HTTPS URL、非空主机、可选端口基本结构和最小镜像头长度规则，在旧 B 首次擦除前先拒绝静态无效请求；本组件不保留这些实现或旧 `esp_base_ota_*` 转发入口。收据查询通过 `eota_observe_slots` 和 `eota_sha256_running` 读取当前事实：worker 活跃或新槽 pending 为 running，新槽 VALID 且完整 signed bin 摘要吻合、产品确认并持久写入读回 `SUCCEEDED` 收据后才 succeeded；A 仍运行且失败已持久记录才 failed，该失败须发生于目标槽写入前，或写入后完成原收据驱动的物理槽与 Container 对账。其余 unknown。存储写入或读回不确定时拒绝启动升级。普通未签名构建不登记收据。
+ESP32 使用 `esp32_product`、ECDSA v1 的 64 字节官方导出验签公钥及已签名分区表，公钥须同时嵌入新 app/bootloader。验签使用本轮私有稳定公钥快照，归档摘要绑定同一份输入。旧 AT 使用 `esp32_at --source-efuse-mac <本轮独立核对MAC>`，不提供 `--device-id`。C3 v1 未签名来源可不提供旧验签公钥，但完整镜像 checksum/hash、产品和芯片检查仍执行，镜像尾后的整个槽必须为擦除字节；有签名或未知尾数据时不能借此跳过旧验签。
 
-当前实板仍是旧固件，签名首次迁移与真实 HTTPS、Flash、bootloader 回滚尚未验收；构建和 host 假件不代表实板结果。ESP32 的 16 KiB 旧 AT 归档及新分区表只提供离线候选，不允许直接向旧分区执行 OTA。
+后续实板窗口必须重新枚举并独占 USB，核对物理芯片、4 MiB、安全/eFuse 状态、源 UUID/MAC 与双恢复件，使用官方有线刷写链完成完整候选写入及全片读回，再验证签名基座、UUID/revision/配置、双槽和恢复。写入或读回不确定时停止自动重试、保留现场，以同板完整恢复件完成独立恢复验收。工具输出明确标记 `software_only`、`device_verified=false`、`hardware_write_authorized=false`；离线候选及测试签名不代表实板授权、首次启动或生产迁入完成。
 
-固件集合接口要求签名构建且调用方串行化 app/otadata 写入。调用方显式选择 `CONFIRMED`、`PENDING_TRIAL` 或 `PREPARED_CANDIDATE`：前者要求运行槽已确认 `VALID`；pending 要求运行槽 `PENDING_VERIFY`、另一槽 `VALID` 且经 IDF 证实可回滚。prepared 模式必须由成功的 `eota_prepare` 调用者传入其精确收据，仅用于 prepare 后、`eota_select` 前；A 仍运行且 boot selector 指向 A、状态 `VALID`，C 位于 inactive 槽且旧 otadata 为 `UNTRACKED`／`INVALID`／`ABORTED`，不能仍为 `VALID`、`NEW`、`PENDING_VERIFY` 或 `UNDEFINED`。收据的 prepare 前 A/C 几何、A 状态和原 inactive 状态也须与当时允许写入的事实一致。prepared 模式重新验签 A/C，并以 SDK 报告的完整签名长度、SHA-256 核对收据，拒绝与 A 相同的 C 身份；双次槽观察必须稳定。三种观察均要求运行槽等于下次启动槽。
-
-运行镜像与涉及的另一镜像均通过 `eota_sha256_verified_image` 验签，再从精确 app 分区读回镜像头和 app 描述，核对 Base 项目名、芯片 ID、magic 与分区几何；签名身份本身不代表属于此产品。`CONFIRMED` 模式中另一槽为 `UNTRACKED`、`INVALID` 或 `ABORTED` 时，必须由 SDK 明确拒绝其镜像，且物理分区首字节读回 `0xff`，才可返回单固件集合；应用侧验签失败不能证明 bootloader 不会后备扫描。其它状态、可被 bootloader 回退扫描加载但未确认的镜像、读态变化、签名或资源失败都拒绝且清空输出。相同 signed bin 摘要合并为同一固件身份。接口不修改槽或发布业务包；产品 OTA worker 已在 `eota_prepare` 后消费精确 prepared 身份，Container 持久 stage 成功后才选 boot。Host 测试与双目标编译不证明实板启动资格。
-
-`esp_base_storage_owner` 是本次 boot 内跨任务传递的唯一升级事务 claim：启动检查与 pending 确认、`ota.start` 的收据/下载/选择，以及 Container 产品装配共用它。产品调用方复用启动已持有的 claim；`esp_base_storage_claim_active` 仅检查此 claim，没有二次 claim。FRP scratch 已改用独立短时 I/O owner，避免 OTA 网络等待期间持有的事务 claim 直接拒绝记录；OTA app／otadata、收据与配置／身份 NVS、Container 包／NVS 和 FRP scratch 已接同一短时 Flash I/O owner，网络等待不持有该短 claim；整镜像验签占用、最大记录同机进展和实板最长时延仍待验证。Container provider 另用自身信号量保护包 NVS/Flash 回调，并在实际物理访问前取得共同短 claim；两目标正式源码均声明包分区，现役设备仍需完成布局迁移。
-
-启动 claim 在产品装载前读取原 V3 收据；A 侧恢复支持三种包模式。A 仍以 `VALID` 运行并被选为 boot 时，先调用 `eota_retire_inactive` 将精确 inactive 槽恢复为物理 A-only，再用收据中的 A/B/C 身份和 ECS2 sequence 令 Container 对账；两者成功后才把 `PREPARED` 更新为 `FAILED`。C 已选中运行且为 pending/VALID 时复核完整 signed bin 摘要、旧 A 签名与 IDF 回退资格；配置 Container 时还核对原 operation、A/C 身份与 ECS2 sequence，不把 C 当作清理目标。产品确认完成后才将 `PREPARED` 提交为 `SUCCEEDED`，提交或读回不确定则保留 unknown。恢复失败、旧 V1/V2 收据、原字段／包状态不符或读回不确定均保持启动阻断。仅在原收据绑定的 pending 带包 guest 已准入后，控制任务可启动 MQTT 采集联合健康；配置写入与 FRP 等待全部持久确认。该路径未经过真实设备断电、NVS/Flash 中间态和 bootloader 回退验收。
+软件回归入口：固定 SDK 环境下运行 `python -m unittest discover -s tools -p 'test_prepare_native_layout.py' -v`，另有双目标 host 的收据、启动和串行 owner 回归。合成输入、宿主替身及编译不能代替双目标实体断电、恢复、容量和 72 小时长稳验收。

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-/* One owner for Base app/otadata changes and product package operations.
+/* One owner for Base firmware and persistent configuration operations.
  * A claim may pass from the USB control task to its OTA worker. No FreeRTOS
  * mutex is held across tasks; each claim has a unique, checked token. */
 typedef struct {

@@ -82,50 +82,13 @@ static void ota_tests(void)
 {
     char json[1400];
     const char *prefix = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.start\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":";
-    const char *valid = "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/esp-base.bin\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"},\"package_mode\":\"no_package\"}";
+    const char *valid = "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/esp-base.bin\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}";
     ebase_command_t out = {0};
     snprintf(json, sizeof json, "%s%s}", prefix, valid);
     assert(!ebase_parse_command(json, strlen(json), &out, malloc) && out.kind == EBASE_OTA_START);
     assert(out.ota->image_size_bytes == 123456 && out.ota->sha256[0] == 0 && out.ota->sha256[31] == 31);
     assert(!strcmp(out.ota->image_url, "https://example.test/esp-base.bin"));
-    assert(out.ota->package_mode == ESP_BASE_OTA_NO_PACKAGE &&
-           out.ota->package_url[0] == '\0');
-    const char *const package_fields =
-        "\"package_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\","
-        "\"trial_event_sha256\":\"22222222222222222222222222222222"
-        "22222222222222222222222222222222\","
-        "\"package_size_bytes\":2048,\"guest_abi_version\":2,\"data_schema_version\":1";
-    char packaged[1100];
-    const int reuse_length = snprintf(packaged, sizeof packaged,
-        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
-        "\"image_url\":\"https://example.test/esp-base.bin\","
-        "\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\","
-        "\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\","
-        "\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"},"
-        "\"package_mode\":\"reuse\",%s}", package_fields);
-    assert(reuse_length > 0 && (size_t)reuse_length < sizeof packaged);
-    snprintf(json, sizeof json, "%s%s}", prefix, packaged);
-    assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
-           out.ota->package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
-           out.ota->package_size_bytes == 2048U &&
-           out.ota->package_sha256[0] == 0x11U &&
-           out.ota->trial_event_sha256[0] == 0x22U &&
-           out.ota->package_url[0] == '\0');
-    const int write_length = snprintf(packaged, sizeof packaged,
-        "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
-        "\"image_url\":\"https://example.test/esp-base.bin\","
-        "\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\","
-        "\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\","
-        "\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"},"
-        "\"package_mode\":\"write\",%s,"
-        "\"package_url\":\"https://packages.example.test/candidate.pkg\"}",
-        package_fields);
-    assert(write_length > 0 && (size_t)write_length < sizeof packaged);
-    snprintf(json, sizeof json, "%s%s}", prefix, packaged);
-    assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
-           out.ota->package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
-           !strcmp(out.ota->package_url,
-                   "https://packages.example.test/candidate.pkg"));
+    assert(!out.ota->inbound_stream);
     const char *bad[] = {
         "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"http://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}",
         "{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"image_url\":\"https://example.test/a\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"esp32s3/esp_base\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}",
@@ -146,166 +109,6 @@ static void ota_result_tests(void)
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{}}");
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"bad\"}}");
     reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"extra\":1}}");
-    ebase_command_release(&out);
-}
-static void product_result_tests(void)
-{
-    const char *valid = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\"}}";
-    ebase_command_t out = {0};
-    assert(!ebase_parse_command(valid, strlen(valid), &out, malloc) &&
-           out.kind == EBASE_PRODUCT_RESULT);
-    assert(!strcmp(out.operation_id, "44444444-4444-4444-8444-444444444444"));
-    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{}}");
-    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{\"operation_id\":\"bad\"}}");
-    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"extra\":1}}");
-    ebase_command_release(&out);
-}
-static void product_status_tests(void)
-{
-    const char *valid = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.status\"}";
-    ebase_command_t out = {0};
-    assert(!ebase_parse_command(valid, strlen(valid), &out, malloc) &&
-           out.kind == EBASE_PRODUCT_STATUS);
-    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.status\",\"parameters\":{}}");
-    reject("{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"product.status\",\"extra\":1}");
-    ebase_command_release(&out);
-}
-static void product_run_tests(void)
-{
-    const char *format = "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\","
-        "\"command\":\"product.%s\",\"device_id\":\"" DEVICE "\","
-        "\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,"
-        "\"parameters\":{\"expected_container_sequence\":%s,\"package_sha256\":\"%s\"%s}}";
-    char json[600], digest[65];
-    memset(digest, 'a', 64U); digest[64] = '\0';
-    ebase_command_t out = {0};
-    for (unsigned start = 0; start < 2U; ++start) {
-        const char *command = start ? "start" : "stop";
-        assert(snprintf(json, sizeof json, format, command, "4294967295", digest, "") > 0);
-        assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
-               out.kind == (start ? EBASE_PRODUCT_START_COMMAND : EBASE_PRODUCT_STOP_COMMAND) &&
-               out.product_run->expected_container_sequence == UINT32_MAX &&
-               out.product_run->package_sha256[0] == 0xaaU);
-        const char *bad[] = {"0", "4294967296", "1.5", "true", "null"};
-        for (size_t index = 0; index < sizeof bad / sizeof *bad; ++index) {
-            assert(snprintf(json, sizeof json, format, command, bad[index], digest, "") > 0);
-            reject(json);
-        }
-        const char *extra[] = {",\"operation_id\":\"" REQUEST "\"",
-                              ",\"operation_sequence\":1", ",\"extra\":1",
-                              ",\"expected_container_sequence\":6"};
-        for (size_t index = 0; index < sizeof extra / sizeof *extra; ++index) {
-            assert(snprintf(json, sizeof json, format, command, "6", digest, extra[index]) > 0);
-            reject(json);
-        }
-    }
-    memset(digest, '0', 64U);
-    assert(snprintf(json, sizeof json, format, "stop", "6", digest, "") > 0); reject(json);
-    digest[0] = 'A';
-    assert(snprintf(json, sizeof json, format, "start", "6", digest, "") > 0); reject(json);
-    ebase_command_release(&out);
-}
-
-static void product_uninstall_tests(void)
-{
-    const char *format =
-        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\","
-        "\"command\":\"product.uninstall\",\"device_id\":\"" DEVICE "\","
-        "\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,"
-        "\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
-        "\"operation_sequence\":%s,\"expected_container_sequence\":%s,"
-        "\"package_sha256\":\"%s\"}}";
-    char json[600];
-    char digest[65];
-    memset(digest, 'a', 64);
-    digest[64] = '\0';
-    assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
-    ebase_command_t out = {0};
-    assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
-           out.kind == EBASE_PRODUCT_UNINSTALL_COMMAND &&
-           out.product_uninstall->operation_sequence == 1U &&
-           out.product_uninstall->expected_container_sequence == 6U &&
-           out.product_uninstall->package_sha256[0] == 0xaaU);
-    assert(snprintf(json, sizeof json, format, "0", "6", digest) > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "1", "4294967295", digest) > 0);
-    reject(json);
-    memset(digest, '0', 64);
-    assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
-    reject(json);
-    digest[0] = 'A';
-    assert(snprintf(json, sizeof json, format, "1", "6", digest) > 0);
-    reject(json);
-    ebase_command_release(&out);
-}
-static void product_package_tests(void)
-{
-    const char *format =
-        "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\","
-        "\"command\":\"product.%s\",\"device_id\":\"" DEVICE "\","
-        "\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,"
-        "\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\","
-        "\"operation_sequence\":%s,\"expected_container_sequence\":%s,"
-        "\"previous_package_sha256\":%s,\"package_url\":\"%s\","
-        "\"package_sha256\":\"%s\","
-        "\"trial_event_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\","
-        "\"package_size_bytes\":%s,"
-        "\"guest_abi_version\":%s,\"data_schema_version\":%s}}";
-    const char *digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    char json[2300];
-    ebase_command_t out = {0};
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
-    assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
-        out.kind == EBASE_PRODUCT_INSTALL_COMMAND &&
-        !out.product_package->previous_package_present &&
-        out.product_package->operation_sequence == 1U &&
-        out.product_package->expected_container_sequence == 6U &&
-        out.product_package->package_size_bytes == 10240U &&
-        out.product_package->guest_abi_version == 2U &&
-        out.product_package->data_schema_version == 1U &&
-        out.product_package->package_sha256[0] == 0xaaU &&
-        out.product_package->trial_event_sha256[0] == 0xccU);
-    char *event_key = strstr(json, "trial_event_sha256");
-    assert(event_key != NULL);
-    event_key[0] = 'X';
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "upgrade", "2", "11", "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
-        "https://packages.example.test/app-v2.pkg", digest, "10240", "2", "1") > 0);
-    assert(!ebase_parse_command(json, strlen(json), &out, malloc) &&
-        out.kind == EBASE_PRODUCT_UPGRADE_COMMAND &&
-        out.product_package->previous_package_present &&
-        out.product_package->previous_package_sha256[0] == 0xbbU);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"",
-        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "upgrade", "2", "11", "null",
-        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "0", "6", "null",
-        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "4294967291", "null",
-        "https://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "http://packages.example.test/app.pkg", digest, "10240", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "https://packages.example.test/app.pkg", digest, "0", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "https://packages.example.test/app.pkg", digest, "10240", "0", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "https://packages.example.test/app.pkg", digest, "10240", "2", "0") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "https://packages.example.test/app.pkg", digest, "2147483648", "2", "1") > 0);
-    reject(json);
-    assert(snprintf(json, sizeof json, format, "install", "1", "6", "null",
-        "https://packages.example.test/app.pkg", "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "10240", "2", "1") > 0);
-    reject(json);
     ebase_command_release(&out);
 }
 static void frp_status_tests(void)
@@ -381,16 +184,49 @@ static void frp_restart_tests(void)
     ebase_command_release(&command);
 }
 
+static void native_firmware_frp_tests(void)
+{
+    char json[1400];
+    ebase_command_t out = {0};
+    const char *reads[] = {"firmware.status", "business.status"};
+    const ebase_command_kind_t kinds[] = {EBASE_FIRMWARE_STATUS, EBASE_BUSINESS_STATUS};
+    for (size_t i = 0; i < 2U; ++i) {
+        snprintf(json, sizeof json, "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"%s\"}", reads[i]);
+        assert(!ebase_parse_command(json, strlen(json), &out, malloc) && out.kind == kinds[i]);
+        assert(out.payload == NULL);
+        assert(ebase_parse_frp_command(json, strlen(json), &out, malloc));
+        snprintf(json, sizeof json, "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"%s\",\"device_id\":\"" DEVICE "\"}", reads[i]);
+        assert(!ebase_parse_frp_command(json, strlen(json), &out, malloc) && out.kind == kinds[i]);
+        assert(!strcmp(out.request.device_id, DEVICE));
+        assert(ebase_parse_command(json, strlen(json), &out, malloc));
+    }
+    const char *writes[] = {"business.pause", "business.resume"};
+    const ebase_command_kind_t write_kinds[] = {EBASE_BUSINESS_PAUSE, EBASE_BUSINESS_RESUME};
+    for (size_t i = 0; i < 2U; ++i) {
+        snprintf(json, sizeof json, "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"%s\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":{}}", writes[i]);
+        assert(!ebase_parse_command(json, strlen(json), &out, malloc) && out.kind == write_kinds[i]);
+        assert(!ebase_parse_frp_command(json, strlen(json), &out, malloc) && out.kind == write_kinds[i]);
+        assert(out.payload == NULL && out.request.expires_at_ms == 31000U);
+    }
+    snprintf(json, sizeof json, "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"ota.start\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-444444444444\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"image_size_bytes\":123456,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}}");
+    assert(!ebase_parse_frp_command(json, strlen(json), &out, malloc) && out.kind == EBASE_OTA_START);
+    assert(out.ota->inbound_stream && out.ota->image_url[0] == '\0' && out.ota->image_size_bytes == 123456U);
+    assert(ebase_parse_command(json, strlen(json), &out, malloc));
+    const char *legacy[] = {"product.status", "product.install", "product.uninstall", "product.run.start", "product.run.stop", "product.run.event"};
+    for (size_t i = 0; i < sizeof legacy / sizeof *legacy; ++i) {
+        snprintf(json, sizeof json, "{\"protocol_version\":1,\"request_id\":\"" REQUEST "\",\"command\":\"%s\",\"device_id\":\"" DEVICE "\",\"target_boot_id\":\"" BOOT "\",\"expires_at_uptime_ms\":31000,\"parameters\":{}}", legacy[i]);
+        reject(json);
+        assert(ebase_parse_frp_command(json, strlen(json), &out, malloc));
+    }
+    ebase_command_release(&out);
+}
+
 int main(void)
 {
+    native_firmware_frp_tests();
     config_tests();
     ota_tests();
     ota_result_tests();
-    product_result_tests();
-    product_status_tests();
-    product_run_tests();
-    product_uninstall_tests();
-    product_package_tests();
     frp_status_tests();
     frp_restart_tests();
     ebase_command_t out = {0};

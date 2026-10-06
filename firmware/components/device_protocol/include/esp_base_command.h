@@ -32,6 +32,8 @@ typedef void *(*ebase_command_alloc_t)(size_t size_bytes);
 const char *ebase_parse_command(const char *json, size_t length,
                                 ebase_command_t *out, ebase_command_alloc_t allocate);
 void ebase_command_release(ebase_command_t *command);
+const char *ebase_parse_frp_command(const char *json, size_t length,
+                                   ebase_command_t *out, ebase_command_alloc_t allocate);
 
 /* Read-only FRP status bootstraps current boot/uptime using device/request UUIDs.
  * It leaves boot/deadline zero. The listener authenticates the exact request

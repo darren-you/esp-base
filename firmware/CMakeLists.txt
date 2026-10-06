@@ -66,12 +66,12 @@ if(ESP_BASE_APP STREQUAL "esp_base" AND CONFIG_ESP_MAIN_TASK_STACK_SIZE LESS 614
 endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32c3" AND
     (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
-    NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/c3-product-partition-table.csv" OR
+    NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/c3-partition-table.csv" OR
     NOT CONFIG_ESPTOOLPY_FLASHSIZE_4MB OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_LABEL STREQUAL "frp_scratch" OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET EQUAL 0x3e5000))
-    message(FATAL_ERROR "ESP Base C3 requires the 4 MiB product partition and dedicated FRP scratch")
+    message(FATAL_ERROR "ESP Base C3 requires the 4 MiB native partition and dedicated FRP scratch")
 endif()
 if(IDF_TARGET STREQUAL "esp32" AND (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
     NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/esp32-partition-table.csv" OR
@@ -88,7 +88,7 @@ if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32" AND
     (NOT CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_LABEL STREQUAL "frp_scratch" OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET EQUAL 0x3ea000))
-    message(FATAL_ERROR "ESP32 Base requires frp_scratch at 0x3ea000 in its product partition table")
+    message(FATAL_ERROR "ESP32 Base requires frp_scratch at 0x3ea000 in its native partition table")
 endif()
 if(IDF_TARGET STREQUAL "esp32")
     if(CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT)

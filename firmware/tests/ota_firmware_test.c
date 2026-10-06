@@ -9,6 +9,30 @@
 #include "esp_app_format.h"
 #include "esp_partition.h"
 
+static bool flash_claimed, flash_busy;
+static unsigned acquire_calls, release_calls, acquire_failure_at, release_failure_at;
+static unsigned partition_read_calls, description_calls;
+
+static bool flash_acquire(void *context)
+{
+    assert(context == &flash_claimed);
+    ++acquire_calls;
+    if (flash_busy || acquire_calls == acquire_failure_at) return false;
+    assert(!flash_claimed);
+    flash_claimed = true;
+    return true;
+}
+
+static bool flash_release(void *context)
+{
+    assert(context == &flash_claimed && flash_claimed);
+    ++release_calls;
+    /* Model an uncertain callback result after the physical claim is freed.
+     * The caller must still discard all observations from that I/O turn. */
+    flash_claimed = false;
+    return release_calls != release_failure_at;
+}
+
 static bool signed_enabled, rollback_possible, change_during_hash;
 static unsigned observe_calls, verify_calls, rollback_calls;
 static uint8_t running_subtype, boot_subtype, image_seed[2];
@@ -23,6 +47,10 @@ static bool read_failure[2], description_failure[2];
 
 static void reset(void)
 {
+    assert(!flash_claimed);
+    flash_busy = false;
+    acquire_calls = release_calls = acquire_failure_at = release_failure_at = 0;
+    partition_read_calls = description_calls = 0;
     signed_enabled = rollback_possible = true;
     change_during_hash = false;
     observe_calls = verify_calls = rollback_calls = 0;
@@ -56,6 +84,8 @@ const esp_partition_t *esp_partition_find_first(uint8_t type, uint8_t subtype,
 esp_err_t esp_partition_read(const esp_partition_t *partition, size_t offset,
                              void *destination, size_t size)
 {
+    assert(flash_claimed);
+    ++partition_read_calls;
     assert(partition == &partitions[0] || partition == &partitions[1]);
     assert(offset == 0 && (size == sizeof(esp_image_header_t) || size == 1));
     const size_t index = (size_t)(partition - partitions);
@@ -72,6 +102,8 @@ esp_err_t esp_partition_read(const esp_partition_t *partition, size_t offset,
 esp_err_t esp_ota_get_partition_description(const esp_partition_t *partition,
                                              esp_app_desc_t *description)
 {
+    assert(flash_claimed);
+    ++description_calls;
     assert(partition == &partitions[0] || partition == &partitions[1]);
     const size_t index = (size_t)(partition - partitions);
     if (description_failure[index]) return ESP_FAIL;
@@ -86,6 +118,7 @@ bool eota_available(void) { return signed_enabled; }
 
 eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slots)
 {
+    assert(!flash_claimed); /* eota_* owns its own short claims; no outer nesting. */
     assert(policy && slots && !strcmp(policy->project_name, "esp_base") &&
            policy->chip_id == CONFIG_IDF_FIRMWARE_CHIP_ID &&
            policy->ota_0_address_bytes == ESP_BASE_OTA_0_ADDRESS_BYTES &&
@@ -114,6 +147,7 @@ eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slot
 eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t subtype,
                                          uint32_t *image_size_bytes, uint8_t digest[32])
 {
+    assert(!flash_claimed);
     assert(policy && image_size_bytes && digest &&
            (subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 || subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1));
     ++verify_calls;
@@ -128,6 +162,7 @@ eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t su
 
 bool esp_ota_check_rollback_is_possible(void)
 {
+    assert(flash_claimed);
     ++rollback_calls;
     return rollback_possible;
 }
@@ -139,7 +174,7 @@ static void expect_uncertain(esp_base_ota_firmware_observation_t observation)
     assert(esp_base_ota_observe_firmware_set(observation, NULL, &set) ==
            ESP_BASE_OTA_FIRMWARE_UNCERTAIN);
     const esp_base_ota_firmware_set_t empty = {0};
-    assert(memcmp(&set, &empty, sizeof set) == 0);
+    assert(memcmp(&set, &empty, sizeof set) == 0 && !flash_claimed);
 }
 
 static eota_prepared_t prepared_receipt(void)
@@ -164,11 +199,13 @@ static void expect_prepared_uncertain(const eota_prepared_t *prepared)
         ESP_BASE_OTA_FIRMWARE_PREPARED_CANDIDATE, prepared, &set) ==
         ESP_BASE_OTA_FIRMWARE_UNCERTAIN);
     const esp_base_ota_firmware_set_t empty = {0};
-    assert(memcmp(&set, &empty, sizeof set) == 0);
+    assert(memcmp(&set, &empty, sizeof set) == 0 && !flash_claimed);
 }
 
 int main(void)
 {
+    assert(esp_base_ota_policy_bind_flash_io((eota_flash_io_t){
+        .acquire = flash_acquire, .release = flash_release, .context = &flash_claimed}));
     esp_base_ota_firmware_set_t set;
     reset();
     assert(esp_base_ota_observe_firmware_set(
@@ -347,5 +384,61 @@ int main(void)
     reset(); prepared = prepared_receipt(); change_during_hash = true;
     expect_prepared_uncertain(&prepared);
 
-    puts("  ota_firmware passed (confirmed, trial and prepared A/C signed observation; failure rejection)");
+    /* Fail each of Base's own short I/O claims in all three observation modes.
+     * eota fake entry points reject outer claims, so wrapping the full observer
+     * would fail instead of hiding recursive acquisition. */
+    for (unsigned mode = 0; mode < 4; ++mode) {
+        const esp_base_ota_firmware_observation_t observation = mode == 1 ?
+            ESP_BASE_OTA_FIRMWARE_PENDING_TRIAL : mode == 2 ?
+            ESP_BASE_OTA_FIRMWARE_PREPARED_CANDIDATE : ESP_BASE_OTA_FIRMWARE_CONFIRMED;
+        const unsigned claims = mode == 2 ? 2U : mode == 3 ? 3U : 4U;
+        reset();
+        if (mode == 1) running_state = EOTA_STATE_PENDING_VERIFY;
+        if (mode == 3) {
+            target_state = EOTA_STATE_UNTRACKED;
+            image_result[1] = EOTA_UPDATE_IMAGE_INVALID;
+            image_magic[1] = 0xff;
+        }
+        eota_prepared_t candidate = mode == 2 ? prepared_receipt() : (eota_prepared_t){0};
+        assert(esp_base_ota_observe_firmware_set(observation,
+            mode == 2 ? &candidate : NULL, &set) == ESP_BASE_OTA_FIRMWARE_OK);
+        assert(acquire_calls == claims && release_calls == claims && !flash_claimed);
+        for (unsigned fail_at = 1; fail_at <= claims; ++fail_at) {
+            for (unsigned release_failure = 0; release_failure < 2; ++release_failure) {
+                reset();
+                if (mode == 1) running_state = EOTA_STATE_PENDING_VERIFY;
+                if (mode == 3) {
+                    target_state = EOTA_STATE_UNTRACKED;
+                    image_result[1] = EOTA_UPDATE_IMAGE_INVALID;
+                    image_magic[1] = 0xff;
+                }
+                candidate = mode == 2 ? prepared_receipt() : (eota_prepared_t){0};
+                if (release_failure) release_failure_at = fail_at;
+                else acquire_failure_at = fail_at;
+                memset(&set, 0xff, sizeof set);
+                assert(esp_base_ota_observe_firmware_set(observation,
+                    mode == 2 ? &candidate : NULL, &set) == ESP_BASE_OTA_FIRMWARE_UNCERTAIN);
+                assert(memcmp(&set, &empty, sizeof set) == 0 && !flash_claimed);
+                assert(acquire_calls == fail_at &&
+                    release_calls == fail_at - (release_failure ? 0U : 1U));
+            }
+        }
+        reset();
+        if (mode == 1) running_state = EOTA_STATE_PENDING_VERIFY;
+        if (mode == 3) {
+            target_state = EOTA_STATE_UNTRACKED;
+            image_result[1] = EOTA_UPDATE_IMAGE_INVALID;
+            image_magic[1] = 0xff;
+        }
+        candidate = mode == 2 ? prepared_receipt() : (eota_prepared_t){0};
+        flash_busy = true;
+        memset(&set, 0xff, sizeof set);
+        assert(esp_base_ota_observe_firmware_set(observation,
+            mode == 2 ? &candidate : NULL, &set) == ESP_BASE_OTA_FIRMWARE_UNCERTAIN);
+        assert(memcmp(&set, &empty, sizeof set) == 0 && !flash_claimed &&
+            acquire_calls == 1 && release_calls == 0 &&
+            partition_read_calls == 0 && description_calls == 0 && rollback_calls == 0);
+    }
+    reset();
+    puts("  ota_firmware passed (signed A/C observation; short Flash claims, BUSY and all callback faults fail closed)");
 }

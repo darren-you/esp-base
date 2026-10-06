@@ -12,6 +12,13 @@ HEAP_GATE_BYTES = 16384
 SUPPORTED_TARGETS = ("esp32c3", "esp32")
 LARGEST_GATE_BYTES = 24576
 STACK_GATE_BYTES = 1024
+OBSERVER = re.compile(
+    rb"ESP_BASE_CAPACITY_OBSERVER LAB_ONLY target=(esp32c3|esp32) period_ms=5000"
+    rb" task_limit=32 exit_limit=64 other_capability_domains=unmeasured"
+    rb" worker_exit_coverage=ota_before_done_and_normal_task_cleanup"
+    rb" uncaptured_exits=reset_panic_before_cleanup non_task_stacks=unmeasured"
+    rb" largest_history=unmeasured full_peak_qualification=0"
+    rb" frozen_signed_image_qualification=0 observation_cost_added_back=0")
 MEMORY = re.compile(rb"ESP_BASE_LAB_MEMORY uptime_ms=(\d+) free_bytes=(\d+) min_bytes=(\d+) largest_bytes=(\d+) control_stack_min_bytes=(\d+)")
 TASKS = re.compile(rb"ESP_BASE_LAB_TASKS uptime_ms=(\d+) expected=(\d+) captured=(\d+) workspace_bytes=(\d+)")
 TASK = re.compile(rb"ESP_BASE_LAB_TASK uptime_ms=(\d+) task=([^\r\n]+?) task_number=(\d+) minimum_stack_bytes=(\d+) priority=(\d+) state=(\d+)")
@@ -29,6 +36,10 @@ def observe(paths: list[Path], target: str) -> dict:
     expected_tasks = None
     captured_tasks = {}
     frame_uptime = None
+    observer_starts = 0
+    observer_bound = False
+    last_uptime = None
+    uptime_regressions = 0
     inputs = []
 
     def finish_frame():
@@ -41,30 +52,58 @@ def observe(paths: list[Path], target: str) -> dict:
                 incomplete += 1
         expected_tasks, captured_tasks = None, {}
 
+    def accept_uptime(uptime):
+        nonlocal last_uptime, malformed, uptime_regressions
+        if last_uptime is not None and uptime < last_uptime:
+            finish_frame()
+            malformed += 1
+            uptime_regressions += 1
+            return False
+        last_uptime = uptime
+        return True
+
     for path in paths:
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for raw in stream:
                 digest.update(raw)
                 # 原串口其它输出不属于这个观察格式，原样留在输入文件。
-                prefix = raw.find(b"ESP_BASE_LAB_")
-                if prefix < 0:
+                prefixes = [position for marker in (b"ESP_BASE_CAPACITY_OBSERVER", b"ESP_BASE_LAB_")
+                            if (position := raw.find(marker)) >= 0]
+                if not prefixes:
                     continue
-                line = raw[prefix:].rstrip(b"\r\n")
+                line = raw[min(prefixes):].rstrip(b"\r\n")
+                if line.startswith(b"ESP_BASE_CAPACITY_OBSERVER"):
+                    finish_frame()
+                    observer_starts += 1
+                    match = OBSERVER.fullmatch(line)
+                    observer_bound = (observer_starts == 1 and match is not None and
+                                      match.group(1) == target.encode("ascii"))
+                    if not observer_bound:
+                        malformed += 1
+                    continue
+                if not observer_bound:
+                    malformed += 1
+                    continue
                 match = MEMORY.fullmatch(line)
                 if match:
-                    memory.append(tuple(map(int, match.groups())))
+                    values = tuple(map(int, match.groups()))
+                    if accept_uptime(values[0]):
+                        memory.append(values)
                     continue
                 match = TASKS.fullmatch(line)
                 if match:
                     finish_frame()
                     frame_uptime, expected, captured, _ = map(int, match.groups())
-                    expected_tasks = expected if expected == captured and expected <= 32 else 0
+                    if accept_uptime(frame_uptime):
+                        expected_tasks = expected if expected == captured and expected <= 32 else 0
                     continue
                 match = TASK.fullmatch(line)
                 if match:
                     uptime, _, number, margin, _, _ = match.groups()
                     number, margin = int(number), int(margin)
+                    if not accept_uptime(int(uptime)):
+                        continue
                     if expected_tasks is None or int(uptime) != frame_uptime or number in captured_tasks:
                         malformed += 1
                     else:
@@ -77,12 +116,14 @@ def observe(paths: list[Path], target: str) -> dict:
                 finish_frame()
                 malformed += 1
         inputs.append({"sha256": digest.hexdigest(), "size_bytes": path.stat().st_size})
+        # 不把不同日志／启动轮中的残缺任务帧拼成完整快照。
+        finish_frame()
     finish_frame()
     history = min((r[2] for r in memory), default=None)
     largest = min((r[3] for r in memory), default=None)
     control = min((r[4] for r in memory), default=None)
     tasks = min(task_margins, default=None)
-    valid = malformed == 0
+    valid = malformed == 0 and observer_bound and observer_starts == 1
     return {
         "target": target,
         "scope": "periodic_uart_observations_and_observed_worker_exits",
@@ -93,6 +134,8 @@ def observe(paths: list[Path], target: str) -> dict:
         "complete_task_snapshots": complete,
         "incomplete_task_snapshots": incomplete,
         "malformed_resource_lines": malformed,
+        "observer_start_declarations": observer_starts,
+        "uptime_regressions": uptime_regressions,
         "observed_history_heap_min_bytes": history,
         "observed_largest_block_min_bytes": largest,
         "observed_control_stack_min_bytes": control,

@@ -1,120 +1,74 @@
 # 设备控制协议 v1
 
-本文件为设备协议事实源。当前实现 status、restart、config.set、受控签名构建的 ota.start/ota.result、`product.status`／`product.result`、公开产品安装／升级／卸载与本次启动内停止／启动、Wi-Fi 候选验证、UUID 启动身份、有界解析与回执。安装／升级会持久登记原操作、下载并验签候选，在同 boot 试运行中等待请求绑定的授权业务事件完成和连续在线稳定窗口；真实 Broker、两块实体板和生产账户尚未验收。普通未签名构建收到合法 OTA 命令时返回 `ota_signing_unavailable`。实现与测试边界见开发检查点。
+生产命令为 status、restart、config.set、firmware.status、ota.start／ota.result、business.status／pause／resume。原生业务直接编译进固件；动态 product.*、包模式和包摘要字段已删除，旧字段或命令按未知输入拒绝，没有兼容分支。软件与实板资格见[执行计划](../operations/ota-allocation-diagnostic-checkpoint.md)及[软件检查点](../operations/native_software_checkpoint.md)。
 
-## 帧与身份
+## 帧、身份与结果
 
-USB 为 UTF-8 JSON Lines；单帧最大 9216 字节（不含换行），拒绝 NUL、重复 key、未知字段、非法 UTF-8、非对象与非整数数值。只解析带协议字段的行，日志不是 ACK。网络端复用同一请求与结果对象。
+USB 为 UTF-8 JSON Lines，单帧最多 9,216 B（不含换行）；拒绝 NUL、非法 UTF-8、重复／未知字段、非对象、非整数数值以及超深对象。半帧 2 秒后排空至下一换行。所有 UUID 使用规范小写 UUID v4。
 
-只读 `status` 请求包含 `protocol_version:1`、`request_id`、`command:"status"`。响应包含固件持久 `device_id`、随机启动 `boot_id`、`uptime_ms`、配置 `revision`、能力状态与资源事实，不返回秘密。固件初始化失败时不生成替代身份。
+USB／MQTT 的只读 status、firmware.status、business.status 精确包含 `protocol_version:1`、`request_id`、`command`。ota.result 另包含 `parameters:{"operation_id":"<原 UUID>"}`，不携带写期限或目标 boot，允许重启后查询原操作。FRP 只读请求再加入持久 `device_id`，防止查错设备。
 
-只读 `ota.result` 请求精确包含 `protocol_version:1`、`request_id`、`command:"ota.result"`、`parameters:{"operation_id":"<UUID v4>"}`；它不携带写入期限或目标 boot，允许在新启动后按原 operation ID 读取结果。响应 `request_id` 对应本次查询，`result` 含 `operation_id`、完整 signed bin `sha256`、`image_size_bytes`、固定 `target`、`target_slot`、`package_mode` 和可为 null 的 `package_sha256`；`no_package` 的包摘要必须为 null。设备身份仍以响应的 `device_id` 由调用方核对。
+写命令精确包含 protocol_version、device_id、target_boot_id、request_id、command、expires_at_uptime_ms、parameters 七字段。boot 必须为当前启动，期限为设备 uptime 的安全整数、晚于执行时刻且不超过 30,000 ms。32 槽本 boot 守卫保存首次指纹与 outcome，不驱逐已用记录；同 ID 相同请求只回放，冲突拒绝。表满拒绝新写，旧结果仍可查询。request_id、operation_id 和查询请求 ID 各自保持真实语义。
 
-只读 `product.result` 使用相同的四个顶层字段，`command` 为 `product.result`，`parameters` 只含原 `operation_id`。停止／启动的当前 boot 观察按后文四字段分支读取；安装／升级／卸载从 `base_store/base_product/operations` 的持久账本读取最近固定 8 条；已记录结果包含 `operation_id`、`operation_sequence`、`kind`、`package_sha256`、`container_sequence` 与数值 `result_code`。已完成记录返回 `succeeded`／`failed`，未决意图返回 `unknown/product_operation_unresolved`，窗口外旧 ID 或尚未初始化的账本返回 `unknown/product_operation_not_found`，存储不确定返回 `unknown/storage_uncertain`。缺失 NVS 键不能自行重置操作序号并受理写入；启动时仅在签名固件与 ECS2 均证明无历史操作的初始空绑定后建账，历史状态或不确定读回阻断 READY。查询不会触发安装、下载、试运行或重放。持久连续序号阻止窗口外旧请求用原序号重执行；公开安装／升级／卸载仍需设备级验收。
+响应精确为 protocol_version、device_id、boot_id、request_id、state、error_code、result 七字段；状态包含 running、succeeded、failed、expired、unknown。超时、发送完成和 running 都不等于成功。存储不确定保留原 ID；客户端只能读回，不自动换 ID 或重发写入。
 
-只读 `product.status` 精确包含 `protocol_version:1`、`request_id`、`command:"product.status"`，没有 `parameters`。在同一 Base 存储占用期内核对签名固件对应的 ECS2 绑定并读取账本，返回 `operation_sequence_high_watermark`、`next_operation_sequence`、`pending_operation_id`、`container_sequence` 与可为 null 的 `package_sha256`；高水位耗尽时下一序号为 null，末条为未决 PREPARED 时返回其原 ID，否则未决 ID 为 null。键缺失返回 `unknown/product_ledger_uninitialized` 且 result 为 null，忙或绑定／存储不确定同样不输出序号。查询不初始化账本，不验证包字节或 guest 健康，也不保证后来写入时序号仍未被另一请求占用；写命令在持久账本上核对连续序号。
+## 固件状态与升级
 
-只读产品状态现硬切为十个 required 字段：原五字段加 `firmware_sha256`、`runtime_guest_abi_version`、`package_guest_abi_version` 、`package_data_schema_version` 与 `active_product`。运行固件摘要来自同一 Base claim 下双次核对的实际签名镜像，按 SDK 验签后确定的完整镜像长度计算，包含该签名方案的尾部；不是 ELF 或包摘要。运行时 ABI 来自实际 Container 编译常量；包 ABI／schema 来自同一当前固件对应的 ECS2 确认绑定，无包时二者必须同时为 `null`，有包时必须同时为正 uint32。公开 CLI 与 Tool 同批拒绝缺字段、全零摘要及摘要／包元数据不一致。活动版本复制本次验签装载结果；状态查询没有新增包 Flash 读取或验签，不证明 guest 健康。
+firmware.status 的 result 精确包含 firmware_sha256、image_size_bytes、target、ota_slot。摘要来自实际运行镜像的完整 signed bin（含签名尾部），在独占 claim 下验签并前后核对 running／boot／槽状态；忙或无法证明时报告 unknown，不使用旧产品状态摘要。C3 target 为 `esp32c3/esp_base`，方案 `esp_secure_boot_v2_rsa3072`；ESP32 为 `esp32/esp_base`，方案 `esp_secure_boot_v1_ecdsa_p256`。
 
-`product.status` 现硬切为十个 required 字段，新增 required nullable 的 `active_product`。非 null 对象精确包含 `product_id`、完整 `product_version`、非零 `package_sha256`、正 uint32 `guest_abi_version`／`data_schema_version`、布尔 `is_trial` 和 required nullable `operation_id`。ID／版本沿用 Container 的小写连字符 ASCII 合同，两者合计不超过 v1 manifest 的 4096 字节边界，不截为 64 字节。确认实例的摘要／ABI／schema 与根确认绑定一致且 operation ID 为 null；候选来自本 boot 的实际验签装载，操作 ID 必须匹配未决账本，确认绑定仍保留旧包。活动 ABI 必须等于实际运行时 ABI。null 只表示未取得可确认的活动实例，不能证明 guest 健康或所有 native 资源已回收。
+USB／MQTT ota.start parameters 精确六项：operation_id、image_url、sha256、image_size_bytes、target、signature。image_url 是最多 512 B 的 HTTPS URL；sha256 为非零小写 64 位十六进制；长度必须容纳完整签名镜像并适合目标槽；signature 只含精确 scheme。FRP ota.start 精确五项，删除 image_url，固件字节通过随后绑定的入站流提供。两入口复用唯一升级 owner、V4 意图、验签、备用槽和恢复机制。
 
-写命令必须且仅包含 `protocol_version`、`device_id`、`target_boot_id`、`request_id`、`command`、`expires_at_uptime_ms`、`parameters`。request_id 为规范 UUID v4；target_boot_id 必须精确等于当前启动值，受理期限为当前设备 uptime 后不超过 30000 ms；在出队执行前再次验证。过期拒绝，不跨启动重放。
+受理要求签名策略可用、已确认运行 A／boot 一致、准确 inactive 槽、无 pending 或未决收据、无配置试运行／重启。来源 URL／流元数据在任何 app 擦写前静态验证；写前意图持久提交并逐字节读回后才创建 worker／FRP arm。worker 重读原意图，先使旧 inactive 镜像物理不可启动，再分块准备 C；精确长度、完整摘要、芯片／项目及官方签名均通过后才选择新 boot。部分失败只有清理 C 且证明 A 仍 VALID／selected 后才能记录 failed，否则 unknown 并保留占用。
 
-## 命令与配置
+ota.result 的 result 精确五项：operation_id、sha256、image_size_bytes、target、target_slot。原收据与实际槽一致时，活动 worker／pending C 为 running；C 为 VALID、完整身份吻合且成功收据提交读回才 succeeded；A 为 VALID／selected 且原失败收据已完成才 failed。只看 INVALID／ABORTED 或看见 VALID 而缺成功收据都不能推断终态；未登记／被后续操作替换的 ID 为 unknown。普通未签名构建拒绝固件写入与持久结果资格。
 
-- `config.set`：parameters 为 `expected_revision` 和完整类型化 `config`；只从当前 revision 开始候选事务，校验失败不写入已提交配置。Wi-Fi 候选完成取得 IP 和必要链路 proof 后才提交；超时恢复已提交配置。
-- `restart`：parameters 为空对象；发送成功不表示重启成功，必须回读相同 device_id 的新 boot_id。
-- `ota.start`：parameters 必须包含 `operation_id`（UUID v4）、`image_url`（最多 512 字节 HTTPS URL）、`sha256`（完整 signed bin 的小写 64 字符十六进制）、`image_size_bytes`（完整镜像字节数）、`target`（C3 固定 `esp32c3/esp_base`，ESP32 固定 `esp32/esp_base`）、`signature`（C3 精确 `{"scheme":"esp_secure_boot_v2_rsa3072"}`，ESP32 精确 `{"scheme":"esp_secure_boot_v1_ecdsa_p256"}`）及 `package_mode`。`no_package` 只允许这些字段；`reuse` 还必须包含非零 `package_sha256`、`trial_event_sha256`、正整数 `package_size_bytes`、`guest_abi_version` 和 `data_schema_version`；`write` 再增加最多 1024 字节的 `package_url`。代表事件摘要取后续授权 MQTT 业务事件的原始 guest 字节；目标包长度不得超过当前芯片包槽上限，来源 URL 必须通过 HTTPS 静态预检。同一请求指纹绑定上述全部字段。受控签名构建已接三种模式的软件链；产品策略、provider、当前 guest／空绑定及来源快照必须满足该模式的准入条件，否则在登记与擦写前返回 `failed/product_ota_unavailable`。`no_package` 只允许未配置 Container 或已准入的空绑定；`reuse` 要求已确认来源 guest 正在接收事件；`write` 可从该运行来源或已准入空绑定开始，试运行期间均不得再受理升级。非法 `write` 来源先返回 `invalid_request`。无包模式要求当前运行槽 VALID、boot 与 running 一致、另一 OTA 槽可写、Wi-Fi IP 和本次启动时间同步。目标 otadata 只允许历史 VALID/INVALID/ABORTED/UNDEFINED 或尚无记录；NEW/PENDING/读取异常拒绝写入。启动下载任务前先把设备 ID、operation ID、摘要、长度与旧/目标槽写入 `base_store/base_ota/operation` 并逐字节读回；写入不确定时拒绝下载。worker 重读原 V3 收据和来源快照后，先物理退役旧 B 并对账 ECS2，再下载、验签新固件 C。存在来源 guest 时先停止并证明 native 回收；`reuse` 在 C 身份下重验来源包，`write` 从精确 WRITING 预约经严格 HTTPS 来源写包、完整回读验签和授权。只有模式对应的 PREPARED 绑定与完整传输都读回，才选择 C。下载期间不重复执行同一操作；切槽后先报告 running 并重启。无包按本地自检与控制进展窗口确认；带包还须在原 V3／ECS2 准入下完成候选 guest 的请求绑定代表事件和连续 30 秒 Wi-Fi／可信时间／MQTT 在线窗口，依次提交健康、确认固件 VALID、确认包，再持久写入并独立读回成功收据。来源、stage、selector 或持久结果不确定时保留占用和 unknown；真实网络与两板端到端仍未验收。
-- `ota.result`：签名构建查询最近一次登记的 operation ID。worker 活跃，或原 PREPARED 收据对应的目标槽正在运行且被选为 boot、状态为 PENDING_VERIFY 时为 `running`。只有原收据为 SUCCEEDED、目标槽运行且被选为 boot、otadata 为 VALID、完整 signed bin 摘要匹配时为 `succeeded`；VALID 但没有持久成功收据仍为 `unknown`。只有旧来源槽运行且被选为 boot、状态为 VALID，并存在原 FAILED 收据时为 `failed`；失败收据须在目标写入前证明失败，或在写入后完成原收据驱动的物理退役与 ECS2 对账。仅见目标 ABORTED/INVALID 不足以判失败。损坏收据、槽关系不明或仅见旧槽而无失败收据为 `unknown`；未登记或已被后续操作替换的原 ID 为 `unknown/ota_operation_not_found`。普通未签名构建拒绝查询。
-- `product.uninstall`：parameters 精确包含 `operation_id`（UUID v4）、`operation_sequence`（下一连续持久序号）、`expected_container_sequence`（当前 ECS2 序号）和 `package_sha256`（当前包总摘要的小写非零 64 字符十六进制）。公共写命令身份、boot 与期限核对后，Base 独占 OTA／产品长存储操作权；设备用同一签名固件下的 ECS2 快照核对序号与包绑定，先持久提交并读回账本 `PREPARED`，再由正式 Container 停止并回收 guest、清除当前固件的已确认绑定，读回空绑定并持久写入终态。重复 operation ID 只查询原指纹与账本结果，不重新卸载；复位后在网络入口开放前只读核对原 UUID、ECS2 序号和绑定，证明已提交或未提交时分别写回成功或失败，否则阻断 READY。未知结果按原 ID 查询，不自动重发或换 ID；包字节和产品数据不随绑定清除而擦除。
-- `product.install`／`product.upgrade`：parameters 精确包含 `operation_id`（UUID v4）、`operation_sequence`（下一连续持久序号）、`expected_container_sequence`（当前 ECS2 序号）、`previous_package_sha256`、`package_url`、`package_sha256`、`trial_event_sha256`、`package_size_bytes`、`guest_abi_version` 和 `data_schema_version`。安装的前包摘要必须为 null；升级必须给出当前包的小写非零 64 字符摘要。新包和代表事件摘要均为小写非零 64 字符；事件摘要是随后发布到独立 MQTT `event` Topic 的**原始 guest 业务字节** SHA-256，不是 HMAC 帧摘要。大小和两个版本号为正整数，包 URL 最多 1024 字节且通过 HTTPS 来源的严格静态预检。设备将操作类型、原 ID、序号、前后摘要、代表事件摘要、长度、ABI、schema 与完整 URL 纳入请求指纹；同 ID 改变任一值会冲突。设备持久登记原操作后异步下载、验签并启动候选；只有同 boot、同包且摘要相同的授权事件完成并返回非负业务结果，才开始连续在线 30 秒观察。执行器保留该代表事件的完成序号，并累计试运行期间的 guest／runtime 失败；后续普通成功事件不会覆盖代表事件。观察期间每次控制轮询间隔最多 1 秒，Wi-Fi、可信时间或 MQTT ready 丢失、代表事件变化或失败计数变化均重置窗口；离线或缺事件保持未决。窗口通过后 Container 在停止接收新事件前重新核对代表事件、失败计数和队列空闲；若尚未开始持久提交，仅释放短时 claim 并在下一控制轮询重试。提交开始后写入并读回健康及已确认包绑定，Base 再持久写入原 ID 成功账本。任何不能证明的存储结果返回 unknown，不能重放写命令。真实设备及 Broker 的端到端验证仍待完成。
-- 独立业务事件只从已认证的 MQTT `event` Topic 入队给 guest；当前设备协议没有 `business.*` 命令。未知命令拒绝，不提供任意 shell、脚本或 Topic。
+新 boot 不依赖 Broker／FRPS 在线确认：本地初始化与控制进展通过完整 30 秒窗口，确认 VALID 并复核后提交成功收据。控制进展跨窗或失活重新累计窗口；确认／读回不确定保持原事实。普通 app OTA 不改变分区表。
 
-配置 `schema_version` 固定 3，完整字段为 `schema_version`、`wifi`、`mqtt`、`frp`、`business`。Wi-Fi 为 null 或精确 `{ssid,password}`；MQTT 为 null 或精确 `{hostname,port,username,password,ca_pem,management_key_hex}`；FRP 为 null 或精确 `{server_hostname,server_port,token,ca_pem,proxy_name,remote_port,local_port,management_key_hex}`；business 必须为 null。FRP Token 为 1–256 字节非空可打印 ASCII，CA PEM 最多 2048 字节，proxy_name 为 1–128 字节受限 ASCII，三个端口均为 1–65535；本地目标固定为 `127.0.0.1`，独立管理 key 与 MQTT key 不互用。主机为 1–253 字节 ASCII DNS 名（单 label 最多 63 字节），端口为 1–65535 整数；用户名 1–128 字节、密码 1–256 字节，均为无控制字符的 UTF-8；CA PEM 1–4096 字节，含证书 BEGIN/END 标记，只允许可打印 ASCII 与 tab/CR/LF；管理密钥为非全零的 64 个小写十六进制字符，解码后独立保存 32 字节。Wi-Fi 长度规则见 remote_config README；未配置用 null，不使用空白默认凭据。revision 是设备持久单调整数；状态仅返回现有脱敏字段，MQTT/FRP 能力按实际 owner 状态报告。USB 控制任务使配置候选/提交与 OTA 下载互斥；外部串口 Flash 租约只能由工具侧管理，设备不能阻挡外部刷写。
+V4 为 182 B 固件独立记录。旧 V3、旧长度、损坏、未知或读取失败一律存储不确定；不能自动清空或改成新操作。首次有线迁入审计旧终态、受限归档原收据与物理证据后才在离线候选中退役旧运行键，保留 UUID／配置／revision／凭据。布局／镜像身份替换后旧原 ID 在设备返回 unknown，其历史通过迁入收据核对；新 OTA 的原 ID 持久查询合同保持。未决或损坏迁入阻断，不通过清 NVS 解决。
 
-## 产品停止与新启动
+## 原生业务
 
-`product.stop`／`product.start` 沿普通七字段写请求；顶层 `request_id` 同时是本次停止／启动的原操作 ID。`parameters` 精确包含 `expected_container_sequence`（正 uint32，允许最大值）和非零小写 `package_sha256`，绑定当前已确认包。它们不接受 `operation_id` 或 `operation_sequence` 参数，不推进 ECS2 或持久账本序号。USB 与已认证 MQTT 使用相同入口；FRP 管理端点仍只提供 status／restart。
+business.status result 精确三项：byte_count、state（idle／active／paused）、window_deadline_uptime_ms。business.pause／resume 使用七字段写身份与空 parameters；复用请求守卫。暂停保留计数并清定时窗口，恢复只允许 paused→idle。新启动计数、状态和最近事件重置，不持久化暂停。
 
-两种命令复用唯一产品 worker、Base 长操作 claim 与现有写守卫；OTA 验证／下载、配置试运行、产品安装／升级试运行或未决持久账本均拒绝冲突操作。同一当前 boot 的原 ID 和规范请求指纹只执行一次；同 ID 更改命令、绑定、期限或参数冲突，固定 32 项请求表满后拒绝，不驱逐旧 ID。结果观察复用现有 outcome 空间，不建立第二份 RAM 或持久账本。
+MQTT 原始业务字节沿用消息计数样例：首字节 0x01 加至少一个数据字节，按后续字节数累计（含零字节）；0x02 暂停；0x03 恢复；0x04 返回状态数值 0／1／2；0x05 返回计数。除 0x01 外长度必须为 1。idle 的首个计数事件开启 100 ms active 窗口，后续事件不延长，到期变 idle且计数保持。非法输入 -1，暂停拒绝 -2，int32 计数溢出 -3，时间溢出 -4；不新增硬件动作。
 
-`product.result` 先读取当前 boot 的停止／启动原 ID。对应 `result` 精确为 `operation_id`、nullable `operation_sequence`（必须为 null）、`kind`（stop／start）和 `container_sequence`（原请求绑定的序号，失败结果也不冒充当前状态快照）；包摘要已纳入原请求指纹，不再为每条结果复制摘要。查询返回原动作在现有 outcome 中的 running／succeeded／failed／unknown 结果，不触发动作；跨 boot 没有该 RAM 观察时沿原持久查询返回 unknown／product_operation_not_found。安装／升级／卸载的六字段持久结果保持原合同。
-
-原 ID 在持久三种操作与本 boot 停止／启动之间不得互相占用：停止／启动先沿既有 Flash 短 claim 只读查询 EPRD，已有持久 ID 返回 `product_operation_conflict`；持久写入也拒绝本 boot 已有停止／启动 ID。账本无法一致读取、内存申请失败或重启意图已受理时，未登记停止／启动观察；后续 `product.result` 不伪造四字段结果，沿原持久查询可返回 `unknown/product_operation_not_found`。过期与身份／容量拒绝也不建立该观察。已收到直接拒绝的客户端不再轮询；写回执丢失时只查询原 ID，unknown 不重发。
-
-停止成功须证明 native 回收、线程 join、活动视图与事件入口关闭；启动成功须重新验签装载并完成 init，或证明同一已确认实例已经在运行。已完整停止的同包再次停止可只读成功；trap、启动异常、停止失败或不确定实例不能被 start 自动重开。实际实体停止／启动、两板与 Tool 完整消费者仍待验收。
-
-
-2026-10-02 维护者确认：手动停止只对当前启动生效；重启后自动运行当前固件绑定的已确认产品。停止成功须证明 guest `stop`／`close`、唯一产品线程 join 和 native 实例回收，随后活动产品为空、业务事件入口关闭；已确认包绑定、ECS2 序号、包 Flash 和产品数据保持原样。停止状态仅在本 boot 的 RAM 中，不写持久启动开关，也不将停止登记成安装／升级／卸载操作。
-
-新启动沿普通启动恢复：先对账原 OTA 收据和未决产品操作，再以本次签名固件集合核对 ECS2、重新验签和装载当前已确认包；全部事实成立时自动执行 `init` 并开放授权事件。无包返回空状态；存储、绑定、包或回收事实不确定时继续阻断。本候选公开 USB／MQTT 停止／启动复用内部 `esp_base_container_product_stop_confirmed` 与 `product_boot`；实体链仍需单独验收。
-
-## 结果与幂等
-
-无法解析或没有合法唯一 request_id 的输入返回 failed/invalid_request，request_id 为 null，不能与任何已提交操作关联。有效请求的结果带 protocol_version、device_id、boot_id、request_id、state、error_code、result。state 只允许 accepted/running/succeeded/failed/expired/unknown；error_code 为稳定字符串或 null。所有 key 必须存在。状态以设备最终结果裁决，USB write、HTTP 202、PUBACK 都不是 succeeded。
-
-同 boot 下缓存有界 request_id 与规范内容 SHA-256；同 ID 不同内容返回 request_conflict。缓存满时拒绝新操作，不驱逐尚可被重复投递的有效条目后再次执行。重启后的未终态只能报告 unknown 或基于持久裁决对账，不宣称物理 exactly-once。
-
-OTA 收据只保存最近一次 operation。相同 operation ID 永不重新下载：摘要/长度相同返回 `ota_operation_exists`，不同返回 `ota_operation_conflict`。前次结果未能裁决时，新 ID 返回 `ota_previous_unresolved`，不能覆盖唯一持久证据；可能需要外部恢复后才能继续 OTA。一个新操作仅在前次有成功或失败证据时覆盖收据。新镜像摘要等于已复核的运行镜像摘要时，`ota.start` 返回 `failed/ota_same_image`，不写新收据、不退役旧备用槽、不创建下载任务；查询这个未登记的 operation 返回 `unknown/ota_operation_not_found`。目标状态不安全、selector 不一致、当前槽非 VALID 或目标状态读回异常分别拒绝并返回 `ota_target_not_safe`、`ota_selector_mismatch`、`ota_source_not_valid` 或 `ota_target_state_unknown`。`ota.result` 不重放写动作；查询旧 ID 在收据被新操作替换后返回 `unknown/ota_operation_not_found`。回滚若进入尚未实现 `ota.result` 的旧镜像，该镜像无法读取新收据，工具必须报告 unknown，不能推断失败或成功。
-
-产品账本保留最近 8 条操作与不回退的 `operation_sequence` 高水位。`product.uninstall` 对同一 operation ID 的相同规范指纹只读取原结果，指纹、操作类型或包摘要冲突返回 `product_operation_conflict`；窗口外 ID 返回查询 unknown，旧请求的持久序号不能再通过写入门。若卸载意图已持久提交但结果未能证明，设备保留存储占用并返回 unknown；下一次启动仅凭真实 ECS2 恢复裁决，不重放卸载。该账本记录操作结果，不复制或替代 ECS2 的包绑定事实。
-
-## 网络授权与首配
-
-物理 USB 首配绑定真实 device_id；设备管理凭据由维护者的受控材料注入。网络写命令使用 HMAC-SHA256，对整个精确 UTF-8 请求字节签名，使用独立管理密钥；先验证身份、签名、boot、deadline 和 request_id 再入队。只在受认证 TLS 路径传递。FRP Token、UUID 或 CORS 都不是管理授权。公开主机调用不依赖工作区 Auth；私有网关另负责维护者/installation 授权与精确目标绑定。
-
-TLS 依赖可信墙钟时间，命令有效期使用设备 uptime；HTTP envelope 的 timestamp 是 Unix 毫秒，两者不得混用。
+业务同步借用当前认证事件内存，无新 FIFO、heap 副本或任务；有限处理完成后记录实际输入 SHA-256 和业务返回。业务负值属于已处理失败，序号推进，避免同一业务拒绝被重复当作未交付。认证／序号／资源准入失败不推进序号。
 
 ## MQTT 网络命令合同（固件软件接线候选）
 
-正式设备的 ClientID 仍是持久 UUID。五个 Topic 精确为 `esp-base/<device_id>/command`、`event`、`result`、`reported`、`status`；静态段为小写 kebab-case，设备 UUID 原样填入。设备只读 `command` 与 `event`，只写其余三个 Topic；控制端只对已绑定设备写 `command` 与 `event`、读 `result`/`reported`/`status`。Broker 必须为每台设备分配独立 principal 和精确 ACL，不借用实验应用的 `esp-base-lab` Topic 或已有共享 principal。
+MQTT 3.1.1／严格 TLS 复用既有 CA、主机名、当前 boot 时间门和设备凭据。ClientID 为设备 UUID，精确 command／event 两订阅 SUBACK 均批准后才 ready。命令须精确 Topic、QoS 1、非 retained；载荷为 64 个小写 HMAC-SHA256 十六进制字符、LF 和原始 JSON，认证后才解码。网络 config.set 返回 physical_usb_required。
 
-首版 MQTT 3.1.1 只走严格 TLS。设备取得 Wi-Fi IP 和本次启动可信时间后才启动客户端；本轮 `command` 与 `event` 两个 QoS 1 订阅的 SUBACK 均已批准，才可报告 MQTT `ready`。`status` 的上线和 LWT 离线消息采用 QoS 1 retained，载荷分别为 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","state":"online"}` 和同结构的 `state:"offline"`；retained `online` 只是最近提示，Broker 重启或设备主动停止/重配会话后可能残留，Tool/网关不得由单条 retained 消息判在线。MQTT ready 时，`reported` 每 5 秒以 QoS 1 非 retained 发布 `{"protocol_version":1,"device_id":"<UUID>","boot_id":"<UUID>","uptime_ms":<整数>,"revision":<整数>,"wifi_state":"<状态>","time_ready":<布尔>,"frp_state":"<状态>","last_accepted_event_sequence":<整数>,"last_completed_event_sequence":<整数或null>,"last_completed_package_sha256":<摘要或null>,"last_completed_event_sha256":<摘要或null>,"last_event_outcome":"<none|busy|succeeded|business_failed|runtime_failed>","last_guest_result":<整数或null>}`，不包含连接密码、管理密钥等敏感配置。入队序号只表示已复制到 guest 有界队列；完成序号、包摘要、原始 guest 事件字节的 SHA-256 与 guest 返回值来自最近启动的产品实例中的最近一次真实调用，换包启动时清空。`none` 表示尚无完成事件，`busy` 表示本次快照占用；runtime 失败时 guest 结果为 null。即使 guest 返回非负值，也不能单独确认产品试运行健康。Tool/网关按自身收到该次消息的时间、当前会话及 boot_id 判断新鲜度；设备 uptime 不是 Unix 时间，历史 reported 也不能单独证明当前在线。
+event 采用 `esp-base-business-event-v1\n` 域隔离。认证原文依次为该 ASCII 域、36 B device UUID、36 B 当前 boot UUID、8 B 大端正 event_sequence 和原生业务字节，外层仍是 64 B tag 与 LF。完整入站帧最多 4,096 B，所以业务字节最多 3,924 B；没有包摘要。序号必须为本 boot 下一值，重连与同 boot 重配不清高水位，旧 boot／重放／retained 拒绝。
 
-`command` 载荷是连续 `64` 个小写十六进制字符、一个 LF、原始 UTF-8 v1 JSON 请求字节，总长度最多 `4096` 字节。前缀解码为 32 字节 HMAC-SHA256 tag，使用独立的设备管理密钥，只覆盖 LF 后的原始请求字节；不重排 JSON、归一化空白或先解析再签名。仅精确 `command` Topic、QoS 1、非 retained、格式和 HMAC 均有效的消息进入既有 JSON decoder、boot/deadline、request_id/指纹裁决。无认证消息直接丢弃，不回显 request_id 或产生 ACK。已认证但语法错误的请求由设备协议结果裁决。DUP 重投不重复执行，复用本次 boot 的原结果；跨 boot 未决结果仍是 unknown，不能从 PUBACK 推断成功。
+每 5 秒非 retained reported 精确输出 protocol_version、device_id、boot_id、uptime_ms、revision、wifi_state、time_ready、frp_state、last_accepted_event_sequence、last_completed_event_sequence、last_completed_event_sha256、last_event_outcome、last_business_result。无完成事件后三个可空字段为 null，outcome 为 none；完成后 outcome 为 succeeded／business_failed，business_result 为实际 int32。reported 不是持久升级结果。PUBACK 只证明 Broker 接收，须按当前 boot、序号和输入摘要核对设备结果。
 
-独立 `event` 载荷为 `64` 个小写十六进制 HMAC 字符、一个 LF，以及如下连续原始字节：ASCII `esp-base-product-event-v1\n`、36 字节设备 UUID、36 字节当前 boot UUID、32 字节二进制包 SHA-256、8 字节大端无符号 `event_sequence`、至少 1 字节 guest 事件。整帧最多 `4096` 字节。HMAC-SHA256 使用同一设备管理密钥，但覆盖 LF 后的完整域隔离字节串；Broker 的控制账户和设备 ACL 不能代替这次签名。设备只接受精确 Topic、QoS 1、非 retained、非零包摘要和下一个连续序号；当前运行包摘要、签名配额及有界队列均满足且已复制入队才推进本 boot 的高水位。队列满或离线时发布方从新鲜 `reported` 读高水位后以原序号重发同一帧；高水位随同 boot MQTT 重连和重配保留，新 boot 从 0 开始。Broker PUBACK 只表示传输，guest 结果须结合最近完成事件的 SHA-256 核对原始业务字节，产品试运行健康仍须由独立持久合同验证。[公开帧生成器](../../tools/product_event.py)只负责签名和写 0600 帧文件，真实 Broker 账户和发布链尚需联调。
+保持入站 4,096 B、发布载荷 5,120 B、outbox 16,384 B，以及原网络队列／在途上限。连接／订阅／outbox 过期等故障撤销 ready，再按既有退避恢复；旧 retained online 不能证明当前在线。
 
-`result` 发布与 USB 相同的设备结果对象，QoS 1 且非 retained；只有设备执行状态可以是 `succeeded`。同启动重复请求经共同 owner 的幂等裁决后回送原结果；异步 OTA 结果回送原请求通道。发布入队、Broker PUBACK 和 `status=online` 都不是操作终态。`config.set` 的 MQTT 凭据、CA 与独立管理密钥只能由受控物理 USB 注入；已认证的远端 `config.set` 经身份、期限与去重裁决后返回 `failed/physical_usb_required`，不写入配置。普通固件的软件 owner 已接入客户端、订阅和结果通道；设备级 Broker ACL、Tool 的网络控制端与实板 v1/v2→v3 迁移尚未生效，此代码构建与 host 测试不构成网络端到端验收。
+## 配置与重启
 
-QoS 1 outbox 报告消息过期时，设备立即撤销 MQTT `ready`、停止会话并在退避后重新取得 `command` SUBACK。该过期事件只证明传输回执丢失，不改写已执行命令的结果；同一 boot 的控制端可用相同 request_id 重投，写命令由原去重表回送已保存结果，只读命令重新查询设备事实。重启后仍须按新 boot 与持久事实裁决，不能把旧 request_id 当作跨启动的执行证明。
+config.set parameters 为 expected_revision 与完整 schema_version 3 配置（wifi／mqtt／frp／business），business 当前必须为 null。候选取得连接证明后才条件提交、读回；失败恢复已提交配置，不回显凭据。pending／active OTA、配置 trial、重启或存储不确定阻断新的冲突写入。
 
-## 当前 USB 结果
-
-status 成功的 result 固定含 uptime_ms、revision、free_heap、min_free_heap、ota_received_bytes、ota_total_bytes 和 capabilities；capabilities 固定含 wifi、mqtt、frp、config、ota。未签名构建的 OTA 为 unsupported；签名构建在空闲时为 ready、下载时为 running。配置在存储或启动槽不确定时为 failed。restart 的 running 回执 result 为 null；设备执行重启后通过同 UUID 的新 boot_id 验证完成。
-
-`ota.result` 的 `state` 和 `error_code` 是查询时由持久收据与当前槽事实裁决的结果；一次 `ota.start` 的 running 回执以及 USB 写入成功均不是最终成功。NVS 登记写入或失败终态持久化不确定时返回 `unknown/storage_uncertain` 并关闭本次启动的配置写入，不能自动重试升级。目标槽摘要读取失败时返回 `unknown/ota_result_uncertain`。
-
-USB 缓冲最多 9216 字节，JSON 嵌套最多 8 层、成员分隔符最多 128 个。拒绝小数/指数数字、NUL（含 Unicode 转义）和重复 key。超限或半帧闲置 2 秒后排空至换行，再处理下一帧；错误输入不回显请求内容或凭据。
-
-USB 使用官方无缓冲 VFS 和硬件 FIFO 背压，不使用可能在 RX ring 满时丢字节的中断缓冲驱动。主机每次请求前后各发送一个换行，前导换行只用于结束先前未完成的帧；不得把写入完成当成设备受理。
-
-## P2 配置执行
-
-`config.set` 的 parameters 必须恰含 expected_revision 和 config；revision 为 0–4294967295 的整数。候选与 expected_revision 一起规范编码，以官方 PSA SHA-256 计算命令指纹，不受 JSON 字段顺序影响。同请求重复返回保存的原始结果，不再次连接或写入；同 ID 不同内容冲突。
-
-USB 配置候选在 RAM 验证最多 20 秒，取得 IP 后核对当前关联；此阶段的必要链路证明是当前 USB 控制通道和候选 Wi-Fi 关联/IP，不宣称互联网、MQTT 或 FRP 已连通。清除 Wi-Fi 则先确认 station 已停止。通过后单 blob 提交 revision 与完整配置，并读回校验；succeeded 的 result 使用与 status 相同的脱敏字段，revision 必须是 expected_revision+1。
-
-候选失败返回 connection_proof_failed，重新选择已提交配置；离线环境不伪造已经恢复连接。候选执行期间其他写命令返回 configuration_busy，status 仍可用。NVS 写后状态不确定返回 unknown/storage_uncertain，不自动重放，不承诺旧配置已恢复；重新读取存储事实后保持写入关闭，重启重新核验。已提交配置的真实断电恢复已验收；候选及 Flash 提交中间态掉电仍待实测。
-
-FRP Flash reader 硬切候选要求启动时已有精确分区且 boot recover 成功。当前固件没有已恢复 scratch store 时，物理 USB `config.set` 若请求启用 FRP，返回 `failed/frp_storage_unavailable`，不进入 Wi-Fi 候选或 NVS 提交；MQTT 仍先按原合同返回 `failed/physical_usb_required`。已存 FRP 配置只保持原值并报告 FRP failed，不在启动时自动改写。
-
-OTA pending 新槽完成本地确认前，`config.set` 在身份、期限与去重裁决后返回 `failed/ota_verification_pending`，不执行候选连接或配置提交；下载期间返回 `ota_in_progress`。`status` 保持可读。确认成功后新 request_id 可执行配置写入，原 request_id 重放仍返回原失败结果。签名构建的 OTA 下载与配置候选互斥；外部 flash 租约仍须工具侧实现。
+restart 先回 running，延迟并让已认证回执排出；客户端必须读回同设备的新 boot。FRP 重启最早 100 ms、回执排出最多 2 秒；断线或丢失回执只记未确认。Mac 本机工具须核对实际设备身份、当前连接、操作权限和唯一 USB 租约；远程 Bridge 账号与绑定不再是本机设备操作前置，设备软件不能阻止外部烧录器。
 
 ## FRP Base 软件接线边界
 
-普通 Base 精确锁定公开 `esp-frp@8f056273b3b93ea3273b4637038ddd0c6aea82a8`。FRP owner 在单一 USB 控制任务中持有一个客户端句柄；配置变更、网络或时间门失效时用非阻塞 destroy 持续收敛，未完成时保留句柄。`ready` 只来自库完成代理注册与首轮认证 Pong 的状态快照，status 与 reported 不含 Token、CA、管理 key。受控 listener 与 owner 共用该控制任务，只在配置的 `127.0.0.1:local_port` 绑定；绑定失败保持 `endpoint_unavailable`，不会向 FRPS 建连。配置 revision 变化时先关闭旧 listener 与半帧，旧 FRP worker 销毁后才装配新独立 key。FRP Token、TLS 和 UUID 不能代替管理端点授权。
+唯一 loopback listener 复用既有设备 FRP 工作流。POST `/api/v1/commands/{status,restart,firmware-status,ota-start,ota-result,business-status,business-pause,business-resume}` 使用 application/json、唯一 Content-Length 和 X-ESP-Management-Tag；tag 是独立 FRP 管理 key 对实际 JSON 字节的 HMAC-SHA256。旧 status／restart body 上限 384 B、header 512 B、连接总期限 2 秒保持；新六命令 body 上限 1,024 B，控制期限仍 2 秒。认证前错误只返回空 body，不泄露状态；认证响应 tag 覆盖实际完整响应 JSON。
 
-当前设备端点的软件候选为 HTTP/1.1 `POST /api/v1/commands/status` 和 `POST /api/v1/commands/restart`，路径与 JSON 命令必须相符。请求必须含一个非空 `Host`、精确 `Content-Type: application/json`、十进制 `Content-Length` 和 `X-ESP-Management-Tag`。Tag 为 `frp.management_key` 对**原始 JSON body 字节**计算的 HMAC-SHA256，以 64 个小写十六进制字符发送；先完整读取并验证 HMAC，之后才解析或回显 request ID。header 最多 512 字节，body 为 1–384 字节，不接受重复安全/长度头、`Transfer-Encoding`、`Expect`、HTTP 管线化或无效帧；单连接从 accept 起的读取与写回总期限为 2 秒，随后关闭。未认证请求返回空 body 的 HTTP 401，错误 HTTP 帧返回空 body 的 400；两者均不泄露设备状态。listener 同时只处理一个连接。
+新六命令 HTTP 映射为 invalid_request→400、failed／expired→409、running→202、succeeded／unknown→200；客户端先验响应 tag、严格字段与设备／请求身份，再读 state。旧 status／restart 映射保持。status 四字段和 8 槽／30 秒首快照缓存保持；新只读命令每次获取当前事实，写请求共用 32 槽守卫。
 
-body 精确包含 `protocol_version:1`、`device_id`、`request_id`、`command:"status"` 四项；两个 ID 都是规范 UUIDv4，不接受旧六字段、boot、期限或额外参数。只读查询从目标设备自身取得当前 boot 与 uptime，不需要 USB／MQTT 先提供状态。设备在同一控制任务先核对持久设备 ID；8 槽 RAM 表以设备当前 uptime 加 30000 ms 保存首次脱敏快照。同 ID 在该窗口内返回首次快照，调用方每次新查询必须使用新的 request UUID；窗口结束后原槽可复用，缓存不跨启动、没有 NVS 写入。表满时新 ID 返回 `capacity_exceeded`。已认证但非法的请求返回现有结果 envelope、HTTP 400；错设备返回相同 envelope、HTTP 409；成功返回 HTTP 200、`succeeded` 与 USB/MQTT 共用序列化的脱敏 status `result`。该 status 路径不接受 restart、OTA、配置写入或任意命令。
+FRP ota.start 接受五项固件元数据，V4 意图读回后预约唯一 upload。PUT `/api/v1/ota-images/<operation_id>` 必须为 application/octet-stream、精确 Content-Length；HMAC 原文是：
 
-restart body 使用 USB／MQTT 的精确七字段写合同：`protocol_version:1`、`device_id`、`request_id`、`command:"restart"`、`target_boot_id`、`expires_at_uptime_ms`、`parameters:{}`。三个 ID 均为规范 UUIDv4；期限是设备 uptime 的非负整数，最多为 `9007199254740991`，必须晚于当前 uptime 且不超过 30000 ms。调用方先通过同一 FRP 通道的新 request UUID 读取并验证 status，再构造写请求。路径或命令不符、旧六字段、重复字段、额外参数均在准入前拒绝。轻量解析器复用普通写请求的身份与指纹逻辑，不分配完整配置命令工作区。
+```text
+esp-base-ota-upload-v1\n
+<operation_id>\n
+<device_id>\n
+<boot_id>\n
+<十进制 image_size_bytes>\n
+<小写 sha256>\n
+```
 
-FRP restart 使用 USB／MQTT 共用的 32 槽、同 boot 写请求守卫与首次 outcome；同 ID 的相同期限／指纹仅返回原结果，不改变原通道、不重复执行或推迟原重启时间。错误设备、旧 boot、过期、过长窗口、请求冲突或容量耗尽均不执行。新请求在 OTA pending／运行、产品操作、配置试运行、存储或 boot 状态不确定时拒绝；拒绝的首次结果同样缓存。准入成功返回签名 HTTP 202、`running`、`error_code:null` 与 `result:null`；认证后解析失败为签名 400，守卫或互斥拒绝为签名 409，过期保留 `state:"expired"`。
+其中每行只有一个 LF，首行本身含 LF；正文不由独立第二 MAC 替代完整 signed bin 摘要／签名。上传 header／预读各最多 1,024 B，固定单槽，不把整镜像缓存在 RAM／额外 Flash。控制 owner 验证绑定后移交 fd给唯一 worker，同一 listener 可接另一条查询；占用既有两活跃流预算，不新增第三流资格。
 
-控制任务在构造回执后登记一次 RAM 重启意图，不在 HTTP handler 中阻塞或直接重启；满 100 ms 且已准备响应发送结束／连接关闭后执行 `esp_restart`。对端停止读取时最多等待 2000 ms，之后仍执行，丢失回执只能视为未确认。此期间其他 USB／MQTT／FRP 写请求返回 `operation_busy`，只读查询及原请求结果回放仍可用。响应序列化失败时保存 `resource_failure` 且不登记重启意图；HMAC 签发或连接发送失败可能丢失已准入的回执，不证明动作失败。此意图和去重表不写 NVS，新启动的旧 target boot 请求拒绝。调用方不能把 202／running 或 TCP 发送完成作为成功，也不得以新 ID 重试写动作；必须经同一 FRP 通道验证同一持久 device ID 的新 boot。
+预约 5 秒内建立上传，流单次 I/O 1 秒、无进展 30 秒、总传输 300 秒；每次 Flash I/O 仅持短仲裁，网络等待释放。禁止重复长度、安全头、Transfer-Encoding、Expect、pipeline、第二上传和迟到／重放。Content-Length 界定 EOF；当时已到达的额外字节拒绝，未来字节不作预知，结束关闭该 fd。取消／重配撤销旧 key与连接，借用计数确保最终 close 不作用于复用 fd；验签后选槽前再次检查连接仍有效。
 
-所有已认证且有 body 的响应均包含唯一 `X-ESP-Management-Tag`，为同一独立 FRP 管理 key 对**实际发出的完整原始 JSON body 字节**计算的 HMAC-SHA256，使用 64 个小写十六进制字符。响应 body 包含设备 UUID、当前 boot UUID；严格解析通过时回显本次 request UUID，非法请求仍返回 `request_id:null`。客户端必须先验证原始字节的 tag，再严格检查七字段 envelope、设备／请求身份、HTTP 与业务状态。认证前的空 400／401 不含响应 tag，也不能作为状态证据。请求四字段与响应七字段严格分离，响应 tag 不能作为有效请求使用。PSA import、compute、精确 32 字节长度或 destroy 任一步失败，设备关闭连接且不发送未认证结果。现有输出缓冲仍为 1024 字节，其中最多 256 字节预留响应头，handler 的 body 容量为 768 字节；序列化超限拒绝，不截断。
-
-FRP status 的新请求 UUID 与经验证的响应提供独立设备身份和本次查询证据。设备本地 loopback 仍为明文 HTTP，外侧调用方必须经受控 HTTPS 入口和 FRPS 的严格 TLS／路由授权验证；HMAC 不提供机密性，不能替代这两段加密。私有网关已有独立认证只读 status 候选，restart 的网关账本、受控 HTTPS 请求与新 boot 确认仍待接入；外侧路径、真实 FRPS、同板 MQTT/OTA 并行、资源门槛与硬件运行均未验收，因此 P4-05 和产品 FRP 路径尚未完成。
+PUT 上传回执只允许 running／202 或 unknown／200，result 均为 null；失败收据尚未持久化时不得回复 failed。客户端对未知、丢失或声称终态的上传响应都只读原 operation_id，不重新提交或上传。准备／选槽不是最终成功，必须在新 boot 经原 operation_id 持久查询并核对独立 firmware.status。当前验收分别覆盖设备 FRP 公网与 Mac 本机有线两条路线；App 内置 FRP／frpc 与远程 Bridge 的删除仍待实施，不再要求远程 Mac Bridge 通过验收。宿主 HTTP／模拟平台不替代公网与实板。

@@ -60,7 +60,7 @@ def private_regular_file(info: os.stat_result) -> None:
 
 
 def open_backup(path: Path):
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
     try:
         info = os.fstat(descriptor)

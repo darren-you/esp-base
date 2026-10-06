@@ -16,6 +16,18 @@
 
 static uint8_t management_key[32];
 
+static void management_restart_request(char *request, unsigned number,
+                                         const char *device, const char *boot,
+                                         uint64_t deadline)
+{
+    const int size = snprintf(request, 384U,
+        "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-%012u\","
+        "\"command\":\"restart\",\"device_id\":\"%s\",\"target_boot_id\":\"%s\","
+        "\"expires_at_uptime_ms\":%" PRIu64 ",\"parameters\":{}}", number, device, boot, deadline);
+    assert(size > 0 && size < 384);
+}
+
+
 static uint16_t management_unused_port(void)
 {
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -108,7 +120,7 @@ int main(void)
         "\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"command\":\"status\"}";
     management_roundtrip(config.local_port, "status", status, false, 200, "succeeded", NULL);
     char request[384];
-    restart_request(request, 1U, s_context.device_id, s_boot_id, 31000U);
+    management_restart_request(request, 1U, s_context.device_id, s_boot_id, 31000U);
     management_roundtrip(config.local_port, "restart", request, true, 401, NULL, NULL);
     assert(s_guard.count == 0U && !s_frp_restart_pending);
     management_roundtrip(config.local_port, "status", request, false, 400, "failed", "invalid_request");
@@ -117,7 +129,7 @@ int main(void)
     management_roundtrip(config.local_port, "restart", request, false, 202, "running", NULL);
     management_roundtrip(config.local_port, "restart", request, false, 202, "running", NULL);
     assert(s_guard.count == 1U && s_frp_restart_pending && s_frp_restart_since_ms == 1000U);
-    restart_request(request, 2U, s_context.device_id, s_boot_id, 31000U);
+    management_restart_request(request, 2U, s_context.device_id, s_boot_id, 31000U);
     management_roundtrip(config.local_port, "restart", request, false, 409, "failed", "operation_busy");
     assert(s_guard.count == 2U && task_calls == 0U && register_calls == 0U &&
            config_commit_calls == 0U && !esp_base_frp_management_listener_response_pending());

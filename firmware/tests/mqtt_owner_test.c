@@ -10,21 +10,15 @@ static const char device_id[] = "22222222-2222-4222-8222-222222222222";
 static const char boot_id[] = "33333333-3333-4333-8333-333333333333";
 static const char request[] = "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"command\":\"status\"}";
 static const char hex_tag[] = "57d8e98b33e69b075cd138712813411c036f615a240e04a54e8c54f2fa3f38ca";
-static const char event_hex_1[] = "825d3ce7ac4f69135bd409f47516840047e0f6470cd49279ec1a2e65475aaedd";
-static const char event_hex_2[] = "6a86796cb13a216bcca68da890c5b267aae612bd0ca7968eefa5261d8f35358c";
+static const char event_hex_1[] = "9fb0774308f1438407d8a298468d0c9d067c76897447a2c1d0618fe5429cab8c";
+static const char event_hex_2[] = "1f0b65a5d26e51b20b1e2f0cf3cfed8de744b17586a5d4782d8588dbf07175f7";
 static const uint8_t event_tag_1[32] = {
-    0x82, 0x5d, 0x3c, 0xe7, 0xac, 0x4f, 0x69, 0x13,
-    0x5b, 0xd4, 0x09, 0xf4, 0x75, 0x16, 0x84, 0x00,
-    0x47, 0xe0, 0xf6, 0x47, 0x0c, 0xd4, 0x92, 0x79,
-    0xec, 0x1a, 0x2e, 0x65, 0x47, 0x5a, 0xae, 0xdd
+    0x9f, 0xb0, 0x77, 0x43, 0x08, 0xf1, 0x43, 0x84, 0x07, 0xd8, 0xa2, 0x98, 0x46, 0x8d, 0x0c, 0x9d, 0x06, 0x7c, 0x76, 0x89, 0x74, 0x47, 0xa2, 0xc1, 0xd0, 0x61, 0x8f, 0xe5, 0x42, 0x9c, 0xab, 0x8c
 };
 static const uint8_t event_tag_2[32] = {
-    0x6a, 0x86, 0x79, 0x6c, 0xb1, 0x3a, 0x21, 0x6b,
-    0xcc, 0xa6, 0x8d, 0xa8, 0x90, 0xc5, 0xb2, 0x67,
-    0xaa, 0xe6, 0x12, 0xbd, 0x0c, 0xa7, 0x96, 0x8e,
-    0xef, 0xa5, 0x26, 0x1d, 0x8f, 0x35, 0x35, 0x8c
+    0x1f, 0x0b, 0x65, 0xa5, 0xd2, 0x6e, 0x51, 0xb2, 0x0b, 0x1e, 0x2f, 0x0c, 0xf3, 0xcf, 0xed, 0x8d, 0xe7, 0x44, 0xb1, 0x75, 0x86, 0xa5, 0xd4, 0x78, 0x2d, 0x85, 0x88, 0xdb, 0xf0, 0x71, 0x75, 0xf7
 };
-static uint8_t signed_event[141];
+static uint8_t signed_event[110];
 static struct emqtt_runtime { int marker; } runtime;
 static emqtt_config_t captured;
 static emqtt_config_t scratch;
@@ -155,15 +149,13 @@ static void push_business_event(uint8_t sequence, bool retained, bool bad_tag)
     if (bad_tag) event->message.payload[0] ^= 1U;
     event->message.payload[64] = '\n';
     size_t offset = 0;
-    static const char domain[] = "esp-base-product-event-v1\n";
+    static const char domain[] = "esp-base-business-event-v1\n";
     memcpy(signed_event + offset, domain, sizeof domain - 1);
     offset += sizeof domain - 1;
     memcpy(signed_event + offset, device_id, 36);
     offset += 36;
     memcpy(signed_event + offset, boot_id, 36);
     offset += 36;
-    memset(signed_event + offset, 0x11, 32);
-    offset += 32;
     memset(signed_event + offset, 0, 8);
     signed_event[offset + 7] = sequence;
     offset += 8;
@@ -187,8 +179,6 @@ static bool received_event(const ebase_mqtt_event_view_t *event, void *context)
     assert(event->event_sequence == business_events + 1U &&
            event->event_size_bytes == 3U &&
            !memcmp(event->event, "\x01\x02\x03", 3));
-    for (unsigned index = 0; index < 32U; ++index)
-        assert(event->package_sha256[index] == 0x11U);
     ++business_event_attempts;
     if (accept_event) ++business_events;
     return accept_event;

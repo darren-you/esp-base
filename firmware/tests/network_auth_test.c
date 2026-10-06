@@ -25,12 +25,9 @@ static const uint8_t tag[32] = {
 static const uint8_t request[] =
     "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"command\":\"status\"}";
 static const uint8_t event_tag[32] = {
-    0x82, 0x5d, 0x3c, 0xe7, 0xac, 0x4f, 0x69, 0x13,
-    0x5b, 0xd4, 0x09, 0xf4, 0x75, 0x16, 0x84, 0x00,
-    0x47, 0xe0, 0xf6, 0x47, 0x0c, 0xd4, 0x92, 0x79,
-    0xec, 0x1a, 0x2e, 0x65, 0x47, 0x5a, 0xae, 0xdd
+    0x9f, 0xb0, 0x77, 0x43, 0x08, 0xf1, 0x43, 0x84, 0x07, 0xd8, 0xa2, 0x98, 0x46, 0x8d, 0x0c, 0x9d, 0x06, 0x7c, 0x76, 0x89, 0x74, 0x47, 0xa2, 0xc1, 0xd0, 0x61, 0x8f, 0xe5, 0x42, 0x9c, 0xab, 0x8c
 };
-static uint8_t event_body[141];
+static uint8_t event_body[110];
 static const char boot_id[] = "33333333-3333-4333-8333-333333333333";
 
 static unsigned imports, verifies, computes, destroys, resets;
@@ -180,7 +177,7 @@ int main(void)
     assert(view.request == NULL && view.request_length == 0);
     assert(imports == 7 && verifies == 6 && destroys == 6);
 
-    static const char event_domain[] = "esp-base-product-event-v1\n";
+    static const char event_domain[] = "esp-base-business-event-v1\n";
     size_t offset = 0;
     memcpy(event_body + offset, event_domain, sizeof event_domain - 1);
     offset += sizeof event_domain - 1;
@@ -188,8 +185,6 @@ int main(void)
     offset += 36;
     memcpy(event_body + offset, boot_id, 36);
     offset += 36;
-    memset(event_body + offset, 0x11, 32);
-    offset += 32;
     memset(event_body + offset, 0, 8);
     event_body[offset + 7] = 1;
     offset += 8;
@@ -197,7 +192,7 @@ int main(void)
     offset += 3;
     assert(offset == sizeof event_body);
     static const char event_hex[] =
-        "825d3ce7ac4f69135bd409f47516840047e0f6470cd49279ec1a2e65475aaedd";
+        "9fb0774308f1438407d8a298468d0c9d067c76897447a2c1d0618fe5429cab8c";
     uint8_t event_frame[65 + sizeof event_body];
     memcpy(event_frame, event_hex, 64);
     event_frame[64] = '\n';
@@ -209,8 +204,6 @@ int main(void)
     assert(event_view.event_sequence == 1U && event_view.event_size_bytes == 3U &&
            event_view.event == event_frame + sizeof event_frame - 3U &&
            !memcmp(event_view.event, "\x01\x02\x03", 3));
-    for (unsigned index = 0; index < 32U; ++index)
-        assert(event_view.package_sha256[index] == 0x11);
     assert(!ebase_mqtt_verified_event(key, device_id, boot_id, topic, 0, false,
                                        event_frame, sizeof event_frame, &event_view));
     assert(!ebase_mqtt_verified_event(key, device_id, boot_id, topic, 1, true,
@@ -265,5 +258,5 @@ int main(void)
     assert(!memcmp(signed_tag, zero_tag, sizeof signed_tag));
     puts("  network_auth     passed (exact request bytes, PSA failure cleanup)");
     puts("  mqtt_command     passed (Topic, QoS1, retained and frame rejection)");
-    puts("  mqtt_event       passed (signed boot/package/sequence and payload boundary)");
+    puts("  mqtt_event       passed (signed boot/sequence and payload boundary)");
 }

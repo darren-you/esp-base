@@ -8,7 +8,8 @@ case "${ESP_BASE_TEST_TARGET:-esp32c3}" in
 esac
 build_dir="$(mktemp -d)"
 trap 'rm -rf -- "$build_dir"' EXIT
-cjson_dir="$test_root/managed_components/espressif__cjson/cJSON"
+components_dir="${ESP_BASE_TEST_COMPONENTS_DIR:-$test_root/managed_components}"
+cjson_dir="$components_dir/espressif__cjson/cJSON"
 [[ -f "$cjson_dir/cJSON.c" ]] || { printf 'esp-base FRP crypto tests\n  error  Resolve the locked cJSON dependency first.\n' >&2; exit 1; }
 command -v pkg-config >/dev/null && pkg-config --exists openssl || {
   printf 'esp-base FRP crypto tests\n  error  OpenSSL development files and pkg-config are required.\n' >&2; exit 1;
@@ -21,7 +22,7 @@ read -r -a openssl_libs <<< "$(pkg-config --libs openssl)"
   -Wall -Wextra -Werror -fsanitize=address,undefined "${openssl_cflags[@]}" \
   -I "$test_root/tests/fakes/network_auth" -I "$test_root/tests/fakes" \
   -I "$test_root/components/device_protocol/include" -I "$test_root/components/remote_config/include" \
-  -I "$test_root/components/ota_operation/include" -I "$test_root/managed_components/esp_ota/include" -I "$cjson_dir" \
+  -I "$test_root/components/ota_operation/include" -I "$components_dir/esp_ota/include" -I "$cjson_dir" \
   "$test_root/components/device_protocol/network_auth.c" \
   "$test_root/components/device_protocol/frp_management_listener.c" \
   "$test_root/components/device_protocol/command_decoder.c" \
@@ -61,7 +62,7 @@ done
   -Debase_parse_command=ebase_parse_command_real -Debase_parse_frp_status=ebase_parse_frp_status_real \
   -I "$test_root/tests/fakes" -I "$test_root/components/device_protocol/include" \
   -I "$test_root/components/remote_config/include" -I "$test_root/components/ota_operation/include" \
-  -I "$test_root/managed_components/esp_ota/include" -I "$cjson_dir" \
+  -I "$components_dir/esp_ota/include" -I "$cjson_dir" \
   -c "$test_root/components/device_protocol/command_decoder.c" -o "$build_dir/command_decoder_real.o"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -ffunction-sections -fdata-sections -Debase_config_encode=ebase_config_encode_real \
@@ -73,10 +74,10 @@ done
   -I "$test_root/components/device_protocol/include" -I "$test_root/components/device_protocol" \
   -I "$test_root/components/device_identity/include" -I "$test_root/components/remote_config/include" \
   -I "$test_root/components/wifi_runtime/include" -I "$test_root/components/time_runtime/include" \
-  -I "$test_root/components/ota_operation/include" -I "$test_root/managed_components/esp_ota/include" \
-  -I "$test_root/managed_components/esp_frp/include" -I "$test_root/managed_components/mqtt/runtime/include" \
+  -I "$test_root/components/ota_operation/include" -I "$test_root/components/native_business/include" -I "$components_dir/esp_ota/include" \
+  -I "$components_dir/esp_frp/include" -I "$components_dir/mqtt/runtime/include" \
   "$test_root/components/device_protocol/command_guard.c" "$test_root/components/device_protocol/control_state.c" \
-  "$test_root/components/device_protocol/product_ledger.c" "$test_root/components/ota_operation/esp_base_storage_owner.c" \
+  "$test_root/components/native_business/esp_base_business.c" "$test_root/components/ota_operation/esp_base_storage_owner.c" \
   "$build_dir/command_decoder_real.o" "$build_dir/config_codec_real.o" "$build_dir/cjson.o" \
   "$build_dir/network_auth.o" "$build_dir/frp_management_listener.o" "$build_dir/psa_openssl_port.o" \
   "$test_root/tests/frp_management_owner_crypto_test.c" "${openssl_libs[@]}" -lm \

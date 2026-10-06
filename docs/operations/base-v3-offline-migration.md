@@ -4,7 +4,7 @@
 
 ## 当前事实
 
-P1-04 保存的 C3 实板基线仍运行 v1 配置，已观测 revision 5；`base_store/base_config/committed` 为可选的 112 字节 `EBCF` v1 blob。v2 只在此前软件候选中实现，并未完成实板部署。普通新固件只读 `EBCF` v3，遇到 v1 或 v2 会停止启动并保留 NVS，不会自动转换、擦除或生成凭据。旧设备分区为 4 MiB：默认 `nvs` 位于 `0x9000/0x6000`，`otadata` 位于 `0xf000/0x2000`，`ota_0`、`ota_1` 分别位于 `0x20000/0x1e0000`、`0x200000/0x1e0000`，`base_store` 位于 `0x3e0000/0x20000`。P1-04 是已保存的基线，未来物理写入前仍须重新确认同一设备的实时身份和状态。源码中的旧 `partitions/partition_table.csv` 仅供本预检核对旧备份；C3 产品构建已改用 `partitions/c3-product-partition-table.csv`，目标 `base_store@0x3f5000/0xb000`。
+P1-04 保存的 C3 实板基线仍运行 v1 配置，已观测 revision 5；`base_store/base_config/committed` 为可选的 112 字节 `EBCF` v1 blob。v2 只在此前软件候选中实现，并未完成实板部署。普通新固件只读 `EBCF` v3，遇到 v1 或 v2 会停止启动并保留 NVS，不会自动转换、擦除或生成凭据。旧设备分区为 4 MiB：默认 `nvs` 位于 `0x9000/0x6000`，`otadata` 位于 `0xf000/0x2000`，`ota_0`、`ota_1` 分别位于 `0x20000/0x1e0000`、`0x200000/0x1e0000`，`base_store` 位于 `0x3e0000/0x20000`。P1-04 是已保存的基线，未来物理写入前仍须重新确认同一设备的实时身份和状态。源码中的旧 `partitions/partition_table.csv` 仅供本预检核对旧备份；C3 产品构建已改用 [partitions/c3-product-partition-table.csv](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/partitions/c3-product-partition-table.csv)，目标 `base_store@0x3f5000/0xb000`。
 
 v3 候选只改同一个 `base_config/committed` 键，保留 revision 与原字段：v1 输入转为 40 字节 header 加原 Wi-Fi 字节，MQTT/FRP 未配置；v2 输入在严格校验后保留原 Wi-Fi、MQTT 凭据和管理 HMAC key 字节，FRP 未配置。可选 `base_ota/operation` 收据保持原 blob。候选不生成或更换任何 Token、key、密码、证书，也不替换默认 `nvs/base_identity/device_uuid`。
 

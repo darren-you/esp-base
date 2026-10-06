@@ -11,13 +11,10 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-READY = '''    ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required container=%s",
-             product == ESP_BASE_CONTAINER_RUNNING ? "running" :
-             product == ESP_BASE_CONTAINER_EMPTY ? "empty" : "not_configured");
-}'''
+READY = '    ESP_LOGI(TAG, "ESP_BASE_READY hardware_outputs=untouched provisioning=required business=native");\n}'
 
 PROBE = r'''
-/* 仓外 QEMU 探针：与 RUNNING guest 同进程，调用正式 provider 和 AEAD reader。 */
+/* 仓外 QEMU 探针：与原生业务同进程，调用正式 provider 和 AEAD reader。 */
 enum { QEMU_FRP_CIPHER_BYTES = 65536, QEMU_FRP_FEED_BYTES = 1024 };
 static uint8_t s_qemu_frp_window[EFRP_AEAD_RX_CHUNK_BYTES];
 static uint8_t s_qemu_frp_zero[QEMU_FRP_FEED_BYTES];
@@ -88,7 +85,7 @@ static void qemu_frp_authenticated_probe(void *context)
                      atomic_load_explicit(&s_storage_owner.active_token,
                                           memory_order_acquire) == 0,
                      "initial_owner");
-    ESP_LOGI(TAG, "QEMU_FRP_BEGIN guest=running owner=idle owner_next=%u"
+    ESP_LOGI(TAG, "QEMU_FRP_BEGIN business=native owner=idle owner_next=%u"
              " baseline_free=%zu baseline_largest=%zu",
              owner_before, baseline_free, baseline_largest);
 
@@ -228,12 +225,11 @@ def main() -> None:
                   .replace("@@PREFIX@@", c_array(nonce + header))
                   .replace("@@TAG@@", c_array(record[-16:]))
                   .replace("@@DIGEST@@", c_array(hashlib.sha256(plaintext).digest())))
-    updated = original.replace('#include "esp_base_container_product.h"',
-        '#include "esp_base_container_product.h"\n#include "esp_frp_flash_reader.h"\n'
+    updated = original.replace('#include "esp_frp_idf_flash_store.h"',
+        '#include "esp_frp_idf_flash_store.h"\n#include "esp_frp_flash_reader.h"\n'
         '#include "esp_heap_caps.h"\n#include "psa/crypto.h"')
     updated = updated.replace("void app_main(void)", probe + "void app_main(void)")
-    updated = updated.replace(READY, READY[:-1] + '''    if (product == ESP_BASE_CONTAINER_RUNNING &&
-        xTaskCreate(qemu_frp_authenticated_probe, "qemu_frp_auth",
+    updated = updated.replace(READY, READY[:-1] + '''    if (xTaskCreate(qemu_frp_authenticated_probe, "qemu_frp_auth",
                     8192, NULL, 4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "QEMU_FRP_FAIL stage=task_create result=-1");
     }

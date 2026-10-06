@@ -108,15 +108,6 @@ static int hex_digit(char c)
     return -1;
 }
 
-static bool positive_u32(const cJSON *item, uint32_t maximum, uint32_t *out)
-{
-    if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) ||
-        item->valuedouble < 1 || item->valuedouble > maximum ||
-        floor(item->valuedouble) != item->valuedouble) return false;
-    *out = (uint32_t)item->valuedouble;
-    return true;
-}
-
 static bool digest32(const cJSON *item, uint8_t output[32])
 {
     if (!cJSON_IsString(item) || strlen(item->valuestring) != 64U) return false;
@@ -164,8 +155,8 @@ static bool restart_parameters(const cJSON *root, ebase_request_t *request)
     return true;
 }
 
-const char *ebase_parse_command(const char *json, size_t length,
-                                ebase_command_t *out, ebase_command_alloc_t allocate)
+static const char *parse_command(const char *json, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate, bool frp)
 {
     if (!out) return "invalid_request";
     ebase_command_release(out);
@@ -178,6 +169,8 @@ const char *ebase_parse_command(const char *json, size_t length,
     const char *error = "invalid_request";
     const char *const status_keys[] = {"protocol_version", "request_id", "command"};
     const char *const query_keys[] = {"protocol_version", "request_id", "command", "parameters"};
+    const char *const frp_read_keys[] = {"protocol_version", "request_id", "command", "device_id"};
+    const char *const frp_query_keys[] = {"protocol_version", "request_id", "command", "parameters", "device_id"};
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (end != json + length || !cJSON_IsObject(root) || !cJSON_IsNumber(version) || version->valuedouble != 1 || !cJSON_IsString(command)) goto done;
@@ -186,8 +179,11 @@ const char *ebase_parse_command(const char *json, size_t length,
     bool business_status = !strcmp(command->valuestring, "business.status");
     bool ota_result = !strcmp(command->valuestring, "ota.result");
     const bool query = ota_result;
-    if (!exact_keys(root, (status || firmware_status || business_status) ? status_keys : query ? query_keys : write_keys,
-                    (status || firmware_status || business_status) ? 3 : query ? 4 : 7)) goto done;
+    const bool read = status || firmware_status || business_status;
+    if (!exact_keys(root, read ? (frp ? frp_read_keys : status_keys) :
+                    query ? (frp ? frp_query_keys : query_keys) : write_keys,
+                    read ? (frp ? 4U : 3U) : query ? (frp ? 5U : 4U) : 7U)) goto done;
+    if (frp && (read || query) && !copy_id(root, "device_id", out->request.device_id)) goto done;
     if (!copy_id(root, "request_id", out->request.request_id)) goto done;
     if (status) { out->kind = EBASE_STATUS; error = NULL; goto done; }
     if (firmware_status) { out->kind = EBASE_FIRMWARE_STATUS; error = NULL; goto done; }
@@ -217,7 +213,8 @@ const char *ebase_parse_command(const char *json, size_t length,
         const cJSON *parameters = cJSON_GetObjectItemCaseSensitive(root, "parameters");
         const char *const keys[] = {"operation_id", "image_url", "sha256",
             "image_size_bytes", "target", "signature"};
-        if (!exact_keys(parameters, keys, 6U) ||
+        const char *const stream_keys[] = {"operation_id", "sha256", "image_size_bytes", "target", "signature"};
+        if (!exact_keys(parameters, frp ? stream_keys : keys, frp ? 5U : 6U) ||
             !copy_id(parameters, "operation_id", out->ota->operation_id)) goto done;
         const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "image_url");
         const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "sha256");
@@ -226,21 +223,17 @@ const char *ebase_parse_command(const char *json, size_t length,
         const cJSON *signature = cJSON_GetObjectItemCaseSensitive(parameters, "signature");
         const char *const signature_keys[] = {"scheme"};
         const cJSON *scheme = cJSON_GetObjectItemCaseSensitive(signature, "scheme");
-        if (!cJSON_IsString(url) || strlen(url->valuestring) > EOTA_URL_BYTES ||
-            strncmp(url->valuestring, "https://", 8) != 0 ||
+        if ((!frp && (!cJSON_IsString(url) || strlen(url->valuestring) > EOTA_URL_BYTES ||
+            strncmp(url->valuestring, "https://", 8) != 0)) ||
             !cJSON_IsString(digest) || strlen(digest->valuestring) != 64 ||
             !cJSON_IsNumber(size) || !isfinite(size->valuedouble) || size->valuedouble < 1 ||
             size->valuedouble > UINT32_MAX || floor(size->valuedouble) != size->valuedouble ||
             !cJSON_IsString(target) || strcmp(target->valuestring, ESP_BASE_OTA_TARGET) ||
             !exact_keys(signature, signature_keys, 1) || !cJSON_IsString(scheme) ||
             strcmp(scheme->valuestring, ESP_BASE_OTA_SIGNATURE_SCHEME)) goto done;
-        for (size_t i = 0; i < sizeof out->ota->sha256; ++i) {
-            const int hi = hex_digit(digest->valuestring[2 * i]);
-            const int lo = hex_digit(digest->valuestring[2 * i + 1]);
-            if (hi < 0 || lo < 0) goto done;
-            out->ota->sha256[i] = (uint8_t)((hi << 4) | lo);
-        }
-        memcpy(out->ota->image_url, url->valuestring, strlen(url->valuestring) + 1);
+        if (!digest32(digest, out->ota->sha256)) goto done;
+        if (!frp) memcpy(out->ota->image_url, url->valuestring, strlen(url->valuestring) + 1);
+        out->ota->inbound_stream = frp;
         out->ota->image_size_bytes = (uint32_t)size->valuedouble;
         out->kind = EBASE_OTA_START;
         error = NULL;
@@ -361,6 +354,18 @@ done:
     if (error) release_payload(out);
     cJSON_Delete(root);
     return error;
+}
+
+const char *ebase_parse_command(const char *json, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate)
+{
+    return parse_command(json, length, out, allocate, false);
+}
+
+const char *ebase_parse_frp_command(const char *json, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate)
+{
+    return parse_command(json, length, out, allocate, true);
 }
 
 const char *ebase_parse_frp_status(const char *json, size_t length,

@@ -83,6 +83,10 @@ static esp_base_remote_config_t *s_candidate;
 /* Parsed commands and MQTT setup both live within synchronous callbacks.
  * The commit path gets separate temporary storage after the Wi-Fi proof. */
 static bool s_reply_mqtt, s_mqtt_revision_set;
+static char *s_frp_reply;
+static size_t s_frp_reply_capacity, s_frp_reply_length;
+static bool s_parse_frp;
+static ebase_command_kind_t s_frp_expected_kind;
 static uint32_t s_mqtt_revision;
 static bool s_frp_revision_set;
 static uint32_t s_frp_revision;
@@ -134,45 +138,28 @@ static bool fingerprint_config_bytes(const uint8_t *bytes, size_t length, void *
     return true;
 }
 
-static bool fingerprint_ota_request(const esp_base_ota_request_t *request,
-                                    uint8_t fingerprint[32])
+static bool fingerprint_ota_request(const esp_base_ota_request_t *request, uint8_t fingerprint[32])
 {
-    static const uint8_t domain[] = "ota.start";
-    const uint32_t numbers[] = {request->image_size_bytes,
-        request->package_size_bytes, request->guest_abi_version,
-        request->data_schema_version};
-    const uint8_t mode = (uint8_t)request->package_mode;
     psa_hash_operation_t hash = PSA_HASH_OPERATION_INIT;
-    size_t written = 0U;
+    size_t written = 0;
+    const uint8_t source = request->inbound_stream ? 1U : 0U;
+    uint8_t size[4];
+    for (size_t i = 0; i < 4; ++i) size[i] = (uint8_t)(request->image_size_bytes >> ((3U-i)*8U));
     bool valid = psa_hash_setup(&hash, PSA_ALG_SHA_256) == PSA_SUCCESS &&
-        psa_hash_update(&hash, domain, sizeof domain) == PSA_SUCCESS &&
-        psa_hash_update(&hash, (const uint8_t *)request->operation_id,
-                        sizeof request->operation_id) == PSA_SUCCESS &&
-        psa_hash_update(&hash, (const uint8_t *)request->image_url,
-                        strlen(request->image_url) + 1U) == PSA_SUCCESS &&
-        psa_hash_update(&hash, request->sha256, sizeof request->sha256) == PSA_SUCCESS &&
-        psa_hash_update(&hash, &mode, sizeof mode) == PSA_SUCCESS &&
-        psa_hash_update(&hash, request->package_sha256,
-                        sizeof request->package_sha256) == PSA_SUCCESS &&
-        psa_hash_update(&hash, request->trial_event_sha256,
-                        sizeof request->trial_event_sha256) == PSA_SUCCESS &&
-        psa_hash_update(&hash, (const uint8_t *)request->package_url,
-                        strlen(request->package_url) + 1U) == PSA_SUCCESS;
-    for (size_t index = 0; valid && index < sizeof numbers / sizeof numbers[0]; ++index) {
-        uint8_t number[4];
-        for (int shift = 24, byte = 0; shift >= 0; shift -= 8, ++byte)
-            number[byte] = (uint8_t)(numbers[index] >> shift);
-        valid = psa_hash_update(&hash, number, sizeof number) == PSA_SUCCESS;
-    }
-    valid = valid && psa_hash_finish(&hash, fingerprint, 32U, &written) == PSA_SUCCESS &&
-        written == 32U;
+        psa_hash_update(&hash, (const uint8_t *)"ota.start", 10) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->operation_id, sizeof request->operation_id) == PSA_SUCCESS &&
+        psa_hash_update(&hash, (const uint8_t *)request->image_url, strlen(request->image_url)+1U) == PSA_SUCCESS &&
+        psa_hash_update(&hash, request->sha256, 32) == PSA_SUCCESS &&
+        psa_hash_update(&hash, size, sizeof size) == PSA_SUCCESS &&
+        psa_hash_update(&hash, &source, 1) == PSA_SUCCESS &&
+        psa_hash_finish(&hash, fingerprint, 32, &written) == PSA_SUCCESS && written == 32;
     if (!valid) (void)psa_hash_abort(&hash);
     return valid;
 }
 
 static uint64_t uptime_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
 
-static void package_digest_hex(char output[67], const uint8_t digest[32])
+static void digest_hex(char output[67], const uint8_t digest[32])
 {
     static const char digits[] = "0123456789abcdef";
     output[0] = '"';
@@ -203,39 +190,24 @@ static void reported(void)
         frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request->image_size_bytes : 0);
-    esp_base_container_event_observation_t event = {0};
-    const esp_base_container_event_observation_result_t observed =
-        esp_base_container_product_event_observation(&event);
-    const char *event_outcome = observed == ESP_BASE_CONTAINER_EVENT_OBSERVATION_BUSY ? "busy" :
-        observed != ESP_BASE_CONTAINER_EVENT_OBSERVED ? "none" :
-        !event.runtime_ok ? "runtime_failed" :
-        event.guest_result < 0 ? "business_failed" : "succeeded";
-    char completed_sequence[24] = "null";
-    char guest_result[16] = "null";
-    char event_package[67] = "null";
-    char completed_event[67] = "null";
-    if (observed == ESP_BASE_CONTAINER_EVENT_OBSERVED) {
-        (void)snprintf(completed_sequence, sizeof completed_sequence,
-                       "%" PRIu64, event.event_sequence);
-        package_digest_hex(event_package, event.package_sha256);
-        package_digest_hex(completed_event, event.event_sha256);
-        if (event.runtime_ok)
-            (void)snprintf(guest_result, sizeof guest_result,
-                           "%" PRId32, event.guest_result);
+    char digest[67] = "null", completed[24] = "null", business_result[16] = "null";
+    if (s_business.last_event_sequence) {
+        (void)snprintf(completed, sizeof completed, "%" PRIu64, s_business.last_event_sequence);
+        (void)snprintf(business_result, sizeof business_result, "%" PRId32, s_business.last_result);
     }
+    if (s_business.last_event_sequence) digest_hex(digest, s_business.last_event_sha256);
     const int size = snprintf(s_response_json, MQTT_REPORTED_JSON_BYTES,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
         "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\","
         "\"last_accepted_event_sequence\":%" PRIu64 ","
-        "\"last_completed_event_sequence\":%s,\"last_completed_package_sha256\":%s,"
-        "\"last_completed_event_sha256\":%s,"
-        "\"last_event_outcome\":\"%s\",\"last_guest_result\":%s}",
+        "\"last_completed_event_sequence\":%s,\"last_completed_event_sha256\":%s,"
+        "\"last_event_outcome\":\"%s\",\"last_business_result\":%s}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
         esp_base_wifi_state(), time_ready ? "true" : "false", frp.state,
-        esp_base_mqtt_owner_event_sequence(), completed_sequence, event_package,
-        completed_event,
-        event_outcome, guest_result);
+        esp_base_mqtt_owner_event_sequence(), completed, digest,
+        !s_business.last_event_sequence ? "none" : s_business.last_result < 0 ? "business_failed" : "succeeded",
+        business_result);
     if (size > 0 && (size_t)size < MQTT_REPORTED_JSON_BYTES)
         (void)esp_base_mqtt_owner_reported(s_response_json, (size_t)size);
 }
@@ -321,23 +293,26 @@ static int handle_frp_status(const uint8_t *json, size_t json_length,
     return error ? http_status : 200;
 }
 
+static void emit_json(int length)
+{
+    if (length < 0 || (size_t)length >= sizeof s_response_json) return;
+    if (s_frp_reply) {
+        if ((size_t)length >= s_frp_reply_capacity) return;
+        memcpy(s_frp_reply, s_response_json, (size_t)length);
+        s_frp_reply_length = (size_t)length;
+    } else if (s_reply_mqtt) {
+        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
+    } else {
+        flockfile(stdout);
+        fputc('\n', stdout); (void)fwrite(s_response_json, 1, (size_t)length, stdout);
+        fputc('\n', stdout); fflush(stdout); funlockfile(stdout);
+    }
+}
+
 static void reply(const char *request_id, const char *state, const char *error, const status_snapshot_t *status)
 {
-    /* USB, MQTT and FRP share one result serializer. Strings are validated
-     * UUIDs or closed firmware constants; raw request bytes are never echoed. */
-    const int length = format_result_json(s_response_json, sizeof s_response_json,
-        request_id && request_id[0] ? request_id : NULL, state, error, status);
-    if (length < 0) return;
-    if (s_reply_mqtt) {
-        (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
-        return;
-    }
-    flockfile(stdout);
-    fputc('\n', stdout);
-    (void)fwrite(s_response_json, 1, (size_t)length, stdout);
-    fputc('\n', stdout);
-    fflush(stdout);
-    funlockfile(stdout);
+    emit_json(format_result_json(s_response_json, sizeof s_response_json,
+        request_id && request_id[0] ? request_id : NULL, state, error, status));
 }
 
 static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_view_t *view)
@@ -345,52 +320,53 @@ static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_
     const char *state = view->state == ESP_BASE_OTA_OPERATION_RUNNING ? "running" :
         view->state == ESP_BASE_OTA_OPERATION_SUCCEEDED ? "succeeded" :
         view->state == ESP_BASE_OTA_OPERATION_FAILED ? "failed" : "unknown";
-    static const char digits[] = "0123456789abcdef";
-    char digest[65];
-    for (size_t i = 0; i < 32; ++i) {
-        digest[i * 2] = digits[view->sha256[i] >> 4];
-        digest[i * 2 + 1] = digits[view->sha256[i] & 15];
+    char digest[67]; digest_hex(digest, view->sha256);
+    emit_json(snprintf(s_response_json, sizeof s_response_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
+        "\"result\":{\"operation_id\":\"%s\",\"sha256\":%s,"
+        "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\"}}",
+        s_context.device_id, s_boot_id, request_id, state,
+        view->error_code ? "\"" : "null", view->error_code ? view->error_code : "",
+        view->error_code ? "\"" : "", view->operation_id, digest, view->image_size_bytes, ESP_BASE_OTA_TARGET,
+        view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1"));
+}
+
+static void reply_business(const char *request_id)
+{
+    ebase_business_poll(&s_business, uptime_ms());
+    emit_json(snprintf(s_response_json, sizeof s_response_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":\"%s\",\"state\":\"succeeded\",\"error_code\":null,"
+        "\"result\":{\"byte_count\":%" PRIu32 ",\"state\":\"%s\",\"window_deadline_uptime_ms\":%" PRIu64 "}}",
+        s_context.device_id, s_boot_id, request_id, s_business.byte_count,
+        s_business.state == EBASE_BUSINESS_IDLE ? "idle" : s_business.state == EBASE_BUSINESS_ACTIVE ? "active" : "paused",
+        s_business.window_deadline_ms));
+}
+
+static void reply_firmware(const char *request_id)
+{
+    esp_base_storage_claim_t claim = {0};
+    if (!esp_base_storage_claim(s_context.storage_owner, &claim)) {
+        reply(request_id, "unknown", "operation_busy", NULL); return;
     }
-    digest[64] = '\0';
-    const char *package_mode = view->package_mode == ESP_BASE_OTA_PACKAGE_REUSE ?
-        "reuse" : view->package_mode == ESP_BASE_OTA_PACKAGE_WRITE ?
-        "write" : "no_package";
-    char package_digest[67] = {0};
-    const char *package_sha256 = "null";
-    if (view->package_mode != ESP_BASE_OTA_NO_PACKAGE) {
-        package_digest_hex(package_digest, view->package_sha256);
-        package_sha256 = package_digest;
-    }
-    if (s_reply_mqtt) {
-        const int length = snprintf(s_response_json, sizeof s_response_json,
-            "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
-            "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":%s%s%s,"
-            "\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
-            "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\","
-            "\"package_mode\":\"%s\",\"package_sha256\":%s}}",
-            s_context.device_id, s_boot_id, request_id, state,
-            view->error_code ? "\"" : "null", view->error_code ? view->error_code : "",
-            view->error_code ? "\"" : "", view->operation_id, digest, view->image_size_bytes,
-            ESP_BASE_OTA_TARGET,
-            view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1",
-            package_mode, package_sha256);
-        if (length > 0 && (size_t)length < sizeof s_response_json)
-            (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
-        return;
-    }
-    flockfile(stdout);
-    printf("\n{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
-           "\"request_id\":\"%s\",\"state\":\"%s\",\"error_code\":",
-           s_context.device_id, s_boot_id, request_id, state);
-    if (view->error_code) printf("\"%s\"", view->error_code); else printf("null");
-    printf(",\"result\":{\"operation_id\":\"%s\",\"sha256\":\"%s\","
-           "\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"target_slot\":\"%s\","
-           "\"package_mode\":\"%s\",\"package_sha256\":%s}}\n",
-           view->operation_id, digest, view->image_size_bytes, ESP_BASE_OTA_TARGET,
-           view->target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1",
-           package_mode, package_sha256);
-    fflush(stdout);
-    funlockfile(stdout);
+    const eota_policy_t policy = esp_base_ota_policy(true);
+    eota_slots_t slots = {0}, after = {0}; uint32_t size = 0; uint8_t digest[32];
+    bool valid = eota_observe_slots(&policy, &slots) == EOTA_UPDATE_OK &&
+        slots.running_subtype == slots.boot_subtype &&
+        eota_sha256_verified_image(&policy, slots.running_subtype, &size, digest) == EOTA_UPDATE_OK &&
+        eota_observe_slots(&policy, &after) == EOTA_UPDATE_OK &&
+        after.running_subtype == slots.running_subtype && after.boot_subtype == slots.boot_subtype &&
+        after.running_state == slots.running_state;
+    if (!esp_base_storage_release(&claim)) { valid = false; s_config_uncertain = true; }
+    if (!valid) { reply(request_id, "unknown", "storage_uncertain", NULL); return; }
+    char hex[67]; digest_hex(hex, digest);
+    emit_json(snprintf(s_response_json, sizeof s_response_json,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
+        "\"request_id\":\"%s\",\"state\":\"succeeded\",\"error_code\":null,"
+        "\"result\":{\"firmware_sha256\":%s,\"image_size_bytes\":%" PRIu32 ",\"target\":\"%s\",\"ota_slot\":\"%s\"}}",
+        s_context.device_id, s_boot_id, request_id, hex, size, ESP_BASE_OTA_TARGET,
+        slots.running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ? "ota_0" : "ota_1"));
 }
 
 static void emit_outcome(size_t slot, bool via_mqtt)
@@ -481,6 +457,8 @@ static int handle_frp_restart(const uint8_t *json, size_t json_length,
     return http_status;
 }
 
+static void handle_line(const char *line, size_t length, void *context);
+
 static int handle_frp_management(esp_base_frp_management_command_t command,
                                  const uint8_t *json, size_t json_length,
                                  char *response, size_t capacity,
@@ -490,7 +468,26 @@ static int handle_frp_management(esp_base_frp_management_command_t command,
         return handle_frp_status(json, json_length, response, capacity, response_length, context);
     if (command == ESP_BASE_FRP_MANAGEMENT_RESTART)
         return handle_frp_restart(json, json_length, response, capacity, response_length);
-    return 500;
+    switch (command) {
+    case ESP_BASE_FRP_MANAGEMENT_FIRMWARE_STATUS: s_frp_expected_kind = EBASE_FIRMWARE_STATUS; break;
+    case ESP_BASE_FRP_MANAGEMENT_OTA_START: s_frp_expected_kind = EBASE_OTA_START; break;
+    case ESP_BASE_FRP_MANAGEMENT_OTA_RESULT: s_frp_expected_kind = EBASE_OTA_RESULT; break;
+    case ESP_BASE_FRP_MANAGEMENT_BUSINESS_STATUS: s_frp_expected_kind = EBASE_BUSINESS_STATUS; break;
+    case ESP_BASE_FRP_MANAGEMENT_BUSINESS_PAUSE: s_frp_expected_kind = EBASE_BUSINESS_PAUSE; break;
+    case ESP_BASE_FRP_MANAGEMENT_BUSINESS_RESUME: s_frp_expected_kind = EBASE_BUSINESS_RESUME; break;
+    default: return 500;
+    }
+    s_frp_reply = response; s_frp_reply_capacity = capacity; s_frp_reply_length = 0;
+    s_parse_frp = true;
+    handle_line((const char *)json, json_length, NULL);
+    s_parse_frp = false; s_frp_reply = NULL;
+    *response_length = s_frp_reply_length;
+    if (*response_length < capacity) response[*response_length] = '\0';
+    if (!*response_length) return 500;
+    if (strstr(response, "\"error_code\":\"invalid_request\"")) return 400;
+    if (strstr(response, "\"state\":\"failed\"") ||
+        strstr(response, "\"state\":\"expired\"")) return 409;
+    return strstr(response, "\"state\":\"running\"") ? 202 : 200;
 }
 
 static void poll_frp_restart(uint64_t now)
@@ -641,117 +638,64 @@ static void ota_progress(uint32_t received, uint32_t total, void *context)
 static void ota_task(void *argument)
 {
     (void)argument;
-    if (!esp_base_container_product_ota_ready(s_ota_request->package_mode)) {
-        atomic_store_explicit(&s_ota_result, EOTA_UPDATE_RESOURCE_FAILURE,
-                              memory_order_relaxed);
-        atomic_store_explicit(&s_ota_done, true, memory_order_release);
-        vTaskDelete(NULL);
-        return;
-    }
     const eota_policy_t policy = esp_base_ota_policy(true);
-    eota_image_t image = {
-        .image_url = s_ota_request->image_url,
-        .image_size_bytes = s_ota_request->image_size_bytes,
-    };
-    memcpy(image.sha256, s_ota_request->sha256, sizeof image.sha256);
     esp_base_ota_receipt_recovery_t receipt = {0};
     eota_result_t result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
-    if (esp_base_ota_receipt_load_for_recovery(
-            s_context.device_id, &receipt) != ESP_BASE_OTA_RECEIPT_OK ||
+    bool mutated = false;
+    if (esp_base_ota_receipt_load_for_recovery(s_context.device_id, &receipt) != ESP_BASE_OTA_RECEIPT_OK ||
         receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED ||
-        receipt.package_mode != s_ota_request->package_mode ||
-        memcmp(receipt.package_sha256, s_ota_request->package_sha256, 32) != 0 ||
-        memcmp(receipt.trial_event_sha256, s_ota_request->trial_event_sha256, 32) != 0 ||
-        receipt.package_size_bytes != s_ota_request->package_size_bytes ||
-        receipt.guest_abi_version != s_ota_request->guest_abi_version ||
-        receipt.data_schema_version != s_ota_request->data_schema_version ||
-        strcmp(receipt.operation_id, s_ota_request->operation_id) != 0 ||
-        receipt.image_size_bytes != image.image_size_bytes ||
-        memcmp(receipt.candidate_sha256, image.sha256, sizeof image.sha256) != 0) {
-        /* A missing or changed durable intent cannot authorize app erasure. */
-        atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
-    } else {
-        if (receipt.package_mode != ESP_BASE_OTA_NO_PACKAGE) {
-            esp_base_ota_receipt_snapshot_t source = {0};
-            if (!esp_base_container_product_snapshot_for_ota(
-                    &s_ota_storage_claim, s_ota_request, &source) ||
-                source.container_enabled != receipt.container_enabled ||
-                source.container_sequence != receipt.container_sequence ||
-                memcmp(source.source_sha256, receipt.source_sha256, 32) != 0 ||
-                memcmp(source.inactive_sha256, receipt.inactive_sha256, 32) != 0 ||
-                source.source_package_present != receipt.source_package_present ||
-                memcmp(source.source_package_sha256, receipt.source_package_sha256, 32) != 0 ||
-                source.source_package_size_bytes != receipt.source_package_size_bytes ||
-                source.source_guest_abi_version != receipt.source_guest_abi_version ||
-                source.source_data_schema_version != receipt.source_data_schema_version) {
-                atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
-                goto done;
+        strcmp(receipt.operation_id, s_ota_request->operation_id) ||
+        receipt.image_size_bytes != s_ota_request->image_size_bytes ||
+        memcmp(receipt.candidate_sha256, s_ota_request->sha256, 32)) goto uncertain;
+    if (s_ota_request->inbound_stream) {
+        const uint64_t started = uptime_ms();
+        while (!esp_base_frp_management_upload_connected()) {
+            const uint64_t now = uptime_ms();
+            if (now < started || now - started >= policy.connect_timeout_ms) {
+                result = EOTA_UPDATE_DOWNLOAD_FAILED; goto done;
             }
-        }
-        /* The original receipt, physical A/B and ECS2 sequence are all known
-         * before the first target write. Retire B physically, then retire its
-         * persistent binding, and only then let IDF download C into the slot. */
-        result = eota_retire_inactive(&policy, receipt.target_subtype,
-                                      receipt.source_sha256);
-        if (result == EOTA_UPDATE_OK &&
-            esp_base_container_product_retire_inactive(
-                &s_ota_storage_claim, &receipt) != ESP_BASE_CONTAINER_RETIRE_COMPLETE) {
-            result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
-        }
-        if (result != EOTA_UPDATE_OK) {
-            atomic_store_explicit(&s_ota_stage_uncertain, true,
-                                  memory_order_relaxed);
+            vTaskDelay(1);
         }
     }
-    if (result == EOTA_UPDATE_OK) {
-        eota_prepared_t prepared = {0};
-        result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);
-        if (result != EOTA_UPDATE_OK) {
-            /* The target can contain a partially written C with a bootable
-             * header. Keep the owner until the same receipt is reconciled. */
-            atomic_store_explicit(&s_ota_stage_uncertain, true,
-                                  memory_order_relaxed);
-        }
-        if (result != EOTA_UPDATE_OK) goto done;
-        if (receipt.source_package_present &&
-            !esp_base_container_product_stop_confirmed(&s_ota_storage_claim)) {
-            /* Source resources must be reclaimed before package preparation.
-             * C already exists: a failed stop keeps the original claim. */
-            atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
-            result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
-            goto done;
-        }
-        esp_base_container_stage_result_t stage =
-            esp_base_container_product_stage_firmware(
-                &s_ota_storage_claim, &prepared, &receipt);
-        if (receipt.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
-            stage == ESP_BASE_CONTAINER_STAGE_WRITING) {
-            esp_base_product_package_source_t *source = esp_base_time_ready() ?
-                esp_base_product_package_source_open(s_ota_request->package_url,
-                    receipt.package_size_bytes, true) : NULL;
-            if (source != NULL) {
-                stage = esp_base_container_product_write_staged_firmware_package(
-                    &s_ota_storage_claim, &prepared, &receipt,
-                    esp_base_product_package_source_read, source);
-                const bool complete = esp_base_product_package_source_complete(source);
-                esp_base_product_package_source_close(source);
-                if (!complete) stage = ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
-            } else stage = ESP_BASE_CONTAINER_STAGE_UNCERTAIN;
-        }
-        if ((receipt.container_enabled &&
-             stage == ESP_BASE_CONTAINER_STAGE_PREPARED) ||
-            (!receipt.container_enabled &&
-             stage == ESP_BASE_CONTAINER_STAGE_NOT_CONFIGURED)) {
-            result = eota_select(&policy, &prepared);
-            if (result != EOTA_UPDATE_OK) {
-                atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
-            }
-        } else {
-            atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
-            result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
-        }
+    result = eota_retire_inactive(&policy, receipt.target_subtype, receipt.source_sha256);
+    if (result != EOTA_UPDATE_OK) goto uncertain;
+    mutated = true;
+    eota_image_t image = {.image_url = s_ota_request->image_url,
+        .image_size_bytes = s_ota_request->image_size_bytes};
+    memcpy(image.sha256, s_ota_request->sha256, 32);
+    eota_prepared_t prepared = {0};
+    if (s_ota_request->inbound_stream) {
+        eota_stream_t stream = {.read = esp_base_frp_management_upload_read,
+            .image_size_bytes = image.image_size_bytes};
+        memcpy(stream.sha256, image.sha256, 32);
+        result = eota_prepare_stream(&policy, &stream, ota_progress, NULL, &prepared);
+    } else result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);
+    if (result == EOTA_UPDATE_OK && s_ota_request->inbound_stream &&
+        !esp_base_frp_management_upload_connected()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
+    if (result == EOTA_UPDATE_OK) result = eota_select(&policy, &prepared);
+    if (result != EOTA_UPDATE_OK) {
+        /* A receipt-bound cleanup must prove A remains VALID/selected and C's
+         * first sector is erased before marking any partial write failed. */
+        if (result == EOTA_UPDATE_BOOT_STATE_UNKNOWN ||
+            (mutated && eota_retire_inactive(&policy, receipt.target_subtype,
+                                            receipt.source_sha256) != EOTA_UPDATE_OK)) goto uncertain;
     }
+    goto done;
+uncertain:
+    atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
 done:
+    if (s_ota_request->inbound_stream) {
+        char response[512];
+        /* The control owner persists and reads back a failure after this worker
+         * finishes. Upload preparation cannot establish a durable terminal state. */
+        const bool prepared = result == EOTA_UPDATE_OK &&
+            !atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed);
+        const int length = format_result_json(response, sizeof response,
+            s_guard.entries[s_ota_slot].request_id,
+            prepared ? "running" : "unknown", prepared ? NULL : "storage_uncertain", NULL);
+        (void)esp_base_frp_management_upload_finish(prepared ? 202 : 200,
+            length > 0 ? response : NULL, length > 0 ? (size_t)length : 0, 1000);
+    }
     atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);
     atomic_store_explicit(&s_ota_done, true, memory_order_release);
     vTaskDelete(NULL);
@@ -815,129 +759,41 @@ static void poll_ota(void)
 
 static void handle_command_line(const char *line, size_t length, ebase_command_t *command)
 {
-    const char *error = ebase_parse_command(line, length, command, protocol_work_alloc);
+    const char *error = s_parse_frp ? ebase_parse_frp_command(line, length, command, protocol_work_alloc) :
+        ebase_parse_command(line, length, command, protocol_work_alloc);
     if (error) { reply(command->request.request_id, "failed", error, NULL); return; }
+    if (s_parse_frp && command->kind != s_frp_expected_kind) {
+        reply(command->request.request_id, "failed", "invalid_request", NULL); return;
+    }
+    if (s_parse_frp && strcmp(command->request.device_id, s_context.device_id)) {
+        reply(command->request.request_id, "failed", "wrong_device", NULL); return;
+    }
     if (command->kind == EBASE_STATUS) {
-        status_snapshot_t current = snapshot();
-        reply(command->request.request_id, "succeeded", NULL, &current);
-        return;
+        status_snapshot_t current = snapshot(); reply(command->request.request_id, "succeeded", NULL, &current); return;
     }
-    if (command->kind == EBASE_PRODUCT_STATUS) {
-        esp_base_storage_claim_t claim = {0};
-        if (s_context.storage_owner == NULL ||
-            !esp_base_storage_claim(s_context.storage_owner, &claim)) {
-            reply(command->request.request_id, "unknown", "operation_busy", NULL);
-            return;
-        }
-        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
-        if (ledger == NULL) {
-            const bool released = esp_base_storage_release(&claim);
-            if (!released) s_config_uncertain = true;
-            reply(command->request.request_id, "unknown",
-                  released ? "resource_failure" : "storage_uncertain", NULL);
-            return;
-        }
-        const ebase_product_ledger_io_t io =
-            ebase_product_ledger_nvs_io(s_context.flash_io_owner);
-        const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
-        esp_base_container_binding_snapshot_t binding = {0};
-        esp_base_container_active_product_t active = {0};
-        esp_base_container_binding_result_t bound = opened == EBASE_LEDGER_OK ?
-            esp_base_container_product_status_snapshot(&claim, &binding, &active) :
-            ESP_BASE_CONTAINER_BINDING_OK;
-        if (bound == ESP_BASE_CONTAINER_BINDING_OK && active.present && active.is_trial &&
-            (!ledger->count || ledger->records[ledger->count - 1U].state != EBASE_PRODUCT_PREPARED ||
-             strcmp(active.operation_id, ledger->records[ledger->count - 1U].operation_id) ||
-             ledger->records[ledger->count - 1U].kind == EBASE_PRODUCT_UNINSTALL ||
-             memcmp(active.package_sha256, ledger->records[ledger->count - 1U].package_sha256, 32)))
-            bound = ESP_BASE_CONTAINER_BINDING_UNCERTAIN;
-        const bool released = bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN ? false :
-            esp_base_storage_release(&claim);
-        if (bound == ESP_BASE_CONTAINER_BINDING_UNCERTAIN || !released)
-            s_config_uncertain = true;
-        if (opened == EBASE_LEDGER_OK && bound == ESP_BASE_CONTAINER_BINDING_OK && released)
-            reply_product_status(command->request.request_id, ledger, &binding, &active);
-        free(active.product_version);
-        free(ledger);
-        if (opened != EBASE_LEDGER_OK || bound != ESP_BASE_CONTAINER_BINDING_OK || !released)
-            reply(command->request.request_id, "unknown",
-                  !released ? "storage_uncertain" :
-                  opened == EBASE_LEDGER_UNINITIALIZED ? "product_ledger_uninitialized" :
-                  opened == EBASE_LEDGER_BUSY || bound == ESP_BASE_CONTAINER_BINDING_BUSY ?
-                  "operation_busy" : bound == ESP_BASE_CONTAINER_BINDING_RESOURCE_FAILURE ?
-                  "resource_failure" : "storage_uncertain", NULL);
-        return;
-    }
+    if (command->kind == EBASE_FIRMWARE_STATUS) { reply_firmware(command->request.request_id); return; }
+    if (command->kind == EBASE_BUSINESS_STATUS) { reply_business(command->request.request_id); return; }
     if (command->kind == EBASE_OTA_RESULT) {
         esp_base_ota_receipt_view_t view;
         const bool active = s_ota_active && !strcmp(s_ota_request->operation_id, command->operation_id);
-        const esp_base_ota_receipt_result_t result = esp_base_ota_receipt_query(
-            s_context.device_id, command->operation_id, active, &view);
+        const esp_base_ota_receipt_result_t result = esp_base_ota_receipt_query(s_context.device_id, command->operation_id, active, &view);
         if (result == ESP_BASE_OTA_RECEIPT_OK) reply_ota_result(command->request.request_id, &view);
         else reply(command->request.request_id, result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "failed" : "unknown",
-                   result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "ota_signing_unavailable" :
-                   result == ESP_BASE_OTA_RECEIPT_NOT_FOUND ? "ota_operation_not_found" : "storage_uncertain", NULL);
+            result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "ota_signing_unavailable" :
+            result == ESP_BASE_OTA_RECEIPT_NOT_FOUND ? "ota_operation_not_found" : "storage_uncertain", NULL);
         return;
     }
-    if (command->kind == EBASE_PRODUCT_RESULT) {
-        size_t slot = 0U;
-        if (find_product_run(command->operation_id, &slot)) {
-            reply_product_run(command->request.request_id, slot);
-            return;
-        }
-        ebase_product_ledger_t *ledger = protocol_work_alloc(sizeof *ledger);
-        if (ledger == NULL) {
-            reply(command->request.request_id, "unknown", "resource_failure", NULL);
-            return;
-        }
-        const ebase_product_ledger_io_t io =
-            ebase_product_ledger_nvs_io(s_context.flash_io_owner);
-        const ebase_product_ledger_result_t opened = ebase_product_ledger_open(ledger, &io);
-        ebase_product_record_t record;
-        const ebase_product_ledger_result_t found = opened == EBASE_LEDGER_OK ?
-            ebase_product_ledger_query(ledger, command->operation_id, &record) : opened;
-        free(ledger);
-        if (found == EBASE_LEDGER_OK) reply_product_result(command->request.request_id, &record);
-        else reply(command->request.request_id, "unknown",
-                   (found == EBASE_LEDGER_UNKNOWN || found == EBASE_LEDGER_UNINITIALIZED) ?
-                   "product_operation_not_found" :
-                   found == EBASE_LEDGER_BUSY ? "operation_busy" : "storage_uncertain", NULL);
-        return;
+    if (command->kind == EBASE_CONFIG_SET && !esp_base_remote_config_with_canonical_bytes(command->config,
+            fingerprint_config_bytes, command->request.fingerprint)) {
+        reply(command->request.request_id, "failed", "resource_failure", NULL); return;
     }
-    if (command->kind == EBASE_CONFIG_SET) {
-        if (!esp_base_remote_config_with_canonical_bytes(command->config,
-                fingerprint_config_bytes, command->request.fingerprint)) {
-            reply(command->request.request_id, "failed", "resource_failure", NULL); return;
-        }
+    if (command->kind == EBASE_OTA_START && !fingerprint_ota_request(command->ota, command->request.fingerprint)) {
+        reply(command->request.request_id, "failed", "resource_failure", NULL); return;
     }
-    if (command->kind == EBASE_PRODUCT_UNINSTALL_COMMAND &&
-        !fingerprint_product_uninstall(command->product_uninstall,
-                                       command->request.fingerprint)) {
-        reply(command->request.request_id, "failed", "resource_failure", NULL);
-        return;
-    }
-    if ((command->kind == EBASE_PRODUCT_STOP_COMMAND ||
-         command->kind == EBASE_PRODUCT_START_COMMAND) &&
-        !fingerprint_product_run(command, command->request.fingerprint)) {
-        reply(command->request.request_id, "failed", "resource_failure", NULL);
-        return;
-    }
-    if ((command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
-         command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) &&
-        !esp_base_product_package_source_request_valid(
-            command->product_package->package_url,
-            command->product_package->package_size_bytes)) {
-        reply(command->request.request_id, "failed", "invalid_request", NULL);
-        return;
-    }
-    if ((command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
-         command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) &&
-        !fingerprint_product_package(command, command->request.fingerprint)) {
-        reply(command->request.request_id, "failed", "resource_failure", NULL);
-        return;
-    }
-    if (command->kind == EBASE_OTA_START) {
-        if (!fingerprint_ota_request(command->ota, command->request.fingerprint)) {
+    if (command->kind == EBASE_BUSINESS_PAUSE || command->kind == EBASE_BUSINESS_RESUME) {
+        size_t written = 0;
+        const char *name = command->kind == EBASE_BUSINESS_PAUSE ? "business.pause" : "business.resume";
+        if (psa_hash_compute(PSA_ALG_SHA_256, (const uint8_t *)name, strlen(name), command->request.fingerprint, 32, &written) != PSA_SUCCESS || written != 32) {
             reply(command->request.request_id, "failed", "resource_failure", NULL); return;
         }
     }
@@ -946,74 +802,56 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         s_context.device_id, s_boot_id, uptime_ms(), &slot);
     if (decision == EBASE_REPLAY) { emit_outcome(slot, s_reply_mqtt); return; }
     if (decision != EBASE_ACCEPT) {
-        reply(command->request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", admission_error(decision), NULL);
-        return;
+        reply(command->request.request_id, decision == EBASE_EXPIRED ? "expired" : "failed", admission_error(decision), NULL); return;
     }
     s_outcomes[slot].via_mqtt = s_reply_mqtt;
-    if (s_frp_restart_pending || s_mqtt_restart_pending) {
-        save_outcome(slot, "failed", "operation_busy", false);
-        return;
+    if (command->kind == EBASE_BUSINESS_PAUSE || command->kind == EBASE_BUSINESS_RESUME) {
+        const uint8_t action = command->kind == EBASE_BUSINESS_PAUSE ? 2 : 3;
+        const int32_t value = ebase_business_event(&s_business, &action, 1, uptime_ms());
+        save_outcome(slot, value < 0 ? "failed" : "succeeded", value < 0 ? "business_failed" : NULL, false); return;
     }
-    if (command->kind == EBASE_PRODUCT_STOP_COMMAND ||
-        command->kind == EBASE_PRODUCT_START_COMMAND) {
-        handle_product_run(slot, command);
-        return;
-    }
-    if (command->kind == EBASE_PRODUCT_INSTALL_COMMAND ||
-        command->kind == EBASE_PRODUCT_UPGRADE_COMMAND) {
-        handle_product_package(slot, command);
-        return;
-    }
-    if (command->kind == EBASE_PRODUCT_UNINSTALL_COMMAND) {
-        handle_product_uninstall(slot, command);
-        return;
-    }
-    if (s_reply_mqtt && command->kind == EBASE_CONFIG_SET) {
-        save_outcome(slot, "failed", "physical_usb_required", false);
-        return;
+    if (s_frp_restart_pending || s_mqtt_restart_pending) { save_outcome(slot, "failed", "operation_busy", false); return; }
+    if ((s_reply_mqtt || s_parse_frp) && command->kind == EBASE_CONFIG_SET) {
+        save_outcome(slot, "failed", "physical_usb_required", false); return;
     }
     if (command->kind == EBASE_CONFIG_SET) {
         const char *ota_error = esp_base_control_state_config_write_error(&s_control_state);
-        if (ota_error != NULL) { save_outcome(slot, "failed", ota_error, false); return; }
+        if (ota_error) { save_outcome(slot, "failed", ota_error, false); return; }
     }
     if (command->kind == EBASE_OTA_START) {
         if (!eota_available()) { save_outcome(slot, "failed", "ota_signing_unavailable", false); return; }
-        if (command->ota->package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
-            !esp_base_product_package_source_request_valid(
-                command->ota->package_url, command->ota->package_size_bytes)) {
-            save_outcome(slot, "failed", "invalid_request", false); return;
-        }
         eota_image_t candidate = {
             .image_url = command->ota->image_url,
             .image_size_bytes = command->ota->image_size_bytes,
         };
         memcpy(candidate.sha256, command->ota->sha256, sizeof candidate.sha256);
-        if (eota_validate_image_request(&candidate) != EOTA_UPDATE_OK) {
+        const eota_stream_t input = {.read = esp_base_frp_management_upload_read,
+            .image_size_bytes = candidate.image_size_bytes};
+        eota_stream_t stream_request = input;
+        memcpy(stream_request.sha256, candidate.sha256, 32);
+        const eota_result_t static_valid = command->ota->inbound_stream ?
+            eota_validate_stream_request(&stream_request) : eota_validate_image_request(&candidate);
+        if (static_valid != EOTA_UPDATE_OK) {
             save_outcome(slot, "failed", "invalid_request", false); return;
         }
         if (esp_base_control_state_ota_pending(&s_control_state)) { save_outcome(slot, "failed", "ota_verification_pending", false); return; }
         if (s_ota_active) { save_outcome(slot, "failed", "ota_in_progress", false); return; }
-        if (s_product_active) { save_outcome(slot, "failed", "operation_busy", false); return; }
         if (s_trial_active) { save_outcome(slot, "failed", "configuration_busy", false); return; }
         if (s_config_uncertain) { save_outcome(slot, "failed", "storage_uncertain", false); return; }
         if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
-        if (!esp_base_container_product_ota_ready(command->ota->package_mode)) {
-            save_outcome(slot, "failed", "product_ota_unavailable", false); return;
-        }
         if (!esp_base_wifi_ready()) { save_outcome(slot, "failed", "network_unavailable", false); return; }
         if (!esp_base_time_ready()) { save_outcome(slot, "failed", "time_unavailable", false); return; }
         if (!esp_base_storage_claim(s_context.storage_owner, &s_ota_storage_claim)) {
             save_outcome(slot, "failed", "operation_busy", false); return;
         }
         esp_base_ota_receipt_snapshot_t snapshot = {0};
-        if (!esp_base_container_product_snapshot_for_ota(
-                &s_ota_storage_claim, command->ota, &snapshot)) {
-            const bool released = esp_base_storage_release(&s_ota_storage_claim);
-            if (!released) s_config_uncertain = true;
-            save_outcome(slot, released ? "failed" : "unknown",
-                         released ? "product_ota_unavailable" : "storage_uncertain", false);
-            return;
+        esp_base_ota_firmware_set_t set = {0};
+        if (esp_base_ota_observe_firmware_set(ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, &set) != ESP_BASE_OTA_FIRMWARE_OK) {
+            if (!esp_base_storage_release(&s_ota_storage_claim)) s_config_uncertain = true;
+            save_outcome(slot, "unknown", "storage_uncertain", false); return;
         }
+        memcpy(snapshot.source_sha256, set.running_firmware_sha256, 32);
+        if (set.bootable_count == 2) memcpy(snapshot.inactive_sha256, set.bootable_firmware_sha256[1], 32);
         const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(
             s_context.device_id, command->ota, &snapshot);
         if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
@@ -1038,6 +876,16 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         s_ota_request = command->ota;
         command->payload = NULL;
         command->payload_size_bytes = 0U;
+        if (s_ota_request->inbound_stream && !esp_base_frp_management_upload_arm(
+                s_ota_request->operation_id, s_context.device_id, s_boot_id,
+                s_ota_request->image_size_bytes, s_ota_request->sha256, uptime_ms())) {
+            const bool failed = esp_base_ota_receipt_record_failure(s_context.device_id,
+                s_ota_request->operation_id, EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
+                esp_base_storage_release(&s_ota_storage_claim);
+            clear_ota_request();
+            if (!failed) s_config_uncertain = true;
+            save_outcome(slot, failed ? "failed" : "unknown", failed ? "resource_failure" : "storage_uncertain", false); return;
+        }
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
@@ -1051,6 +899,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
                 s_context.device_id, s_ota_request->operation_id,
                 EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
                 esp_base_storage_release(&s_ota_storage_claim);
+            if (s_ota_request->inbound_stream) (void)esp_base_frp_management_upload_finish(500, NULL, 0, 1000);
             clear_ota_request();
             if (failed) {
                 save_outcome(slot, "failed", "resource_failure", false);
@@ -1131,15 +980,15 @@ static void handle_mqtt_command(const uint8_t *json, size_t length, void *contex
 static bool handle_mqtt_event(const ebase_mqtt_event_view_t *event, void *context)
 {
     (void)context;
-    if (event == NULL) return false;
-    uint8_t digest[32];
-    size_t digest_size = 0;
+    if (!event) return false;
+    uint8_t digest[32]; size_t written = 0;
     if (psa_hash_compute(PSA_ALG_SHA_256, event->event, event->event_size_bytes,
-                         digest, sizeof digest, &digest_size) != PSA_SUCCESS ||
-        digest_size != sizeof digest) return false;
-    return esp_base_container_product_offer_event(event->package_sha256,
-        event->event_sequence, digest, event->event,
-        event->event_size_bytes) == ESP_BASE_CONTAINER_EVENT_ACCEPTED;
+                         digest, 32, &written) != PSA_SUCCESS || written != 32) return false;
+    s_business.last_result = ebase_business_event(&s_business, event->event,
+                                                  event->event_size_bytes, uptime_ms());
+    s_business.last_event_sequence = event->event_sequence;
+    memcpy(s_business.last_event_sha256, digest, 32);
+    return true;
 }
 
 static void feed_serial(const unsigned char *bytes, size_t count)
@@ -1326,6 +1175,7 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     if (xTaskCreate(control_task, "base_control", control_stack_bytes, NULL, 5, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
+    ebase_business_reset(&s_business);
     s_started = true;
     return ESP_OK;
 }

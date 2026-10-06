@@ -31,7 +31,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def read_backup(path: Path) -> tuple[bytes, os.stat_result]:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
     try:
         before = os.fstat(descriptor)
         require(stat.S_ISREG(before.st_mode), "备份必须是普通文件")
@@ -56,6 +56,9 @@ def check_old_table(flash: bytes) -> None:
         raw = table[offset:offset + 32]
         if raw == b"\xff" * 32:
             break
+        if raw[:16] == b"\xeb\xeb" + b"\xff" * 14:
+            require(raw[16:] == hashlib.md5(table[:offset]).digest(), "旧ESP-AT分区表MD5不符")
+            continue
         require(raw[:2] == b"\xaa\x50", "旧 ESP-AT 分区表含非标准条目")
         label = raw[12:28].split(b"\0", 1)[0]
         try:

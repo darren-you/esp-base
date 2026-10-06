@@ -79,6 +79,22 @@ class ArchiveTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.output.exists())
 
+    def test_fifo_backup_blocks_without_waiting_for_writer(self) -> None:
+        regular = self.work / "regular.bin"
+        regular.write_bytes(self.flash)
+        regular.chmod(0o600)
+        for name in ("backup-a", "backup-b"):
+            with self.subTest(input=name):
+                fifo = self.work / (name + ".fifo")
+                os.mkfifo(fifo, 0o600)
+                first, second = (fifo, regular) if name == "backup-a" else (regular, fifo)
+                result = subprocess.run([sys.executable, str(TOOL), "--backup-a", str(first),
+                    "--backup-b", str(second), "--output-at-old-raw", str(self.output)],
+                    text=True, capture_output=True, check=False, timeout=5)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("普通文件", result.stderr)
+                self.assertFalse(self.output.exists())
+
     def test_same_file_or_symlink_backup_blocks_output(self) -> None:
         self.first.write_bytes(self.flash)
         self.first.chmod(0o600)
@@ -101,6 +117,17 @@ class ArchiveTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.output.exists())
                 self.flash[address + 0x2000] = original
+
+    def test_standard_md5_record_is_verified(self) -> None:
+        offset = archive_tool.TABLE_OFFSET + 2 * 32
+        self.flash[offset:offset + 16] = b"\xeb\xeb" + b"\xff" * 14
+        self.flash[offset + 16:offset + 32] = hashlib.md5(self.flash[archive_tool.TABLE_OFFSET:offset]).digest()
+        self.assertEqual(self.run_tool().returncode, 0)
+        self.output.unlink()
+        self.flash[offset + 16] ^= 1
+        result = self.run_tool()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
 
     def test_wrong_table_blocks_output(self) -> None:
         self.flash[archive_tool.TABLE_OFFSET + 4] ^= 1

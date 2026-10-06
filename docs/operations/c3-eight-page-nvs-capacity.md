@@ -17,7 +17,7 @@
 
 ## 2026-09-27：当前 OTA V2 与 Container ECS2 的六／八页复跑
 
-从 Base `f2d8b3623d60ca18b332c0a5f9913d50f406634d` 建立独立工作树，用[公开容量探针](../../firmware/tests/nvs-capacity-probe/README.md)在另一台 Mac 的独立 checkout 中构建、运行。该 checkout 不依靠邻仓源码：ESP-IDF Component Manager 通过公开 Git URL 解析 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc`、`wasm-micro-runtime@26c235e53e29acd8b43abe7f3b524577bd4d1ae5`，生成的 `dependencies.lock` 与探针仓内副本摘要相同。固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`、Espressif QEMU `9.2.2 (esp_develop_9.2.2_20260417)`；六、八页分别使用独立构建目录、`sdkconfig` 与初始全 `0xff` 的 4 MiB 合成 Flash。
+从 Base `f2d8b3623d60ca18b332c0a5f9913d50f406634d` 建立独立工作树，用[公开容量探针](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/tests/nvs-capacity-probe/README.md)在另一台 Mac 的独立 checkout 中构建、运行。该 checkout 不依靠邻仓源码：ESP-IDF Component Manager 通过公开 Git URL 解析 `esp-container@bf52b17a26e51d35a261bf852ac0c9cde76adefc`、`wasm-micro-runtime@26c235e53e29acd8b43abe7f3b524577bd4d1ae5`，生成的 `dependencies.lock` 与探针仓内副本摘要相同。固定 ESP-IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、esp-lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`、Espressif QEMU `9.2.2 (esp_develop_9.2.2_20260417)`；六、八页分别使用独立构建目录、`sdkconfig` 与初始全 `0xff` 的 4 MiB 合成 Flash。
 
 两种几何的 `base_store` 均从 `0x138000` 开始，大小分别为 `0x6000`／`0x8000`。测试分区表另含供真实 Container IDF provider 校验几何的合成 `product_pkgs@0x260000/0x186000`；本轮未写生产分区表、未操作设备。每代在同一 NVS 写入并读回最大 **7,618 字节** Base v3 规范配置、当前 **186 字节** OTA V2 合成收据形态，以及 **288 字节** ECS2 无包绑定元数据。配置走产品 `base_config/committed` CAS；OTA 字节遵循当前产品 V2 布局并写入 `base_ota/operation`，前四个 SHA-256 字节用于承载测试 revision，不调用正式收据解码或 OTA 注册策略，**不声称它是完整有效的 OTA 事务**；Container 的初态由锁定组件的 `econtainer_slots_initialize` 正式编码，真实 IDF provider 使用产品 `base_pkg/slots` 键提交，每代改变 sequence 和 CRC 后由 `econtainer_slots_load` 正式解码。此压力序列不代表 100 次合法 Container 产品状态迁移。
 
@@ -50,7 +50,7 @@
 
 ## 2026-09-26：历史八页占用实验
 
-2026-09-26，在 Base 独立工作树中，使用[合成容量探针](../../firmware/tests/nvs-capacity-probe/README.md)验证连续八个 4 KiB 页能否承载最大 Base v3 配置和两份旁侧记录。固定 ESP-IDF 为 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，实际 lwIP checkout 为 `2758df4cd3666b3b2a5b53830148379326425c0d`，QEMU 为 Espressif `9.2.2 (esp_develop_9.2.2_20260417)`。SDK fork 当前 gitlink 指向另一 lwIP 提交，构建会发出 submodule out of date 提示；本探针明确按 Base `sdk-lock.json` 固定的 checkout 构建。生成 `sdkconfig` 核对为 `esp32c3`、4 MiB Flash、自定义合成分区表、NVS 加密关闭。
+2026-09-26，在 Base 独立工作树中，使用[合成容量探针](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/tests/nvs-capacity-probe/README.md)验证连续八个 4 KiB 页能否承载最大 Base v3 配置和两份旁侧记录。固定 ESP-IDF 为 `578cf89c343e388db43ba1f4ddcd602fedcb763c`，实际 lwIP checkout 为 `2758df4cd3666b3b2a5b53830148379326425c0d`，QEMU 为 Espressif `9.2.2 (esp_develop_9.2.2_20260417)`。SDK fork 当前 gitlink 指向另一 lwIP 提交，构建会发出 submodule out of date 提示；本探针明确按 Base `sdk-lock.json` 固定的 checkout 构建。生成 `sdkconfig` 核对为 `esp32c3`、4 MiB Flash、自定义合成分区表、NVS 加密关闭。
 
 本次运行的公开输入收据：`main/nvs_capacity_probe.c` SHA-256 `a63eb4c10ec38f0cff0d4d1b7e979e4fbab76c9dda587d9c770628ed458f2621`；`run-qemu.py` SHA-256 `dd05de09517f8a6aa2a259471250e0ee1ded51b150f24a52d0cd3aaf1e3d78c6`；合成 `partitions.csv` SHA-256 `106a690443b1a99ed5aec04eefd7875020a0bebdd62200a3f9c2dc133bc8f1dc`。远端执行副本与仓内源码摘要一致。三阶段构建与 QEMU 命令见探针 README；官方解析命令为 `nvs_tool.py -i -d none <仓外提取的合成八页 NVS>`。
 

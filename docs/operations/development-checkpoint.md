@@ -21,7 +21,7 @@ Container 在选中包重新验签后、WAMR 装载前检查完整签名必需�
 
 Base 精确消费 Container `be3f393460ff3e24b5231e4f58ff4c99c0c6f355`，官方 Component Manager 分别生成 C3 的 `dependencies.lock` 和 ESP32 的 `dependencies.lock.esp32`；仅 Container 版本／组件摘要和清单摘要变化，FRP／MQTT／OTA／WAMR／cJSON 保持前轮锁。生产 Base 继续通过既有验包回调接线，无新持久字段、版本历史库或停止状态；完整整包 SHA 仍是制品身份。
 
-Container 在同一槽锁内比较当前操作仍保留的当前／回退引用，拒绝同产品完整版本异 SHA，包括同清单／Wasm 的随机 PSS 重签；REUSE 只保护退役后仍保留的绑定。引用完整签名、整包摘要和 ABI/schema 按自身绑定复核，不套新固件授权；同 SHA 要求持久元数据一致并复用候选完整验签。验包工作区顺序复用，失败延续原清退／恢复合同。详见[装配说明](../../firmware/integrations/container_binding/README.md)。
+Container 在同一槽锁内比较当前操作仍保留的当前／回退引用，拒绝同产品完整版本异 SHA，包括同清单／Wasm 的随机 PSS 重签；REUSE 只保护退役后仍保留的绑定。引用完整签名、整包摘要和 ABI/schema 按自身绑定复核，不套新固件授权；同 SHA 要求持久元数据一致并复用候选完整验签。验包工作区顺序复用，失败延续原清退／恢复合同。详见[装配说明](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/integrations/container_binding/README.md)。
 
 旧 Container 的真实 PSS 冲突负例实际 CTest 退出 8，命中错误接受，不是 Timeout。修正后的普通和 ASan/UBSan goto／switch 全量各 10/10；两目标以精确 clean Container／WAMR／OTA 执行原公开 guarded 生命周期入口及完整 host 入口，四次均实际退出 0。新增用例核对冲突拒绝时已确认 guest 继续事件、不同版本原试运行、回退引用，以及 WRITE 保持 WRITING 后原恢复／重开；百次重装、期限／取消与停止回收继续通过。Flash/NVS、调度、固件集合和下载来源仍为宿主替身。前置夹具断言、编译错误和旧全量 Timeout 均保留，失败 runner 的未知退出不补写为成功。
 

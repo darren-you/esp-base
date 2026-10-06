@@ -12,6 +12,7 @@
 #define NEXT_OP "55555555-5555-4555-8555-555555555555"
 #define IMAGE_BYTES 512
 #define STORED_BYTES 308
+#define RECEIPT_BYTES 182
 
 static uint8_t running_subtype, boot_subtype;
 static eota_state_t source_state, target_state;
@@ -41,7 +42,7 @@ static void reset(void)
         observed_inactive[index] = (uint8_t)(0x40U + index);
     }
     exists = false;
-    stored_size = STORED_BYTES;
+    stored_size = RECEIPT_BYTES;
     signed_enabled = true;
     firmware_observation_ok = true;
     after_write = false;
@@ -67,8 +68,7 @@ static bool release_flash_io(void *context)
 
 static esp_base_ota_receipt_snapshot_t snapshot(void)
 {
-    esp_base_ota_receipt_snapshot_t result = {.container_enabled = true,
-                                               .container_sequence = 7U};
+    esp_base_ota_receipt_snapshot_t result = {0};
     memcpy(result.source_sha256, observed_source, 32);
     if (target_lookup == ESP_OK && target_state == EOTA_STATE_VALID &&
         memcmp(observed_source, observed_inactive, 32) != 0) {
@@ -202,7 +202,7 @@ esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *output, size_
 esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *data, size_t size)
 {
     assert(flash_io_active);
-    assert(handle == 1 && handles == 1 && !strcmp(key, "operation") && size == sizeof stored);
+    assert(handle == 1 && handles == 1 && !strcmp(key, "operation") && size == RECEIPT_BYTES);
     ++writes;
     if (fault == SET_BEFORE_FAULT) return ESP_FAIL;
     memcpy(staged, data, size);
@@ -221,6 +221,20 @@ esp_err_t nvs_commit(nvs_handle_t handle)
     exists = true;
     return ESP_OK;
 }
+eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t subtype,
+                                         uint32_t *size, uint8_t digest[32])
+{
+    assert(policy && subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0);
+    *size = IMAGE_BYTES;
+    memcpy(digest, observed_source, 32);
+    return firmware_observation_ok ? EOTA_UPDATE_OK : EOTA_UPDATE_IMAGE_INVALID;
+}
+
+static void check_balanced(void)
+{
+    assert(handles == 0 && !flash_io_active && flash_io_acquires == flash_io_releases);
+}
+
 int main(void)
 {
     assert(esp_base_ota_policy_bind_flash_io((eota_flash_io_t){
@@ -232,529 +246,152 @@ int main(void)
     esp_base_ota_receipt_recovery_t recovery;
     reset();
     esp_base_ota_request_t ota = request(OP);
-    memcpy(ota.sha256, observed_source, sizeof ota.sha256);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SAME_IMAGE &&
-           writes == 0 && commits == 0);
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
            ESP_BASE_OTA_RECEIPT_NOT_FOUND);
-    esp_base_ota_receipt_snapshot_t same_image_without_container = snapshot();
-    same_image_without_container.container_enabled = false;
-    same_image_without_container.container_sequence = 0U;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &same_image_without_container) ==
-           ESP_BASE_OTA_RECEIPT_SAME_IMAGE && writes == 0);
-
-    reset();
-    ota = request(OP);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_NOT_FOUND);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_NOT_FOUND);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(stored[4] == 3U && stored[186] == ESP_BASE_OTA_NO_PACKAGE &&
-           stored[263] == 0U);
-    assert(writes == 1 && commits == 1 && reads == 1 && handles == 0);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(recovery.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
-           !strcmp(recovery.operation_id, OP) &&
-           recovery.source_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
-           recovery.target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1 &&
-           recovery.image_size_bytes == IMAGE_BYTES &&
-           !memcmp(recovery.candidate_sha256, ota.sha256, 32) &&
-           !memcmp(recovery.source_sha256, observed_source, 32) &&
-           !memcmp(recovery.inactive_sha256, (uint8_t[32]){0}, 32) &&
-           recovery.container_enabled && recovery.container_sequence == 7U);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, true, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_RUNNING && !view.error_code && partition_reads == 0);
-    assert(!strcmp(view.operation_id, OP) && view.image_size_bytes == IMAGE_BYTES && view.target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1);
-    assert(!memcmp(view.sha256, ota.sha256, 32));
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_UNKNOWN && partition_reads == 0);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_EXISTS && writes == 1);
-    ota.sha256[0] ^= 1;
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_CONFLICT && writes == 1);
-    ota.sha256[0] ^= 1;
-    esp_base_ota_request_t next = request(NEXT_OP);
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_BUSY && writes == 1);
-
-    reset(); ota = request(OP); next = request(NEXT_OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-
-    running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1; source_state = EOTA_STATE_PENDING_VERIFY;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_RUNNING);
-    source_state = EOTA_STATE_VALID;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_UNKNOWN && partition_reads == 0);
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_BUSY);
-    assert(esp_base_ota_receipt_record_success(DEVICE) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.status == ESP_BASE_OTA_RECEIPT_SUCCEEDED);
-    assert(esp_base_ota_receipt_record_success(DEVICE) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
-           ESP_BASE_OTA_RECEIPT_CONFLICT);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_SUCCEEDED && !view.error_code && partition_reads >= 1);
-    image[0] ^= 1;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-    image[0] ^= 1;
-    target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_OK && writes == 3);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_NOT_FOUND);
+    memcpy(ota.sha256, observed_source, 32);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SAME_IMAGE && writes == 0);
 
     reset(); ota = request(OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_record_success(DEVICE) ==
-           ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN);
+    assert(stored_size == RECEIPT_BYTES && stored[4] == 4U && writes == 1 && commits == 1);
+    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
+           recovery.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
+           !memcmp(recovery.source_sha256, observed_source, 32) &&
+           !memcmp(recovery.candidate_sha256, ota.sha256, 32) &&
+           recovery.source_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+           recovery.target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_EXISTS && writes == 1);
+    ota.sha256[0] ^= 1U;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_CONFLICT && writes == 1);
+    ota = request(NEXT_OP);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_BUSY && writes == 1);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, true, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_RUNNING);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
+    assert(esp_base_ota_receipt_query(DEVICE, NEXT_OP, false, &view) == ESP_BASE_OTA_RECEIPT_NOT_FOUND);
+    assert(esp_base_ota_receipt_load_for_recovery(NEXT_OP, &recovery) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
     running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
     source_state = EOTA_STATE_PENDING_VERIFY;
-    assert(esp_base_ota_receipt_record_success(DEVICE) ==
-           ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_RUNNING);
+    assert(esp_base_ota_receipt_record_success(DEVICE) == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN);
     source_state = EOTA_STATE_VALID;
-    image[0] ^= 1;
-    assert(esp_base_ota_receipt_record_success(DEVICE) ==
-           ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN);
-    image[0] ^= 1;
-    fault = COMMIT_FAULT;
-    assert(esp_base_ota_receipt_record_success(DEVICE) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    fault = NO_FAULT;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
     assert(esp_base_ota_receipt_record_success(DEVICE) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_SUCCEEDED);
-
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    target_lookup = ESP_OK; target_state = EOTA_STATE_ABORTED;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-    next = request(NEXT_OP);
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_BUSY);
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_SUCCEEDED);
+    assert(esp_base_ota_receipt_record_success(DEVICE) == ESP_BASE_OTA_RECEIPT_OK && writes == 2);
     assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
-           ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.status == ESP_BASE_OTA_RECEIPT_FAILED);
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
-           ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) ==
            ESP_BASE_OTA_RECEIPT_CONFLICT);
+    image[0] ^= 1U;
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
+    check_balanced();
 
     reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
-           ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.status == ESP_BASE_OTA_RECEIPT_PREPARED);
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_FAILED && !strcmp(view.error_code, "ota_download_failed"));
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_OK);
-
-    reset(); ota = request(OP); next = request(NEXT_OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
     assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) ==
            ESP_BASE_OTA_RECEIPT_OK);
-    memcpy(next.sha256, observed_source, sizeof next.sha256);
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_SAME_IMAGE &&
-           writes == 2 && commits == 2);
-    assert(esp_base_ota_receipt_query(DEVICE, NEXT_OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_NOT_FOUND);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_FAILED);
-
-    reset(); ota = request(OP); next = request(NEXT_OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    target_lookup = ESP_OK; target_state = EOTA_STATE_NEW;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE && writes == 1);
-    target_state = EOTA_STATE_PENDING_VERIFY;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE && writes == 1);
-    target_lookup = ESP_FAIL;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN && writes == 1);
-    target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
-    boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH && writes == 1);
-    boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0; source_state = EOTA_STATE_PENDING_VERIFY;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID && writes == 1);
-    source_state = EOTA_STATE_VALID;
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_BUSY && writes == 1);
-
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    fault = COMMIT_FAULT;
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_FAILED);
     assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    fault = NO_FAULT;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-    fault = SET_AFTER_FAULT;
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    fault = NO_FAULT;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(view.state == ESP_BASE_OTA_OPERATION_FAILED); /* Error may follow a durable write. */
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_BOOT_STATE_UNKNOWN) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE);
-
-    reset(); ota = request(OP);
+           ESP_BASE_OTA_RECEIPT_OK && writes == 2);
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
+           ESP_BASE_OTA_RECEIPT_CONFLICT);
+    observed_source[0] ^= 1U;
+    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
+           view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
+    observed_source[0] ^= 1U;
+    ota = request(NEXT_OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    stored[4] = 9;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    check_balanced();
+
+    /* Old versions, oversized legacy blob and malformed intent remain blocked. */
+    for (unsigned scenario = 0; scenario < 8; ++scenario) {
+        reset(); ota = request(OP);
+        assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+        switch (scenario) {
+        case 0: stored[4] = 1; break;
+        case 1: stored[4] = 2; break;
+        case 2: stored[4] = 3; stored_size = STORED_BYTES; break;
+        case 3: --stored_size; break;
+        case 4: stored[9] = 1; break;
+        case 5: memset(stored + 86, 0, 32); break;
+        case 6: stored[7] = stored[6]; break;
+        case 7: stored[8] = EOTA_UPDATE_DOWNLOAD_FAILED; break;
+        }
+        assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
+               ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+        ota = request(NEXT_OP);
+        assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN && writes == 1);
+        check_balanced();
+    }
 
     reset(); ota = request(OP);
+    ota.inbound_stream = true;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE && writes == 0);
+    ota.image_url[0] = '\0';
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    stored_size = 118U; /* Existing V1 blob cannot authorize a destructive replay. */
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    stored_size = 186U; /* V2 is not reinterpreted as a V3 joint intent. */
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    stored[199] = 0x42U; /* NO_PACKAGE must not silently carry a target package. */
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    stored[186] = ESP_BASE_OTA_PACKAGE_WRITE;
-    stored[187] = 0x00U; stored[188] = 0x04U; /* 1024-byte package. */
-    stored[191] = 2U;
-    stored[195] = 1U;
-    memset(stored + 199, 0x42, 32);
-    memset(stored + 231, 0x24, 32);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
-           recovery.package_size_bytes == 1024U &&
-           recovery.guest_abi_version == 2U &&
-           recovery.data_schema_version == 1U &&
-           !recovery.source_package_present);
-    next = request(NEXT_OP);
-    assert(register_receipt(DEVICE, &next) == ESP_BASE_OTA_RECEIPT_BUSY && writes == 1);
-
-    reset(); ota = request(OP);
-    ota.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
-    memset(ota.package_sha256, 0x42, 32);
-    memset(ota.trial_event_sha256, 0x24, 32);
-    ota.package_size_bytes = 1024U;
-    ota.guest_abi_version = 2U;
-    ota.data_schema_version = 1U;
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH &&
-           writes == 0 && commits == 0);
-
-    reset(); ota = request(OP);
-    esp_base_ota_receipt_snapshot_t package_snapshot = snapshot();
-    package_snapshot.source_package_present = true;
-    memset(package_snapshot.source_package_sha256, 0x42, 32);
-    package_snapshot.source_package_size_bytes = 1024U;
-    package_snapshot.source_guest_abi_version = 2U;
-    package_snapshot.source_data_schema_version = 1U;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0 && commits == 0);
-
-    reset(); ota = request(OP);
-    ota.package_mode = ESP_BASE_OTA_PACKAGE_REUSE;
-    memset(ota.package_sha256, 0x42, 32);
-    memset(ota.trial_event_sha256, 0x24, 32);
-    ota.package_size_bytes = 1024U;
-    ota.guest_abi_version = 2U;
-    ota.data_schema_version = 1U;
-    package_snapshot = snapshot();
-    package_snapshot.source_package_present = true;
-    memcpy(package_snapshot.source_package_sha256, ota.package_sha256, 32);
-    package_snapshot.source_package_size_bytes = ota.package_size_bytes;
-    package_snapshot.source_guest_abi_version = ota.guest_abi_version;
-    package_snapshot.source_data_schema_version = ota.data_schema_version;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_OK && writes == 1 && commits == 1);
-    assert(stored[186] == ESP_BASE_OTA_PACKAGE_REUSE && stored[263] == 1U &&
-           !memcmp(stored + 199, ota.package_sha256, 32) &&
-           !memcmp(stored + 231, ota.trial_event_sha256, 32) &&
-           !memcmp(stored + 276, ota.package_sha256, 32));
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
-           recovery.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
-           recovery.source_package_present &&
-           recovery.package_size_bytes == ota.package_size_bytes &&
-           recovery.source_package_size_bytes == ota.package_size_bytes &&
-           recovery.guest_abi_version == ota.guest_abi_version &&
-           recovery.source_guest_abi_version == ota.guest_abi_version &&
-           recovery.data_schema_version == ota.data_schema_version &&
-           recovery.source_data_schema_version == ota.data_schema_version &&
-           !memcmp(recovery.package_sha256, ota.package_sha256, 32) &&
-           !memcmp(recovery.source_package_sha256, ota.package_sha256, 32) &&
-           !memcmp(recovery.trial_event_sha256, ota.trial_event_sha256, 32));
-    assert(esp_base_ota_receipt_record_success(DEVICE) ==
-           ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN);
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_EXISTS && writes == 1);
-    ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_CONFLICT && writes == 1);
-
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
-           EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_OK && recovery.status == ESP_BASE_OTA_RECEIPT_FAILED &&
-           recovery.package_mode == ESP_BASE_OTA_PACKAGE_REUSE &&
-           !memcmp(recovery.source_package_sha256, package_snapshot.source_package_sha256, 32));
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_FAILED &&
-           view.package_mode == ESP_BASE_OTA_PACKAGE_REUSE && writes == 2 && commits == 2);
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
-           EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK && writes == 2);
-    boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-
-    reset(); ota = request(OP);
-    ota.package_mode = ESP_BASE_OTA_PACKAGE_WRITE;
-    memset(ota.package_sha256, 0x52, 32);
-    memset(ota.trial_event_sha256, 0x24, 32);
-    ota.package_size_bytes = 2048U;
-    ota.guest_abi_version = 2U;
-    ota.data_schema_version = 1U;
-    package_snapshot = snapshot();
-    package_snapshot.source_package_present = true;
-    memset(package_snapshot.source_package_sha256, 0x42, 32);
-    package_snapshot.source_package_size_bytes = 1024U;
-    package_snapshot.source_guest_abi_version = 2U;
-    package_snapshot.source_data_schema_version = 1U;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_OK && stored[186] == ESP_BASE_OTA_PACKAGE_WRITE);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-           ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.package_mode == ESP_BASE_OTA_PACKAGE_WRITE &&
-           recovery.source_package_present &&
-           recovery.package_size_bytes == ota.package_size_bytes &&
-           recovery.source_package_size_bytes == package_snapshot.source_package_size_bytes &&
-           !memcmp(recovery.package_sha256, ota.package_sha256, 32) &&
-           !memcmp(recovery.source_package_sha256,
-                   package_snapshot.source_package_sha256, 32));
-    stored[195] = 2U;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    stored[195] = 1U;
-    stored[190] = 0x80U;
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    reset(); package_snapshot = snapshot();
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_OK && stored[263] == 0U);
-    reset(); package_snapshot = snapshot();
-    package_snapshot.source_package_present = true;
-    memset(package_snapshot.source_package_sha256, 0x42, 32);
-    package_snapshot.source_package_size_bytes = 1024U;
-    package_snapshot.source_guest_abi_version = 2U;
-    package_snapshot.source_data_schema_version = 2U;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
-    package_snapshot = snapshot();
-    memset(ota.trial_event_sha256, 0, 32);
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
-
-    reset(); ota = request(OP);
-    target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(!memcmp(recovery.inactive_sha256, observed_inactive, 32));
-
-    reset(); ota = request(OP);
-    running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-    target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
-           recovery.source_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1 &&
-           recovery.target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0);
-
-    reset(); ota = request(OP);
-    target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
-    memcpy(observed_inactive, observed_source, 32);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
-           !memcmp(recovery.inactive_sha256, (uint8_t[32]){0}, 32));
-
-    reset(); ota = request(OP);
-    esp_base_ota_receipt_snapshot_t current = snapshot();
+    reset(); ota = request(OP); ota.image_size_bytes = 1;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE && writes == 0);
+    ota = request(OP); strcpy(ota.image_url, "http://updates.example.test/base.bin");
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE && writes == 0);
+    ota = request(OP); ota.image_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES + 1U;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE && writes == 0);
+    reset(); ota = request(OP); boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH && writes == 0);
+    reset(); ota = request(OP); source_state = EOTA_STATE_PENDING_VERIFY;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID && writes == 0);
+    reset(); ota = request(OP); target_lookup = ESP_OK; target_state = EOTA_STATE_NEW;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE && writes == 0);
+    reset(); ota = request(OP); esp_base_ota_receipt_snapshot_t current = snapshot();
     current.source_sha256[0] ^= 1U;
     assert(esp_base_ota_receipt_register(DEVICE, &ota, &current) ==
            ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
-    current = snapshot();
-    current.container_sequence = 0;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &current) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
-    current = snapshot();
-    firmware_observation_ok = false;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &current) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
+    reset(); ota = request(OP); firmware_observation_ok = false;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
 
-    reset(); ota = request(OP);
-    ota.image_size_bytes = 1U;
-    assert(register_receipt(DEVICE, &ota) ==
-           ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE && writes == 0);
-    ota = request(OP);
-    strcpy(ota.image_url, "http://updates.example.test/base.bin");
-    assert(register_receipt(DEVICE, &ota) ==
-           ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE && writes == 0);
-
-    reset(); ota = request(OP);
-    target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
-    current = snapshot();
-    current.inactive_sha256[0] ^= 1U;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &current) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
-
-    reset(); ota = request(OP);
-    current = snapshot();
-    current.container_enabled = false;
-    current.container_sequence = 0;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &current) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
-           !recovery.container_enabled && recovery.container_sequence == 0);
-
-    for (int scenario = INIT_FAULT; scenario <= READBACK_MISMATCH; ++scenario) {
-        reset(); ota = request(OP);
-        if (scenario == READ_FAULT) {
-            assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-            ota = request(NEXT_OP);
-        }
-        fault = scenario;
-        const esp_base_ota_receipt_result_t result = register_receipt(DEVICE, &ota);
-        if (scenario == OPEN_WRITE_FAULT) assert(result == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE);
-        else assert(result == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-        assert(handles == 0);
-    }
-    reset(); ota = request(OP);
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(flash_io_acquires == flash_io_releases && !flash_io_active);
-    const int previous_writes = writes;
-    flash_io_deny_at = flash_io_acquires + 2; /* load succeeds; terminal NVS write waits/fails. */
-    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
-           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
-    assert(writes == previous_writes && flash_io_acquires == flash_io_releases + 1 &&
-           !flash_io_active);
-    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_PACKAGE_REUSE;
-         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
-        for (int scenario = NO_FAULT; scenario <= READBACK_MISMATCH; ++scenario) {
+    /* NVS fault matrix verifies intent and terminal readback/unknown handling. */
+    for (int terminal = 0; terminal < 3; ++terminal) {
+        for (int scenario = INIT_FAULT; scenario <= READBACK_MISMATCH; ++scenario) {
             reset(); ota = request(OP);
-            ota.package_mode = mode;
-            memset(ota.package_sha256, mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x42 : 0x52, 32);
-            memset(ota.trial_event_sha256, 0x24, 32);
-            ota.package_size_bytes = 1024;
-            ota.guest_abi_version = 2;
-            ota.data_schema_version = 1;
-            package_snapshot = snapshot();
-            package_snapshot.source_package_present = true;
-            memset(package_snapshot.source_package_sha256, 0x42, 32);
-            package_snapshot.source_package_size_bytes = 1024;
-            package_snapshot.source_guest_abi_version = 2;
-            package_snapshot.source_data_schema_version = 1;
-            assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-                   ESP_BASE_OTA_RECEIPT_OK);
-            assert(esp_base_ota_receipt_query(DEVICE, OP, true, &view) ==
-                   ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_RUNNING);
-            running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-            source_state = EOTA_STATE_PENDING_VERIFY;
-            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-                   ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_RUNNING);
-            source_state = EOTA_STATE_VALID;
-            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) ==
-                   ESP_BASE_OTA_RECEIPT_OK && view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
-            running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
-            /* Slot observation cannot certify a different boot selector. */
-            boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-            assert(esp_base_ota_receipt_record_failure(DEVICE, OP,
-                   EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN &&
-                   writes == 1);
-            boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
-            after_write = false;
+            if (terminal != 0 || scenario == READ_FAULT)
+                assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+            if (terminal == 2) {
+                running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+                source_state = EOTA_STATE_VALID;
+            }
             fault = scenario;
-            const esp_base_ota_receipt_result_t terminal =
-                esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE);
-            assert(terminal == (scenario == NO_FAULT ? ESP_BASE_OTA_RECEIPT_OK :
-                   scenario == OPEN_WRITE_FAULT ? ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE :
-                   ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
-            assert(handles == 0 && !flash_io_active && flash_io_acquires == flash_io_releases);
-            fault = NO_FAULT;
-            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-            assert(view.package_mode == mode && !memcmp(view.package_sha256, ota.package_sha256, 32));
-            assert(view.state == ((scenario == NO_FAULT || scenario == SET_AFTER_FAULT ||
-                                  scenario == READBACK_FAULT || scenario == READBACK_MISMATCH) ?
-                                 ESP_BASE_OTA_OPERATION_FAILED : ESP_BASE_OTA_OPERATION_UNKNOWN));
-        }
-    }
-    for (esp_base_ota_package_mode_t mode = ESP_BASE_OTA_PACKAGE_REUSE;
-         mode <= ESP_BASE_OTA_PACKAGE_WRITE; ++mode) {
-        for (int scenario = NO_FAULT; scenario <= READBACK_MISMATCH; ++scenario) {
-            reset(); ota = request(OP);
-            ota.package_mode = mode;
-            memset(ota.package_sha256, mode == ESP_BASE_OTA_PACKAGE_REUSE ? 0x42 : 0x52, 32);
-            memset(ota.trial_event_sha256, 0x24, 32);
-            ota.package_size_bytes = 1024;
-            ota.guest_abi_version = 2;
-            ota.data_schema_version = 1;
-            package_snapshot = snapshot();
-            package_snapshot.source_package_present = true;
-            memset(package_snapshot.source_package_sha256, 0x42, 32);
-            package_snapshot.source_package_size_bytes = 1024;
-            package_snapshot.source_guest_abi_version = 2;
-            package_snapshot.source_data_schema_version = 1;
-            assert(esp_base_ota_receipt_register(DEVICE, &ota, &package_snapshot) ==
-                   ESP_BASE_OTA_RECEIPT_OK);
-            running_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
-            target_state = EOTA_STATE_VALID;
-            /* C with a different boot selector cannot certify success. */
-            assert(esp_base_ota_receipt_record_success(DEVICE) ==
-                   ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN && writes == 1);
-            boot_subtype = running_subtype;
             after_write = false;
-            fault = scenario;
-            const esp_base_ota_receipt_result_t terminal =
+            const esp_base_ota_receipt_result_t result = terminal == 0 ?
+                register_receipt(DEVICE, &ota) : terminal == 1 ?
+                esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) :
                 esp_base_ota_receipt_record_success(DEVICE);
-            assert(terminal == (scenario == NO_FAULT ? ESP_BASE_OTA_RECEIPT_OK :
-                   scenario == OPEN_WRITE_FAULT ? ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE :
-                   ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
-            assert(handles == 0 && !flash_io_active && flash_io_acquires == flash_io_releases);
+            assert(result == (scenario == OPEN_WRITE_FAULT ?
+                   ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
+            check_balanced();
             fault = NO_FAULT;
-            assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
-            assert(view.package_mode == mode && !memcmp(view.package_sha256, ota.package_sha256, 32));
-            const bool durable = scenario == NO_FAULT || scenario == SET_AFTER_FAULT ||
-                                 scenario == READBACK_FAULT || scenario == READBACK_MISMATCH;
-            assert(view.state == (durable ? ESP_BASE_OTA_OPERATION_SUCCEEDED :
-                                  ESP_BASE_OTA_OPERATION_UNKNOWN));
-            assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) ==
-                   ESP_BASE_OTA_RECEIPT_OK &&
-                   recovery.status == (durable ? ESP_BASE_OTA_RECEIPT_SUCCEEDED :
-                                               ESP_BASE_OTA_RECEIPT_PREPARED) &&
-                   !memcmp(recovery.trial_event_sha256, ota.trial_event_sha256, 32) &&
-                   !memcmp(recovery.source_package_sha256,
-                           package_snapshot.source_package_sha256, 32));
-            if (durable) {
-                const int terminal_writes = writes;
-                assert(esp_base_ota_receipt_record_success(DEVICE) ==
-                       ESP_BASE_OTA_RECEIPT_OK && writes == terminal_writes);
+            if (terminal != 0) {
+                assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK);
+                const bool durable = scenario == SET_AFTER_FAULT ||
+                    scenario == READBACK_FAULT || scenario == READBACK_MISMATCH;
+                assert(view.state == (durable ?
+                    (terminal == 1 ? ESP_BASE_OTA_OPERATION_FAILED : ESP_BASE_OTA_OPERATION_SUCCEEDED) :
+                    ESP_BASE_OTA_OPERATION_UNKNOWN));
             }
         }
     }
+    reset(); ota = request(OP);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+    const int previous_writes = writes;
+    flash_io_deny_at = flash_io_acquires + 2;
+    assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_RESOURCE_FAILURE) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN);
+    assert(writes == previous_writes && !flash_io_active && handles == 0);
     reset(); signed_enabled = false; ota = request(OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && writes == 0);
-    assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && reads == 0);
-    puts("  ota_receipt passed (durable intent, active/pending/valid/rollback, uncertain NVS; fake SDK)");
+    puts("  ota_receipt passed (V4 firmware intent, active/pending/valid/rollback, legacy/corrupt blocking, NVS faults)");
 }

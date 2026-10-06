@@ -1,5 +1,49 @@
 # ESP Base
 
+基于锁定 ESP-IDF 的 ESP32-C3／ESP32 原生业务固件。消息计数业务直接编译进 app，与 Wi-Fi／时间、严格 TLS MQTT、设备 FRP 和签名 A/B OTA 共存。动态业务包、Container／WAMR、产品账本和联合包 OTA 已从生产源码与消费者中移除。
+
+2026-10-06 本轮按[唯一执行计划](docs/operations/ota-allocation-diagnostic-checkpoint.md)推进。维护者确认先完成软件，实板稍后接入；最新要求将 ESP Tool Mac App 收敛为本机 ESP 管理，删除 App 内置 FRP／frpc 与远程 Bridge。Mac远程删除、R3 Rust迁入及R4精确主机装配的软件子项已独立核验：Tool `b748749`精确采用SDK `8db20c5a`，新Universal包实际链接ABI 2，App95通过／2实体跳过，空SDK源码冷装配、重复准备／脏输入拒绝及新452成员归档均通过。实际App运行／旧安装／USB仍待验；[配套任务](../esp-tool/docs/operations/development-checkpoint.md)和SDK完整范围继续独立推进。本聊天负责 Base／OTA 固件与双板验收准备，实体资格仍未取得。软件通过、实板容量、断电与长稳、仓库删除、正式交付分别取得证据；当前不继承旧五能力资格，也未删除两处自有远端仓库。详细软件输入与结果见[原生软件检查点](docs/operations/native_software_checkpoint.md)。
+
+实板接入前已补官方FRPS宿主六场景互操作、双目标LAB容量观察签名构建和百次／72小时有限驱动；输入、运行命令与未取得的实板资格见[宿主工具](tools/README.md)和[准备检查点](docs/operations/native_software_checkpoint.md#实板接入前的软件验证准备)。
+
+## 运行链路
+
+```mermaid
+flowchart LR
+    mqtt["严格 TLS MQTT / 认证业务消息"] --> protocol["device_protocol / 唯一控制 owner"]
+    usb["实际 USB / Mac App 本机操作"] --> protocol
+    public["公网调用方"] --> frps["官方 FRPS"] --> frp["设备 FRP / 既有双流预算"]
+    frp --> listener["HMAC 管理与有界镜像上传"] --> protocol
+    protocol --> native["native_business / 同步消息计数"]
+    protocol --> intent["ota_operation / V4 写前收据与恢复"]
+    intent --> ota["esp-ota / HTTPS 或入站流 / 验签"]
+    ota --> app["双 app / rollback / 30 秒本地确认"]
+    app --> result["原 operation_id 持久结果"]
+```
+
+设备独立 FRP 路线要求控制、固件字节和结果经设备隧道；不依赖 Mac 或 USB，Server／Web 的远程管理直接使用设备 FRP／MQTT。Mac App 只通过本机实际 USB 管理设备，不再作为远程 Bridge，也不依赖宿主 FRP 或远程绑定；设备身份核对与 USB 租约继续保留。有线 OTA 保留 URL 命令、设备 HTTPS 拉取；官方有线刷写／恢复另用于首次布局装配。不能把 USB 发命令称为全部固件字节走 USB；删除 App 的 FRP 功能不删除 ESP 固件自身的 FRP 能力。
+
+两个 4 MiB 目标的 app 槽均为 `0x1e0000`。C3 保留 11 页 `base_store` 与 `frp_scratch@0x3e5000`；ESP32 保留六页 `base_store`、`frp_scratch@0x3ea000` 和只读旧 AT 原字节区。布局变化须按一次性有线迁入工具准备，不由普通 app OTA 修改分区表。
+
+## 开发入口
+
+先按 [SDK 与工具说明](tools/README.md)准备仓外 SDK，使用 [sdk-lock.json](sdk-lock.json)核对 IDF／lwIP。Component Manager 从唯一 [组件清单](firmware/components/device_protocol/idf_component.yml)解析 MQTT／OTA／FRP 与 cJSON，分别生成 [C3 锁](firmware/dependencies.lock)和 [ESP32 锁](firmware/dependencies.lock.esp32)。两目标使用独立 build 与 sdkconfig，签名键保留在仓外。
+
+- [固件构建与架构](firmware/README.md)
+- [设备协议](docs/design/device-protocol.md)
+- [宿主回归](firmware/tests/README.md)
+- [固件独立 OTA 与恢复](firmware/components/ota_operation/README.md)
+- [设备控制及公网 OTA 工具](tools/README.md)
+
+资源门保持内部历史堆至少 16,384 B、最大连续块至少 24,576 B、每个实际任务栈余量至少 1,024 B；尚须本轮双板真实 Wi-Fi／TLS／FRP／MQTT／原生业务／OTA 同存峰值验证。软件构建不证明这些运行门已通过。
+
+## 历史记录
+
+以下为硬切前的原文快照，其中“当前”“继续”和旧命令均仅代表当轮；已退役入口不可用于当前构建或验收。原失败和成功边界保留。
+
+<details>
+<summary>展开硬切前记录</summary>
+
 2026-10-06 维护者已将后续目标改为原生业务＋FRP＋MQTT＋通过设备 FRP 的固件 OTA，并要求彻底删除 Container／WAMR 设计与对应自有仓库；Mac App 内 Bridge 的本机及远程信息获取、控制与 OTA，以及本机有线刷写与恢复继续保留。双目标容量门仍为 16,384／24,576／1,024 B。当前仅完成计划修订，生产源码、依赖和下述架构拓扑仍是待改造现状；代码、删仓、实板与发布均未执行，旧五能力失败保持。当前范围和 R1–R7 清单见[原生业务与双目标验证计划](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-当前目标与执行边界)。下列日期记录保留其当轮事实，不能当作新目标的验收结论。
 
 2026-10-06 WRITE 验包工作区改为来源下载结束后申请，OTA 请求直接转交唯一 owner；双目标公开 host 与真实签名 guest 生命周期通过。完整签名构建及静态成本、初次装配失败和私存范围见[软件检查点](docs/operations/ota-allocation-diagnostic-checkpoint.md#2026-10-06-write-工作区与-ota-请求所有权软件改动)。尚无本候选实板节省，原容量失败保持。
@@ -253,7 +297,7 @@ idf.py -C firmware build
 
 2026-09-26 五仓源码候选已更新 FRP、MQTT、OTA 的唯一依赖锁及可选 Container 清单。C3 专属配置进一步关闭未使用的 SoftAP 并只保留 TLS 客户端：固定 SDK 的普通 C3 构建为 898800 字节，测试键签名 C3 构建为 1052672 字节且 RSA v2 验签通过；Base host ASan/UBSan 全套、离线预检假件 12/12、串口伪终端 5/5 通过。Container 探针只完成组件编译，主应用未链接包操作入口；此后 ESP32 新增独立分区、OTA/ECDSA v1 策略和旧 AT 可逆归档的软件候选，P7-02 五能力运行组合与实板验收尚未完成。各制品 SHA-256、精确锁、可选组件链接范围见[开发检查点](docs/operations/development-checkpoint.md)。
 
-2026-09-27 主应用已接入 Container 产品入口，使用 Base 已持有的 owner、精确分区事实、仓外信任锚及独立授权。首次启动仅在持久键确实不存在且签名固件集合已确认时初始化无包绑定；现有 confirmed 包可验签启动。无包固件 OTA 在擦除旧 B 前先用 OTA 库的同源 HTTPS URL／最小镜像头长度规则校验请求，并持久登记 V2 收据，记录签名 A、原独立 B、目标 C、精确槽和 ECS2 sequence；随后物理擦除旧 B 的镜像头并读回 `0xff`、使旧 B 的 otadata 失效，再将 Container 绑定退役为 A-only。完成这些步骤才下载 C、持久 stage、选槽。重启后启动 claim 在产品启动前用原收据对账：A 仍运行时清理 C 并收敛 Container 至 A-only，再记失败；C 已选中时复核其完整签名摘要、旧 A 的签名与回退资格；配置 Container 时再核对原 operation、A/C 绑定与 ECS2 sequence，保留 pending/已确认路径。pending C 仍须通过本地控制窗口、OTA VALID 回读与 Container confirm。任一步事实不确定时阻断启动或保留本次 boot 的 claim。带包联合 OTA 在写 inactive app 前拒绝，因为联合操作的授权、收据和启动恢复尚未接通。默认 C3 因未配置产品授权不可运行 guest；软件构建与 host 假件不代表实板断电、bootloader 回退或五能力并发验收，P6-03/P7-02 仍未完成。详见[产品装配](firmware/integrations/container_binding/README.md)与[开发检查点](docs/operations/development-checkpoint.md)。
+2026-09-27 主应用已接入 Container 产品入口，使用 Base 已持有的 owner、精确分区事实、仓外信任锚及独立授权。首次启动仅在持久键确实不存在且签名固件集合已确认时初始化无包绑定；现有 confirmed 包可验签启动。无包固件 OTA 在擦除旧 B 前先用 OTA 库的同源 HTTPS URL／最小镜像头长度规则校验请求，并持久登记 V2 收据，记录签名 A、原独立 B、目标 C、精确槽和 ECS2 sequence；随后物理擦除旧 B 的镜像头并读回 `0xff`、使旧 B 的 otadata 失效，再将 Container 绑定退役为 A-only。完成这些步骤才下载 C、持久 stage、选槽。重启后启动 claim 在产品启动前用原收据对账：A 仍运行时清理 C 并收敛 Container 至 A-only，再记失败；C 已选中时复核其完整签名摘要、旧 A 的签名与回退资格；配置 Container 时再核对原 operation、A/C 绑定与 ECS2 sequence，保留 pending/已确认路径。pending C 仍须通过本地控制窗口、OTA VALID 回读与 Container confirm。任一步事实不确定时阻断启动或保留本次 boot 的 claim。带包联合 OTA 在写 inactive app 前拒绝，因为联合操作的授权、收据和启动恢复尚未接通。默认 C3 因未配置产品授权不可运行 guest；软件构建与 host 假件不代表实板断电、bootloader 回退或五能力并发验收，P6-03/P7-02 仍未完成。详见[产品装配](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/integrations/container_binding/README.md)与[开发检查点](docs/operations/development-checkpoint.md)。
 
 2026-09-27 仓外完整产品测试策略的静态深链接进一步确认：ESP32 当前 Base/五仓锁的真实 Container `product_open` 与 WAMR 入口进入 ELF，测试键 ECDSA v1 签名镜像为 `0x10fff4`，双 `0x120000` app 各余 `0x1000c`；C3 在保留三份 `0x82000` 包槽的候选表中，真实产品入口签名镜像为 `0x121000`，超过双 `0x118000` app 各 `0x9000`，官方尺寸门禁拒绝。两项仅为仓外测试输入，不改变本仓分区或授权，也未运行实板 guest、网络并发和掉电恢复。数据见[开发检查点](docs/operations/development-checkpoint.md)。
 
@@ -279,7 +323,7 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 
 签名构建的 `esp_base_ota_observe_firmware_set` 在调用方串行化所有 app/otadata 写入时读取运行、下次启动及另一槽状态，再调用锁定 `esp-ota` 验签并计算完整 signed bin 摘要。已确认模式要求当前槽为 `VALID`；显式 pending trial 模式仅允许当前槽为 `PENDING_VERIFY`、另一槽 `VALID` 且经 IDF 证明可回滚。新增 prepared candidate 模式只消费本次 `eota_prepare` 成功返回的收据，要求当前 A 已确认且仍被选为 boot，待选 C 的旧 otadata 已失效，重新验签 A/C 并核对 C 的完整长度与摘要；随后仍须在选 boot 前完成 Container 持久绑定。已确认的 A-only 模式还要求 inactive 槽首字节实际擦除为 `0xff`，不能仅由应用侧验签失败推断 bootloader 不会后备扫描。三种观察均拒绝状态变化与歧义；观察本身不批准业务试运行。C3／ESP32 正式源码均声明独立包分区，现役设备仍须完成迁移。host 假件和编译不证明实板启动/回滚。
 
-启动与 `ota.start` 使用同一本次 boot 的串行 owner；[Container 产品装配](firmware/integrations/container_binding/README.md)使用启动已持有的 claim，将签名固件集合逐字段送入 Container 并复读。无包初始化、写入 C 前的旧 B 退役、准备后 stage、pending trial、确认及 A 仍运行时的中断恢复已接线；guest 线程存活不长期占有 claim。VALID C 与 ECS2 `HEALTH_VERIFIED` 的重启确认必须凭原 V3 收据完成；收据缺失、已失败或 OTA 不可用时，残留固件迁移会阻断产品启动，普通启动不改写 ECS2。启动控制任务在恢复完成前关闭配置写入和 MQTT/FRP owner。带包 A 侧回滚与 VALID C 健康证据恢复已消费原 V3；新 pending 包 trial、公开带包 worker、真实板卡掉电及五能力并发仍未闭合。
+启动与 `ota.start` 使用同一本次 boot 的串行 owner；[Container 产品装配](https://github.com/esp-space/esp-base/blob/0cd9ae1713fae90a1f315fabb9622326d9cfe5f4/firmware/integrations/container_binding/README.md)使用启动已持有的 claim，将签名固件集合逐字段送入 Container 并复读。无包初始化、写入 C 前的旧 B 退役、准备后 stage、pending trial、确认及 A 仍运行时的中断恢复已接线；guest 线程存活不长期占有 claim。VALID C 与 ECS2 `HEALTH_VERIFIED` 的重启确认必须凭原 V3 收据完成；收据缺失、已失败或 OTA 不可用时，残留固件迁移会阻断产品启动，普通启动不改写 ECS2。启动控制任务在恢复完成前关闭配置写入和 MQTT/FRP owner。带包 A 侧回滚与 VALID C 健康证据恢复已消费原 V3；新 pending 包 trial、公开带包 worker、真实板卡掉电及五能力并发仍未闭合。
 
 2026-09-29 产品包未决安装／升级恢复已前移至普通 guest 装载之前：按原持久账本和签名固件集合核对 ECS2，可在候选包损坏时安全放弃未确认 trial，独立读回 `ABORTED` 与旧绑定并记失败后再启动旧包；无法证明或已确认候选保持阻断。[冷启动恢复检查点](docs/operations/product-package-cold-recovery-checkpoint.md)记录双目标签名 guest、双目标宿主和 C3 签名 QEMU 结果。持久确认及实体设备掉电仍待完成。
 
@@ -320,3 +364,5 @@ ESP32 未签名构建必须显式声明 `ESP_BASE_ESP32_OFFLINE_PROBE=ON` 且关
 ## 许可
 
 新代码及维护者拥有的选定迁移代码使用 Apache-2.0。未导入 GPL FRP POC、私有历史、设备恢复字节或生产配置。
+
+</details>

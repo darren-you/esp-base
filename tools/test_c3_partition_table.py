@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""用固定 SDK 生成并核对 C3 产品分区与三份业务包槽。"""
+"""用固定 SDK 核对 C3 原生业务双应用与诊断分区。"""
 
 from __future__ import annotations
 
@@ -12,22 +12,21 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CSV = ROOT / "firmware/partitions/c3-product-partition-table.csv"
+CSV = ROOT / "firmware/partitions/c3-partition-table.csv"
 EXPECTED = {
     "nvs": (1, 2, 0x9000, 0x6000, 0),
     "otadata": (1, 0, 0xf000, 0x2000, 0),
     "phy_init": (1, 1, 0x11000, 0x1000, 0),
     "coredump": (1, 3, 0x12000, 0xe000, 0),
-    "ota_0": (0, 0x10, 0x20000, 0x130000, 0),
-    "ota_1": (0, 0x11, 0x150000, 0x130000, 0),
-    "product_pkgs": (1, 0x06, 0x280000, 0x165000, 0),
+    "ota_0": (0, 0x10, 0x20000, 0x1e0000, 0),
+    "ota_1": (0, 0x11, 0x200000, 0x1e0000, 0),
     "frp_scratch": (1, 0x06, 0x3e5000, 0x10000, 0),
     "base_store": (1, 2, 0x3f5000, 0xb000, 0),
 }
 
 
 class PartitionTests(unittest.TestCase):
-    def test_official_v2_4mib_geometry_and_package_capacity(self) -> None:
+    def test_official_v2_4mib_geometry(self) -> None:
         idf = Path(os.environ["IDF_PATH"])
         generator = idf / "components/partition_table/gen_esp32part.py"
         self.assertTrue(generator.is_file())
@@ -48,9 +47,10 @@ class PartitionTests(unittest.TestCase):
                               int.from_bytes(raw[8:12], "little"),
                               int.from_bytes(raw[28:32], "little"))
         self.assertEqual(entries, EXPECTED)
-        self.assertEqual(EXPECTED["product_pkgs"][3], 3 * 0x77000)
-        self.assertEqual(EXPECTED["frp_scratch"][2],
-                         EXPECTED["product_pkgs"][2] + EXPECTED["product_pkgs"][3])
+        self.assertEqual(EXPECTED["ota_0"][2] + EXPECTED["ota_0"][3], EXPECTED["ota_1"][2])
+        self.assertNotIn("product_pkgs", entries)
+        self.assertGreaterEqual(EXPECTED["frp_scratch"][2],
+                                EXPECTED["ota_1"][2] + EXPECTED["ota_1"][3])
         self.assertEqual(EXPECTED["base_store"][2],
                          EXPECTED["frp_scratch"][2] + EXPECTED["frp_scratch"][3])
         self.assertEqual(EXPECTED["base_store"][2] + EXPECTED["base_store"][3], 0x400000)

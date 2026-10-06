@@ -1,5 +1,0 @@
-dependencies:
-  esp_container:
-    git: "https://github.com/esp-space/esp-container.git"
-    path: "components/esp_container"
-    version: "2b93b979b8b0760dcb96b28ac5d13fc52ae547bf"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""固定 SDK 生成 ESP32 产品表并核对 OTA 与 Container provider 几何。"""
+"""固定 SDK 核对 ESP32 原生业务双应用与旧 AT 原字节区。"""
 
 from __future__ import annotations
 
@@ -18,10 +18,8 @@ EXPECTED = {
     "phy_init": (1, 1, 0xf000, 0x1000, 0),
     "otadata": (1, 0, 0x10000, 0x2000, 0),
     "coredump": (1, 3, 0x12000, 0xe000, 0),
-    "ota_0": (0, 0x10, 0x20000, 0x120000, 0),
-    "ota_1": (0, 0x11, 0x140000, 0x120000, 0),
-    # Container slots_idf binds ESP_PARTITION_SUBTYPE_DATA_UNDEFINED (0x06).
-    "product_pkgs": (1, 0x06, 0x260000, 0x186000, 0),
+    "ota_0": (0, 0x10, 0x20000, 0x1e0000, 0),
+    "ota_1": (0, 0x11, 0x200000, 0x1e0000, 0),
     "at_old_raw": (1, 0x06, 0x3e6000, 0x4000, 2),
     "frp_scratch": (1, 0x06, 0x3ea000, 0x10000, 0),
     "base_store": (1, 2, 0x3fa000, 0x6000, 0),
@@ -29,7 +27,7 @@ EXPECTED = {
 
 
 class PartitionTests(unittest.TestCase):
-    def test_official_v1_4mib_geometry_and_provider_subtype(self) -> None:
+    def test_official_v1_4mib_geometry_and_preserved_at(self) -> None:
         idf = Path(os.environ["IDF_PATH"])
         generator = idf / "components/partition_table/gen_esp32part.py"
         self.assertTrue(generator.is_file())
@@ -50,7 +48,8 @@ class PartitionTests(unittest.TestCase):
                               int.from_bytes(raw[8:12], "little"),
                               int.from_bytes(raw[28:32], "little"))
         self.assertEqual(entries, EXPECTED)
-        self.assertEqual(EXPECTED["product_pkgs"][3], 3 * 0x82000)
+        self.assertEqual(EXPECTED["ota_0"][2] + EXPECTED["ota_0"][3], EXPECTED["ota_1"][2])
+        self.assertNotIn("product_pkgs", entries)
         self.assertEqual(EXPECTED["frp_scratch"][2], EXPECTED["at_old_raw"][2] + EXPECTED["at_old_raw"][3])
         self.assertEqual(EXPECTED["base_store"][2], EXPECTED["frp_scratch"][2] + EXPECTED["frp_scratch"][3])
         self.assertEqual(EXPECTED["base_store"][2] + EXPECTED["base_store"][3], 0x400000)
