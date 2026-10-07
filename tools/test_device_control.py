@@ -33,7 +33,7 @@ class SerialTransportTests(unittest.TestCase):
         os.close(self.slave)
         os.close(self.master)
 
-    def testRawDuplexPreservesBytesAndDisablesHangup(self):
+    def test_raw_duplex_preserves_bytes_and_disables_hangup(self):
         self.assertEqual(termios.tcgetattr(self.port.fd)[2] & termios.HUPCL, 0)
         payload = bytes(range(256))
         os.write(self.master, payload)
@@ -46,7 +46,7 @@ class SerialTransportTests(unittest.TestCase):
         self.assertTrue(select.select([self.master], [], [], 2)[0])
         self.assertEqual(os.read(self.master, len(payload)), payload)
 
-    def testBackpressureEndsAsUnknownWithinBound(self):
+    def test_backpressure_ends_as_unknown_within_bound(self):
         started = time.monotonic()
         with self.assertRaisesRegex(TimeoutError, "unknown"):
             self.port.write(b"x" * (4 * 1024 * 1024))
@@ -67,7 +67,7 @@ class ConfigurationV3Tests(unittest.TestCase):
             "frp": None, "business": None,
         }
 
-    def testCompleteV3AndNullCapabilities(self):
+    def test_complete_v3_and_null_capabilities(self):
         control.validate_configuration(self.config)
         candidate = copy.deepcopy(self.config)
         candidate["wifi"] = None
@@ -90,7 +90,7 @@ class ConfigurationV3Tests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 control.validate_configuration(rejected)
 
-    def testV1AndMalformedFieldsAreRejected(self):
+    def test_v1_and_malformed_fields_are_rejected(self):
         variants = [
             ("schema_version", 1),
             ("schema_version", 2),
@@ -123,7 +123,7 @@ class ConfigurationV3Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             control.validate_configuration(candidate)
 
-    def testMaxLengthAndFrameLimit(self):
+    def test_max_length_and_frame_limit(self):
         candidate = copy.deepcopy(self.config)
         candidate["mqtt"]["hostname"] = ".".join(["a" * 63] * 3 + ["a" * 61])
         candidate["mqtt"]["username"] = "u" * 128
@@ -141,7 +141,7 @@ class ConfigurationV3Tests(unittest.TestCase):
 
 
 class OtaClientTests(unittest.TestCase):
-    def testSignedImageRequestAndOriginalIdQuery(self):
+    def test_signed_image_request_and_original_id_query(self):
         device = "22222222-2222-4222-8222-222222222222"
         boot = "33333333-3333-4333-8333-333333333333"
         operation = "44444444-4444-4444-8444-444444444444"
@@ -200,7 +200,7 @@ class OtaClientTests(unittest.TestCase):
             self.assertEqual(observed[0]["parameters"], {"operation_id": operation})
 
 
-    def testNoWriteForWrongBootOrOversizedImage(self):
+    def test_no_write_for_wrong_boot_or_oversized_image(self):
         device = "22222222-2222-4222-8222-222222222222"
         boot = "33333333-3333-4333-8333-333333333333"
         current = {"device_id": device, "boot_id": boot}
@@ -227,7 +227,7 @@ class OtaClientTests(unittest.TestCase):
                                       "esp32c3/esp_base")
                 send.assert_not_called()
 
-    def testQueryRejectsDifferentImageAndNeverWritesAgain(self):
+    def test_query_rejects_different_image_and_never_writes_again(self):
         device = "22222222-2222-4222-8222-222222222222"
         boot = "33333333-3333-4333-8333-333333333333"
         operation = "44444444-4444-4444-8444-444444444444"
@@ -274,7 +274,7 @@ class NativeControlTests(unittest.TestCase):
         self.assertEqual(seen[0]["command"], command)
         return result
 
-    def testIndependentFirmwareAndBusinessFields(self):
+    def test_independent_firmware_and_business_fields(self):
         for command, expected in (("firmware.status", self.firmware),
                                   ("business.status", self.business)):
             with self.subTest(command=command):
@@ -283,7 +283,7 @@ class NativeControlTests(unittest.TestCase):
                     reply = self.response(None, state=state, error_code="state_unavailable")
                     self.assertEqual(self.query(command, reply), reply)
 
-    def testStatusRefusesMalformedFieldsAndChangedIdentity(self):
+    def test_status_refuses_malformed_fields_and_changed_identity(self):
         for command, source, malformed in (
             ("firmware.status", self.firmware, (("firmware_sha256", "0" * 64),
                 ("firmware_sha256", "AB" * 32), ("image_size_bytes", True),
@@ -304,7 +304,7 @@ class NativeControlTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown"):
                 self.query(command, self.response(None, state="running"))
 
-    def testBusinessWritesBindFreshBootAndSendOnce(self):
+    def test_business_writes_bind_fresh_boot_and_send_once(self):
         fresh = {**self.current, "result": {"uptime_ms": 1234}}
         for command in ("business.pause", "business.resume"):
             seen = []
@@ -335,7 +335,7 @@ class NativeControlTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
-    def testOldProductCommandsAndJointArgumentsRefuseBeforeSerialOpen(self):
+    def test_old_product_commands_and_joint_arguments_refuse_before_serial_open(self):
         cases = [["product.status"], ["product.install"], ["product.result"],
                  ["ota.start", "--package-mode", "no_package"],
                  ["status", "--operation-id", "44444444-4444-4444-8444-444444444444"],
@@ -350,7 +350,7 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(error.exception.code, 2)
             serial.assert_not_called()
 
-    def testBusinessStatusJsonDispatchAndClose(self):
+    def test_business_status_json_dispatch_and_close(self):
         current = {"device_id": "22222222-2222-4222-8222-222222222222",
                    "boot_id": "33333333-3333-4333-8333-333333333333",
                    "state": "succeeded", "error_code": None, "result": {"uptime_ms": 10}}
