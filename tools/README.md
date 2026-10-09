@@ -19,6 +19,10 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 `frp_ota.py` 经明确设备 FRP 地址执行认证控制、固件 PUT 和原 ID 查询，固件正文不走设备直连 HTTPS。持久成功还须来自不同于提交时的新 boot，随后独立 `firmware.status` 必须在同一新 boot 精确匹配完整摘要、尺寸、target 与真实 OTA 槽；原 ID 查询和身份核对共用原终态绝对期限。迟到、错身份或未知结果保留原 ID，不重发。HTTP／HMAC／期限和命令示例见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md)。独立 FRP 不要求 Mac／USB 在线；宿主 loopback 测试不证明已经经过正式 FRPS或实板。
 
+宿主控制命令的 DNS、TCP／TLS 建连、发送和完整认证响应共用原始 5 秒绝对期限；调用方给出的更早期限继续生效，不在 TLS 后重新计时或压缩为 2 秒。设备 loopback 控制连接的 2 秒期限及正文上界保持原合同；该设备端期限不等于公网往返预算。`ota.start` 响应丢失或超过宿主原期限时保留原 operation_id 为 unknown，不发送 PUT、不重发 start，后续只查原 ID。
+
+`--endpoint` 可以包含已登记的规范设备路径前缀，例如 `https://example.invalid/devices/esp-base-esp32c3`；客户端在同一前缀下追加 `/api/v1/commands/*` 和 `/api/v1/ota-images/<operation_id>`，上传后的原 ID 查询与独立镜像身份核对仍使用这个前缀。前缀各段只接受小写字母、数字和连字符，不接受尾斜杠、空段、点段、编码路径、query、fragment 或空白字符，也不会发现其他设备路线。根路径仍用于明确的独立入口及隔离宿主互操作；HTTPS 保持系统 CA 和原主机名验证。`native_lifecycle_run.py` 复用同一客户端，因此百次／72 小时驱动消费相同显式入口。
+
 ## 原生 MQTT 业务事件
 
 `business_event.py` 从私有普通事件文件生成域隔离 HMAC帧；key 文件须0600、非符号链接，不回显key。`business_event_publish.py` 通过严格 TLS／QoS1／非 retained 仅发布一次，先核对本 boot reported 的下一连续序号，随后按 boot、序号、原始事件摘要和实际 business result 对账。输入只绑定原生业务身份。
@@ -58,9 +62,13 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 ## 一次性有线迁入与历史输入
 
-`preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，归档旧AT原始NVS／at_customize而不解码或打印凭据。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native_software_checkpoint.md)。
+`preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，按 NVS 前三页和 `at_customize` 前两页生成 20 KiB 原字节归档；两分区余尾必须全 FF，并逐字节重建完整原分区，不解码或打印凭据。ESP32 候选将其放入只读 `at_old_raw@0x3e5000/0x5000`。旧 `esp32_product` 的四页输入仅在一次性离线准备时补入第三 NVS 的 FF 页，运行时只消费当前五页布局。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native_software_checkpoint.md)。
+
+旧 AT 空 Wi-Fi 判断先核对 blob 类型与旧 SDK 的 36／65 B 字段长度，再只核对声明 payload 是否全 FF；NVS 槽尾 padding 不属于凭据，但仍随五页归档原样保留。有效 payload 的非 FF 字节、类型／长度不符或 CRC 损坏均阻断。
 
 原生候选／公钥／分区输入、旧C3双备份和现役AT双备份的读取先以非阻塞方式打开，再核对普通文件及原权限／尺寸规则；无写入方的FIFO会明确拒绝，不会停在打开阶段。完整受影响回归35项及原失败见[输入拒绝补审](../docs/operations/native_software_checkpoint.md#一次性迁入输入拒绝补审)；本工具仍只准备离线输入，不能代替本轮实体身份、正式信任、恢复基线和唯一租约。
+
+`prepare_native_layout.py --source-layout c3_mqtt_factory` 用于独立 MQTT 实验固件首次迁入原生 Base：仅接受 C3 的 `nvs@0x9000/0x6000`、`phy_init@0xf000/0x1000`、`factory@0x10000/0x100000` 三分区，核对完整未签名 `esp_mqtt_broker_client` 镜像、checksum／摘要和擦除态槽尾。NVS 与 `0x3e0000` 后的旧 Base 持久范围必须全为空；有数据则阻断，不能据此清空旧身份或配置。来源没有 Base UUID，只记录本轮独立读取的规范 `--source-efuse-mac`，实际物理绑定须另核对双份恢复基线和写前 ROM 身份。原 factory app 占用的新 otadata／PHY／coredump 区在候选中重新装配，原始完整字节先归档并读回。新 UUID 由首次启动的设备生成，Wi-Fi 经当前 USB 配置链设置；该离线工具不连接或写入设备，也不授予正式交付资格。
 
 旧动态包生命周期、专属NVS容量探针与旧QEMU组合入口已删除。当前离线准备只消费明确SDK、真实旧布局终态与签名固件，工具与本轮设备写入资格分别核对。
 

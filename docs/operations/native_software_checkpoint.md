@@ -48,9 +48,13 @@ Fast Deploy Core／Panel 退役动态业务包专属读取能力、路由、配�
 | otadata | 0xf000／0x2000 | 0x10000／0x2000 |
 | FRP scratch | 0x3e5000／0x10000 | 0x3ea000／0x10000 |
 | base_store | 0x3f5000／0xb000，11 页 | 0x3fa000／0x6000，6 页 |
-| 旧 AT 原始区 | 不适用 | 0x3e6000／0x4000，只读 |
+| 旧 AT 原始区 | 不适用 | 0x3e5000／0x5000，只读，NVS 三页加 at_customize 两页 |
 
 来源为[C3](../../firmware/partitions/c3-partition-table.csv)与[ESP32](../../firmware/partitions/esp32-partition-table.csv)真实 CSV；已删除 product_pkgs，完整 Flash 为 4194304 B。普通 app OTA 不能改变分区或 bootloader，新布局必须首次有线迁入。
+
+2026-10-10 的真实 ESP32 AT 双全片表明 NVS 第三页仍有活动 `sta.mac`／`ap.mac` 与已删除记录的原字节，旧四页归档不能无损保存。当前布局利用 app 结束后的既有空闲区，将只读原字节区扩为上述五页；双 app、scratch 和六页 Base NVS 的位置／容量保持。一次性归档只接受 NVS 前三页及 `at_customize` 前两页以外全 FF，并精确重建两个完整原分区；旧 `esp32_product` 四页来源只在离线迁入中确定性补第三 NVS FF 页。先前四页软件 fixture 与签名输出属于改动前检查点，不证明当前五页候选已构建或已写入实体。
+
+同日五页合同的归档 13 项、迁入 11 项及双目标官方分区 2 项回归通过；包含第三 NVS 页、旧四页输入重装配、空 Wi-Fi blob 的非 FF 槽尾 padding 原样保留及非空有效 payload 拒绝。空 Wi-Fi 只按旧 SDK blob 类型、36／65 B 声明长度与有效 payload 全 FF 裁决，padding 不属于凭据。锁定 SDK 下 ESP32 全新签名构建完成，完整 app 983028 B、每槽剩余 983052 B；独立既有公钥的官方 app／分区表验签通过。真实双完整 Flash 输入已生成五页离线候选，五页逐页原字节及两个完整旧分区的重建读回一致。这些结果只证明离线装配与构建，本检查点未执行 ESP32 设备写入、eFuse 或容量验收。
 
 `tools/prepare_native_layout.py` 只生成离线候选，要求两份字节相同、权限受控的新鲜完整备份，核对旧分区、设备身份、CRC、真实签名 A／C、V3 与 ECS2 终态。未决／PREPARED／unknown／损坏阻断。先归档并读回原完整 Flash、旧收据和原 operation，再生成新官方分区、双签名 app 与 VALID otadata；UUID、配置 revision、凭据及其他活动 NVS 记录按精确原字节保留。旧已证实终态退出运行账本，迁入后旧 operation 由私有迁入收据查询，设备如实返回 unknown；不能伪造一条属于新镜像的旧成功记录。
 

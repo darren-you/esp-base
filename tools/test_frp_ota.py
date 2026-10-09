@@ -21,7 +21,8 @@ KEY = bytes(range(32))
 
 
 class Fixture:
-    def __init__(self):
+    def __init__(self, path_prefix=""):
+        self.path_prefix = path_prefix
         self.requests = []
         self.uploads = []
         self.query_count = 0
@@ -30,6 +31,9 @@ class Fixture:
         self.wrong_device = False
         self.bad_result_sha = False
         self.lost_upload_response = False
+        self.lost_start_response = False
+        self.status_reply_delay_seconds = 0
+        self.start_reply_delay_seconds = 0
         self.reject_submit = False
         self.never_finishes = False
         self.extra_result_key = False
@@ -83,10 +87,12 @@ class Fixture:
                         raise AssertionError("client device")
                     command = request["command"]
                     if command == "status":
+                        if fixture.status_reply_delay_seconds:
+                            time.sleep(fixture.status_reply_delay_seconds)
                         self.reply(self.envelope(request, result={"uptime_ms": 1234,
                             "capabilities": {"ota": "ready"}}))
                     elif command == "ota.start":
-                        if self.path != "/api/v1/commands/ota-start":
+                        if self.path != fixture.path_prefix + "/api/v1/commands/ota-start":
                             raise AssertionError("start path")
                         if set(request) != {"protocol_version", "device_id", "request_id", "command",
                                 "target_boot_id", "expires_at_uptime_ms", "parameters"}:
@@ -100,7 +106,13 @@ class Fixture:
                         if fixture.reject_submit:
                             self.reply(self.envelope(request, state="failed", error="operation_busy"), 409)
                         else:
-                            self.reply(self.envelope(request, state="running"), 202)
+                            if fixture.lost_start_response:
+                                self.connection.shutdown(socket.SHUT_RDWR)
+                                self.close_connection = True
+                            else:
+                                if fixture.start_reply_delay_seconds:
+                                    time.sleep(fixture.start_reply_delay_seconds)
+                                self.reply(self.envelope(request, state="running"), 202)
                     elif command == "ota.result":
                         fixture.query_count += 1
                         if request["parameters"] != {"operation_id": OPERATION}:
@@ -149,7 +161,7 @@ class Fixture:
                         raise AssertionError("exact signed length")
                     metadata = frp_ota.upload_metadata(OPERATION, DEVICE, BOOT,
                         size, parameters["sha256"])
-                    if self.path != "/api/v1/ota-images/" + OPERATION or (
+                    if self.path != fixture.path_prefix + "/api/v1/ota-images/" + OPERATION or (
                             self.headers["Content-Type"] != "application/octet-stream") or (
                             self.headers.get("Transfer-Encoding") is not None) or (
                             not hmac.compare_digest(self.headers["X-ESP-Management-Tag"],
@@ -178,7 +190,8 @@ class Fixture:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-        self.client = frp_ota.FrpClient(f"http://127.0.0.1:{self.server.server_port}", DEVICE, KEY)
+        self.client = frp_ota.FrpClient(
+            f"http://127.0.0.1:{self.server.server_port}" + path_prefix, DEVICE, KEY)
 
     def close(self):
         self.server.shutdown()
@@ -215,6 +228,25 @@ class FrpOtaTests(unittest.TestCase):
         self.assertNotIn("image_url", starts[0]["parameters"])
         self.assertIsNone(self.fixture.error)
 
+    def test_registered_prefix_is_preserved_for_commands_upload_and_original_result(self):
+        self.fixture.path_prefix = "/devices/esp-base-esp32c3"
+        self.fixture.client = frp_ota.FrpClient(
+            f"http://127.0.0.1:{self.fixture.server.server_port}" + self.fixture.path_prefix,
+            DEVICE, KEY)
+        self.fixture.lost_upload_response = True
+        final = self.upload()
+        self.assertEqual(final["state"], "succeeded")
+        self.assertEqual(final["boot_id"], NEXT_BOOT)
+        self.assertEqual(final["result"]["operation_id"], OPERATION)
+        self.assertEqual(self.fixture.uploads, [self.payload])
+        self.assertEqual(sum(req["command"] == "ota.start"
+            for _, req, _ in self.fixture.requests), 1)
+        self.assertGreaterEqual(self.fixture.query_count, 2)
+        for path, request, _ in self.fixture.requests:
+            self.assertEqual(path, self.fixture.path_prefix + "/api/v1/commands/" +
+                frp_ota.COMMAND_PATHS[request["command"]])
+        self.assertIsNone(self.fixture.error)
+
     def test_localhost_resolver_process_completes_real_http_original_id_flow(self):
         self.fixture.client = frp_ota.FrpClient(
             f"http://localhost:{self.fixture.server.server_port}", DEVICE, KEY)
@@ -247,6 +279,48 @@ class FrpOtaTests(unittest.TestCase):
         self.assertEqual(len(self.fixture.uploads), 1)
         self.assertEqual(sum(req["command"] == "ota.start" for _, req, _ in self.fixture.requests), 1)
         self.assertGreaterEqual(self.fixture.query_count, 2)
+        self.assertIsNone(self.fixture.error)
+
+    def test_slow_authenticated_status_response_uses_original_five_second_budget(self):
+        self.fixture.status_reply_delay_seconds = 2.25
+        result = self.fixture.client.status()
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(len(self.fixture.requests), 1)
+        self.assertEqual(self.fixture.requests[0][1]["command"], "status")
+        self.assertIsNone(self.fixture.error)
+
+    def test_slow_start_response_allows_one_upload_without_replaying_start(self):
+        self.fixture.start_reply_delay_seconds = 2.25
+        result = self.upload()
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(self.fixture.uploads, [self.payload])
+        self.assertEqual(sum(request["command"] == "ota.start"
+            for _, request, _ in self.fixture.requests), 1)
+        self.assertIsNone(self.fixture.error)
+
+    def test_start_response_beyond_five_seconds_is_unknown_without_upload_or_replay(self):
+        self.fixture.start_reply_delay_seconds = 5.25
+        progress = []
+        with self.assertRaises(frp_ota.UnknownOperation) as caught:
+            self.upload(progress=lambda done, total: progress.append((done, total)))
+        self.assertEqual(caught.exception.operation_id, OPERATION)
+        self.assertEqual(self.fixture.uploads, [])
+        self.assertEqual(progress, [])
+        self.assertEqual(self.fixture.query_count, 0)
+        self.assertEqual(sum(request["command"] == "ota.start"
+            for _, request, _ in self.fixture.requests), 1)
+
+    def test_lost_start_response_is_unknown_without_upload_or_replay(self):
+        self.fixture.lost_start_response = True
+        progress = []
+        with self.assertRaises(frp_ota.UnknownOperation) as caught:
+            self.upload(progress=lambda done, total: progress.append((done, total)))
+        self.assertEqual(caught.exception.operation_id, OPERATION)
+        self.assertEqual(self.fixture.uploads, [])
+        self.assertEqual(progress, [])
+        self.assertEqual(self.fixture.query_count, 0)
+        self.assertEqual(sum(request["command"] == "ota.start"
+            for _, request, _ in self.fixture.requests), 1)
         self.assertIsNone(self.fixture.error)
 
     def test_upload_unknown_is_reconciled_to_original_durable_failure(self):
@@ -428,12 +502,23 @@ class FrpOtaTests(unittest.TestCase):
                 frp_ota.upload_metadata(*arguments)
 
     def test_endpoint_and_key_reject_unbound_or_insecure_options(self):
-        for endpoint in ("ftp://example.invalid", "http://user@example.invalid", "http://example.invalid/path",
+        for endpoint in ("ftp://example.invalid", "http://user@example.invalid", "http://example.invalid/path/",
                          "http://example.invalid/?key=secret"):
             with self.assertRaises(ValueError):
                 frp_ota.FrpClient(endpoint, DEVICE, KEY)
         with self.assertRaises(ValueError):
             frp_ota.FrpClient("http://example.invalid", DEVICE, bytes(32))
+
+    def test_prefix_rejects_path_aliases_and_header_characters_before_io(self):
+        for suffix in ("/devices//c3", "/devices/../c3", "/devices/./c3", "/devices/%63%33",
+                       "/devices/c3%2fother", "/devices/C3", "/devices/c3_1", "/devices/c3/",
+                       "/devices/c3?route=other", "/devices/c3?", "/devices/c3#other",
+                       "/devices/c3#", "/devices/c3\\other",
+                       "/devices/c3\r\nX-Other:yes", "/devices/c3\t", "/devices/设备"):
+            with self.subTest(suffix=suffix), patch.object(frp_ota.FrpClient, "_open") as opening:
+                with self.assertRaises(ValueError):
+                    frp_ota.FrpClient("https://example.invalid" + suffix, DEVICE, KEY)
+                opening.assert_not_called()
 
 
 class ByteSocket:

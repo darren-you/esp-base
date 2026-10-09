@@ -30,11 +30,11 @@ C 的启动确认独立于 Broker、FRPS 和业务消息：本地 NVS、身份�
 
 支持精确 `c3_product`、`esp32_product` 旧包布局、保留的 `c3_v1` 配置布局，以及已核对空 Wi-Fi 的 `esp32_at`。其他布局、未知 NVS 键、重复记录/CRC 失效、加密分区、otadata NEW/PENDING、EOTA PREPARED、ECS2 写入/试运行/中断和未决产品账本均阻断。旧 v1/v2 配置只在保留的 C3 一次性路径转换为 V3，UUID、revision 和已配置字段保留；现役 V3 配置原 blob 字节保留。
 
-旧 V3 终态需与真实 VALID 双槽签名身份、长度、ECS2 绑定、包原字节和账本终态共同核对。工具先把完整原 Flash、原操作 ID、V3/ECS2/账本原 blob 和核对结果写入 0700 仓外目录内的 0600 文件并精确读回，再生成退役旧操作/包键的候选 NVS。身份、配置、revision、凭据及仍活动 SDK 记录保留；默认 NVS、PHY、诊断区、现役 scratch 和 ESP32 `at_old_raw@0x3e6000/0x4000` 保持原字节。旧 C3 的 `base_store@0x3e0000` 整体归档后搬到新位置，覆盖到新 scratch 的原旧 NVS 不作为现役 scratch 内容保留。候选装入两个同信任新签名 app，并生成两个 VALID 选槽记录；选择 `ota_1`。候选 NVS 的页历史会重建，证明范围是仍活动记录的精确类型和值。
+旧 V3 终态需与真实 VALID 双槽签名身份、长度、ECS2 绑定、包原字节和账本终态共同核对。工具先把完整原 Flash、原操作 ID、V3/ECS2/账本原 blob 和核对结果写入 0700 仓外目录内的 0600 文件并精确读回，再生成退役旧操作/包键的候选 NVS。身份、配置、revision、凭据及仍活动 SDK 记录保留；默认 NVS、PHY、诊断区与现役 scratch 保持原字节。旧 ESP32 四页 AT 归档只在一次性离线准备中于两页 NVS 后补入一页 FF，再逐字节保留两页 `at_customize`，写入当前只读 `at_old_raw@0x3e5000/0x5000`；无固件运行时旧布局解析。旧 C3 的 `base_store@0x3e0000` 整体归档后搬到新位置，覆盖到新 scratch 的原旧 NVS 不作为现役 scratch 内容保留。候选装入两个同信任新签名 app，并生成两个 VALID 选槽记录；选择 `ota_1`。候选 NVS 的页历史会重建，证明范围是仍活动记录的精确类型和值。
 
 普通应用 OTA 在原 ID 下保留可核对持久结果；**首次有线更换布局与固件身份的旧 ID 此后在设备上返回 unknown**，历史终态从私有 `migration-receipt.json` 与 `source-flash.bin` 核对。不能把旧 ID 改绑新镜像摘要冒充原升级成功。候选删除运行时键是已证实旧终态的明确退役，PREPARED、损坏或未知记录不允许删除。
 
-旧 ESP-AT 没有 Base UUID，工具不从 MAC 生成身份。旧 NVS 与 `at_customize` 的完整原分区通过已有 16 KiB 归档器无损重建并放入 `at_old_raw`；有非空尾页或非空旧 Wi-Fi 字段时拒绝。新 Base 的身份在首次真实启动按既有 UUIDv4 路径产生，配置通过获授权的物理 `config.set` 提供；这不是旧 AT 配置或身份映射。
+旧 ESP-AT 没有 Base UUID，工具不从 MAC 生成身份。旧 NVS 前三页与 `at_customize` 前两页按原字节组成 20 KiB 归档并放入 `at_old_raw`；两分区其余尾页必须全 FF，按三页加两页重建后逐字节核对完整原分区。有非空尾页或非空旧 Wi-Fi 字段时拒绝。新 Base 的身份在首次真实启动按既有 UUIDv4 路径产生，配置通过获授权的物理 `config.set` 提供；这不是旧 AT 配置或身份映射。
 
 示例仅生成软件候选，须在固定 SDK Python 环境执行，所有路径都指向已审核的仓外输入：
 
