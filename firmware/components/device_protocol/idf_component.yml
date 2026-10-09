@@ -2,12 +2,12 @@ dependencies:
   espressif/cjson:
     version: "==1.7.19~2"
   mqtt:
-    git: "https://github.com/esp-space/esp-mqtt.git"
+    git: "https://github.com/darren-you/esp-mqtt.git"
     version: "6443b71db761f4d667503f14108687bad5e6b5ee"
   esp_ota:
-    git: "https://github.com/esp-space/esp-ota.git"
+    git: "https://github.com/darren-you/esp-ota.git"
     path: "components/esp_ota"
     version: "8ab62f98fba2ea8e76c2822d0e7bf1cb523088a1"
   esp_frp:
-    git: "https://github.com/esp-space/esp-frp.git"
+    git: "https://github.com/darren-you/esp-frp.git"
     version: "989cc876d92b815aeb0b6806fb861f0ee2b39a86"
