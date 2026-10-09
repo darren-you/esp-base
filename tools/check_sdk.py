@@ -20,6 +20,19 @@ def git(path: Path, *args: str) -> str:
 def verify_complete_repository(path: Path) -> None:
     if os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES") or os.environ.get("GIT_OBJECT_DIRECTORY"):
         raise ValueError("SDK 来源不能使用环境提供的 alternate 对象目录")
+    def git_path(*arguments: str) -> Path:
+        value = Path(git(path, *arguments))
+        return value if value.is_absolute() else path / value
+
+    git_directory = git_path("rev-parse", "--git-dir").resolve(strict=True)
+    common_directory = git_path("rev-parse", "--git-common-dir").resolve(strict=True)
+    if git_directory != common_directory:
+        raise ValueError(f"SDK 来源不能使用借用主仓对象库的 linked worktree：{path}")
+    objects = git_path("rev-parse", "--git-path", "objects")
+    if (objects.is_symlink() or not objects.is_dir()
+            or objects.resolve() != git_directory / "objects"
+            or any(item.is_symlink() for item in objects.rglob("*"))):
+        raise ValueError(f"SDK 来源对象库必须归属于该独立仓库，不能以符号链接借用对象：{path}")
     alternate = Path(git(path, "rev-parse", "--git-path", "objects/info/alternates"))
     if not alternate.is_absolute():
         alternate = path / alternate
@@ -72,7 +85,11 @@ def check(path: Path) -> None:
         if revision.startswith("+") and (submodule_path != LOCK["lwip"]["path"]
                                          or revision[1:] != LOCK["lwip"]["revision"]):
             raise ValueError(f"ESP-IDF submodule differs from its gitlink: {submodule_path}")
-        verify_complete_repository(idf / submodule_path)
+        source = idf / submodule_path
+        if git(source, "status", "--porcelain", "--untracked-files=normal",
+               "--ignore-submodules=none"):
+            raise ValueError(f"SDK 递归源码存在未提交内容：{source}")
+        verify_complete_repository(source)
 
 
 def main() -> int:

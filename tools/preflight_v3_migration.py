@@ -19,6 +19,8 @@ import sys
 import tempfile
 import zlib
 
+import check_sdk as sdk_source
+
 
 FLASH_SIZE = 0x400000
 TABLE_OFFSET = 0x8000
@@ -107,6 +109,10 @@ def check_sdk(idf_path: Path) -> Path:
     )
     require(result.returncode == 0 and result.stdout.strip() == IDF_COMMIT,
             "ESP-IDF checkout 不是本仓 sdk-lock.json 固定提交")
+    try:
+        sdk_source.check(idf_path)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        raise PreflightError(f"固定 SDK 来源校验失败：{exc}") from exc
     tracked_tools = ["components/partition_table/gen_esp32part.py",
                      "components/nvs_flash/nvs_partition_tool/nvs_parser.py",
                      "components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"]

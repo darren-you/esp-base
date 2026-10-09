@@ -30,6 +30,21 @@ class SdkSelectionTests(unittest.TestCase):
         self.assertEqual(migration.legacy.IDF_COMMIT, selected)
         self.assertEqual(migration.legacy.check_sdk(idf), idf / "components")
 
+    def test_native_prepare_rejects_linked_sdk_before_reading_inputs(self):
+        idf = Path(os.environ["IDF_PATH"])
+        with tempfile.TemporaryDirectory(prefix="native_layout_linked_sdk_") as directory:
+            linked = Path(directory) / "idf"
+            subprocess.run(["git", "-C", str(idf), "worktree", "add", "--quiet", "--detach",
+                            str(linked), "HEAD"], check=True, capture_output=True)
+            try:
+                with self.assertRaisesRegex(migration.legacy.PreflightError, "SDK"):
+                    migration.legacy.check_sdk(linked)
+                with self.assertRaisesRegex(migration.legacy.PreflightError, "SDK"):
+                    migration.prepare(argparse.Namespace(idf_path=linked))
+            finally:
+                subprocess.run(["git", "-C", str(idf), "worktree", "remove", str(linked)],
+                               check=True, capture_output=True)
+
     def test_native_prepare_rejects_previous_sdk_before_reading_inputs(self):
         idf = Path(os.environ["IDF_PATH"])
         with tempfile.TemporaryDirectory(prefix="native_layout_old_sdk_") as directory:
@@ -328,7 +343,8 @@ class NativeMigrationTests(unittest.TestCase):
                 for field, value in vars(args).items():
                     if value is not None:
                         command.extend(["--" + field.replace("_", "-"), str(value)])
-                result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=5)
+                # 普通入口先核完整 SDK 历史；FIFO 仍须在有限时间内拒绝且不能等写入者。
+                result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=90)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn("普通文件", result.stderr)
                 self.assertFalse(args.output_directory.exists())
