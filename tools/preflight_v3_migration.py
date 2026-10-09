@@ -103,13 +103,14 @@ def compare_backups(first: Path, second: Path) -> bytes:
 
 
 def check_sdk(idf_path: Path) -> Path:
-    result = subprocess.run(
-        ["git", "-C", str(idf_path), "rev-parse", "HEAD"],
-        text=True, capture_output=True, check=False,
-    )
-    require(result.returncode == 0 and result.stdout.strip() == IDF_COMMIT,
-            "ESP-IDF checkout 不是本仓 sdk-lock.json 固定提交")
     try:
+        environment = sdk_source.git_environment()
+        result = subprocess.run(
+            ["git", "-C", str(idf_path), "rev-parse", "HEAD"],
+            text=True, capture_output=True, check=False, env=environment,
+        )
+        require(result.returncode == 0 and result.stdout.strip() == IDF_COMMIT,
+                "ESP-IDF checkout 不是本仓 sdk-lock.json 固定提交")
         sdk_source.check(idf_path)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         raise PreflightError(f"固定 SDK 来源校验失败：{exc}") from exc
@@ -117,7 +118,7 @@ def check_sdk(idf_path: Path) -> Path:
                      "components/nvs_flash/nvs_partition_tool/nvs_parser.py",
                      "components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"]
     unchanged = subprocess.run(["git", "-C", str(idf_path), "diff", "--quiet", "HEAD", "--", *tracked_tools],
-                               check=False)
+                               check=False, env=environment)
     require(unchanged.returncode == 0, "固定 SDK 的分区或 NVS 工具源码已修改")
     components = idf_path / "components"
     require((components / "partition_table/gen_esp32part.py").is_file() and
