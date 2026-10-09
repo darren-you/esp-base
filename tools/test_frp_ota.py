@@ -31,6 +31,9 @@ class Fixture:
         self.wrong_device = False
         self.bad_result_sha = False
         self.lost_upload_response = False
+        self.lost_start_response = False
+        self.status_reply_delay_seconds = 0
+        self.start_reply_delay_seconds = 0
         self.reject_submit = False
         self.never_finishes = False
         self.extra_result_key = False
@@ -84,6 +87,8 @@ class Fixture:
                         raise AssertionError("client device")
                     command = request["command"]
                     if command == "status":
+                        if fixture.status_reply_delay_seconds:
+                            time.sleep(fixture.status_reply_delay_seconds)
                         self.reply(self.envelope(request, result={"uptime_ms": 1234,
                             "capabilities": {"ota": "ready"}}))
                     elif command == "ota.start":
@@ -101,7 +106,13 @@ class Fixture:
                         if fixture.reject_submit:
                             self.reply(self.envelope(request, state="failed", error="operation_busy"), 409)
                         else:
-                            self.reply(self.envelope(request, state="running"), 202)
+                            if fixture.lost_start_response:
+                                self.connection.shutdown(socket.SHUT_RDWR)
+                                self.close_connection = True
+                            else:
+                                if fixture.start_reply_delay_seconds:
+                                    time.sleep(fixture.start_reply_delay_seconds)
+                                self.reply(self.envelope(request, state="running"), 202)
                     elif command == "ota.result":
                         fixture.query_count += 1
                         if request["parameters"] != {"operation_id": OPERATION}:
@@ -268,6 +279,48 @@ class FrpOtaTests(unittest.TestCase):
         self.assertEqual(len(self.fixture.uploads), 1)
         self.assertEqual(sum(req["command"] == "ota.start" for _, req, _ in self.fixture.requests), 1)
         self.assertGreaterEqual(self.fixture.query_count, 2)
+        self.assertIsNone(self.fixture.error)
+
+    def test_slow_authenticated_status_response_uses_original_five_second_budget(self):
+        self.fixture.status_reply_delay_seconds = 2.25
+        result = self.fixture.client.status()
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(len(self.fixture.requests), 1)
+        self.assertEqual(self.fixture.requests[0][1]["command"], "status")
+        self.assertIsNone(self.fixture.error)
+
+    def test_slow_start_response_allows_one_upload_without_replaying_start(self):
+        self.fixture.start_reply_delay_seconds = 2.25
+        result = self.upload()
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(self.fixture.uploads, [self.payload])
+        self.assertEqual(sum(request["command"] == "ota.start"
+            for _, request, _ in self.fixture.requests), 1)
+        self.assertIsNone(self.fixture.error)
+
+    def test_start_response_beyond_five_seconds_is_unknown_without_upload_or_replay(self):
+        self.fixture.start_reply_delay_seconds = 5.25
+        progress = []
+        with self.assertRaises(frp_ota.UnknownOperation) as caught:
+            self.upload(progress=lambda done, total: progress.append((done, total)))
+        self.assertEqual(caught.exception.operation_id, OPERATION)
+        self.assertEqual(self.fixture.uploads, [])
+        self.assertEqual(progress, [])
+        self.assertEqual(self.fixture.query_count, 0)
+        self.assertEqual(sum(request["command"] == "ota.start"
+            for _, request, _ in self.fixture.requests), 1)
+
+    def test_lost_start_response_is_unknown_without_upload_or_replay(self):
+        self.fixture.lost_start_response = True
+        progress = []
+        with self.assertRaises(frp_ota.UnknownOperation) as caught:
+            self.upload(progress=lambda done, total: progress.append((done, total)))
+        self.assertEqual(caught.exception.operation_id, OPERATION)
+        self.assertEqual(self.fixture.uploads, [])
+        self.assertEqual(progress, [])
+        self.assertEqual(self.fixture.query_count, 0)
+        self.assertEqual(sum(request["command"] == "ota.start"
+            for _, request, _ in self.fixture.requests), 1)
         self.assertIsNone(self.fixture.error)
 
     def test_upload_unknown_is_reconciled_to_original_durable_failure(self):

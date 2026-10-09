@@ -276,8 +276,8 @@ class FrpClient:
         deadline = min(deadline, self.clock() + 5) if deadline is not None else self.clock() + 5
         self._connection_remaining(deadline)
         with self._open(deadline) as connection:
-            # The device's small command parser has its own 2-second budget.
-            deadline = min(deadline, self.clock() + 2)
+            # The device's loopback parser owns its separate 2-second budget.
+            # Public DNS/TCP/TLS, request and response share the original deadline.
             headers = self._headers("POST", "/api/v1/commands/" + COMMAND_PATHS[command],
                 "application/json", len(payload), hmac.digest(self.key, payload, "sha256").hex())
             self._send(connection, headers + payload, deadline)

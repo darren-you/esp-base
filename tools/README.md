@@ -19,6 +19,8 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 `frp_ota.py` 经明确设备 FRP 地址执行认证控制、固件 PUT 和原 ID 查询，固件正文不走设备直连 HTTPS。持久成功还须来自不同于提交时的新 boot，随后独立 `firmware.status` 必须在同一新 boot 精确匹配完整摘要、尺寸、target 与真实 OTA 槽；原 ID 查询和身份核对共用原终态绝对期限。迟到、错身份或未知结果保留原 ID，不重发。HTTP／HMAC／期限和命令示例见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md)。独立 FRP 不要求 Mac／USB 在线；宿主 loopback 测试不证明已经经过正式 FRPS或实板。
 
+宿主控制命令的 DNS、TCP／TLS 建连、发送和完整认证响应共用原始 5 秒绝对期限；调用方给出的更早期限继续生效，不在 TLS 后重新计时或压缩为 2 秒。设备 loopback 控制连接的 2 秒期限及正文上界保持原合同；该设备端期限不等于公网往返预算。`ota.start` 响应丢失或超过宿主原期限时保留原 operation_id 为 unknown，不发送 PUT、不重发 start，后续只查原 ID。
+
 `--endpoint` 可以包含已登记的规范设备路径前缀，例如 `https://example.invalid/devices/esp-base-esp32c3`；客户端在同一前缀下追加 `/api/v1/commands/*` 和 `/api/v1/ota-images/<operation_id>`，上传后的原 ID 查询与独立镜像身份核对仍使用这个前缀。前缀各段只接受小写字母、数字和连字符，不接受尾斜杠、空段、点段、编码路径、query、fragment 或空白字符，也不会发现其他设备路线。根路径仍用于明确的独立入口及隔离宿主互操作；HTTPS 保持系统 CA 和原主机名验证。`native_lifecycle_run.py` 复用同一客户端，因此百次／72 小时驱动消费相同显式入口。
 
 ## 原生 MQTT 业务事件
