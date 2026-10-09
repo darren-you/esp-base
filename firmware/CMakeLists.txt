@@ -95,19 +95,41 @@ if(IDF_TARGET STREQUAL "esp32")
         if(NOT CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME OR
             NOT CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT OR
             NOT CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT OR
-            NOT CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES OR
             NOT CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE OR CONFIG_SECURE_BOOT)
             message(FATAL_ERROR "ESP32 Base signed build requires ECDSA v1, signed boot/update and rollback without hardware Secure Boot")
         endif()
-        if(NOT IS_ABSOLUTE "${CONFIG_SECURE_BOOT_SIGNING_KEY}" OR
-            NOT EXISTS "${CONFIG_SECURE_BOOT_SIGNING_KEY}")
-            message(FATAL_ERROR "ESP32 Base signed build requires an existing absolute signing key path")
-        endif()
         get_filename_component(esp_base_source_root "${CMAKE_CURRENT_LIST_DIR}/.." REALPATH)
-        get_filename_component(esp_base_signing_key "${CONFIG_SECURE_BOOT_SIGNING_KEY}" REALPATH)
-        file(RELATIVE_PATH esp_base_signing_key_relative "${esp_base_source_root}" "${esp_base_signing_key}")
-        if(NOT esp_base_signing_key_relative MATCHES "^\\.\\./")
-            message(FATAL_ERROR "ESP32 Base signing key must remain outside the source repository")
+        if(CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES)
+            if(NOT IS_ABSOLUTE "${CONFIG_SECURE_BOOT_SIGNING_KEY}" OR
+                NOT EXISTS "${CONFIG_SECURE_BOOT_SIGNING_KEY}")
+                message(FATAL_ERROR "ESP32 Base signed build requires an existing absolute signing key path")
+            endif()
+            get_filename_component(esp_base_signing_key "${CONFIG_SECURE_BOOT_SIGNING_KEY}" REALPATH)
+            file(RELATIVE_PATH esp_base_signing_key_relative "${esp_base_source_root}" "${esp_base_signing_key}")
+            if(NOT esp_base_signing_key_relative MATCHES "^\\.\\./")
+                message(FATAL_ERROR "ESP32 Base signing key must remain outside the source repository")
+            endif()
+        else()
+            if(ESP_BASE_ESP32_OFFLINE_PROBE OR
+                NOT IS_ABSOLUTE "${CONFIG_SECURE_BOOT_VERIFICATION_KEY}" OR
+                NOT EXISTS "${CONFIG_SECURE_BOOT_VERIFICATION_KEY}" OR
+                IS_SYMLINK "${CONFIG_SECURE_BOOT_VERIFICATION_KEY}")
+                message(FATAL_ERROR "ESP32 Base external signing requires an existing absolute public verification key and no offline probe")
+            endif()
+            get_filename_component(esp_base_verification_key "${CONFIG_SECURE_BOOT_VERIFICATION_KEY}" REALPATH)
+            file(RELATIVE_PATH esp_base_verification_key_relative "${esp_base_source_root}" "${esp_base_verification_key}")
+            if(NOT esp_base_verification_key_relative MATCHES "^\\.\\./")
+                message(FATAL_ERROR "ESP32 Base public verification key must remain outside the source repository")
+            endif()
+            # Stat only: reject directories/FIFOs/devices without opening them.
+            execute_process(COMMAND "${Python3_EXECUTABLE}" -c
+                "import os,stat,sys; s=os.lstat(sys.argv[1]); sys.exit(0 if stat.S_ISREG(s.st_mode) and s.st_size == 64 else 1)"
+                "${CONFIG_SECURE_BOOT_VERIFICATION_KEY}"
+                RESULT_VARIABLE esp_base_verification_key_result)
+            if(NOT esp_base_verification_key_result STREQUAL "0")
+                message(FATAL_ERROR "ESP32 Base external signing requires a regular 64-byte public verification key")
+            endif()
+            message(STATUS "ESP32 Base prepares unsigned bytes for external signing; sign and verify before consumption")
         endif()
     elseif(ESP_BASE_ESP32_OFFLINE_PROBE)
         if(CONFIG_SECURE_BOOT OR CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES OR

@@ -21,7 +21,7 @@ esp-base-ota-upload-v1\n
 
 唯一 worker 在写前收据已读回后 `upload_arm`，复制本次操作、身份、尺寸、摘要及绑定 key；arm 的 5 秒内认证成功才移交 socket 与最多 1024 B 预读正文。重复／未 arm／已 claim 的连接拒绝，认证失败不取得擦写资格。移交后原 listener 可接只读查询，上传与查询占用原 FRP 活跃流预算，没有新增 listener、旁路 HTTPS 下载或额外不计账的流。
 
-worker 使用 `upload_read` 作为 `eota_stream_t.read`，单次最多 64 B、传入最多 1 秒 socket 等待；它不持有 Flash claim。断流返回失败，单次无数据返回 `-2`；精确 Content-Length 后返回 framing EOF，不要求 HTTP 客户端先 FIN。已收到的额外正文／pipelining 字节拒绝，未来尚未到达的违规字节不能在保留 HTTP 响应的同时预知；连接结束关闭，不把它们作为另一请求或另一镜像消费。OTA 完整 signed 尺寸、摘要和签名仍必须精确相等。
+worker 使用 `upload_read` 作为 `eota_stream_t.read`，单次最多 64 B、传入最多 1 秒完整回调预算；内部 socket 等待按剩余期限反推并限制为至多一个实际 RTOS tick，为调度与返回留下余量；它不持有 Flash claim。断流返回失败，单次无数据返回 `-2`；精确 Content-Length 后返回 framing EOF，不要求 HTTP 客户端先 FIN。已收到的额外正文／pipelining 字节拒绝，未来尚未到达的违规字节不能在保留 HTTP 响应的同时预知；连接结束关闭，不把它们作为另一请求或另一镜像消费。OTA 完整 signed 尺寸、摘要和签名仍必须精确相等。
 
 `upload_finish` 在独立的最多 1 秒响应发送预算内使用 arm 绑定的 key 签署准备观察，然后关闭并清除操作。PUT 只返回 `running`／HTTP 202／`result=null`，或 `unknown`／`storage_uncertain`／HTTP 200／`result=null`；两者都不形成持久终态。准备失败仍须由控制 owner 提交并读回原操作结果；只有后继 `ota.result` 能裁决持久成功、失败或未决。客户端收到 PUT 的 `unknown` 继续查询原 ID；即使上传响应声称 `failed`、`expired` 或 `succeeded`，也只按原 ID 对账，不把阶段观察报成最终结果，不重发升级。配置改变 `cancel` 并 shutdown，socket 的短借用计数把最后 close 留给 worker，防止配置任务关闭已复用的 fd；网络等待、HMAC、shutdown 和 close 均在临界区外。取消后的旧事务不会用新配置 key 签响应，无连接、失败或取消的 arm 也必须由 worker finally 调用 finish 释放。
 
@@ -143,3 +143,17 @@ final 总结 SHA 为 `844f4a394aa32cb55c54952cd0bc1f205b03f944082fb983329fba6f32
 完整原件已独占保存到 `receipts/private/native_readback_frps_20261006`：1304 个 manifest 成员，manifest SHA `5e96342d8c1a1872465af4e2d83f07533899527333a5bc608e91cf25f08aced0`，archive receipt SHA `4730cf170a7673222cb293a21e0ef47cc09bb51c5e0f55d25854ad4727ab3896`。包括全部 1229 个原证据文件（原总清单的 1228 成员及清单自身）、71 生产源、两目标软件公钥、采集器与归档收据，文件 0600／目录 0700、无链接且逐项读回。没有本轮固件签名私钥或生产凭据；临时 TLS 已清理，公开夹具生成源码与固定软件 token 按原样保存。
 
 独立补审另指出 final 总结中的 `long_ota_owner_success_and_write_failure_released=true` 把成功也写作生产显式 release，措辞过强。实际 production 成功持长期 claim 调用 `esp_restart`，宿主 peer 的模拟新 boot 清零 claim 并重新初始化 owner；只有写失败经过生产 release 并断言 inactive，NVS 不确定按合同断言 retain。原总结与冻结档均未改，最小纠正收据 `receipts/private/native_readback_frps_cleanup_correction_20261006.json` SHA 为 `98ad87a3d3e693387ba07ecb097f90381f31c14658994695b181e343f667992d`，绑定实际源行与摘要；六场景原结果没有被改写或扩大为真实重启资格。
+
+## 2026-10-10 读取回调预算组合补审
+
+本轮以冻结 `esp-ota@8ab62f98fba2ea8e76c2822d0e7bf1cb523088a1` 的实际读取包装器、生产 Base listener、真实微秒单调钟和非阻塞 socketpair 复现：Base 的相对 socket 等待从回调内部稍后开始，等满传入预算再返回 `-2`；外层计入入口／返回成本，将正常等待判成 `ota_download_failed`。12次 1／5／50／1000 ms 静默等待全部出现原始 `-2` 被包装器改为失败；2.25 秒后恢复正文的正例在首个等待就退出。原红例未覆盖或改写。
+
+两目标锁定配置均为单核、100 Hz。锁定 IDF 的 [`sys_arch_sem_wait`](https://github.com/darren-you/esp-idf/blob/578cf89c343e388db43ba1f4ddcd602fedcb763c/components/lwip/port/freertos/sys_arch.c#L160)按 `ceil(timeout/tick)+1` 等待；990 ms 仍可能占满1000 ms，不能只减1 ms或一个tick。本机长等待额外成本约10 ms，另一个真实宿主出现约145 ms额外延迟，20 ms宿主余量也曾被原严格门拒绝；这些读数不是MCU的调度上界。
+
+修复只收敛 Base 内部等待：每次按同一回调截止时间扣除已耗与两tick返回余量，反推锁定 lwIP 的tick等待上界，再限制为最多一个实际 RTOS tick；不足正等待预算时只作零超时 readiness／非阻塞读取。`EINTR/EAGAIN` 不刷新截止。外层库源码、迟到字节／EOF拒绝、1秒读取、30秒无进展与300秒总期限保持；任意长抢占仍失败关闭，不以宿主通过冒充硬实时保证。
+
+双目标完整 host ASan／UBSan 回归通过，新组合验证正文停顿后至少两次 `-2` 再继续、精确 framing、截断／尾字节、迟到数据／EOF及30秒真实无进展拒绝；300秒总期限只验证真实时钟下的最后500 ms，测试 deadline 初始时刻显式反移，不宣称运行完整五分钟。原 configure 取消回归在同一绝对期限内重试正常 `-2`，保持读取失败／fd回收断言。软件资格不覆盖 MCU Flash、签名、无线负载或R5／R6。
+
+原 OTA worker 失败完成前只新增一条安全 UART 记录：原 operation_id、wait／retire／prepare／连接检查／select 阶段、库错误、已消费字节、上传响应是否完成与不确定标记。已消费计数不是Flash已写计数；日志在临界区和短Flash claim外输出，不含key／Token／网络配置，不新增 wire 字段或诊断系统。
+
+官方 FRPS 夹具的时间源改为真实微秒钟，增加 `paused_success`：在同一完整 signed 镜像正文中停顿2.25秒后继续，原ID与新boot独立镜像对账保持。宿主依赖使用[官方 MbedTLS 4.1.0 完整发行包](https://github.com/Mbed-TLS/mbedtls/releases/tag/mbedtls-4.1.0)，SHA为 `377a09cf8eb81b5fb2707045e5522d5489d3309fed5006c9874e60558fc81d10`，包含配套 TF-PSA-Crypto 1.1.0。SDK内的Espressif定制树不作为这个独立host构建输入；未改SDK、固件依赖锁或组件实现。

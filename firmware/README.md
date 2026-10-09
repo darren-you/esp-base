@@ -22,7 +22,9 @@ idf.py -C firmware -B /absolute/build-c3 -DIDF_TARGET=esp32c3 reconfigure
 ESP_BASE_TEST_TARGET=esp32c3 bash firmware/tests/run_host_tests.sh
 ```
 
-ESP32 签名构建必须使用仓外绝对路径 P-256 键，启用 signed boot/update、build signed binaries 与 rollback。无签名只读软件探针须显式 `ESP_BASE_ESP32_OFFLINE_PROBE=ON`，不能作为刷写制品。C3 同样在独立签名 defaults 提供仓外 RSA 键。正式制品还需官方验签、精确 signed bin 摘要与分区容量核对。
+ESP32 自动签名构建必须使用仓外绝对路径 P-256 键，启用 signed boot/update、build signed binaries 与 rollback。无签名只读软件探针须显式 `ESP_BASE_ESP32_OFFLINE_PROBE=ON`，不能作为刷写制品。C3 自动签名同样在独立签名 defaults 提供仓外 RSA 键。正式制品还需官方验签、精确 signed bin 摘要与分区容量核对。
+
+外部签名准备使用官方 `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n`，保留目标对应签名方案、signed boot/update、rollback及关闭硬件Secure Boot。ESP32同时要求仓外绝对路径、非链接普通64B的 `CONFIG_SECURE_BOOT_VERIFICATION_KEY`，直接消费本轮已核对的公开P-256验证字节；不能启用offline probe代替该装配。此路径不读取私有签名键，只产unsigned app／partition输入，须再由受控签名事实源独立签名、验签和核对完整signed身份后才能交付或发送OTA。自动签名 `y` 的原私有键合同保持，未签输入不具有消费资格。
 
 精确公开依赖来自 [唯一组件清单](components/device_protocol/idf_component.yml)与 [C3](dependencies.lock)／[ESP32](dependencies.lock.esp32)锁。host 使用这些已解析组件，不从相邻源仓运行时 import。构建图只读取当前锁定的 MQTT／OTA／FRP 与 cJSON，不读取退役运行组件。
 

@@ -206,7 +206,7 @@ def main() -> int:
         run(command, inputs / (name + ".txt"), timeout_s=30)
     shutil.copyfile(build / "CMakeCache.txt", inputs / "CMakeCache.txt")
     run(["go", "list", "-m", "-json", "github.com/fatedier/frp"], inputs / "official_frp_module.json", cwd=go_dir, timeout_s=30)
-    for mode in ["success", "write_failure", "nvs_failure"]:
+    for mode in ["success", "paused_success", "write_failure", "nvs_failure"]:
         mode_dir = output / mode; mode_dir.mkdir()
         run([str(output / "frps_fixture"), "-peer", str(build / "frps_ota_peer"), "-image", str(image),
              "-source-image", str(source_image),
@@ -227,6 +227,8 @@ def main() -> int:
                              "device identity/version/heap", "Wi-Fi/MQTT/time readiness",
                              "Base FRP owner readiness snapshot"],
         "physical_or_public_qualification": False,
+        "scenarios": ["success", "paused_success", "write_failure", "nvs_failure"],
+        "timer_resolution": "real_monotonic_microseconds",
         "image_original": str(image_original), "source_original": str(source_original),
         "lock_file": str(lock_path), "lock_sha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
         "components_path": str(components), "managed_verified_files": len(selected),
@@ -246,7 +248,7 @@ def main() -> int:
         elif path.is_file():
             path.chmod(0o700 if path.stat().st_mode & 0o111 else 0o600)
     (output / "evidence_manifest.json").write_text(json.dumps(source_manifest(output), indent=2) + "\n")
-    print(f"官方FRPS宿主联调\n  目标  {args.target}\n  场景  3/3通过\n  实板/公网资格  未授予\n  证据  {output}")
+    print(f"官方FRPS宿主联调\n  目标  {args.target}\n  场景  4/4通过\n  实板/公网资格  未授予\n  证据  {output}")
     return 0
 
 

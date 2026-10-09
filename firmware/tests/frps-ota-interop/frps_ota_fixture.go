@@ -21,7 +21,7 @@ func main() {
  sourceImage := flag.String("source-image", "", "distinct source A image")
  scenario := flag.String("scenario", "", "Python through-FRPS scenario")
  target := flag.String("target", "", "exact firmware target")
- mode := flag.String("mode", "success", "success, write_failure, nvs_failure")
+ mode := flag.String("mode", "success", "success, paused_success, write_failure, nvs_failure")
  output := flag.String("output", "", "private evidence directory")
  flag.Parse()
  withSessionServer(func(port int, caPath, dir string) {

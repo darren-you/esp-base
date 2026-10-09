@@ -233,15 +233,42 @@ static int64_t monotonic_us(void)
 static int wait_upload_socket(int fd, bool writing, int64_t deadline_us)
 {
     if (fd < 0 || fd >= FD_SETSIZE) return -1;
+#ifdef ESP_PLATFORM
+    const int64_t tick_us = (int64_t)portTICK_PERIOD_MS * 1000;
+#else
+    /* Host scheduling/return costs use the frozen Base 100 Hz unit. */
+    const int64_t tick_us = 10000;
+#endif
+    const int64_t return_reserve_us = 2 * tick_us;
     for (;;) {
         const int64_t now = monotonic_us();
         if (now < 0 || now >= deadline_us) return 0;
         const int64_t left = deadline_us - now;
-        struct timeval timeout = {.tv_sec = (long)(left / 1000000),
-            .tv_usec = (long)(left % 1000000)};
+        int64_t wait_us = left;
+        if (!writing) {
+            wait_us = 0;
+            if (left > return_reserve_us) {
+#ifdef ESP_PLATFORM
+                /* The locked lwIP wait rounds up and adds one tick (AT LEAST
+                 * timeout). Reverse its bound and reserve the measured return/
+                 * scheduling cost inside the complete read callback budget. */
+                const int64_t ticks = (left - return_reserve_us - 1) / tick_us;
+                if (ticks > 1) wait_us = (ticks - 1) * tick_us;
+#else
+                wait_us = left - return_reserve_us - 1;
+#endif
+                /* One scheduler unit per poll keeps normal timeout/return
+                 * well inside the callback cap. Long POSIX waits additionally
+                 * exhibited 150 ms timer coalescing on the actual host. */
+                if (wait_us > tick_us) wait_us = tick_us;
+            }
+        }
+        struct timeval timeout = {.tv_sec = (long)(wait_us / 1000000),
+            .tv_usec = (long)(wait_us % 1000000)};
         fd_set descriptors;
         FD_ZERO(&descriptors);
         FD_SET(fd, &descriptors);
+        /* A zero timeval is a readiness poll, not sys_arch's infinite wait. */
         const int ready = select(fd + 1, writing ? NULL : &descriptors,
             writing ? &descriptors : NULL, NULL, &timeout);
         if (ready >= 0) return ready;

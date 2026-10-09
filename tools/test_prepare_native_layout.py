@@ -50,7 +50,8 @@ class NativeMigrationTests(unittest.TestCase):
                 cls.secure("sign-data", "--version", str(version), "--keyfile", str(key), "--output", str(signed), str(unsigned))
                 cls.images[(target, name)] = signed.read_bytes()
             table_name = "c3-partition-table.csv" if target == "esp32c3" else "esp32-partition-table.csv"
-            plain_table = migration.table_from_csv(migration.ROOT / "firmware/partitions" / table_name, cls.components)
+            plain_table = migration.table_from_csv(migration.ROOT / "firmware/partitions" / table_name, cls.components,
+                                                    disable_md5=target == "esp32")
             table = cls.work / (target + "_new_table.bin")
             table.write_bytes(plain_table)
             if target == "esp32":
@@ -62,6 +63,9 @@ class NativeMigrationTests(unittest.TestCase):
             bootloader.write_bytes(cls.image(target, b"bootloader", public_bytes, app=False))
             cls.artifacts[target] = (app, bootloader, table)
         for source_layout, layout in migration.LAYOUTS.items():
+            if layout.get("native"):
+                cls.old_tables[source_layout] = cls.artifacts[layout["target"]][2].read_bytes()
+                continue
             if source_layout == "esp32_at":
                 rows = [("nvs", "data", "nvs", "0x12000", "0xe000", ""),
                         ("at_customize", "data", "undefined", "0x20000", "0xe0000", ""),
@@ -232,6 +236,156 @@ class NativeMigrationTests(unittest.TestCase):
             source_verification_key=self.keys[target][1], verification_key=self.keys[target][1],
             app=app, bootloader=bootloader, partition_table=table,
             output_directory=self.directory / "prepared")
+
+    def native_flash(self, source_layout, status=None, *, failed_inactive=False, same_image=False):
+        layout = migration.LAYOUTS[source_layout]
+        target = layout["target"]
+        flash = bytearray(b"\xff" * migration.FLASH_SIZE)
+        _, boot, table = self.artifacts[target]
+        boot_offset = 0 if target == "esp32c3" else 0x1000
+        flash[boot_offset:boot_offset + boot.stat().st_size] = boot.read_bytes()
+        flash[0x8000:0x8000 + table.stat().st_size] = table.read_bytes()
+        flash[0x9000:0xf000] = self.nvs({"base_identity": [("device_uuid", "string", DEVICE)]}, 0x6000)
+        flash[layout["phy"]:layout["phy"] + 0x1000] = bytes((0x67,)) * 0x1000
+        flash[0x12000:0x20000] = bytes((0x92,)) * 0xe000
+        flash[0x3e0000:0x3e5000] = bytes((0x74,)) * 0x5000
+        flash[layout["scratch"]:layout["scratch"] + 0x10000] = bytes((0x23,)) * 0x10000
+        if target == "esp32":
+            for page in range(5):
+                flash[0x3e5000 + page * 0x1000:0x3e6000 + page * 0x1000] = bytes((page + 1,)) * 0x1000
+        images = [self.images[(target, name)] for name in ("old_source", "old_candidate")]
+        if same_image:
+            images[1] = images[0]
+        for offset, image in zip(layout["apps"], images):
+            flash[offset:offset + len(image)] = image
+        selected = 0 if status == 2 else 1
+        for index in range(2):
+            at = layout["otadata"] + index * 0x1000
+            sequence = (3 if index == 0 and selected == 0 else index + 1).to_bytes(4, "little")
+            state = 3 if index == 1 and failed_inactive else 2
+            flash[at:at + 4] = sequence
+            flash[at + 24:at + 28] = state.to_bytes(4, "little")
+            flash[at + 28:at + 32] = zlib.crc32(sequence, 0xffffffff).to_bytes(4, "little")
+        if failed_inactive:
+            flash[layout["apps"][1]:layout["apps"][1] + 0x1000] = b"\xff" * 0x1000
+        config = bytearray(self.config())
+        config[8:12] = (2).to_bytes(4, "little")
+        records = {"base_config": [("committed", "base64", base64.b64encode(config).decode())]}
+        if status is not None:
+            blob = bytearray(182)
+            blob[:10] = b"EOTA\x04" + bytes((status, 0x10, 0x11, 6 if status == 2 else 0, 0))
+            blob[10:14] = len(images[1]).to_bytes(4, "little")
+            blob[14:50], blob[50:86] = DEVICE.encode(), OPERATION.encode()
+            blob[86:118] = hashlib.sha256(images[1]).digest()
+            blob[118:150] = hashlib.sha256(images[0]).digest()
+            records["base_ota"] = [("operation", "base64", base64.b64encode(blob).decode())]
+            if not failed_inactive and not same_image and status == 2:
+                blob[150:182] = hashlib.sha256(images[1]).digest()
+                records["base_ota"] = [("operation", "base64", base64.b64encode(blob).decode())]
+        offset, size = layout["store"]
+        flash[offset:offset + size] = self.nvs(records, size)
+        return bytes(flash), selected
+
+    def test_native_new_app_preserves_complete_persistent_bytes(self):
+        for name in ("c3_native", "esp32_native"):
+            with self.subTest(layout=name):
+                flash, _ = self.native_flash(name)
+                args = self.arguments(flash, name)
+                args.output_directory = self.directory / name
+                report = migration.prepare(args)
+                candidate = (args.output_directory / "candidate-flash.bin").read_bytes()
+                layout = migration.LAYOUTS[name]
+                self.assertEqual(report["config_revision"], 2)
+                self.assertEqual(candidate[0x9000:0xf000], flash[0x9000:0xf000])
+                self.assertEqual(candidate[layout["phy"]:layout["phy"] + 0x1000], flash[layout["phy"]:layout["phy"] + 0x1000])
+                self.assertEqual(candidate[0x12000:0x20000], flash[0x12000:0x20000])
+                self.assertEqual(candidate[0x3e0000:], flash[0x3e0000:])
+                self.assertIsNone(report["old_operation"])
+                self.assertEqual(report["retired_records"], {})
+                self.assertEqual((args.output_directory / "source-flash.bin").read_bytes(), flash)
+                if name == "esp32_native":
+                    self.assertEqual((args.output_directory / "at-old-raw.bin").read_bytes(), flash[0x3e5000:0x3ea000])
+
+    def test_native_original_state_binds_selected_app_boot_table_and_terminal(self):
+        for name in ("c3_native", "esp32_native"):
+            for status, failed_inactive in ((None, False), (3, False), (2, False), (2, True)):
+                with self.subTest(layout=name, status=status, inactive_invalid=failed_inactive):
+                    flash, selected = self.native_flash(name, status, failed_inactive=failed_inactive)
+                    args = self.arguments(flash, name)
+                    args.output_directory = self.directory / (name + str(status) + str(failed_inactive))
+                    args.original_state = status is None
+                    args.app = self.work / (migration.LAYOUTS[name]["target"] + ("_old_source.bin" if selected == 0 else "_old_candidate.bin"))
+                    report = migration.prepare(args)
+                    self.assertEqual((args.output_directory / "candidate-flash.bin").read_bytes(), flash)
+                    self.assertEqual(report["candidate_selected_slot"], "ota_" + str(selected))
+                    self.assertEqual(report["device_id"], DEVICE)
+                    self.assertEqual(report["config_revision"], 2)
+                    self.assertEqual(set(report["old_slots"]), {"ota_0"} if failed_inactive else {"ota_0", "ota_1"})
+                    if status is not None:
+                        self.assertEqual(report["old_operation"], {"operation_id": OPERATION, "state": "succeeded" if status == 3 else "failed"})
+
+    def test_native_terminal_different_app_and_unresolved_sources_reject_before_outputs(self):
+        for name in ("c3_native", "esp32_native"):
+            for status in (1, 2, 3):
+                with self.subTest(layout=name, status=status):
+                    flash, _ = self.native_flash(name, status)
+                    args = self.arguments(flash, name)
+                    args.output_directory = self.directory / (name + str(status))
+                    with self.assertRaises(migration.MigrationError):
+                        migration.prepare(args)
+                    self.assertFalse(args.output_directory.exists())
+            flash, _ = self.native_flash(name)
+            layout = migration.LAYOUTS[name]
+            for mutation in ("identity", "signature", "pending", "inactive", "table"):
+                wrong = bytearray(flash)
+                if mutation == "identity": wrong[0x9000] ^= 1
+                elif mutation == "signature": wrong[0x200000 + 40] ^= 1
+                elif mutation == "pending": wrong[layout["otadata"] + 0x1000 + 24:layout["otadata"] + 0x1000 + 28] = (1).to_bytes(4, "little")
+                elif mutation == "inactive": wrong[layout["otadata"] + 24:layout["otadata"] + 28] = (3).to_bytes(4, "little")
+                else: wrong[0x8008] ^= 1
+                args = self.arguments(wrong, name)
+                args.output_directory = self.directory / (name + mutation)
+                with self.assertRaises((migration.MigrationError, migration.legacy.PreflightError)):
+                    migration.prepare(args)
+                self.assertFalse(args.output_directory.exists())
+
+    def test_native_v4_terminal_fields_and_slot_bindings_are_strict(self):
+        for name in ("c3_native", "esp32_native"):
+            layout = migration.LAYOUTS[name]
+            for status in (2, 3):
+                flash, selected = self.native_flash(name, status)
+                records = migration.legacy.nvs_records(flash, "base_store", *layout["store"],
+                    migration.legacy.load_nvs_parser(self.components), {migration.CONFIG_KEY, migration.NATIVE_OPERATION_KEY})
+                blob = records[migration.NATIVE_OPERATION_KEY][1]
+                _, states = migration.ota_selection(flash, layout)
+                images = {index: migration.signed_image(flash[offset:offset + migration.APP_SIZE], layout["target"])
+                          for index, offset in enumerate(layout["apps"])}
+                self.assertEqual(migration.validate_v4_receipt(blob, DEVICE, selected, states, images)["state"],
+                                 "failed" if status == 2 else "succeeded")
+                for mutation in ("version", "pending", "subtype", "failure", "reserved", "uuid", "operation", "source", "prior_b", "selected"):
+                    with self.subTest(layout=name, status=status, mutation=mutation):
+                        wrong = bytearray(blob)
+                        wrong_selected = selected
+                        if mutation == "version": wrong[4] = 3
+                        elif mutation == "pending": wrong[5] = 1
+                        elif mutation == "subtype": wrong[6] = wrong[7]
+                        elif mutation == "failure": wrong[8] = 0 if status == 2 else 1
+                        elif mutation == "reserved": wrong[9] = 1
+                        elif mutation == "uuid": wrong[14] = ord("X")
+                        elif mutation == "operation": wrong[50] = ord("X")
+                        elif mutation == "source": wrong[118] ^= 1
+                        elif mutation == "prior_b": wrong[150:182] = wrong[118:150]
+                        else: wrong_selected = 1 - selected
+                        with self.assertRaises(migration.MigrationError):
+                            migration.validate_v4_receipt(bytes(wrong), DEVICE, wrong_selected, states, images)
+            for status in (2, 3):
+                flash, _ = self.native_flash(name, status, same_image=True)
+                args = self.arguments(flash, name)
+                args.app = self.work / (layout["target"] + "_old_source.bin")
+                args.output_directory = self.directory / (name + "same_image" + str(status))
+                with self.assertRaises(migration.MigrationError):
+                    migration.prepare(args)
+                self.assertFalse(args.output_directory.exists())
 
     def test_both_targets_archive_terminal_and_preserve_real_records(self):
         for layout_name in ("c3_product", "esp32_product"):

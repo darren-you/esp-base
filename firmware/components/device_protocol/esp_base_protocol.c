@@ -642,12 +642,15 @@ static void ota_task(void *argument)
     esp_base_ota_receipt_recovery_t receipt = {0};
     eota_result_t result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
     bool mutated = false;
+    const char *stage = "receipt_load";
+    bool upload_finished = false;
     if (esp_base_ota_receipt_load_for_recovery(s_context.device_id, &receipt) != ESP_BASE_OTA_RECEIPT_OK ||
         receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED ||
         strcmp(receipt.operation_id, s_ota_request->operation_id) ||
         receipt.image_size_bytes != s_ota_request->image_size_bytes ||
         memcmp(receipt.candidate_sha256, s_ota_request->sha256, 32)) goto uncertain;
     if (s_ota_request->inbound_stream) {
+        stage = "wait_upload";
         const uint64_t started = uptime_ms();
         while (!esp_base_frp_management_upload_connected()) {
             const uint64_t now = uptime_ms();
@@ -657,6 +660,7 @@ static void ota_task(void *argument)
             vTaskDelay(1);
         }
     }
+    stage = "retire_inactive";
     result = eota_retire_inactive(&policy, receipt.target_subtype, receipt.source_sha256);
     if (result != EOTA_UPDATE_OK) goto uncertain;
     mutated = true;
@@ -664,15 +668,21 @@ static void ota_task(void *argument)
         .image_size_bytes = s_ota_request->image_size_bytes};
     memcpy(image.sha256, s_ota_request->sha256, 32);
     eota_prepared_t prepared = {0};
+    stage = "prepare";
     if (s_ota_request->inbound_stream) {
         eota_stream_t stream = {.read = esp_base_frp_management_upload_read,
             .image_size_bytes = image.image_size_bytes};
         memcpy(stream.sha256, image.sha256, 32);
         result = eota_prepare_stream(&policy, &stream, ota_progress, NULL, &prepared);
     } else result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);
-    if (result == EOTA_UPDATE_OK && s_ota_request->inbound_stream &&
-        !esp_base_frp_management_upload_connected()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
-    if (result == EOTA_UPDATE_OK) result = eota_select(&policy, &prepared);
+    if (result == EOTA_UPDATE_OK && s_ota_request->inbound_stream) {
+        stage = "upload_connection";
+        if (!esp_base_frp_management_upload_connected()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
+    }
+    if (result == EOTA_UPDATE_OK) {
+        stage = "select";
+        result = eota_select(&policy, &prepared);
+    }
     if (result != EOTA_UPDATE_OK) {
         /* A receipt-bound cleanup must prove A remains VALID/selected and C's
          * first sector is erased before marking any partial write failed. */
@@ -693,9 +703,19 @@ done:
         const int length = format_result_json(response, sizeof response,
             s_guard.entries[s_ota_slot].request_id,
             prepared ? "running" : "unknown", prepared ? NULL : "storage_uncertain", NULL);
-        (void)esp_base_frp_management_upload_finish(prepared ? 202 : 200,
+        upload_finished = esp_base_frp_management_upload_finish(prepared ? 202 : 200,
             length > 0 ? response : NULL, length > 0 ? (size_t)length : 0, 1000);
     }
+    if (result != EOTA_UPDATE_OK) {
+        ESP_LOGE("base_ota", "ESP_BASE_OTA_FAILURE operation_id=%s stage=%s error=%s consumed_bytes=%u upload_finished=%s uncertain=%s",
+            s_ota_request->operation_id, stage, eota_error(result),
+            (unsigned)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
+            upload_finished ? "true" : "false",
+            atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed) ? "true" : "false");
+    }
+    /* Host log fakes discard variadic arguments; production logs use both. */
+    (void)stage;
+    (void)upload_finished;
     atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);
     atomic_store_explicit(&s_ota_done, true, memory_order_release);
     vTaskDelete(NULL);

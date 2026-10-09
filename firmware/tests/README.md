@@ -35,6 +35,8 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_frp_management_crypto_tests.s
 
 独立crypto入口需OpenSSL与pkg-config，真实loopback TCP、HMAC、decoder和Base handler核对原status／restart固定向量、签名错误、响应篡改、原ID回放与延迟一次重启。普通listener矩阵另覆盖六新命令、绑定PUT上传、分片／预读、错HMAC、framing、截断／多余字节、并发查询、真实读线程与configure shutdown／fd回收。
 
+`frp_ota_stream_budget_test.c` 在同一 host 入口直接组合所选 managed 原件的 `read_stream_input`／framing finish 与生产上传回调，使用真实微秒单调钟和非阻塞 socketpair，不复制 OTA 机制。覆盖 2.25 秒正文停顿、至少两次无数据等待后继续接收、截断／尾字节、迟到数据／EOF、真实 30 秒无进展以及 300 秒总期限最后 500 ms；最后一项只调整测试 deadline 初始时刻，不伪称观察完整五分钟。原取消读线程在同一绝对期限内重试 `-2`，继续验证 configure shutdown 与 fd 回收。SDK／Flash 未使用部分由链接器移除；该组合不证明 MCU 调度、实体签名或公网资格。
+
 通用HTTPS／有界输入流、完整镜像／签名／Flash／slot机制回归归属于精确esp-ota组件，不保留第二份实现。当前测试图只覆盖保留的原生固件、网络、OTA与恢复；退役动态运行测试及专属探针已删除。
 
 宿主Python控制、FRP客户端、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。官方 FRPS 的 Python 场景消费者也位于 `tools/frps_ota_scenario.py`；C／Go 主机联调夹具归入 [frps-ota-interop](frps-ota-interop/)，本目录保留 Shell 入口；它不是 ESP-IDF 组件或 Go import 包。本轮输入／实际结果见[原生软件检查点](../../docs/operations/native_software_checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
