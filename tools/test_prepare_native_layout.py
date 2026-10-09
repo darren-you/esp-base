@@ -23,6 +23,29 @@ DEVICE = "22222222-2222-4222-8222-222222222222"
 OPERATION = "44444444-4444-4444-8444-444444444444"
 
 
+class SdkSelectionTests(unittest.TestCase):
+    def test_current_sdk_lock_is_consumed(self):
+        idf = Path(os.environ["IDF_PATH"])
+        selected = json.loads((migration.ROOT / "sdk-lock.json").read_text())["idf"]["revision"]
+        self.assertEqual(migration.legacy.IDF_COMMIT, selected)
+        self.assertEqual(migration.legacy.check_sdk(idf), idf / "components")
+
+    def test_native_prepare_rejects_previous_sdk_before_reading_inputs(self):
+        idf = Path(os.environ["IDF_PATH"])
+        with tempfile.TemporaryDirectory(prefix="native_layout_old_sdk_") as directory:
+            previous = Path(directory) / "idf"
+            subprocess.run(["git", "-C", str(idf), "worktree", "add", "--quiet", "--detach",
+                            str(previous), "HEAD^"], check=True, capture_output=True)
+            try:
+                with self.assertRaisesRegex(migration.legacy.PreflightError, "sdk-lock.json"):
+                    migration.legacy.check_sdk(previous)
+                with self.assertRaisesRegex(migration.legacy.PreflightError, "sdk-lock.json"):
+                    migration.prepare(argparse.Namespace(idf_path=previous))
+            finally:
+                subprocess.run(["git", "-C", str(idf), "worktree", "remove", str(previous)],
+                               check=True, capture_output=True)
+
+
 class NativeMigrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

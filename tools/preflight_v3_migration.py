@@ -9,6 +9,7 @@ import contextlib
 import csv
 import hashlib
 from importlib import metadata, util
+import json
 import os
 from pathlib import Path
 import re
@@ -37,10 +38,10 @@ SDK_NVS_TYPES = {
     ("phy", "cal_data"): "blob",
     ("phy", "cal_version"): "uint32_t",
 }
-IDF_COMMIT = "578cf89c343e388db43ba1f4ddcd602fedcb763c"
 NVS_GENERATOR_VERSION = "0.1.9"
 UUID_V4 = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 ROOT = Path(__file__).resolve().parents[1]
+IDF_COMMIT = json.loads((ROOT / "sdk-lock.json").read_text())["idf"]["revision"]
 
 
 class PreflightError(Exception):

@@ -16,6 +16,26 @@ def git(path: Path, *args: str) -> str:
     ).stdout.rstrip("\n")
 
 
+def verify_complete_repository(path: Path) -> None:
+    if git(path, "rev-parse", "--show-toplevel") != str(path.resolve()):
+        raise ValueError(f"SDK 来源未独立初始化：{path}")
+    if git(path, "rev-parse", "--is-shallow-repository") != "false":
+        raise ValueError(f"SDK 来源必须保有完整历史，不能使用 shallow clone：{path}")
+    for line in git(path, "config", "--list").splitlines():
+        key, _, value = line.partition("=")
+        if key == "extensions.partialclone" or (
+                key.startswith("remote.") and key.endswith((".promisor", ".partialclonefilter"))):
+            raise ValueError(f"SDK 来源不能使用 partial clone：{path}")
+        if key in ("core.sparsecheckout", "core.sparsecheckoutcone") and value.lower() in (
+                "true", "yes", "on", "1"):
+            raise ValueError(f"SDK 来源不能使用 sparse checkout：{path}")
+    result = subprocess.run(["git", "-C", str(path), "fsck", "--connectivity-only",
+                             "--no-dangling"], text=True, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE)
+    if result.returncode:
+        raise ValueError(f"SDK 来源对象不完整：{path}\n{result.stderr.strip()}")
+
+
 def check(path: Path) -> None:
     idf = path.resolve(strict=True)
     lwip = idf / LOCK["lwip"]["path"]
@@ -33,6 +53,7 @@ def check(path: Path) -> None:
                  "--ignore-submodules=none")
     if status != f" M {LOCK['lwip']['path']}":
         raise ValueError("ESP-IDF checkout differs beyond the locked lwIP gitlink")
+    verify_complete_repository(idf)
     for line in git(idf, "submodule", "status", "--recursive").splitlines():
         parts = line.strip().split()
         if len(parts) < 2:
@@ -43,6 +64,7 @@ def check(path: Path) -> None:
         if revision.startswith("+") and (submodule_path != LOCK["lwip"]["path"]
                                          or revision[1:] != LOCK["lwip"]["revision"]):
             raise ValueError(f"ESP-IDF submodule differs from its gitlink: {submodule_path}")
+        verify_complete_repository(idf / submodule_path)
 
 
 def main() -> int:
