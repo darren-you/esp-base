@@ -47,7 +47,7 @@ git clone --no-checkout --branch master \
 git -C "$ESP_BASE_IDF" checkout --detach fb53f8a76df5ea913715658f5ac602e91a094e72
 git -C "$ESP_BASE_IDF" submodule update --init --recursive --checkout --no-recommend-shallow
 git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
-  https://github.com/darren-you/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
+  https://github.com/darren-you/esp-lwip.git f6e98c34ad65d31419b3fbb1fe27015e46060a6a
 git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
 bash "$ESP_BASE_IDF/install.sh" esp32c3 esp32
 source "$ESP_BASE_IDF/export.sh"
