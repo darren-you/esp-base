@@ -6,7 +6,7 @@
 
 实验使用 `94323b19ca72a5c33fac10a2efc7d8e77f3f4049` 的原始启动入口与正式分区，C3 RSA v2 测试签名 app 为 1183744 B，SHA-256 `260735e57baa0aa7ba001cec8c9f347db6f3638431be7dee7d031719bb2f81cb`。未注入固件测试调用方。宿主复用既有有效测试证书，使用独立实验账号、严格 TLS、精确设备 Topic ACL 和 paho-mqtt 2.1.0；生产 Broker、凭据与服务没有修改。
 
-真实 C3 完成 Wi-Fi 配置版本 0→1、MQTT 配置版本 1→2，取得当前 boot 的可信时间、实际 MQTT ready 与非 retained reported。认证 `status`／`product.status` 返回成功，空产品固件摘要匹配；错误 HMAC 与 QoS 0 命令各观察两秒没有结果，随后同请求 ID 的有效帧都成功。MQTT `config.set` 返回 `failed/physical_usb_required`，USB 独立回读版本仍为 2。
+真实 C3 完成 Wi-Fi 配置版本 0→1、MQTT 配置版本 1→2，取得当前 boot 的可信时间、实际 MQTT ready 与非 retained reported。认证状态查询返回成功，当轮固件摘要匹配；错误 HMAC 与 QoS 0 命令各观察两秒没有结果，随后同请求 ID 的有效帧都成功。MQTT `config.set` 返回 `failed/physical_usb_required`，USB 独立回读版本仍为 2。
 
 随后一次 MQTT `restart` 没有交付 running 结果，观察者在原始 5 秒期限内超时；Broker 记录了设备 offline。该轮没有完成新 boot 验收，不将断连当作重启成功。原始日志与代码共 18 份文件冻结为私有失败证据索引，SHA-256 `b4f30be3515dde43e2889434b9f2e63e8e223721bc07d84f9350fd8dccd8cdc0`。原代码三份制品逐字节恢复，实验 NVS 丢弃，Wi-Fi 关闭、串口释放、临时 Broker 与控制客户端停止，没有 eFuse 写入。
 
@@ -30,8 +30,8 @@ MQTT owner 现在只跟踪一份重启回执的精确 QoS 1 消息 ID。只有�
 
 执行源码 `b8d695838328b3664f983baeb7dafc992d5f3982` 的双目标固定 SDK 完整构建、官方签名校验与容量检查通过。C3 RSA v2 app 为 1183744／1245184 B，SHA-256 `bb204cbe50d10f63236c5efcbe0737d7926a69176d4fbc2f5fc8ac6739f06609`；ESP32 ECDSA v1 app 为 1114100／1179648 B，SHA-256 `066c5a3bc99d1da0f6513ddc61390acf90eb1a1aea5d999d376df9872320f59e`。SDK、两目标配置、四份依赖锁和原分区未变。
 
-原始启动入口的正式 C3 签名镜像在空白数据实板复验通过，没有注入固件测试调用方。Wi-Fi／MQTT 配置版本为 0→1→2；严格 TLS、可信时间、当前 boot 的非 retained reported、认证状态／空产品查询、错误 HMAC／QoS 0 拒绝及远程配置写门均通过。只发布一次 MQTT restart，在原 5 秒回执期限内取得对应 running；随后 USB 与新的非 retained reported 独立核对同设备的新 boot、配置版本 2、联网恢复与相同十字段空产品状态。首次 MQTT ready 的 uptime 为 35684 ms，重启后为 4484 ms；这些是该轮采样值，不是性能保证。
+原始启动入口的正式 C3 签名镜像在空白数据实板复验通过，没有注入固件测试调用方。Wi-Fi／MQTT 配置版本为 0→1→2；严格 TLS、可信时间、当前 boot 的非 retained reported、认证状态查询、错误 HMAC／QoS 0 拒绝及远程配置写门均通过。只发布一次 MQTT restart，在原 5 秒回执期限内取得对应 running；随后 USB 与新的非 retained reported 独立核对同设备的新 boot、配置版本 2、联网恢复与当轮状态字段。首次 MQTT ready 的 uptime 为 35684 ms，重启后为 4484 ms；这些是该轮采样值，不是性能保证。
 
 这轮 49 份文件冻结为私有成功证据索引，SHA-256 `10f3de06acef686bdd0101e044249e978d14d725df530b297fe4975a1683fd84`。它与前述失败索引分别保存，包含实际测试输入、原始回执、串口／Broker／发布与接收记录、双目标回归、签名构建及恢复证明。4 MiB 写入逐字节读回一致；结束后丢弃实验数据、逐字节恢复原三份代码制品、关闭 Wi-Fi、释放串口并停止实验 Broker／控制客户端，没有 eFuse 写入。
 
-该切片验证空产品状态下的原始 Base USB／MQTT 控制与一次重启。ESP32 未连接；真实产品安装／升级／卸载、产品网络事件、联合 OTA、FRP 实网、五能力峰值、掉电与 72 小时仍未验收。
+该切片只验证当轮Base USB／MQTT控制与一次重启，ESP32未连接。当前原生固件、设备FRP OTA、双板峰值／断电／长稳和正式交付仍按[唯一执行计划](../operations/ota-allocation-diagnostic-checkpoint.md)取得独立资格，已退役的运行路线不再执行。

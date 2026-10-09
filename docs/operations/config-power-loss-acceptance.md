@@ -4,7 +4,7 @@
 
 ## 制品与前置条件
 
-运行既有 P2 应用，760576 字节，SHA-256 为 `5097fb549ff792680a311144b44340f5470a78bcd11b3694d29e77d07d684773`。原配置 revision 为 5。监测使用公开 `tools/device-control.py` 的 POSIX 串口实现，持有 Bridge 共用端点租约，不切换 DTR/RTS；先停止该端点的原 Mac Bridge。
+运行既有 P2 应用，760576 字节，SHA-256 为 `5097fb549ff792680a311144b44340f5470a78bcd11b3694d29e77d07d684773`。原配置 revision 为 5。监测使用公开 `tools/device_control.py` 的 POSIX 串口实现，持有 Bridge 共用端点租约，不切换 DTR/RTS；先停止该端点的原 Mac Bridge。
 
 本轮按 USB 枚举定位设备，再读取协议 UUID、revision 与 Wi-Fi 状态。两次新鲜的完整 Flash 读取一致，并逐字节等于既有已核验的恢复基线，因此同时确认应用、身份、配置、分区与 OTA 选择保持原值。只读 esptool 操作的复位发生在人工断电观测区间之外。
 
@@ -24,4 +24,4 @@
 
 真实 UUID、USB 序列号、配置输入、完整 Flash、原始日志与执行脚本只保存在 ESP Tool 私有忽略目录：首次尝试为 `p2-candidate-power-20260922/`，有效尝试为 `p2-candidate-power-retry-20260922/`。目录权限 0700，文件 0600；公开记录不包含恢复字节或网络身份。
 
-已提交配置断电恢复另见[开发检查点](development-checkpoint.md)。本次只关闭 RAM 候选期间断电子项；Flash 实际写入中间态掉电、WPA3、外部 AP 中断、完整 USB 插拔矩阵和五能力长稳仍未完成，P2 整体保持实施中。
+本记录只关闭当轮RAM候选期间断电子项。当前固件Flash编程中间态、完整USB／网络矩阵、双板容量与长稳仍按[唯一执行计划](ota-allocation-diagnostic-checkpoint.md)验证，旧镜像结果不转为当前候选资格。

@@ -1,166 +1,68 @@
 # ESP 原生业务、FRP 公网 OTA 与双目标容量验证
 
-更新：2026-10-06。本文沿用原“ESP 五能力容量与双目标验证”的执行入口，重新制定后续范围，不新建平行计划。
+更新：2026-10-09。本文是 ESP Base 原生业务、设备 FRP OTA 与双板交付的唯一执行计划。软件输入与限定结果见[原生软件检查点](native_software_checkpoint.md)，协议见[设备控制协议](../design/device-protocol.md)。
 
 ## 2026-10-06 当前目标与执行边界
 
-维护者已确认：采用 **原生业务＋FRP＋MQTT＋通过设备 FRP 的固件 OTA**，彻底移除 Container／WAMR 设计及对应自有仓库。2026-10-06 最新职责调整为：**ESP Tool Mac App 只管理本机实际连接的 ESP 设备，删除 App 内置 FRP／frpc 与远程 Bridge 相关功能**，保留本机设备识别、信息查询、控制、配置、有线 OTA、刷写与恢复。当前保留设备独立 FRP 公网访问和 Mac 本机有线操作两种方式；设备自身 FRP／MQTT 以及 Server／Web 直接面向设备的远程管理职责保持，不再通过 Mac App 中转。
+维护者已确认采用原生业务＋FRP＋MQTT＋经设备 FRP 的签名固件 OTA。消息计数直接编译进固件，随整机升级更新；动态业务运行体系及其消费者已经退出生产源码、组件清单和双目标锁。2026-10-09 维护者明确要求立即删除退役自有引擎云端仓库并清理工作区，仓库退役与尚未取得的实体／正式交付资格分别记录，不再让删仓等待实板验收。
 
-主机侧 SDK 的最终方向已确认是 **`esptool-sdk` 单一 Rust 核心＋各平台薄绑定**：macOS 使用 Swift，未来 Windows／Linux 桌面使用 C++／Qt；完整范围与验收由[跨平台 SDK 合同](../../../esptool-sdk/docs/design/esptool_cross_platform_sdk.md)独立维护。首轮固定官方 espressif/esptool `v5.4.0`／`5ac7935ee036f64080a4b2f5cda6c9a6188ae93b`，覆盖 `esptool`、`espefuse`、`espsecure`、`esp_rfc2217_server` 及其适用芯片与选项。Mac App 只装配本机管理所需能力，SDK 的 RFC 2217 范围不恢复 App 远程 Bridge／FRP，也不自动新增 eFuse 等产品操作入口。
+ESP Tool Mac App 只管理本机实际连接的 ESP 设备，保留本机识别、信息查询、控制、配置、有线 OTA、刷写与恢复。内置 FRP／frpc 与远程 Bridge 的软件接线已删除；实际 App、旧安装和 USB 调用链仍待验。设备自身 FRP／MQTT，以及 Server／Web 直接面向设备的远程职责继续保留。
 
-此前维护者明确要求按本文完成原生业务任务，并明确“先完成软件，实板稍后接入”；该任务既有软件结果继续保留。SDK 仓库改名、旧 Swift 阶段 SDK29 与本机构建结果见[Tool 开发检查点](../../../esp-tool/docs/operations/development-checkpoint.md)。此前 `5406589a54ca0e0ef51cc462c15ed773aee2b698` 是 Swift／Darwin／IOKit 阶段，不赋予 Rust 资格。后继已保存 Tool `b748749bc5cde3db7793d6361917d056d223e18a`，精确消费 Rust SDK `8db20c5a9e8bf6deddc1ee54b392bd0796ad7bc4`；product／module仍为`ESPToolSwift`。Mac远程删除、R3 Rust迁入与R4精确主机装配的软件子项已独立核验：新包双架构实际链接ABI 2，App95项通过／2项实体跳过，空SDK源码冷装配、重复准备不变及脏输入拒绝通过，新452成员原件逐项回读，详见[精确装配补核](native_software_checkpoint.md#rust-sdk-精确消费与冷装配软件补核)。实际App运行、USB、旧安装及正式交付仍未完成。本文活动清单仍为下文 R1–R7；原五能力 P6-03、Wasm 生命周期、满八个产品事件加 processing、联合业务包 WRITE／REUSE 以及远程 Mac Bridge 的保留与验收要求均按范围变更退役，**不标记为验收完成**。历史章节的“当前”“下一步”“继续开放”和旧勾选项只描述当轮，不再发出执行要求。
+主机 ROM／Flash 能力由 `esptool-sdk` 单一 Rust 核心与 Swift 薄绑定承载。已核软件装配为 Tool `b748749bc5cde3db7793d6361917d056d223e18a`、SDK `8db20c5a9e8bf6deddc1ee54b392bd0796ad7bc4` 和 ABI 2；完整工具／芯片／宿主矩阵继续由[SDK 独立合同](../../../esptool-sdk/docs/design/esptool_cross_platform_sdk.md)维护，不能用其未完成范围阻止不依赖它的 Base 固件验证，也不能以 SDK 软件通过替代实体调用链资格。
 
-- [x] ✅ 范围已由维护者确认：原生业务及三核心能力；完整删除 Container／WAMR；Mac App 收敛为本地 ESP 管理，删除 App 内置 FRP／frpc 与远程 Bridge，主机 ROM／Flash 能力由 `esptool-sdk` 单一 Rust 核心与 Swift 薄绑定承载。
-- [x] ✅ 最新职责、真实起点、删除边界、两种访问方式、实施顺序及双目标验收条件已写入本检查点；本项仅为文档交付。
-- [ ] 全部新架构验收、C3／ESP32 实体资格、仓库实际删除和正式交付。软件实现与离线验证已推进，整体验收未完成。
+维护者要求先完成软件、实板稍后接入。目前 R1／R2／R4 和 R3 软件子项已有限定结果；仍缺本轮 C3／ESP32 接入、设备／信任／恢复基线及旧安装窗口，R3 真实公网／App／USB、R5 双板容量与故障、R6 每板百次和连续 72 小时、R7 正式交付均未完成。旧架构的实验通过或失败不转为新架构验收，退役实验正文与不可执行入口已删除，必要原始恢复资料继续留在既有私有受控位置。
 
-当前执行阻塞：维护者已安排实板后置，但尚未交付本轮C3／ESP32接入信息及设备／旧安装验收窗口。连续三轮核对仍缺相同前置；当前约定范围内没有还能独立执行的必要软件项。R3真实公网／App／USB及R5双板验收须先取得当轮设备、身份、安全／信任、恢复与租约条件，R6继承R5合格候选，R7在R1–R6合格后执行。Goal标记阻塞而非完成；SDK完整矩阵仍按其独立任务推进，不作为解除Base阻塞的条件。
+## 当前能力与数据路径
 
-前次文档修订记录：工作区链接检查覆盖 1,032 份文档／4,541 个引用，缺失为 0；当时旧诊断正文与修订前逐字相同，新增本地引用与差异格式检查通过。当时三种访问方式的复核结论不再作为当前 Mac App 范围依据；这些记录不构成任何新源码或实体资格。
-
-### 改造前已核起点（历史）
-
-| 项目 | 已核事实 | 新方案资格 |
-| --- | --- | --- |
-| Base 源码 | 文档修订前为 `22b6fde1128fd4c210ce6eb71af52512ba7f7666`；仍装配 Container／WAMR | 未移除 |
-| 设备 FRP 管理 | 只接 `status/restart`；现有 JSON 正文最多 384 B、连接总期限 2 秒 | 尚无设备隧道 OTA 上传、启动和结果查询 |
-| 现有固件 OTA | `eota_prepare` 按 URL 主动 HTTPS 拉取，已有分块写入、完整镜像校验和启动选择 | 可复用机制，不能证明固件经过 FRP |
-| Mac Bridge 路线 | Mac 可经自己的 FRP 暴露 Bridge，再经 USB 发 OTA 命令；现有固件正文仍由设备 HTTPS 拉取 | 旧实现事实；当前要求删除 App 远程入口，保留本机有线能力，不冒称全 USB 固件传输 |
-| 旧组合软件 | C3／ESP32 完整签名构建及宿主回归通过 | 不继承为新架构通过 |
-| 旧组合实体 | 最新 C3 功能切片通过，历史堆 4,796 B、周期连续块 21,504 B，另有 MQTT 分配失败；实际运行来源早于上述 Base 提交 | 五能力容量失败保持；新方案尚无实测 |
-
-源码入口：[FRP listener](../../firmware/components/device_protocol/frp_management_listener.c)、[OTA 公共组件装配](../../firmware/components/device_protocol/idf_component.yml)、[OTA 与协议 owner](../../firmware/components/device_protocol/esp_base_protocol.c)、[独立固件核验](../../firmware/components/ota_operation/esp_base_ota_firmware.c)。旧 FRP 超时与 SDK 接收生命周期缺陷继续作为相关回归输入，不能因删掉 Wasm 或一次未复现而宣称修复。
-
-### 保留的能力与删除范围
-
-| 所属对象 | 新职责或处理 |
+| 所属对象 | 当前职责 |
 | --- | --- |
-| `esp-base` | 保留设备身份、配置、Wi-Fi／时间、管理协议、原生业务、升级协调和结果；删除 Container binding、guest 线程／事件队列、产品账本和联合包事务 |
-| `esp-frp` | 保留设备到 FRPS 的认证 TLS／TCP／Yamux 和既有流预算，承载公网管理与固件数据；本次不引入 UDP／QUIC／STCP／XTCP 扩展 |
-| `esp-mqtt` | 保留认证管理、原生业务消息和结果、队列／outbox、重连；只删除对动态业务包身份与 guest 的耦合 |
-| `esp-ota` | 保留签名固件 A/B 更新、完整摘要、芯片／项目／尺寸校验及 rollback；让 FRP 入站流和有线入口复用同一固件校验与写入机制 |
-| `esp-tool` Mac App | 只管理本机实际连接的设备，保留 USB 信息／控制／配置／OTA、刷写／恢复与目标核对；本机设备协议直接调用本地服务，ROM／Flash 经 Swift 薄绑定消费 `esptool-sdk` 的 Rust 核心；删除内置 FRP／frpc、远程 Bridge、宿主隧道与远程绑定／授权入口及其构建、配置和文档接线 |
-| `esptool-sdk` 主机 SDK | 以单一 Rust 核心拥有官方 esptool 的协议、芯片、镜像、安全与传输语义；Swift 与未来 C++／Qt 薄绑定不重复协议。完整工具／芯片矩阵独立验收，现有 Swift ROM 子集仅为已实现阶段；调用链切换时删除被替代的 Swift 协议实现，不保留平行引擎或 Python／外部 esptool 兜底 |
-| `esp-tool` Server／Web | 保留直接面向设备 FRP／MQTT 的远程管理和固件 OTA 消费者；解除对 Mac App 远程 Bridge 的依赖，不新增替代 Mac 常驻服务 |
-| `esp-tool` 各交付面 | 同步原生业务与固件状态；删除业务包导入、验包 SDK、安装／卸载／试运行和联合包 OTA UI／API；固件身份、原 ID 对账和操作结果保持 |
-| Container 自有源仓 | 删除对象为 `esp-space/esp-container`；工作区逻辑仓 `esp-container`，物理路径由统一 resolver 解析。先迁出仍需的原生业务语义／测试并解除全部消费者，再删除本地仓、gitlink／登记和远端仓 |
-| WAMR 自有维护 fork | 删除对象为 `darren-you/wasm-micro-runtime`；当前由 Container manifest 间接消费，并非根工作区独立登记仓。清除消费者与缓存装配入口后删除该 fork |
+| Base | 持久设备 UUID、配置、Wi-Fi／时间、管理协议、原生业务、升级协调和原 ID 结果 |
+| FRP | 固定设备到 FRPS 的认证 TLS／TCP／Yamux 与既有双流预算，承载管理和完整固件字节 |
+| MQTT | 认证管理、原生业务消息／结果、有限队列／outbox与重连 |
+| OTA | 完整签名固件、摘要／芯片／项目／尺寸核验、A/B写槽与rollback；HTTPS和有界入站流共用机制 |
+| Mac App | 实际本机 USB、设备核对与租约、本地协议操作，以及 Rust 核心／Swift 绑定的刷写与恢复 |
+| Server／Web | 直接面向设备 FRP／MQTT 的远程管理与固件 OTA，固件身份和原 ID 对账 |
 
-删除包含 WAMR 引擎、guest ABI／schema／能力策略、Wasm 包格式／签名链、动态加载运行环境、三业务包槽、ECS2 固件与业务包绑定、`product.*` 动态管理接口，以及专属生成器／测试／文档和依赖锁。不得仅关闭配置开关、保留空 Container 壳、改名为另一个动态运行框架或保留兼容分支。固件签名链、设备凭据、通用 TLS 与真实 OTA 恢复机制不属于删除对象。
+公网路径为调用方→官方 FRPS→设备 FRP→有界 OTA 接收→备用 app→验签／选槽／新 boot 本地确认→原 operation_id 持久结果，Mac／USB可离线。未经认证不创建意图或擦写；上传按固定缓冲顺序写入与背压，不把整镜像存入 RAM或新增Flash副本。数据流计入既有流预算；上传返回不等于持久成功，最终结果须在新boot查询，并独立核对完整固件身份。
 
-消费者以真实 import、manifest、锁和构建图核对：已发现 Base 生产 binding／NVS 探针，以及 Tool Web 的 Container JS SDK、Server 的 Container Go host SDK；不能用 catalog 的依赖空值判定无人使用。官方 WAMR 上游、ESP-IDF、esp-lwip 和独立工具链不是上述两个自有删除对象；只移除本产品对 Wasm 工具链的消费，不顺带删除共享工具或其他仓库。必要历史实验记录、恢复资料和本页旧证据保留在现有受控位置，历史链接不再作为新构建的依赖入口。
+本机有线路径为 Mac App→本地协议／Rust薄绑定→实际 USB→设备。当前 USB OTA 下发 URL，由设备 HTTPS 拉取；该路径不声称离线全 USB流式传输。直接刷写与首次分区装配使用当轮精确设备、安全状态、恢复基线与唯一租约，不能与应用 OTA 混同。两类 OTA入口共享单操作互斥、完整固件身份、30秒本地控制进展确认和原 ID结果；unknown只查原ID，不自动重发或另建操作。
 
-### 原生业务的最小范围
+设备 FRP连接／单次I/O／无进展／传输总期限为5／1／30／300秒；原status/restart的384 B／2秒解析边界保持。网络等待期间不持有短 Flash I/O claim，Flash擦写、槽观察及收据读回由既有owner裁决。MQTT／原生业务与FRP继续工作，不能停止网络来取得容量资格。
 
-第一批原生业务以现有消息计数样例中已验证的外部行为为基准：消息字节计数（含零字节）、状态查询、暂停／恢复、暂停拒绝且计数不变、定时状态、新启动重新初始化。逐项映射[原十二项业务检查](c3-joint-ota-write-message-counter-checkpoint.md)，去掉 Wasm 包安装／试运行等平台语义；业务代码直接编译进固件，跟随整机 OTA 更新。
+## 持久状态、分区与恢复
 
-执行时冻结实际业务输入、结果、定时器、队列／在途所有权和背压上限，保持已有消息认证、大小及交付语义；不把旧 guest 的 64 KiB 或专属 queue8 机械搬进原生实现，也不能用空业务验证代替真实负载。不新增硬件输出、脚本语言、插件 ABI 或通用任务运行平台。业务内部故障不得放大为危险 GPIO 行为或无限重启。
+当前固件升级采用182 B V4收据，保留来源／候选精确签名身份、写前意图与读回、pending／VALID、自检、rollback、失败清理和原ID结果。普通升级遇旧V3、损坏或未决记录须阻断；旧格式只供一次性离线迁入解析，不能删除这段解析后把旧记录当空状态。真实配置、UUID、revision和有效凭据按已定语义保留。
 
-## 两种访问方式与升级事务
-
-本节区分设备独立公网访问与 Mac 本机有线操作，OTA 分别使用设备自身 FRP 和实际 USB 控制入口。Mac App 的本机有线管理不需要宿主 FRP、远程 Bridge、Bridge 账号或远程绑定；Server／Web 的独立远程路线直接使用设备 FRP／MQTT，不再借 Mac App 转发。两类 OTA 入口复用同一设备升级事务，MQTT 业务消息和管理入口保持。
-
-| 使用方式 | 控制路径 | 实际依赖与数据边界 |
-| --- | --- | --- |
-| 设备独立公网访问 | 公网调用方 → FRPS → 设备 FRP | Mac／USB 可不在线；本目标要求升级控制、固件字节和结果都经过设备隧道 |
-| Mac 本机有线操作 | Mac App → 本地设备协议／`esptool-sdk` 主机能力 → USB → 设备 | 依赖本机实际 USB 与目标核对；信息／控制／配置／OTA 使用本地设备协议，ROM／刷写／恢复经 Swift 薄绑定调用 Rust 核心；现有 URL 型 OTA 仍需要设备联网下载 |
-
-下图是目标链路，不代表当前全部已经接通或取得运行验收：
-
-```mermaid
-flowchart LR
-    public["公网升级端"] -->|"认证控制与完整签名镜像"| frps["FRPS"]
-    frps -->|"设备现有 TLS / TCP / Yamux 隧道"| frp["设备 esp-frp"]
-    frp --> receiver["有界 OTA 接收入口"]
-    receiver --> ota["固件 OTA 校验与顺序写入"]
-    ota --> inactive["备用 app 槽"]
-    inactive --> boot["完整核验 / 选槽 / 重启 / 本地自检"]
-    boot --> result["持久结果 / 失败回滚"]
-    result -->|"恢复联网后按原 operation_id 查询"| frp
-    local["Mac App 本机操作"] --> mac["本地设备操作层"]
-    mac <-->|"实际 USB 连接：命令与结果"| usb["设备有线管理入口"]
-    usb --> ota
-    local -->|"受控 ROM 探测 / 刷写 / 首次装配 / 恢复"| binding["esptool-sdk / Swift 薄绑定"]
-    binding --> rust["单一 Rust 主机核心"]
-    rust -->|"本机 USB / ROM 或已验证 stub 模式"| flash["ESP 目标芯片与分区"]
-    broker["MQTT Broker"] <-->|"TLS 业务消息 / 管理 / 结果"| native["设备 MQTT 与原生业务"]
-```
-
-### 公网 FRP OTA
-
-1. 公网调用方通过 FRPS 到达设备自身的管理入口，完成设备、权限、操作 ID、完整签名镜像摘要／长度及目标适配校验；未经认证不创建升级事务或擦写固件槽。
-2. 写前持久化本次升级意图并读回，唯一升级 owner 控制目标槽。固件字节必须实际走 FRP 工作流，采用固定上界缓冲、顺序写入与背压，不将整镜像存进 RAM，也不临时中转到额外 Flash 文件。
-3. 每次 Flash 擦写只持有短 I/O 仲裁；等待网络时释放。FRP worker／心跳、MQTT 和原生业务继续取得执行机会。OTA 占用既有工作流预算，管理或另一业务流不能通过增加未计账的第三条活跃流取得资格。
-4. 接收结束后验证精确长度、完整 signed bin 摘要、目标和官方签名；只在持久状态一致后选新槽。截断、超长、摘要／签名错误、超时或断流均不得选中未验证固件。
-5. 重启按本地初始化与控制进展确认新固件；保留现有 30 秒本地稳定窗口，不以 Broker／FRPS 在线作为 boot 确认前提。联网恢复后，经设备 FRP 按同一操作 ID 查询持久终态。发送完成、隧道返回成功或镜像写完均不等于升级成功。
-
-现有 384 B／2 秒 status/restart 解析器不能直接套在固件上传上。新增上传需明确入口、认证／防重放、操作绑定、字节计数、进度、分块及期限；原 status/restart 期限保持。沿用现有 OTA 连接 5 秒、单次 I/O 1 秒、无进展 30 秒、传输总期限 300 秒的上界，分别映射到隧道建立、流读写与接收会话；固件本地验证／重启确认和只读查询独立计时，不能通过连续重试延长一次操作。
-
-### Mac 本机有线管理
-
-Mac 与设备实际连接时，保留设备识别、信息获取、USB 租约、控制、配置、OTA 提交／进度／原 ID 查询，以及有线固件刷写、首次装配和恢复。Base 运行态设备协议由 App 本地服务消费；ROM 探测、Flash 与恢复所需的主机机制由 `esptool-sdk` Rust 核心实现，App 经 Swift 薄绑定装配，不另写一套 Swift 协议或调用 Python／外部 esptool 进程。App 不向远程调用方开放 Bridge，不依赖 Server 登录、宿主隧道或 Bridge／设备远程绑定。实际设备身份、当轮连接和操作权限仍须在本机核对。**有线 OTA 与直接刷写是不同操作**：前者仍遵循签名 A/B 升级与 boot 确认，后者可以处理已核对的 bootloader／分区表／应用布局，并受精确设备与恢复基线约束。当前Tool `b748749`已采用SDK `8db20c5a`的单一Rust核心与Swift薄绑定；软件实际链接已核，最终冻结与实体调用链按R3／R4／R5分别取得资格。
-
-当前 USB OTA 下发 URL、设备 HTTPS 拉取的方式可继续作为本机有线控制路径，其实际数据路径必须如实标明；本轮不额外要求实现离线全 USB 流式 OTA，也不声称它已经存在。本机入口仍须解除旧 Server delivery／owner 与 Bridge Bearer 装配依赖，闭合无需 Server 会话或 Mac 远程入口的受控镜像来源，并保持完整签名镜像、实际设备及原操作 ID 绑定；该项的新本机硬切正在实施，完整调用链与实际目标验收尚未取得资格，不得删除唯一来源后仍宣称本机 OTA 可用，也不在本文另设服务或替代传输。删除 App 远程功能不删除本机固件能力，也不删除设备自己的 FRP 配置与状态。Mac 离线、App 退出、USB 断开或接入另一设备时，必须准确报告原设备的可达性和操作状态，不能误发给其他设备或把失联记为 OTA 成功。
-
-设备 FRP 与 Mac 本机 USB 两类 OTA 入口共用固件身份、单操作互斥、完整验证和持久结果规则；一个入口已有未决操作时，另一个入口不得再发起擦写。对 `unknown` 只按原 ID 核实，不自动重发或新建操作。固件状态中的完整镜像摘要必须独立于被删除的 `product.status`。
-
-### 两类 SDK 与验收依赖
-
-Base 固件构建依赖的是本仓 `sdk-lock.json` 固定的 **ESP-IDF／lwIP 嵌入式 SDK**及设备组件锁；`esptool-sdk` 是运行在电脑上的**主机 SDK**，不链接进 MCU 固件，也不替代设备 `esp-frp`、`esp-mqtt` 或 `esp-ota`。下文 R4 的既有双目标构建／签名证据属于嵌入式 SDK，不是 Rust 主机 SDK 已实现的证明。
-
-Base 的 R5／R6 双板容量、故障与长稳不自动依赖主机 SDK 全部 15 个芯片、四个工具或三宿主的完整验收；这些由独立 SDK 合同负责。每轮固件验收仍须核对当轮工具真实具备并验证了所需能力。涉及 Mac App 本机交付时，R3／R5／R7 必须验证其实际消费的 C3／ESP32 能力、Rust 核心至 Swift 绑定和 App 的完整调用链，以及原身份、租约、签名、取消与恢复约束；不能用当前 Swift 子集的测试替代 Rust 资格，也不能因 SDK 尚未全量完成阻止不依赖它的固件验证。
-
-### 持久状态与迁移
-
-保留固件 A/B、otadata、写前收据及读回、pending／VALID、自检、rollback、失败清理和原 ID 结果。删除 V3 中包模式／包摘要／ECS2 依赖后，明确新固件收据格式、旧未决记录识别和一次性迁入条件；不能把旧 V3、损坏 NVS 或未完成升级当成空状态。涉及 Tool 数据库字段时迁移真实数据，不靠清空数据库或长期双写兼容。
-
-4 MiB 新布局删除三业务包槽，保留双 app、NVS、otadata、必要诊断区和 FRP scratch；两目标分别从实际启动链与签名几何确定槽大小。ESP32 的旧 AT 原字节区、首次签名迁入和恢复约束须单独核对，不能把 C3 的处理复制过去。应用 OTA 不承担未经验证的分区表变更；首次改变布局由明确的有线装配／迁入流程完成。[ESP-IDF OTA 机制](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/ota.html)区分应用 A/B 更新与分区表等更新的不同掉电风险。
+C3／ESP32均为4 MiB Flash，双app各`0x1e0000`。C3保留11页`base_store`与`frp_scratch@0x3e5000`；ESP32保留六页`base_store`、`frp_scratch@0x3ea000`和只读旧AT原字节区。真实CSV见[固件说明](../../firmware/README.md)，一次性离线输入、官方验签、旧终态与归档读回见[OTA恢复合同](../../firmware/components/ota_operation/README.md)。应用OTA不修改bootloader或分区表。设备物理写入授权、安全状态和恢复基线仍按每轮真实目标核对，当前任务的云端删仓不授予设备写入资格。
 
 ## 容量预算与验收口径
 
-| 项目 | C3／ESP32 当前保持的合同 |
+| 项目 | C3／ESP32合同 |
 | --- | --- |
-| 硬件 | 各自现有 4 MiB Flash 目标；不以更换板卡、增加 PSRAM 或扩大 Flash 作为本次前提 |
-| 历史空闲堆 | 普通内部 `INTERNAL\|8BIT` 历史最低值 ≥ **16,384 B** |
-| 连续空间 | 普通内部最大连续块 ≥ **24,576 B**；实际能力域还须满足该域下一次最大合法申请 |
-| 任务栈 | 每个真实任务的最低余量 ≥ **1,024 B**，包含 OTA／FRP／MQTT／原生业务和系统任务 |
-| TLS／网络 | 证书、主机名、可信时间和既有认证不降；IN 16,384 B／OUT 4,096 B、动态缓冲、12 sockets 及既有 Wi-Fi 配置保持 |
-| MQTT | 3.1.1／TLS、原 QoS／非 retained 命令规则；入站最大 4,096 B、发布载荷最大 5,120 B、outbox 16,384 B，现有队列和在途预算保持 |
-| FRP | 原双活跃流／备用流、最大合法 65,536 B 控制记录和完整认证；OTA 计入流预算，不暂停 FRP 来腾内存 |
-| 原生业务 | 验证真实业务与最大合法输入，明确实际有限队列／在途成本；Wasm 专属预算随旧体系删除 |
-| OTA | 完整签名镜像、严格目标与长度、流式接收、A/B 和回滚；OTA 期间 MQTT／原生业务持续工作，重启窗口单独计入恢复验收 |
+| 内部堆 | INTERNAL\|8BIT历史最低值至少16,384 B |
+| 连续空间 | 内部最大连续块至少24,576 B，并满足真实能力域下一最大合法申请 |
+| 任务栈 | 每个真实任务最低余量至少1,024 B，包含网络、OTA、业务与SDK任务 |
+| TLS／Wi-Fi | 证书、主机名和可信时间不降；IN16,384／OUT4,096 B、动态缓冲、12 sockets；静态RX／BA各6，动态RX／TX各32 |
+| MQTT | 3.1.1／TLS、QoS／非retained命令；入站4,096 B、发布5,120 B、outbox16,384 B及原队列／在途预算 |
+| FRP | 双活跃流与备用流、65,536 B最大控制记录、完整认证；OTA计入既有流预算 |
+| 原生业务 | 消息字节计数、零字节、查询、暂停／恢复、定时状态、重启初始化；最大合法输入与真实背压 |
+| OTA | 完整签名镜像、严格目标／长度、有界输入、A/B与rollback，网络和业务同存 |
 
-当前固定 Wi-Fi profile 为静态 RX／BA 各 6，既有动态 RX／TX 各 32；以新构建的实际 sdkconfig 与 receipt 核对，不能沿用 README 中过期快照。FRP 从 Base 当前精确依赖继续，不能为删除 Wasm 顺带升级到另一套多协议实现。
-
-资源预期只用于判断方向：Wasm 线性内存 64 KiB 加产品执行线程 16 KiB，共 80 KiB 专属持有项；另有最多约 34.6 KiB 产品事件请求量及解释器运行成本。三包槽分别占 C3 1,462,272 B、ESP32 1,597,440 B。**这些均不是新架构实测净节省**，原生业务、FRP 上传和新收据也有成本；删除 Flash 分区不会增加 RAM。未重建前不承诺新 app 大小或可用堆。
-
-历史最低堆、当前空闲、最大连续块、各 region minimum 与任务高水位分别报告，不拼成一个虚构瞬时峰值；观察器成本不加回，不靠采样恰好未遇到峰值判定通过。新方案必须从启动到业务／网络峰值、升级、重启及回收全程取得自己的资格。
+历史最低堆、当前空闲、最大连续块、各region minimum与任务高水位分别报告；观察成本不加回，不把异时历史值拼成瞬时峰值，也不靠有限采样未遇峰值判定通过。双目标软件静态大小、普通／LAB候选与当前完整输入均记录在[软件检查点](native_software_checkpoint.md)，不据此推定实体资源或Flash寿命通过。
 
 ## 当前实施与验收清单
 
-本清单替代旧五能力执行要求。R1–R4 是软件改造，R5 是双目标实体容量与故障验收，R6 承接原双板长稳任务，R7 完成仓库实际删除与交付。只对已取得证据的小项勾选；[原生软件检查点](native_software_checkpoint.md)记录此前固件实现、独立构建、宿主回归、实际成本和私有实体收据。已有软件结果与 SDK 改名装配通过，不代表 FRPS／USB／Flash／bootloader 实体验收，也不证明 Mac App 远程功能删除或 Rust 主机 SDK 迁入完成；R3 的两项硬切与两条真实路线、R4 新增主机装配项、R5–R7 保持开放。
+### R1 原生业务与运行依赖硬切
 
-2026-10-06实板接入前补验：官方FRPS回环联调双目标成功／Flash失败／NVS不确定6/6通过；独立LAB容量观察补齐正常任务清理事实，双目标签名构建与官方验签通过，静态DRAM各增加4616 B且不加回。固定100周期／连续72小时宿主驱动已实现，要求不同冻结原生A/C与外部R5原件，保持不重发、原ID对账与观察／资格分离。详细输入、成本、替身和日志见[准备检查点](native_software_checkpoint.md#实板接入前的软件验证准备)；5秒采样不证明全域瞬时峰值，尚未运行真实百次或72小时，本清单实体验收项不因此勾选。
-
-补审发现并修复生产短Flash共享claim竞争、宿主多地址连接累计超期和Tool拒绝真实ESP32无MD5表。真实main双target host／TSan、宿主51＋1下游回归、新71输入双目标签名及当前LAB A/C四构建全部通过，44／1876／502成员新归档逐项回读。Tool真实表／原签名字节回归、新115项App与本地包通过，六路径保存a1；实体仍未授资格。当前C3观察signed因官方64 KiB填充跨界为1118208 B，RAM观察成本仍各4616 B。旧71输入制品与1924成员准备归档只代表修复前版本，不用于当前候选R5／R6；新输入与所有边界见[补审检查点](native_software_checkpoint.md#短-flash-交接与宿主连接期限补审)。
-
-本轮补审继续修复固件集合自有物理读取／rollback查询漏短Flash仲裁、宿主OTA终态缺少新boot与独立当前镜像核对、有限长稳并发时钟进度竞态，以及容量日志未绑定target／唯一启动。双目标定向及完整host通过，FRP／驱动／容量／观察器28＋31＋13＋8项通过，原失败与119成员新归档保留。最新71生产输入仅固件观察源变化，输入集合`bbe264eeb14bc4989169c6a93f6e41ad39c0297b98eacfc71943e19a6ea5c67b`；双目标全量签名与官方app／ESP32分区验签通过，大小1052672／983028 B、静态DRAM95604／42210 B，增量0，3064成员新构建归档逐项回读。新官方FRPS双目标成功／Flash失败／NVS不确定6/6已用本轮输入通过，核对新boot与独立固件四字段；LAB A/C四份全量签名与官方验签完成，每target同源941项、DRAM各增加4616 B且不加回，4990成员新档与普通构建／回归／FRPS全部已独立核验；前文旧六场景、旧观察制品只保留各自版本资格。完整边界见[本轮补审](native_software_checkpoint.md#固件集合读回与-ota-终态补审)。
-
-后继有限驱动收尾补审又复现最终原件核对期间的空档／时钟异常仍可能被记为完成，以及检查后另取结束时刻会纳入未经核验的时间。当前驱动以最后已记录的宿主采样为摘要终点，并在完成判定前核对收尾进展；36项完整驱动回归通过，原红例及中间夹具错误保留。FRP、容量解析与MCU生产输入未改，不重新赋予或扩大实体资格，详细版本与观察终点边界见[收尾补审](native_software_checkpoint.md#有限驱动收尾与观察终点补审)。
-
-实板准备工具后继补核修复非法FIFO在普通文件检查前阻塞的路径：原生输入及其实际旧C3双备份消费者、现役AT双备份各仅增加非阻塞打开，35项完整受影响回归和11个真实CLI输入位置拒绝通过，修前阻塞／超时原件保留；签名、身份、双备份、原终态和输出读回合同保持，未操作设备。源码与原件分类见[输入拒绝补审](native_software_checkpoint.md#一次性迁入输入拒绝补审)。
-
-### R1 原生业务与 Container 消费者硬切
-
-- [x] 将既有消息计数、二进制输入、暂停／恢复、定时状态和重启行为落实为原生业务及确定性测试，冻结输入／结果和有限资源预算；不保留动态 guest API。
-- [x] 从 Base 删除 Container／WAMR 构建装配、binding、产品 worker／队列、policy、`product.*`、产品账本与 ECS2；清理生产、样例和 NVS 探针的 manifests、双目标锁、Kconfig、生成器与专属测试。
-- [x] 同步当时 Tool Go／Web／Bridge 的真实业务包消费者、npm／Go 锁、UI／API／数据库与测试；保留固件管理、身份、原 ID 对账、Mac 有线能力，将固件摘要查询迁到独立状态链。本项是已取得的软件结果；后续 Mac App 远程功能删除单列在 R3。
+- [x] 实现消息计数、二进制输入、暂停／恢复、非延期100 ms窗口和重启初始化的原生业务与确定性测试，输入由唯一控制owner同步消费。
+- [x] 解除动态运行引擎、包槽、产品账本、专属线程／队列和联合包升级；生产／样例／探针manifest、双锁、Kconfig与专属构包和测试入口已清理。
+- [x] 同步Tool真实UI／API、npm／Go依赖与持久字段，固件摘要改由独立状态链查询，保留设备身份、原ID和必要迁入解析。
 
 ### R2 固件独立 OTA 与恢复
 
-- [x] 从固件升级核心删除包模式、联合 WRITE／REUSE 和产品健康确认；复用现有签名、目标几何、摘要与 A/B 写入机制，接入有界输入流，保留有线控制路径所需的 HTTPS 来源。
-- [x] 实现固件独立收据、写前读回、目标槽处理、唯一 operation、成功／失败／unknown 与重启恢复；覆盖源 A、中断写入、待选 C、pending C、VALID C 和回滚 A 的实际状态。
-- [x] 保留 30 秒本地控制进展确认、跨入口互斥与短 Flash I/O 仲裁；处理旧 V3 未决状态和损坏记录，完成确定性失败、释放及掉电阶段测试。
+- [x] 保留签名、目标几何、摘要与A/B机制；接入有界入站流和本机URL型HTTPS来源。
+- [x] 实现V4写前读回、唯一operation、成功／失败／unknown和重启恢复，覆盖来源A、写入中断、待选C、pendingC、VALIDC与回滚A的宿主故障边界。
+- [x] 保留30秒本地控制进展、跨入口互斥和短Flash仲裁；旧记录／损坏／未决阻断和一次性离线迁入已有软件回归。
 
 ### R3 设备 FRP OTA 与 Mac 本地管理消费者
 
@@ -175,7 +77,7 @@ Base 的 R5／R6 双板容量、故障与长稳不自动依赖主机 SDK 全部 
 ### R4 双目标分区与可复现构建
 
 - [x] 分别确定 C3／ESP32 的 4 MiB 新分区与首次有线迁入流程，移除 product_pkgs；验证双 app、otadata、base_store、FRP scratch、旧 AT 区及恢复边界，不将布局变更混入普通 app OTA。
-- [x] ✅ 完成两目标的独立 ESP-IDF／lwIP 嵌入式 SDK／组件锁、干净全量签名构建、官方验签、槽容量检查和 host/component 回归；构建不依赖旧 Container/WAMR checkout、缓存或私有隐藏实现。短Flash交接与集合读回两轮修复后，各自新71输入独立重建通过，最新双target完整host、前轮TSan与原失败分别保存；本项不包含 Rust 主机 SDK。
+- [x] ✅ 完成两目标的独立 ESP-IDF／lwIP 嵌入式 SDK／组件锁、干净全量签名构建、官方验签、槽容量检查和 host/component 回归；构建只消费当前公开组件和精确SDK，不读取退役运行仓或隐藏实现。短Flash交接与集合读回两轮修复后，各自新71输入独立重建通过，最新双target完整host、前轮TSan与原失败分别保存；本项不包含 Rust 主机 SDK。
 - [x] ✅ 保存新源码、实际 ELF／bin、sdkconfig、分区、编译输入和签名身份的对应关系；实际盘点 RAM／任务／缓冲／最大申请／Flash 成本，确认旧模块没有残留链接。最新3064成员普通构建与119成员定向回归归档逐项回读，旧1876／502／2128／1924等归档不覆写；新制品与静态成本见检查点本轮补审段。
 - [x] Mac本机交付的软件装配已独立核验：冻结Tool `b748749bc5cde3db7793d6361917d056d223e18a`及其SDK gitlink `8db20c5a9e8bf6deddc1ee54b392bd0796ad7bc4`，真实Rust核心／Swift薄绑定从产品内精确源码构建并链接，现有C3／ESP32子集回归通过；空SDK源码冷装配及SwiftPM编译、重复准备不改1030源、脏输入拒绝均有原件，另一同提交Universal Xcode本地包实际链接ABI 2。新452成员逐项回读，不依赖相邻可变checkout或旧Swift／Python引擎。冷构建使用隔离的既有Cargo缓存，不称完全空缓存／完整离线或cold Universal App打包；实体能力按R3／R5另验，详见[精确装配补核](native_software_checkpoint.md#rust-sdk-精确消费与冷装配软件补核)。
 
@@ -194,568 +96,9 @@ Base 的 R5／R6 双板容量、故障与长稳不自动依赖主机 SDK 全部 
 - [ ] 每板完成 72 小时原生业务、MQTT、FRP 与定期公网 OTA 联合长稳，记录断线恢复、操作终态、堆／连续块／栈趋势；不得把多次独立短测相加冒充连续长稳。
 - [ ] Flash 设计使用目标定为 5 年；超过 4 KiB 的 FRP 加密控制记录按长期平均最多每小时 1 次计算，约 43,830 次 scratch 擦写，另计启动、失败重试及其他写入。该频率是工程假设，不是已经实现的限流；须按两板实际 Flash 规格、热点扇区与实测开销核算，超出假设时重新计算。普通 TCP 固件数据不按该类控制记录计数，不能按心跳或固件每个数据块虚增 scratch 寿命消耗。
 
-### R7 仓库删除与正式交付
-
-- [ ] 在 R1–R6 合格后复查所有真实消费者、未提交改动、所需历史证据及构建输入；把必要原生业务／通用固件结论迁到保留仓，清理所有活动设计和工程入口中的 Container/WAMR 合同，不复制旧实现作兼容层。
-- [ ] 删除 `esp-container` 的工作区 gitlink／本地仓、根 .gitmodules 登记、agents 注册和相关治理入口，按真实事实源重建受影响视图；删除远端 `esp-space/esp-container` 及自有 fork `darren-you/wasm-micro-runtime`，逐个核实实际结果，不能用 archive 或未初始化冒充删除。官方上游、其他 SDK 和历史受控证据不在删除范围。
-- [ ] 删除后再次从保留仓及明确 ESP-IDF／lwIP 嵌入式 SDK 完成干净双目标签名构建／验签，核对实际运行制品与已验候选；活动源码、锁、工具、CI、文档与发布入口没有旧依赖。历史记录只保留原事实与证据身份，不成为仍可执行的旧路线。
-- [ ] 按真实产品发布入口交付固件及 Tool Mac App／Server／Web，使用正式信任和实际目标分别完成设备独立 FRP OTA、本机有线操作及刷写／恢复验收；Mac App 的 ROM／Flash 由精确固定的 `esptool-sdk` Rust 核心与 Swift 绑定实际承载，验证其所需能力及原安全边界，不能把改名或旧 Swift 测试当作迁入完成。核对 App 内置 frpc 与远程 Bridge 的源码、制品和入口均已删除，Server／Web 不再依赖 Mac 中转；同步相关 README 拓扑、API、总计划和任务总览。独立 SDK 全工具／全芯片／未来平台的完成资格另行记录，软件通过、实验通过、删除完成、正式交付分别记录，不互相替代。
-
-R7 的删除对象和硬切方向已由维护者确认，本轮不重新征求同一范围决定。实际执行仍须先形成可核对的精确对象与消费者结果；任何新发现的非本任务消费者或未保存工作都作为真实新增事实处理，不擅自删除他人／其他任务内容。
-
-## 历史五能力记录
-
-以下原文保留旧源码、当轮预算、成功与失败、未完成项和证据摘要。它们解释新决策的来源，不构成当前实施清单；原五能力失败没有通过降低门槛或移除需求改判为成功。新方案不继承旧组合容量资格。
-
-<details>
-<summary>展开 2026-10-03 至 2026-10-06 的原五能力诊断记录</summary>
-
-## 2026-10-06 WRITE 工作区与 OTA 请求所有权软件改动
-
-当前候选在 Base `fa7409d3` 上修改两条生产路径，依赖、协议、签名／TLS 和全部预算保持。普通产品安装／升级及联合固件 WRITE 的验包工作区，改为在原槽引擎完成来源下载、Flash 写入和整包摘要后，由原 validator 回调申请；完整调用既有签名、Wasm、保留引用与完整版本身份校验后释放。临时 `verified_info` 不逃逸，长期 validation policy 不持有临时指针；REUSE 和 `open_selected` 不变。原 C3 ELF 的工作区请求为 **5,640 B**，最后一次 HTTP 正文读取已先释放 TLS；这只减少产品包下载阶段的重叠，**不计为 4,796 B 固件正文低水窗口的净节省**。
-
-晚申请失败按原持久事务恢复：普通 prepare 只有精确 ABORTED 与独立读回均成立才返回失败，否则保持 UNCERTAIN；联合 WRITE 保留 WRITING／claim，沿原收据恢复。没有把写后失败重新报成写前 BUSY，也没有跳过引用复验。
-
-OTA 请求从解码命令直接转交唯一控制 owner，不再复制到静态结构。命令释放不回收已转交的载荷；worker 借用至 release 发布完成，控制循环 acquire 读取后按原终态清零并单次释放。活动结果查询和第二个 OTA 请求不替换 owner，创建失败先保存原操作的失败收据再释放；成功选槽保留至原重启。**完整请求仍在固件正文下载期间存活，静态量下降不等于同额活动堆收益**，分配器成本和能力域仍须实测。
-
-两个目标的公开 `run_host_tests.sh` 及 `run_container_lifecycle_test.sh` 均 exit 0。前者包含 ASan／UBSan 与请求转交、活动查询、第二请求拒绝、worker 早失败、阶段不确定和创建失败回归；后者编译真实精确 Container／WAMR 与签名 guest，新增六个故障分支，核对来源期零持有、0／1 次 validator、双保留引用、工作区释放和上述恢复结果，原期限、取消、定时业务及宿主百次资源检查也通过。Flash／NVS／调度／固件观察仍为宿主替身；Darwin 资源检查不证明 MCU 堆、栈或实体百次生命周期。首次新增夹具的活动查询假件／固件排序错误保留，修正后重跑通过，不作为生产行为红。
-
-生产输入 SHA 前缀为 protocol `e93159ab`、product `3fcff166`；宿主复跑逐项绑定当前源码，生命周期最终测试为 `72146d61`。固定 SDK `578cf89c` 的 C3 baseline／候选 A／候选 C 及 ESP32 baseline／候选完整构建与各目标官方验签通过。C3 候选 A/C 各 1,183,744 B，摘要 `3c52b1c7`／`16834998`；ESP32 候选 1,114,100 B，摘要 `03ee34e2`。两目标实际 ELF 的 BSS／普通堆起点均减少 1,696 B，request 符号 1,696→4 B；data／IRAM text／rodata 保持，Flash text 分别增加 4／48 B。原尺寸由 DWARF 核对，Root另从五份实际 ELF／bin 独立复核，仍无活动堆净节省资格。
-
-C3 配置、CA 和签名键复用原实验输入；ESP32 使用既有 `esp_base_mapped_dependency_us_h_bhr` 的完整目标合同，19项预算及产品授权三字段与当前 C3 精确相同，保留自己的分区、ECDSA、单核与IRAM策略，原父键导出公钥与父构建验签键匹配。Tool另一父输入缺的是已清理的临时键路径，其受管键仍存在；本候选没有拼接该生产信任。离线装配关闭Component Manager并复制必要组件，补齐原 manifest 已声明的cJSON依赖；首次缺实验CA、缺该依赖及临时属性读取错误均保留为装配失败。仅仓外装配文件变化，SDK、信任源与生产构建合同未改。
-
-必要源码、五份完整签名镜像、实际编译输入索引、宿主回归与全部上述初失败共332 payload受限私存于Tool既有忽略目录 `c3-validation-20261005/base_memory_owner_software`。归档SHA-256 `3c4f0a40aaa57141991460b70e59e6b003f7d098d9cd33aca2e485a63a64f485`，索引 `05c3a5135599d1a2045b8c4f049c077d84c24cb18ea310c83b0a7ec494e23f55`；全部成员的字节／长度／模式／集合及源前后稳定核对通过。SDK和完整组件复用已声明精确父输入，不重复包装；没有私钥原件，完整离线复现资格为false。
-
-本候选尚无新物理轮，实际容量节省未验收。双目标 **16,384／24,576／1,024 B** 门与五能力原预算保持；最新物理 history 4,796 B、准入累计连续块 3,840 B、MQTT 分配失败及未达满 8+processing 的结论不变。完整合法峰值、各域后续申请／native 回收、联合 Flash／寿命、实体百次、ESP32、真实断电、双板 72 小时和正式交付继续开放。
-
-## 2026-10-06 协作 C3 功能复验与容量阶段边界
-
-Tool 在已协调的唯一串口窗口完成新鲜 native recv 六字段轮，报告 launcher／driver exit 0：USB／Wi-Fi、严格 TLS MQTT、认证 FRP 与错误密钥拒绝、HTTPS 产品安装确认、WRITE OTA 确认、USB／MQTT 停启、软重启持久状态、十二项 counter 业务、卸载及 source／target 槽字节检查通过。**这是实验功能切片，不是完整容量或生产迁入资格。** 本轮没有复现此前首响应头超时；原失败和 SDK 首次／第二调用单元原件保留，不能把未复现当作根因已解决。native errno 为跨连接累计，不能把末次 EAGAIN 或高水当作某一 TLS session 的因果证据。
-
-容量解析仍有 **513** 个 memory／task 样本及 **1** 条坏行，历史最低堆／周期当前连续块最低 **4,796／21,504 B**，均低于双目标 **16,384／24,576 B** 门；control／已观察任务栈最低为 2,392／1,196 B。512 个 memory 帧有同 uptime 的严格 native 绑定，CLI 末尾一个完整资源帧没有对应 native 帧；原坏行及未绑定帧均保留，不补造或删除。容量资格保持 false。
-
-严格 `INTERNAL|8BIT` 的 history 在来源 A Boot 1 的 uptime **166,603→167,604 ms** 更新为 4,796 B；后一个时点当前空闲已经为 **53,932 B**。周期连续块 21,504 B 出现在 **172,623 ms**，当时当前空闲为 28,976 B。SDK history 是各匹配 heap region 各自历史 minimum 的和，不对应已证明的单一瞬时 owner 图；两项最低值也不能拼成一个瞬时峰值。普通 status 的 DEFAULT 数字不替代严格容量域。
-
-最大事件与 OTA 正文下载重叠时，queued／live 高水为 4、offers 为 6；四个最大事件的载荷合计请求下界为 15,572 B，但只对应 boot 内高水，不能绑定上述最低值的时点。MQTT owner 高水为 2／8,736 B；报告记录 **48** 次消息分配失败及 overflow／fail_closed、MQTT connecting 与任务退出后重建。MQTT 分配后累计观察的连续块低至 3,200 B、产品准入累计低至 **3,840 B**；它们来自不同 API 的顺序读取和各自累计，不构成原子元组或完整分配账本。没有满八队列加处理中事件的资格，Broker PUBACK 不证明设备准入。
-
-既有真实 WAMR 探针只证明 native 输入复制到 guest buffer 后可不再被 consumer 读取；生产转交合同未实施，实际 saving=0。最大 native 事件请求为 **48+3,893=3,941 B**，不能把它作为净空闲或连续块收益加回，也没有证据闭合 **16,384−4,796=11,588 B** 历史门差。常驻 `s_event` 的 4,388 B 同样有真实消费者：原 `emqtt_poll` 先复制到它、释放动态 slot，Base 随后才验证和分发。直接改为指针会破坏原有效期；延长原消息寿命又会增加与命令解析／产品复制的重叠，删除常驻量不等于同额峰值收益。原队列、guest、TLS／签名、栈与期限预算保持。
-
-Tool 原运行收据的功能成功、数据丢弃、串口释放与 cleanup errors 0 已读取。Root 从冻结主档另核 **9** 个成员的 SHA／长度／模式：双新鲜 4 MiB 逐字节一致，bootloader 21,232 B／partition 3,072 B／factory 1,048,576 B 的 before、restored 与两全片对应区四方一致；随后非阻塞重获并释放原 inode 48262417，新唯一锁目录有效，旧目录不存在，没有打开 UART。Tool 主档位于受限忽略目录 `production_delivery_20261005/native_recv_c3_20261006`，payload manifest `8b6fa2d2b83634f50cf25e0413aaf09a6f9af65edf94d3ddb912d415488331ae`，主档自核 17,120 payload；Root 本次没有重新核全部成员。容量阶段只读报告 manifest `d3af5451c834d135a5fe2609c34096c6b236131771d188a11d1d96dac282ddc8` 的四成员已核对。
-
-完整容量、8+processing／native 分域申请、联合 Flash／寿命、百次实体、ESP32、断电／双板 72 小时和正式交付继续开放；后继物理轮仍须全新基线，不能复用本轮全片或运行目录。
-
-## 2026-10-06 TLS 接收边界与容量续验
-
-双目标普通内部 8BIT 历史最低堆门统一为 **16,384 B**，连续块 **24,576 B**、各任务栈余量 **1,024 B**、五能力并存与原预算保持。真正最大事件／WRITE OTA 轮的历史堆 **3,396 B**、准入后连续块 **3,840 B** 失败不改判，`whole_capacity_passed=false` 保持。
-
-本轮实际运行源码仍绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 和原精确组件／SDK。仓外在已冻结 WORKRX 输入上加入 24 字段、96 B 的 TLS_GATE 观察；FRP 原 186 文件与 Base 三个接入文件反向恢复精确，MQTT 325 文件不变。A/C `0.2.0-c3-frp-tls-gate-a/c` 均为 1,183,744 B，签名镜像摘要分别为 `8a15e01b164692c497a79f9b0367a902b8d52d4b427e20b7346bbe26e3e1e279`／`912a0af11a412f4be26d6807c9d06a32f8c0110e3ec4eb2a95da0641b3c5f987`；完整构建、RSA 验签与 SDK 31,468 个原文件的 SHA／长度／模式／链接核对通过。实际 LTO 相对 WORKRX 的 BSS／堆起点增 **96 B**、text 增 772 B、rodata 增 472 B，trace／helper／snapshot 入口帧为 208／32／0 B；没有完整 callee 栈资格，观察成本不加回。
-
-新鲜 C3 轮 driver exit 1：提交 FRP 配置后，网关在等待首响应头阶段约 **3,002.079 ms** 超时，未到产品安装、队列峰值或 OTA。`upstream_response_headers` 阶段行表示进入 `getresponse()`，不是已收到响应头。schema4 的 133 项软件测试通过；三份原 UART 完整严格解析得到 **66** 个同 boot、五类 native 完整周期，错误 0。首次误指定“排除未绑定前段”，实际前段已有绑定，解析拒绝的 7 条错误原样保留；取消排除后重新解析全部原日志通过，parser 和原日志未改。
-
-工作流仍为已读 **8 B** 帧头、声明正文 **116 B**、正文已收 **0 B**；帧头不能识别 type8。收到帧头后的两次采样只跨 **1,001 ms**，不称完整十秒部分帧期限已验证。两次采样的 TLS OPEN／pending／library error 为 1／0／0，SDK read 调用及返回由 2,494 增至 3,294，最新 raw 为 WANT_READ（-26,880）、原映射为 WOULD_BLOCK（1）；BIO recv 调用及返回由 2,538 增至 3,338，最新返回 1。read pending gate 的累计值保持 122；write 成功／排空各 20，WANT_READ／WANT_WRITE／crypto pending 均 0。它们是 boot 聚合、非事务观察，不能据单行差值判 hang 或绑定同一 TLS session；本轮未证明持续 pending TX 是正文缺失根因，也未取得 socket／TCP 到达或 SDK 内部消费因果。实际编译的 native recv 源码中，BIO WOULD_BLOCK 只来自真实 socket 负返回且 errno 为 EAGAIN／EWOULDBLOCK／EINTR，连接状态错误为不同返回；聚合记录尚不能确定本轮具体 errno 或正文去向。type8／local create／step 均 0，监听器实际 accepted 为 0。
-
-fresh 双 4 MiB 与独读原三码、实验全片回读及 finally 恢复通过。Root 独核 bootloader 21,232 B、partition 3,072 B、factory 1,048,576 B 的 before／restored／两份全片对应区四方字节一致；实验数据擦除、旧／实验 NVS 不保留、Wi-Fi down、串口释放和 cleanup errors 0。连续 UART 源前段记录并消费 268,895 B，pending／overflow 0，最大 pending 57,583 B、容量 1 MiB，reader 正常停止并完成 join；36 个所属进程和 4 个监听均释放。运行合同中两项 SDK current role 引用在触板前修正，旧合同与 prior 字段保留；修正发生于夹具预检后、launch 前，57 项预检静态输入未变。原失败不抹除。
-
-仅严格合法 native 行被过滤后，66 个内存样本和 66 个完整任务快照的低负载最低值为历史堆／连续块／control 栈／已观察任务栈 **143,192／114,688／2,888／1,196 B**；不与前轮相减计节省，不取得完整峰值或 native 生命周期资格。软件 165 payload 归档 `4d6bce469654cd2ad1399147831fd89e65a3fa3ce188d972046a0f3c476bfddb`、索引 `ef0995dd083e8a1d7765255cb08050d77ea1f1526d5bba18e38db95b4e9c2f6a`；现场 165 payload 归档 `532f725dc557969f8bbab581b0eff207826857f1a7a3b217a05e641a6af66b6d`、索引 `d1c8823de3db22b722c3761e2883ae017164802dfe5aea59d3a0494bbd5983cf`，受限私存于 Tool 已有忽略目录。软件复用已验证 WORKRX／SDK 父档的精确成员，只保存本轮实际变更和必要执行材料；完整离线复现资格为 false。完整成员核验与源前后稳定通过。
-
-### 无网络 SDK 单元与峰值所有权边界
-
-固定 SDK 的 `heap_caps_get_minimum_free_size` 累加各匹配 heap region 各自的历史最低值；**3,396 B 不能对应为某一单一时点的 live owner 图**。原历史指标与双目标 **16,384 B** 门保持，准入后连续块 3,840 B 仍失败。现有周期采样与累计队列高水不足以建立 allocation/free 时间线，不按其他轮的分配或周期差值认领节省。
-
-独立、无网络的 C3 QEMU 单元直接编入原 SDK 的 dynamic RX 和真实 MbedTLS `fetch_input`。初次 `ssl_setup` 后，内存 BIO 给出合法五字节 TLS 1.2 帧头的 1–4 字节前缀，随后返回 WANT_READ：实际 raw=-26,880、`in_left`=对应前缀、BIO 调用两次，但 `in_buf` 为 NULL，帧头指针没有持久 RX owner；完整五字节前缀则返回 0、`in_left`=5、owner 有效、BIO 调用一次。五例在释放前写入结果表，全部清理后写入完成标记；QEMU 本地 monitor 导出并逐值核对通过，合成 Flash 不变，所属进程正常回收。该地址所有权不变量不读取已失效帧头字节；**没有跨第二次读取、TLS 握手／解密或实板 8+116 因果资格**，不能据此认定正文缺失根因。
-
-原 SDK 未修改；四个实际编译的核心／dynamic 源与精确父档一致，31,468 个 SDK 文件在单元后再次逐 SHA／长度／模式／链接与父档及核验前后一致。IN=16,384／OUT=4,096、TLS 1.2／dynamic 配置保持；该最小工程不是五能力 Base 镜像。QEMU 制品由固定 SDK tools manifest 校验。首次缺少既有实验 CA 文件的构建失败、数次无控制台完成标记的运行及首次 monitor 文件名解析失败均保留；最终直接读取内存结果，不把早期失败改判为通过。未连接物理 UART 或网络，没有实现 SDK 修正。
-
-后继独立无网单元进一步验证第二调用：九例包含完整五字节 fresh 对照、四个 1–4 字节前缀的立即续接、四个前缀在续接前调用一次使用 512 B 零值局部数组的普通函数。第二 BIO 只提供原帧头的 `5−k` 字节后缀，没有重送前缀。fresh 与四个立即续接都逐字节相等；四个插入普通函数的续接均将已收前缀变为零，后缀正确，SDK 仍返回 0、`in_left`=5、当前 owner 有效、owner payload 449 B。九例 live owner 内的内容、调用数与全部清理后的完成标记由本地 monitor 导出逐值核对，合成 Flash 不变、所属进程正常退出。**这取得该精确构建／API 单元的跨调用前缀保存不稳证据**，不再仅是首次指针归属推测；仍只有初次 setup 的 NULL owner 路径，没有 16 B idle owner、真实握手／解密或实板 8+116 因果资格。四个实际编译的 SDK 核心／dynamic 源与原父档一致，SDK 源未修改。
-
-第二调用的必要 26 payload 私存于 `c3-validation-20261005/sdk_rx_resume_software`，归档 `c67886307816cd33cfde9d53d732b88f90fec66971b81b1a1eebe25a001d393a`、索引 `16836b1479490efe110b67d10ae69e0a47d871ceb87df4058e8cbb66c10d0e70`；全部成员 SHA／长度／模式／集合和源前后稳定核验通过。SDK／QEMU 复用既有精确父材料，不重复打包，完整离线复现资格为 false；容量失败与其他开放项保持。
-
-真实冻结 Container／WAMR 的宿主单元另确认：完整 3,893 B 输入复制到既有 guest event buffer 后，清零并释放单个模拟 Base owner 的八项成功／失败／取消／拒绝边界通过；复制前释放的反例被 ASan 检出 UAF。峰值 A/C ELF 的事件头均为 48 B，最大 native malloc 请求为 **3,941 B**。该探针没有修改生产 API 或 Base 返回后释放合同，实际节省为 0；复制／并发准入期间仍可能有九份 owner，不能把 8+processing 的峰值直接减为八份。完整所有权接口改造子任务被工具安全审查以“可能涉及网络安全风险”拦截，未执行。
-
-原生 recv 六字段、24 B 的仓外观察候选已完成；原 recv 返回与 errno 保存／恢复、四文件逆向、固定正反例及 ASan／UBSan 通过。C3 独立对象新增 text／rodata／BSS 为 356／145／24 B，recv 局部帧 16→32 B；没有完整 SDK 链接、LTO、atomic callee、堆或实板资格，尚未用于设备，不形成 TCP 原因结论。
-
-必要软件材料 166 payload 受限私存于 Tool 已有忽略目录 `c3-validation-20261005/sdk_rx_lifetime_software`；归档 `f65b0b4d89fa46e5e46782527c9220c121d6839eff7d5b19d67f074fa617b259`，索引 `f5bd71909004213fc0dcade940e86b11661957977c64d0cdabdc7c582e85e650`。逐成员 SHA／长度／模式／集合及源前后稳定通过，复用精确 SDK／组件父源，完整离线复现资格为 false。Tool 的本地 App 只读轮已释放 C3；Root 非阻塞重获同 inode 的新唯一串口锁，不打开 UART，历史归档保持原样。整体容量与其余开放项不改判。
-
-正文缺失原因仍待接收路径定位；完整队列 8+processing、分域最大申请、FRP 最大记录／双流与 OTA 峰值、Flash 争用／寿命、实体百次、ESP32、断电／双板 72 小时和正式交付继续开放。
-
-## 2026-10-06 工作帧正文接收检查点
-
-后继仓外实验仍绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 与前轮精确组件组合，在冻结 CONTROL 候选上仅新增 WORK_RX 30 个原子数值字段，分别记录原 work 的发送／等待、可读／读取、wire reader、共享 JSON、type8 和本地连接结果。原工作对象 2,192 B／set 104 B 不变；185 个 FRP 原文件及 Base 三处接线 marker 反向逐字节恢复前轮，新头单独可逆。数值 stream_id 保留为原临时协议编号，结果／gauge 为最近值，八个计数为 boot／组件累计；各字段独立读取，不构成事务快照或全局唯一 work 序号。原任务、锁对象、动态缓冲、socket／clock 调用、预算及全部期限保持。
-
-初版真实 host 六项正负矩阵所用 FRP 的 186 个成员字节／长度与最终源相同；Root 新头仅收紧为 0600，原 scope 为 0644 且父目录私有，最后 Base 接线 marker 位置修订未重跑该矩阵。最终固定红绿、真实 U32_MAX advertised 长度的 reader 容量错误、ASan／UBSan／TSan 计数与 errno／饱和边界通过。完整固定 SDK A/C 构建和官方 RSA v2 验签通过，版本 `0.2.0-c3-frp-work-rx-a/c`，signed app 各 1,183,744 B，摘要 `9c4845fe34e3337c86c31efd3ac8004ae456565b85cd467ca52ab408dd8a3d68`／`c252751b69831a237e6fb332b615444e66a312d9a1f4c91238b23aa717b134da`。31,468 个 SDK tracked 输入与父档 SHA／长度／权限／链接及前后集合一致；实际编译路径、配置仅版本差异、依赖及 provider 字段已独核。
-
-相对 native CONTROL 的最终 A/C ELF：观察声明 120 B，实际 bss／普通堆起点 **+128 B**，Flash text +820 B、rodata +584 B；输出局部帧 272 B、CAS helper 32 B、snapshot／gauge 0 B。局部帧不证明完整 callee 栈，原子内部 IRQ／临界区成本不宣称为零，全部观察成本不加回。完整软件 4,518 payload／4,519 tar 成员归档 `71b43fea8cfce130604a7399d9ec7ff92ece493d54f333d421e04bec5a5fb272`、索引 `0882df9afd42b11cf96f7a9170c04b820309cc47d4304576422cf1bce89be43c`，逐项与源前后不变核对通过，SDK 只精确引用父档，私存 `c3-validation-20261005/native_frp_work_rx_software`。
-
-首次启动被摘要守卫拒绝：Root 在旧夹具预检后完成 SDK／历史事实标签修正，使 manifest 摘要过期。拒绝位于 USB 枚举、串口租约和 driver 创建之前；只有一个所属进程、无 listener，已释放，没有设备动作。实际现存材料和分析说明保留，缺原 stderr 文件不补造。随后从完整 57 项静态合同创建全新目录，仅更换授权 round_id；在所有 metadata 定稿后重新预检，三夹具构造／ready／close 通过，启动前再核全摘要相等。原 driver／recovery／fixture／controller 与预算字节保持。
-
-**2026-10-05 夜间新鲜 C3 轮 driver exit 1，仍未进入产品／突发／OTA。** 原唯一 USB／ROM 身份、安全状态和 4 MiB 核对后，本轮两份新鲜全片一致，原三码独读匹配，实验全片写入／读回通过；USB、严格 TLS MQTT 及认证／配置写门通过。首外侧 FRP 查询等待上游响应头 **3,001.984 ms** 超时，原三秒／八秒与设备期限保持。
-
-63 个同 boot 完整 IO／WORK／CONTROL／WORK_RX 周期严格解析通过，102 项 parser 边界测试与最终头／生成器摘要绑定。控制层 TLS read／Yamux consumed／control read 仍为 713／713／501 B，两个 ReqWorkConn 均已调用原 work_request，各层错误为 0。同轮官方 FRPS 登录、用户连接、工作注册、get、join 精确各一次。工作流累计实际 read **8 B**，reader header_used 8、payload_expected **116 B**、payload_used 0、partial_header 1，共享 4 KiB JSON 一次分配成功；随后读取返回 WOULD_BLOCK。8 B wire 头只给出 frame kind 和声明长度；type8 需完整 payload 中的 `[0,8]` 前缀，此时尚不能识别为 type8。type8 seen／started、本地 create／step 均 0；work waiting 1／pending 1／active 0，listener accept 580 次／接入 0，最大 poll 间隙 768 ms。首次已收头采样 uptime 61,663 ms，末采样 62,664 ms，只约一秒观察跨度，不声称已等待完整十秒部分帧期限。源端成功写出不证明正文交付；不能用控制层字节相减代替工作 read，也不能把未发生的 JSON／本地连接指认为根因。
-
-结束时擦实验数据、仅恢复当轮原 bootloader／partition／factory；Root 与两新鲜全片及独立恢复读回逐字节核同，Wi-Fi down、串口释放、cleanup errors 空。UART **230,783 B** 全记录／消费，pending／overflow 0、最高 pending 41,283／1,048,576 B，reader error／join timeout 均无；实际绑定的 36 个所属子进程和 4 个 listener 全释放。
-
-原资源消费者明确拒绝 252 条新增 native 行，失败原样保存；四类 native 原行完整独立校验后，仅派生移除这些行的资源视图，原 UART 不变。63 个内存样本和 63 个任务快照完整，损坏／缺失 0；低负载历史堆／连续块／控制栈／已观察任务栈最低 **141,992／114,688／2,800／1,196 B**，只限本前置窗口。完整成功恢复现场与先期无设备拒绝材料 248 payload 归档 `4691316f901398b5ea428bf3bbf7d1d96120092836601c3592d7c55fd0dd3aa7`、索引 `dcc9f6ce43bc4c54bcddb826239fcb1d7ad32a37933fb0bc23c899a6b199519c`，源集合／SHA／长度／模式及全 tar 成员核对通过，私存 `c3-validation-20261005/native_frp_work_rx_device_timeout`。
-
-下一边界是正文进入 TLS／Yamux 工作流的进展。源码允许 native TLS 在 pending TX 时直接使 read 返回 WOULD_BLOCK；这仍缺本轮 pending／socket／SDK 返回事实，只作为待证路径，不称根因、不修改协议或重试。双目标历史堆门 16,384 B、largest 24,576 B、任务栈 1,024 B 和五能力并存保持；真正最大事件／OTA 的历史堆 3,396 B、准入连续块 3,840 B 失败及 `whole_capacity_passed=false` 保持，完整峰值／native、Flash 争用／寿命、实体百次、ESP32、断电／双板 72 小时及正式交付仍开放。
-
-### 已排除的两个简单回收假设
-
-真正峰值 A/C 的实际 SDK 编译为 TLS 1.2，dynamic RX 对普通正长度 wire body R 的 allocator 请求为 R+341 B，消费完回 24 B idle；它们不等于同时净占用，普通小记录并非每次固定申请 16 KiB。源码的 TLS 1.3 CCS 最大 RX 特判未进入该实际编译，不能用于解释本轮；未消费 record 后缀仍有消费者，当前未发现可直接释放 12,988 B 缺口的重复 owner。另一单点核真正峰值的最大第一方固定普通 DRAM 对象 `s_event` 为 4,388 B，承接 MQTT poll、验证和事件复制，生命周期有真实消费者；没有证明维持现合同的删除或无损表示收益。两点 actual saving 均为 0，不作为已完成优化。
-
-## 2026-10-05 FRP 控制请求已到与工作握手续验
-
-本轮继续绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020` 与前轮相同的精确组件组合，在已冻结的 native IO 候选上新增仓外控制流计数。FRP 通过独立本地组件覆盖显式装配，实际编译路径、原源码可逆差异和其他依赖字段单独核对；SDK 的 31,468 个 tracked 输入与既有父档逐项相同。24 个原子数值字段占 96 B，记录原 TLS read、Yamux feed／control read、AEAD 认证、wire 回调和 ReqWorkConn 准入结果。计数按 boot／组件累计，phase 和 error 则为最近值；各字段顺序采样，不构成同一 session 的事务快照；没有新增任务、锁对象、动态缓冲、socket 或时钟调用。另补齐 MQTT 两处原 free-slot return 失败漏计，复用已有 48 B 计数区，原释放／失败行为保持，不增加首故障时间或顺序记录。
-
-完整固定 SDK 构建和官方 RSA v2 验签通过。A/C 为 `0.2.0-c3-frp-control-a/c`，signed app 各 1,183,744 B，摘要分别为 `ecd4fcf935f59d4bdd6be3165edbbb08c2b1bc1954945d7146a1ff8a351fb62e`／`ab29c69ad747a6a593dced0db542e3eb35b68c302ab8c2c022f31da50bea2967`。相对前轮 native IO 的实际 ELF：bss／普通堆起点各 +96 B、Flash text +896 B、rodata +432 B；新增输出函数的 C3 局部栈帧 208 B，计数 helper 局部帧 32 B，snapshot 无新增局部帧。原成本脚本误查不存在的 helper 符号所得空片段保留，后继按实际 `lab_control_add.part.0.lto_priv.0` 符号独立核对 A/C 的 32 B 帧并保存反汇编；局部帧不证明完整 callee 栈。前轮 listener 112 B 和 work 输出帧 592 B 仍在，全部观察成本不加回。初版真实 FRP host 10/10 通过；最终两处计数修订的受影响固定测试重新通过，包括 ASan／UBSan、并发计数和实际 ReqWorkConn 回调的正例／删 hook 反例；MQTT 两个真实注册回调的漏计反例由红转绿，不能据此声称已复现 SDK API 锁下的死锁。
-
-**新鲜 C3 轮 driver exit 1，仍未进入产品／突发／OTA。** USB 首配、严格 TLS MQTT 就绪及认证／配置写门通过；首 FRP 查询在原三秒上游响应头期限失败，实测 **3,002.893 ms**。59 个同 boot 完整 native 周期（4 个 fresh、55 个 CLI）严格解析通过：末段已观察 TLS 接收 713 B、Yamux 消费 713 B、control read 501 B、AEAD 完整认证 8 条、wire 控制帧 4 条，ReqWorkConn seen／admitted 均为 **2**，各层错误计数为 0。admitted 仅表示已调用原 work_request，不能代替工作槽或本地 socket 准入。已发布 work 为 requests 2、pending 1、waiting 1、active／cleaning 0、本地双向字节 0；listener accept 调用 561 次、实际接入 0，poll 最大间隙 760 ms。不能用 `713−501` 推导工作帧字节，也不把 poll 间隙当 UART 阻塞时间。
-
-同轮官方 FRPS 精确登录／用户连接／工作连接注册／get／join 各一次；后三阶段在用户连接后约 72 ms。官方源码的 join 分支位于 StartWorkConn 成功 WriteMsg 之后，固定 Yamux 写入等待底层 TLS Write 返回；这证明本轮服务端成功写出握手，不能证明设备收取／解析了 type 8。设备 waiting 同时包含 SENDING／WAITING，当前公开快照无法区分工作帧读取、完整握手和本地 connect；原因尚未证明。下一步只补工作流可读／读取结果、wire reader 进度、type8 与本地连接边界，保持原三秒／八秒查询、设备两秒 HTTP 和十秒部分工作帧期限，不加重试或缓冲，不改判前轮 requests 0。
-
-严格 parser 的 67 项边界测试通过。原资源消费者明确拒绝新增的 177 条 native 行，失败原样保存；只有完整 native 校验通过后，才派生移除这些已验证行的资源视图，原 UART 不改写。原消费者得到 59 个内存样本和 59 个完整任务快照，损坏／缺失均为 0；低负载历史堆／连续块／控制栈／已观察任务栈最低 **143,476／114,688／2,864／1,196 B**，仅属该前置窗口。
-
-结束时擦除实验数据，只恢复当轮原 bootloader／partition／factory；Root 独立核对与两份一致的新鲜 4 MiB 全片及恢复读回逐字节相同。Wi-Fi down、串口释放、cleanup errors 空；UART **186,417 B** 全记录／消费，pending／overflow 0、最高 pending 29,555／1,048,576 B，reader error／join timeout 均无。运行中绑定的 36 个所属子进程和 4 个 listener 均释放，不宣称全局无进程；无 eFuse 或生产服务修改。
-
-软件 4,567 payload 归档 `6b8e4236fb327c2e1702f92e3c7f4f4b997885521488e3d3ddeaccb41879ed27`、索引 `7dd268419e3dd5bd0f9147cc58b1468d556456b894440c317178db3a6e91d741`，实际执行归档脚本为 `ca887c57`。执行后添加 static review 的 `67bc2b3b` 后版未执行到该目录，另以 9 成员补件保存（归档 `3b7af9ace601d9cac743c3325d4ca581018f8121b6f538fb602186d087f15d83`）；原档不覆盖，原归档内脚本与索引逐项相同。现场 161 payload 归档 `c3421544fb9dc0a6e95e5e46d7de9ad42b0bdd4cbadbf57211679085635c1798`、索引 `052bb83b0663800bcce81186de1296e0a0b2d837d43bce19fdb42aa93301b838`；逐成员 SHA／长度／模式／集合和源前后不变核对通过，受限私存于 Tool 已有忽略目录 `c3-validation-20261005/native_frp_control_software`／`native_frp_control_device_timeout`。双目标历史堆门继续为 16,384 B；真正最大事件／OTA 的 3,396 B 堆和准入后 3,840 B 连续块失败保持，`whole_capacity_passed=false`。
-
-### 宿主发送观察的有限证据
-
-官方 FRPS 的 ReqWorkConn 发送没有逐次日志，Send 队列满时阻塞，后台 WriteMsg 错误被原实现忽略；原三秒网关可以在服务端十秒等待告警前结束，因此缺日志不能证明未投递。另冻结只改 dispatcher 数值日志的私有 host 候选，保持原 Send／WriteMsg 返回、队列和期限。520 份官方 0.71.0 module 源逐项 reverse 相同；候选使用 Go 1.26.1 与上游 `frps,noweb` 标签，原官方 binary 使用 Go 1.25.12，不能称官方 binary 已被观测。真实 TLS／HMAC host 链三次查询及错误 key 401 通过，type7 Send／Write 各有五次成功返回；该候选没有用于本轮 C3，也不覆盖直接写 StartWorkConn 的工作连接。
-
-宿主档共 1,150 成员，归档 `a0a2e9bd674cf881c5afcb064d5672071a5ff4c52a175729590686de590430f3`、索引 `9a105d9fbda8ede201aae4e78a5f5518653fd77b6a978280937e1d1aa6c7165a`，逐成员及源前后核对通过，私存 `c3-validation-20261005/frps_dispatch_observer_host`。原 receipt 字节保持：独立回绑只覆盖 management／gateway／local 三端口，remote proxy 第四端口没有独立检查；FRPS 同 Popen owner 的 wait／poll 停止有据，但未单存 wait exit code。初次 ANSI 解析失败仅保留实际现存日志／未完成 receipt，缺失的旧 parser 源码和 traceback 不补造，不回写旧失败为成功。
-
-### 最大事件阶段的 MQTT 后续边界
-
-原真正峰值轮在最大事件突发窗口先有设备主动 DISCONNECT，约六秒后重连；`TLS -0x004C` 在约三十秒后，不能归因为首断。当前 SDK 先同步调用 publish callback，再写 PUBACK；回调为 void，runtime 的 OOM／满槽退出后 core 仍可 ACK。产品层 OOM／FULL 为零不能排除 MQTT owner 的原生拒绝，控制器至 Broker 的 PUBACK 也不证明设备准入。
-
-原 MQTT task 在递归 API 锁内运行 callback，control owner 的 stop／提交路径又需要该锁。直接在 callback 等 free slot 有互相等待路径；仅凭源码不能称实测死锁，已有漏计补全也不证明首故障顺序。后续若研究背压，必须在下一 transport read 前、无该 API 锁持有时验证 stop／destroy 可取消及既有在途保留；目前没有实施生产背压或新增缓冲／重试。有限 timer 压力 guest 和完整峰值、native／分域最大申请、Flash 争用／寿命、百次实体生命周期、ESP32、真实断电、双板 72 小时与正式交付仍开放。
-
-## 2026-10-05 原生 FRP 请求与本地监听续验
-
-本轮绑定 Base `b677868cc6a772351c22019818f02cbf8bcda020`、FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 Container `7f25647a5380953dfd40efcef281014660ff9530`，在前轮静默候选上只加仓外 listener 计数和既有 FRP status 数值导出。监听器原 socket 调用、处理条件及两秒期限不变；work 每周期最多读取一次原已发布快照，复用原锁，没有新任务、锁对象或动态缓冲。两类观察块删除后逐字节恢复原静默源；实际组件装配路径和官方生成 manifest hash 单独核对，其他依赖、SDK、配置和预算保持。当前 31,468 个 SDK tracked 输入逐项 SHA／长度／权限／链接与既有全量父档一致，不重复包装 SDK，不把文档提交当作固件来源。
-
-完整固定 SDK 构建和官方 RSA v2 验签通过。A/C 版本为 `0.2.0-c3-frp-io-a/c`，签名 app 各 1,183,744 B，摘要分别为 `a585dee606012b027b3a80b2bcb453deb0771e0e94b08fdc11837e7c7123fa71`／`c3a3af4ec956485b61bf54a2e246d56a7909643d66ec091241d959d9390e2e3a`。相对静默候选实际 ELF：bss／普通堆起点各增加 112 B，Flash text +1,048 B、rodata +656 B；work 导出函数的 C3 局部栈帧为 592 B。成本不加回，局部帧不证明完整调用栈。原 listener 回环、owner 生命周期、额外数值映射的 ASan／UBSan 和严格 warning 检查通过。
-
-**新鲜 C3 轮 driver exit 1，仍在产品／突发／OTA 前失败。** 全程沿用 Bridge 同一串口租约；唯一授权 C3、ROM 身份、4 MiB 和安全状态核对后，取得本轮双份一致全片及独读原三码，实验 A 全片写入／读回通过。USB 首配、严格 TLS MQTT 就绪、认证查询／负例和远程配置写门通过。FRP 登记就绪后，首外侧查询在原三秒上游响应头期限失败，记录为 **3,002.381 ms**；完整查询八秒与设备期限保持，没有增加重发或等待。
-
-原始 UART 的 69 个同 boot 数值周期严格重解析通过，CLI 占 65 个；40 项解析边界测试覆盖损坏、重复／未知字段、范围、绑定冲突、缺周期与计数回退。绑定至少一个同 uptime 的既有 MQTT owner／产品队列 boot，所有存在绑定必须一致；首启动周期只有 MQTT 绑定也可唯一识别。旧双重绑定规则的失败保留。原资源消费者把新增 FRP 行当未知格式并明确拒绝（138 行），该失败也保留；只有在全部原 native 行独立严格校验后，才派生移除这 138 行的资源视图并用原消费者重解析，原日志未修改。69 个内存样本和 69 个任务快照完整，无损坏／缺失；低负载历史堆／连续块／控制栈／已观察任务栈最低为 138,144／114,688／2,888／1,196 B，不取得完整容量或所有 native 资格。
-
-监听器累计 poll **6,293**、accept 调用 **607**，但 accepted／rejected／accept error、recv／send、response／close 全为 0；原传入 now 的最大 poll 间隙 **769 ms**，不直接解释为 UART 阻塞时间。7 个可用 work 快照中 5 个为 READY，请求、排队／活动／清退、本地双向字节和错误计数全为 0。本轮 FRPS 只有登录、代理登记、心跳和一个用户连接，没有工作连接登记或 join；不套用上一轮约 49 ms join 的证据。源码确认 work.requests 仅在控制流成功接受 ReqWorkConn 后增加，READY 每步仍发布快照。因此本轮尚未观察到工作请求或本地 HTTP 接入，原因仍未证明；下一步核同轮 FRPS 的请求投递与设备 TLS 接收、Yamux 控制流和 AEAD／wire 消息三个边界，不改变期限或预算。
-
-结束时仅恢复当轮原 bootloader／partition／factory，Root 独立核其与双新鲜全片及恢复读回逐字节相同；实验数据擦除、Wi-Fi down、串口释放通过，cleanup errors 为空。UART 190,180 B 全部记录／消费，pending／overflow 0、最高 pending 34,344／1,048,576 B，reader error／join timeout 均无。运行中实际绑定的 36 个所属子进程和 4 个 TCP listener 均释放，仅声明这些所属资源。恢复末尾的 passed 断言仍拒绝整轮功能失败，不是新恢复缺口；没有 eFuse 或生产服务修改。
-
-完整软件 3,105 payload 归档摘要 `b8608213cfa028a184fcaa6a8eab117ca246ee971c82c878e9acbfbb5a1a0265`、索引 `e8185246658189fe80558a59de57baed1cf5c6c2ad6f68ae764ca667a5025c32`；现场 132 payload 归档 `7ef39a7fcdab36291bf4bb5061a80a85ac26867f46a2b6772b3ca1e1bfb72966`、索引 `9782925b167c899e823df8b257796894e90528e87e5a170bc5a4991961f3a8d9`。两档逐成员 SHA／长度／权限／集合与源前后不变核对通过，受限私存于 Tool 既有忽略目录 `c3-validation-20261005/native_frp_io_software`／`native_frp_io_device_timeout`。原最大事件／OTA 堆 3,396 B 和准入后连续块 3,840 B 的失败保持，`whole_capacity_passed=false`；完整峰值／native、Flash 争用与寿命、百次实体生命周期、ESP32、真实断电、双板 72 小时及正式交付继续开放。
-
-### 满八队列与处理中事件的软件输入准备
-
-真实 Container／WAMR host 上准备了单独有限 timer 压力 guest，保留计数业务语义，只以有限 N 次单 timer start／同 handle cancel 延长成功事件处理；ABI2、64 KiB、4096 B guest 栈、queue8、100000 指令、100 ms 入口／单导入、timer1／log0／capability `0x4` 保持。N=6000 与 6248 各完成同实例 100 次事件调用且每次 timer 清空、stop／close 成功；6249 命中原指令上限。N=6000 host 最大 1,040 µs，不能外推 C3 时长。独立候选 `v0-1-1-timer-n-6000` 的 Wasm 为 643 B，摘要 `20110d66b9d8a7d9fa4478e82cfee33d854a7b113b5e57c306870a8198709464`；尚未签包或实板校准，不复用旧版本，不计作八槽加一处理中、百次生命周期或容量通过，也没有改变本轮 FRP 输入。
-
-189 份原软件输出和冻结源共 2,279 payload 已逐项归档到 `c3-validation-20261005/finite_timer_pressure_software`，归档摘要 `4d745b16dadbc27e1dd2884c26f56aef3ea5bca9581b7f6f7a3d83272acd8f25`、索引 `0c6fd04adaf4ae9c91a698aa741bb518d55aedd9e0764c18116f2116f3054984`。既有 live_max 还包含 timer／排日志工作，后续必须区分真正外部事件处理种类并验证实际存活，不能只用 live=9 或 PUBACK 关闭峰值门。
-
-## 2026-10-05 FRP 响应头宿主定位与真实主机协议链
-
-本轮沿用前节静默 A/C 的精确字节、持续 UART reader 和原设备调用／恢复体，仅在宿主 HTTPS 转发夹具添加阶段记录并开启官方 FRPS debug。真实 TLS 正例的字节／认证头保持、延迟上游负例仍在原三秒响应头期限失败，宿主阶段观察先行通过；固件构建源仍为 Base `b677868cc6a772351c22019818f02cbf8bcda020`，不能用后来的文档提交改写来源。
-
-**新鲜 C3 轮 driver exit 1，失败定位到等待上游 HTTP 响应头 3,002.625 ms。** 请求已写入本地 FRPS；官方 FRPS 同轮日志确认已登录、登记代理、收到心跳，用户连接后约 49 ms 登记工作连接并 join。没有观察到 HTTP 响应头或正文，尚缺设备监听器 accept／recv／send 和工作流字节／错误计数，原因未证明。MQTT 认证前置通过，产品准入仍为零，未安装产品、触发突发或执行 OTA。60 条严格消息 owner 观察峰值为 1 个／2,154 B，所列错误计数为零；这些低负载读数不改变既有峰值容量失败。
-
-本轮重新枚举 C3、核对安全状态／4 MiB，以两份一致的新鲜全片及原 bootloader／partition／factory 独读建立恢复基线。实验 A 完整写入／读回，结束擦除实验数据；原三码由独立读回逐字节确认，Wi-Fi down、串口租约与所属夹具释放通过，cleanup errors 为空。首次启动因其他任务占用串口在打开前拒绝，等待该轮恢复释放后才执行；没有并行设备写入、eFuse 或生产配置修改。
-
-另以实际固定 FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、Base 监听器／network_auth、Mbed TLS 4.1.0、PSA HMAC、官方 FRPS 0.71.0 和 Tool 原 CLI 完成真实主机协议链。三次认证查询分别约 867.692／23.648／24.303 ms，同期错误管理 key 返回 401；ASan／UBSan、native exit 0、停止／fd 与夹具释放通过。状态业务回调及 Flash 明确为 host fixture，固定测试身份不代表设备；直接 IPv4、单 owner loop 不覆盖 SDK DNS、FreeRTOS、实板时序或容量。初次 CMake 装配错误和修正后的构建日志保留。
-
-完整现场、实际源码／宿主测试／协议链共 213 payload 已受限归档到 Tool 既有 Git 忽略目录 `provisioning/receipts/private/c3-validation-20261005/frp_header_host_observation/`，逐项 SHA／长度／模式核对通过，目录 0700／文件 0600。归档 SHA-256 `17b243a34653cfcb58a51e310b034a544fd572b5ebfb451558e57f7b2aa2ede4`，索引 `00a4d76fdc0b226a03fe8c9be42ea9a2cd460c28d7b05b9d905c47b415de6f37`。维护者已授权向“完成 ESP 容量与双目标验证”共享资料并协调 C3；后续设备 I/O 诊断由该容量目标继续，本 Tool 目标暂不并行刷写。原三秒／八秒期限、16／24 KiB 门及永久迁入前置保持，`whole_capacity_passed=false`。
-
-## 2026-10-05 MQTT 消息所有权诊断前置失败
-
-为归因此前最大事件／OTA 的堆缺口，仓外诊断取公开 Base `b677868cc6a772351c22019818f02cbf8bcda020`、原 Container 与 MQTT `6443b71db761f4d667503f14108687bad5e6b5ee`。MQTT 实际编译输入显式指向独立实验组件，只添加 48 B 原子消息 owner／错误计数；释放开始前撤销计数，不能用它证明 native free 完成。队列、载荷、分配、优先级、协议与期限保持。另通过私有 CMake 令 SDK 既有两类动态 TLS 日志可见，SDK 源码未改。最终实际 ELF 相对前轮：data +48 B、bss +8 B、Flash text +8,832 B、rodata +2,056 B、普通堆起点 +48 B，观察成本不加回；此前 owner-only 成本记录不能替代此最终日志配置。
-
-两份实验 A/C 均为 1,183,744 B，版本 `0.2.0-c3-mqtt-owner-a/c`，完整签名摘要为 `33bde2d61432f954fd317c1d031f255adbf38b146fa9671c0385999711a2a325`／`903fe67ff830d185ebb1f1293259d9c240939b1b41f0fbbb3a11d0f8f436bfd7`；完整 SDK 构建、官方实验键验签与 ASan／UBSan host 计数平衡检查通过，不取得生产实板资格。
-
-**两轮 driver exit 1，均在首个 MQTT status 查询的五秒宿主期限处失败，尚未执行突发或 OTA。** 后到回执逐项证明同请求、同设备、同 boot 的 succeeded，不能再描述为设备未返回结果。第一轮只在后继 OTA 阶段准备持续 reader；第二轮改为从首个 USB 查询开始单 reader，OTA 前顺序交接、重启后继续采集，设备调用 AST、原失败捕获与恢复体保持。第二轮 logged／consumed 均 131,676 B、pending 0、峰值 25,167 B、overflow／reader error／join timeout 均无；仍复现超时，停止读取不能单独解释该现象。详细日志的时序影响尚待隔离，不能据此认定前轮峰值中的 MQTT 重连原因。
-
-每轮均重新核对唯一 C3／4 MiB／安全状态，以本轮两份一致全片和独读原三码建立恢复基线；实验镜像全片读回通过。两轮结束均擦实验数据、精确恢复原 bootloader／partition／factory、确认 Wi-Fi down、所属夹具关闭与串口释放，cleanup errors 为空，没有 eFuse 或生产配置变更。80／51 条同 boot 消息 owner 周期行均为零峰值且申请点仍为未观察哨兵，不能作峰值占用或回收结论。
-
-失败材料在 Tool 既有 Git 忽略目录中独立私存，目录 0700／文件 0600，逐成员 SHA／长度／权限核对通过：第一轮 180 payload，归档 `820e1e7a65a266994428cd73c16a852cc3b39bc312d8e24556cc7b02e35aa9cc`；最终源码补件 14 payload，归档 `9b1731f40de8516d2935e53e342f7b99180dbeae5136e6996317be6d3ad154e0`；第二轮 189 payload，归档 `75c81378ed03335d2e9b08c6f19fd332639833ffacede922867cf78d0d4cb090`。原最大事件／OTA 的容量失败保持；下一轮仅保留消息计数、关闭详细 TLS 日志，并继续使用新目录、新鲜双基线和原恢复合同。
-
-### 关闭详细 TLS 日志后的消息 owner 实板续验
-
-独立静默候选移除私有 SDK 日志编译参数和两个运行日志级别设置，仅保留消息计数与原周期资源观察。公开源码逐文件核对，固件差异严格限于已声明的观察、实验策略和实际本地组件装配；首轮发现三个旧文档输入后按声明的公开提交重新取回，固件构建输入保持。实际 MQTT 编译目录、C3 的 A/C 配置标签、SDK 源码和官方实验验签通过。A/C 均 1,183,744 B，版本 `0.2.0-c3-mqtt-quiet-a/c`，摘要 `0ac9d7acf9699637fcd65f49adcceedd2b6bc4a6e3c3501de60f69110c54868f`／`da593513360a378bb4667ee8119983e0bc6266eb522b6225c2cca2b9cd9a7b89`。相对前轮 queue-only ELF，data +48 B、Flash text +628 B、rodata +312 B、普通堆起点 +48 B，其余分配段保持；成本不加回。
-
-**本轮越过前两轮的 MQTT 失败点，但整轮 driver exit 1。** 新鲜双全片、原三码独读和完整实验镜像读回通过；公开 USB Wi-Fi／MQTT 首配、严格 TLS 就绪、MQTT status／product.status、坏 HMAC／QoS0 拒绝后的合法同 ID 查询，以及远程 config.set 的 physical_usb_required 拒绝通过。随后 revision 3 的 USB 状态已报告 FRP／MQTT ready，首个外侧 FRP status 探针仍不可验证：私有 HTTPS 转发夹具记录其本地 FRPS 上游 TimeoutError，未得到设备响应。具体停在哪个网络阶段及其原因尚未取得证据；保持原三秒响应头、八秒完整查询与设备期限，下一步补齐宿主上游阶段观察。
-
-62 条严格消息 owner 观察中峰值为 1 个／2,154 B，所列 allocation／满槽／notice／poll 错误计数为 0；产品队列准入仍为 0，尚未安装产品、触发突发或执行 OTA。62 个完整任务快照及 62 个周期内存样本无损坏／缺失；这些低负载读数不替代既有最大事件／OTA 的容量失败或完整 native 资格。详细日志的时序影响仍需独立核对，原容量轮的 MQTT 重连原因继续未证明。
-
-UART 138,341 B 全部记录和消费，pending 0、峰值 20,622 B、overflow／reader error／join timeout 均无；单 reader 已退出。原三码由本轮新鲜全片独立复核与恢复字节完全相同；实验数据擦除、Wi-Fi down、串口及夹具释放通过，cleanup errors 为空。静默软件 43 payload 归档 SHA `480bc8029ebb9563b02ac87ad33e6d3bdd21f52cc77903bc465dcd974ff2f1b7`，完整现场 137 payload 归档 SHA `6976ad5f86f55f11072156bf3a88e552b4c2c82ff064c6ba031f5679a85fb9b1`，各自逐成员 SHA／长度／权限核对通过，继续受限私存于 Tool 的既有忽略目录。生产材料、完整容量及迁移资格保持原边界。
-
-## 2026-10-05 当前容量合同与续验范围
-
-维护者在本轮明确确认：ESP32-C3 与 ESP32-D0WD-V3 均保持 Wi-Fi、MQTT、FRP、OTA 和 Wasm 五能力并存，普通内部 8BIT 堆的历史最低门槛统一改为 **16,384 B（16 KiB）**。普通堆最大连续块至少 **24,576 B**、各任务栈余量至少 **1,024 B**，并按实际能力域的后续最大申请验证连续空间；严格 TLS／签名、标准 Wasm、队列、包槽、期限及既有功能预算保持。
-
-本轮修改验收合同，不产生内存节省，也不追认历史轮次。以下历史记录继续按各轮当时的 48 KiB 合同保持原失败结论。最新 C3 新鲜联合功能轮绑定 Base `f2f9ad24aadaa46ec358d7fef23a8950ba4a3092`／Container `7f25647a5380953dfd40efcef281014660ff9530`，覆盖此前签名期限、制品身份、OTA 恢复、必需能力、定时业务与映射只读修正；完整合法峰值仍须补验。当前签名软件镜像为 C3 1,183,744 B／ESP32 1,114,100 B，各槽余 61,440 B／65,548 B；源码、实际 ELF／bin 摘要和固定 SDK 已只读核对，不能代替新源码实板峰值。
-
-- [x] ✅ 维护者确认双目标统一 16 KiB 堆门，五能力并存及其余合同保持；现行计划按 target 同步。
-- [x] ✅ 当前冻结组合的新鲜 C3 联合功能轮与恢复、周期堆／连续块／已观察栈门通过，范围和私存见下节；不代表完整容量。
-- [ ] 完整合法峰值／所有任务栈／连续块、native 回收、联合 Flash 争用与寿命、ESP32 实板、真实断电、双板 72 小时和正式交付。
-
-## 2026-10-05 最大事件突发与 WRITE OTA 重叠实测
-
-Tool 交付前置续接 C3 容量实验，绑定公开 Base `41c0eeec5ad828ab311594d639e831858bd3ddc0`／Container `7f25647a5380953dfd40efcef281014660ff9530` 和原固定 SDK。仓外 A/C 为 `0.2.0-c3-queue-peak-a/c`，完整签名 app 各 1,183,744 B，摘要分别为 `bafee24c4838b53f215cf6d80e6ca3b401349bdd23b56e01afdf720e298a7832`／`845dad1bdcfba2c403f8dcc23c20c347798ea9cb8125e553b7dda7d3de17f12d`；官方重新验签通过，仅使用既有实验键／CA。SDK 和 provider 保持原字节，产品队列观察差异可逆回公开源码；24 B 固定计数使实际堆起点后移 32 B，成本不加回，未修改队列、准入、分配、优先级或期限。
-
-**功能与原代码恢复通过，容量失败。** 每轮新目录且全程持有与 Bridge 相同的串口租约；重新核对唯一 C3、安全状态和 4 MiB，两份新鲜全片一致，独读三码与全片相同后才完整写入／读回实验 A。公开产品安装、来源单个最大事件、唯一一次 WRITE OTA 到 C 持久确认、USB／MQTT 各一次停止启动、重启自动运行 confirmed、原 stop ID 新 boot unknown、十二项业务、卸载及 A/C 精确读回完成，真正 driver exit 0。结束擦除全部实验数据，恢复本轮独读原 bootloader／partition／factory；Root 独立核对原三码、恢复字节与新鲜全片相同，Wi-Fi down、串口释放、所属夹具关闭通过，清理错误为空。没有 eFuse 或生产网络／信任材料修改。
-
-在来源同 boot 已观察到 OTA 正文 5,056 B 后，一次发送 32 个精确 4,096 B 公开签名事件帧（载荷 3,893 B，序号 3–34），每个 application publish 只调用一次，无重发；32 个 PUBACK 仅证明控制器至 Broker 的传输确认。447 条严格队列观察中来源为 134 条，来源 queued／live 高水均为 **4**，总 accepted offers 为 **6**（含此前两事件）；产品层 allocation failure／FULL 计数均 0，不扩大成全部 native 无失败。没有达到 8 个排队事件加 1 个处理中事件，不把 32 个 PUBACK 当作 32 个设备入队或业务完成。
-
-| 观察范围 | 实际最低 B | 当前门 B | 结论 |
-| --- | ---: | ---: | --- |
-| 普通内部 8BIT 历史堆 | 3,396 | 16,384 | 失败，差 12,988 |
-| 周期采样最大连续块 | 21,504 | 24,576 | 失败，差 3,072 |
-| 事件准入后的最大连续块 | 3,840 | 24,576 | 失败，差 20,736 |
-| 控制栈／已观察任务栈余量 | 2,392／1,196 | 1,024 | 所列周期观察通过 |
-
-四份原 UART 严格重解析得到 458 个内存样本、458 个完整任务快照，不完整／损坏均 0。来源下载 153 份状态中 Wi-Fi／FRP 全部 ready，MQTT 110 份 ready、43 份 connecting；不能称五能力始终 ready，具体重连原因仍待归因。突发前的同 boot status 历史堆／current 为 32,176／37,556 B，随后历史低水为 3,396 B；这是本轮顺序观察，不当作某一模块的独立节省。UART 755,497 B 全部消费，最高 pending 67,673／1,048,576 B，overflow 0、reader error 为空、join 无超时，没有 backend 重开。
-
-完整现场与软件材料已受限保存于 ESP Tool 既有忽略目录 `provisioning/receipts/private/c3-validation-20261005/queue_peak_with_ota/`，248 个 payload 成员逐项 SHA／长度／模式核对通过；归档 SHA-256 `f81019d51974501082f83c750ff7f25fa1585916825f28cea3231a486b4d8616`，索引 `780484bce322072345b0af76037975ee32fac209a89029108cdfae40e7b1b162`。材料含实验网络、设备与恢复字节，仅私有 0700／0600 保存，不发布。
-
-当前已经证明合法最大事件与 OTA 重叠可使 C3 低于新 16 KiB／24 KiB 门，`whole_capacity_passed=false` 保持。下一步核对消息、产品事件和 TLS 在同一窗口的实际所有权与占用；不进入永久迁移或正式 Tool 实板交付。满八队列及 processing、完整 native／分域申请、FRP 最大记录／双流重叠、Flash 争用／寿命、百次实体生命周期、ESP32、真实断电和双板 72 小时仍待完成。此前有限联合轮通过的证据范围保持，不重新改判历史。
-
-## 2026-10-05 新组合联合续验与映射只读修正
-
-双目标按本页当前合同统一为 16,384 B，周期 UART 消费者的 8 项边界测试通过，默认终端块摘要与 `--json` 机器模式分别核对。旧成功轮 474 个完整任务快照可被严格重解析；该工具重放不改写原 48 KiB 合同下的旧失败，不作为 ESP32 实板证据。
-
-本轮以公开 Base `c8cbae4b991f73367a7e2cae80e977bea2eb6d46` 的运行源码和 Container `15b74a2` 准备新 A/C，SDK 与 provider 源码保持，仓外只含既有实验 CA／策略、周期资源和任务观察。首轮因装配时漏带 MQTT 的 `existing_network.json` 输入，在 Wi-Fi 连通后失败；两份新鲜 4 MiB、实验写入／读回及原三码精确恢复、擦实验数据、Wi-Fi down、UART 释放通过，原失败保留。补齐既有 MQTT／HTTPS／官方 FRPS 与网关材料后，三类真实本机 TLS 构造、ready 与关闭先行通过。
-
-第二轮重新取得独立新鲜基线，MQTT／FRP 认证管理、公开安装与一次 WRITE OTA 下载通过；候选 C 打开产品时 `open_slots=3/open_runtime=3`，原策略回退至 A，观察器因此拒绝后续新 boot 不符。完整联合轮失败。157 个完整任务快照，周期历史堆／连续块／控制栈／已观察任务栈最低分别为 **23,400／28,672／2,392／1,196 B**；三个数值观察门通过，满合法峰值与完整 native 未取得资格。恢复／擦实验数据／Wi-Fi down／UART 释放通过，清理错误为空。
-
-第三轮独立重读双基线，只增加原失败 claim 的日志，处理、期限与预算保持。候选 C 再次回退，日志 `active=22380/claim=22380/owner_bound=1/task=pthread` 与源码对应：映射包持有自己的 Flash 租约，引用身份门复读另一份保留包时，原 provider 再次获取同一非递归租约而失败。148 个完整任务快照，历史堆／连续块／已观察任务栈最低为 **25,480／24,576／1,196 B**，不与第二轮相减归因。原三码恢复、数据擦除、Wi-Fi down 与 UART 释放通过，原失败保持。
-
-三轮全部 regular 现场分别以 119／160／160 成员受限私存于 ESP Tool 的 `c3-validation-20261005`，归档逐成员 SHA／size／mode 核对通过。归档 SHA 依次为 `a62606fb8adda7ae3262e43bcced7f16d9227538733528de5d5778c97917e4ce`、`920dd061f149332335a4d7449a4605eaf4c4d4360dfa66bc6b05a19ea2261079`、`23f70b5d43e1fbf0fe561c62d4219648847db97c1357973c8071969b4e46ae19`。本轮未写 eFuse 或生产服务。
-
-修正已由 Container 源仓保存推送 **`7f25647a5380953dfd40efcef281014660ff9530`**。在既有槽锁内，仅当前映射任务的包分区只读复用其持有的租约；跨任务／写入不能借用，重复 map 和错任务／错 handle 的 unmap 拒绝，正确 unmap 单次释放。源码与回归正文见 [Container 检查点](https://github.com/esp-space/esp-container/blob/7f25647a5380953dfd40efcef281014660ff9530/docs/operations/three-slot-storage-checkpoint.md#2026-10-05-映射窗口内保留包复读的-flash-租约修正)。原 provider 行为红、普通 10/10 与 ASan／UBSan 6/6 通过。Base 两目标官方 manager 锁的其余字段保持，组件摘要均为 `97f94138bae86610842aa1534a3ac6013a44f94a35386bfdf1982e8d1aea013c`；host／真实签名生命周期四入口、固定 SDK 完整签名构建及 RSA v2／ECDSA v1 验签通过。补全 Base 测试 fake 的原生 mmap handle 类型后四入口通过，初次编译失败保留。
-
-两目标签名 app 仍为 1,183,744／1,114,100 B；产品 context 各增加 8 B，分配段除 `.flash.text` 增加 136／128 B 外保持，实际非函数 heap 符号保持。新增节省 0，不继承旧新鲜轮的容量或实体资格。修正后的 C3 新鲜联合轮如下；满合法峰值／native、最大连续块／全部任务、Flash 争用与寿命、ESP32、真实断电、双板 72 小时及正式交付继续。
-
-
-### 修正后的 C3 新鲜联合轮
-
-公开 Base `f2f9ad24aadaa46ec358d7fef23a8950ba4a3092`／Container `7f25647a5380953dfd40efcef281014660ff9530` 的 A/C 完整固定 SDK 构建与官方 RSA v2 验签通过。版本 `0.2.0-c3-mapped-read-a/c`，签名 app 各 **1,183,744 B**，SHA-256 分别为 `ef71b4ea07d161fadd1ade857881b42f9fc4e0c88a25dd850ad34548fa2d8b3f`／`7f438f056499bf808eafd8dc0f6cb1e2296d1e7b00d1a74deaf65163dba3278a`。SDK 与 provider 无私有修改，仓外仅原实验 CA／策略、周期资源／任务快照与 worker 退出观察；原写序、期限、单 reader 和恢复体保持。全部输入、损坏／符号链接／误在准备目录执行的拒绝核对及三类实际本机 TLS 夹具预检通过。
-
-**真正 driver exit 0，C3 联合功能与恢复通过。** 本轮重新核对唯一目标、4 MiB 与安全状态，读取两份新鲜一致全片及独立原三码后完整写入／读回 A。公开产品安装、来源最大单事件、唯一一次 WRITE 联合 OTA 到 C 持久确认、USB／MQTT 各一次停止启动、五个原生命周期 ID 各写一次并只读重查、停止后重启自动运行 confirmed 产品、旧 stop ID 新 boot 双通道 unknown、十二项业务、卸载及 A/C 精确读回均通过。候选 C 没有前两轮映射复读失败；最大事件仍在 OTA 前完成，不能写作并存峰值。
-
-来源下载 **146/146** 状态样本 MQTT／FRP ready。四份已保存原 UART 严格重解析与整份原观察相等：**457** 个内存样本和 **457** 个完整任务快照，不完整／损坏均 0；历史堆／最大连续块／控制栈／已观察任务栈最低分别为 **23,464／27,648／2,392／1,196 B**。这三个周期观察门按当前双目标 16,384／24,576／1,024 B 合同通过；不扩大为所有瞬时峰值、全部 native 生命周期或 ESP32 实板。读数顺序取得、观察成本不加回，不与失败轮相减计收益，`whole_capacity_passed=false` 保持。
-
-原 continuous UART **716,736 B＝已消费 714,904 B＋结尾待消费 1,832 B**，最高 pending 64,998／1,048,576 B；overflow 0、reader error 为空、reader 已退出、join 无超时。本轮没有发生 backend 重开。结束擦全部实验数据，只恢复当轮独读原 bootloader／partition／factory 并逐字节读回；Root 再核对三码与新鲜全片及恢复字节一致，Wi-Fi down／串口释放和清理错误为空。运行中绑定的 **3** 个所属进程及 **5** 个真实监听结束后逐项复核释放；没有全局零进程声明、不写 eFuse、不改生产服务。
-
-ESP Tool 的受限、Git 忽略 `c3-validation-20261005/capacity16-mapped-read-software` 保存 **34,644** 个软件归档成员（固定 SDK **31,468** 项），单档 SHA-256 `1e20cf416c9d8c80d077d0aee736771012fd63c43f3a002dccb31e018b602b46`，索引 `2673377248e5ccc1db88a5a2043f5a2aa276b0e0bd0af5502ed526141703aa10`。`capacity16-mapped-read-physical` 保存完整 **192** 个 runtime regular 文件＋1 个索引，单档 `df255be582af9b0f506e384e2e1ee900409ec86bb9ca8574d826fceaea4819d5`，索引 `3f5d419c75bfa809c0646a6d4f5ecc27c51452633ab72601ba93020f378da2a2`。两档逐成员 SHA／size／mode／集合及源文件前后不变核对通过，前三失败独立保持。
-
-该轮关闭本组合的候选启动与有限联合功能复验，容量完整门保持开放：合法满队列及 processing、MQTT 满槽／在途／outbox、FRP 双流／预备流／64 KiB 记录与 OTA 相遇、完整 native／所有任务／分域最大申请、联合 Flash 最坏时延与寿命 Y/f、实体百次生命周期、ESP32、真实断电、双板 72 小时及正式交付仍待完成。
-
-
-### 产品队列峰值观察输入与 FRP 首查前失败
-
-在公开 Base `41c0eeec5ad828ab311594d639e831858bd3ddc0`／同一 Container `7f25647a` 上，仓外增加产品队列高水、原 OOM／FULL 次数和入队后普通内部连续块观察；写方复用原队列锁，周期读取快照后解锁再打印，并绑定真实 boot。反向删除全部观察增量后产品源码逐字等于公开输入。原申请、准入、队列、调度优先级与期限保持；SDK／provider 无私改。实际 ELF 固定观察区 **24 B**，`.dram0.data` 增加 24 B、`.flash.text`／`.flash.rodata` 增加 248／160 B、`_heap_start` 后移 **32 B**；全部成本计入本轮读数、不加回。
-
-A/C 版本 `0.2.0-c3-queue-peak-a/c` 完整固定 SDK 构建与官方 RSA v2 验签通过，签名 app 仍各 **1,183,744 B**；SHA-256 为 `bafee24c4838b53f215cf6d80e6ca3b401349bdd23b56e01afdf720e298a7832`／`845dad1bdcfba2c403f8dcc23c20c347798ea9cb8125e553b7dda7d3de17f12d`。与前节 A 的实际 sdkconfig 仅软件版本标签不同，数字预算及原实验 CA／策略保持。来源突发驱动只在同 boot、已确认原 counter、前两事件完成、正式 OTA 正文已经开始时触发一次 **32** 条 QoS1／非 retained 最大事件，guest／wire 长度 **3,893／4,096 B**，连续序号 3–34 各应用发布一次；PUBACK 不当入队／执行证明，超时不重发。发布器与高水解析器 **8 项**边界测试通过；首版 mock 全零 key 被公开协议正确拒绝的两个错误保留，修正仅 mock 数据。原主写序、原异常捕获与恢复体、单 reader 和 1 MiB 宿主队列核对通过；新主流程仅增加已声明的来源事件突发。
-
-**三轮 driver 均 exit 1，均未到产品安装、事件突发或 OTA。** 每轮重新枚举、确认 ROM 身份／4 MiB／安全状态，取得两份一致 fresh 全片和独读三码，再完整写入／回读同一 A。USB 配置、严格 MQTT、FRP 配置 revision 3 与 ready 观察后，原首个 FRP 认证 status 未取得可验证结果，夹具网关报 `TimeoutError`。第二轮保持同一签名字节与期限独立重跑，原失败复现；第三轮只在原网关记录原生 I/O 阶段，明确 **response_headers／3,001 ms／未收到 HTTP 响应头**。设备 listener 总期限仍 2,000 ms、网关 socket 仍 3 s，未增加请求重发或延长期限。设备 USB 失败只读状态继续报告 Wi-Fi／MQTT／FRP ready；尚不能证明请求已到达设备监听器，不能归因于堆、打印或 FRP 单一实现。
-
-三轮完整任务快照分别 **62／52／59**，对应历史堆最低 **150,376／147,312／150,216 B**、连续块均 **114,688 B**、控制栈 **2,800／2,888／2,800 B**、已观察任务栈 **1,196／1,260／1,196 B**。队列高水及处理中均 0、未发生产品申请或 FULL，连续块的入队后观察为 null；产品尚未运行，这些读数不是五能力容量。完整合法峰值、事件与 OTA 重叠资格和节省仍为 0／未取得。
-
-三轮原 finally 擦实验数据，只恢复 fresh 独读原三码并逐字节回读；Root 再核对恢复字节与三码及对应新鲜全片一致，Wi-Fi down、串口释放、已构造的两夹具 close 和清理错误为空。运行中所属 PID／监听绑定没有在清理前捕获，不补写独立逐进程释放资格；HTTPS 产品夹具尚未构造。首轮原收据缺单独产品观察 bool，实际冻结 manifest 与 boot 绑定日志明确包含观察；后继准备器只修正该声明，原首轮收据不改写。
-
-受限、Git 忽略的 `c3-validation-20261005/capacity16-product-queue-peak-software` 已存 **34,658** 个成员（固定 SDK **31,468** 项），归档 SHA-256 `a67334175cf0dd0e0c4c4cc5d8e70f524a751ff35fbd6d75bf156b33e23e251c`，索引 `2ea3c600551fe90a0ef39b038e4ab9af0c95a2004fdee1bb2b709ac47748ef19`。三个失败完整 runtime 各 **141** 文件＋1 索引；前两档 SHA 为 `f0924e4cf36a49cfef5ef81051e0872d1322c619759d77d24e243ffb387900b1`／`a878181e35e3caad5448b5f24771776b01167f9b2d61479c5c523c1359e48f4b`，分别位于 `capacity16-queue-observer-frp-preflight-failure`／`capacity16-queue-observer-frp-preflight-second-failure`；第三档 SHA 为 `0cbb8792356039d9680cea9734af0e27adc439ff14b9c61a1c4d7605c5071f03`、索引 `d3d464a1bf5f049e4ec02f7bff0b90397e0ad908fa9a4953a00a2008130681a8`，位于 `capacity16-queue-observer-frp-header-diagnostic-failure`。各档逐成员 SHA／size／mode／集合及原现场前后不变核对通过，失败不被后继重跑覆盖。
-
-下一步只为重现的 FRP 首查记录设备监听器 accept／recv／send 与关闭阶段，继续原期限与原恢复合同，先证明数据面到达及返回；不把 ready 当认证管理通过。完整合法满队列、MQTT 槽／在途／outbox、最大 FRP／双流与 OTA 相遇、全部 native／分域申请／任务栈、Flash 时延／寿命、实体百次、ESP32、断电／72 小时与正式交付保持开放。
-
-## 事件准入修正后的联合实体复验
-
-✅ 只覆盖该行明确命名的源码、软件回归或 C3 有限切片；历史失败原样保留，容量、双板与总验收分别保持未完成。
-
-2026-10-04，使用 Base `96d60df59160f1d7f5cef116f4dbf38a8f93911e` 的产品事件准入修正及本页所列新 A/C 实际完整构建；两轮均重新核对唯一 C3、两份一致 4 MiB、独读原三码，完整写入 A 后经 Wi-Fi／MQTT／FRP、公开安装、来源单次 3893 B 最大事件及唯一 WRITE 联合 OTA 到达持久确认。最大事件在 OTA 前已执行完成，不证明并存峰值。
-
-首轮 driver exit 1，原 `passed=false`、`cleanup_incomplete` 保留。发布器先返回 120，其根因未知；之后收据及部分清理日志明确 ENOSPC。原下载过滤得到 149/149 MQTT／FRP ready，状态采样最低空闲堆 26540 B，来源 boot 历史最低 19820 B；22 条 TLS 记录与当前有限 PC 消费者的 131 个区间仅取得局部资格。原擦除／三码写回与 Wi-Fi down 回执已经执行，Root 再独立读回当轮 fresh 三码一致，没有额外 Flash／eFuse 写入；补证不改写首轮恢复收据中的失败字段。58 成员选中归档及六份材料已受限私存，私存索引 `844e33d69a4af707c5c996f430c6f48399cb6b394a2768fd1f9e7de788cfbff5`。首轮未完成后续生命周期、第三 boot、十二项业务、卸载及最终 A/C 读回。
-
-第二轮 driver exit 1，UART 观察器的有界队列失败在 MQTT 停止／启动后的 USB product.status 查询中暴露。原始日志 634379 B＝已消费 568837 B＋仍待消费 65498 B＋拒绝入队整块 44 B；该块使 65536 B 上限实际超过 6 B。原始字节先写日志再尝试入队，没有删旧队列或当作串口断连重开。USB 停止／启动完整一轮、MQTT 停止及启动原 ID 的成功结果已保存；其后查询失败，第三 boot、十二项业务、卸载与最终 A/C 读回未完成。原下载过滤得到 147/147 网络 ready，状态采样最低空闲堆 30640 B，来源 boot 历史最低 19268 B；1 条合格 TLS 记录和 6 个 PC 区间仅局部通过。原三码精确恢复、擦除实验数据、Wi-Fi down、串口释放及原 fixture close 均通过，清理错误为空；末尾对 `passed` 的失败断言保留整轮失败，不是新增恢复缺口。37 成员选中归档及三份材料已私存，索引 `38b7ea906d8f2ed00d1927dbbb305e8c53750f1ff01a9ddcb37826a38416d6bb`。
-
-以上历史最低水位不是下载阶段局部因果测量；采样最低空闲堆也不是完整峰值。新签名标签不继承旧 IRQ 资格，当前有限 SOURCE/PC 消费者不证明完整 IRQ、全栈峰值、largest 或 native 满峰值。两轮容量均未通过，新增实测节省仍为 0；不将两轮与旧镜像相减推算收益。
-
-- [x] ✅ 宿主观察器边界与 27 项纯测试：当前宿主观察器只将两处 ContinuousUART 调用显式设为 1048576 B，并同步 scope。类及默认 65536 B 保持，溢出仍 fatal，不丢旧队列；设备预算、A/C 镜像、CLI 写序、业务、期限和物理恢复体不变。原 24 项纯测试与新增三项均 exit 0；本轮全部 634379 B 原日志零前台消费重放后 log/FIFO/字节一致，1 MiB 恰满再加 1 B 仍 fatal、旧 FIFO 保留，单 reader 和 join 通过。当前三个差异逆向后与前轮 driver 字节／AST 一致；不继承未重跑的历史 driver contract 全量资格。第三轮已独立完成以下功能切片；纯测试自身仍不提高实体或容量资格。
-
-- [x] ✅ 本轮 C3 联合功能切片：第三轮真正 driver exit 0：公开一次 WRITE 联合 OTA、USB／MQTT 停止启动、五个原生命周期 ID 各 application 写一次及只读重查、停止后 MQTT 重启自动运行 confirmed 产品、旧 stop ID 在新 boot 经两入口均 unknown、十二项业务（含预期暂停拒绝）、卸载，以及来源 A／目标 C 逐字节读回全部通过。源码仍绑定公开 Base `96d60df5` 及同一新 A/C 签名字节，没有因宿主预算变化重签设备镜像。
-
-原下载过滤 150/150 MQTT／FRP ready；来源 boot 历史最低 21360 B、状态采样 current 最低 31204 B。历史水位距离 49152 B 门差 27792 B，不是阶段局部因果、完整 native 峰值或实测节省。15 条 TLS 记录、drop 0、errors 0、qualification true；保存 UART 严格重解析与原收据整个 observation 相等，当前有限 SOURCE/PC 后置门通过 89 个区间。完整 IRQ／全栈、largest、满队列与 processing、最大事件及 OTA 并存、联合 Flash 争用仍无资格。
-
-连续 UART 共 770858 B＝已消费 769644 B＋结尾待消费 1214 B，overflow 0、reader error 为空、reader 已退出且 join 无超时。本轮最大 pending 63737 B，低于旧 65536 B 门，因此不能将本次成功唯一归因于 1 MiB；前轮积压事实及新预算的严格边界测试继续保留。两份 fresh 原现场只互相比对及匹配独读三码；待刷入 A 候选与写后读回另行核对。首次离线归档脚本误将原现场与候选相等比较，明确拒绝后在新目录修正，首失败脚本及 JSON 原样保留；不是实体失败或重新执行设备测试。
-
-- [x] ✅ 本轮 C3 恢复、资源释放与证据归档：原三码精确恢复、实验数据擦除、原 boot Wi-Fi down 及 UART 释放通过；Root 对实际运行中观测的三个所属进程／四个本地监听逐项核对释放，不作全局零进程声明。213 个完整 runtime regular 文件及必要外部材料组成 222 个 payload、223 个 tar 成员，原现场前后索引不变、逐成员 SHA／size／mode／执行位一致，有限独核 must_fix 为空。单档 SHA `d6ed4edefebac4d6558eb19b8cf6b58dd382d3bab3585a0bbdbbb360e0d6f61e`，选中索引 `a90b7c20ebd22d5a0c73ba5526d7f557f567fbc2e17e9d90cb601b810057c21e`；四份材料受限私存索引 `a0d97fea05e00bc0f98bbd9608a4b599b5dbeb1ca06c446ba219a11a05364e0f`。这是当前 C3 联合功能切片通过，五仓完整目标及容量保持未完成。
-
-- [ ] 容量与完整交付：最新来源历史最低 21360 B 距离 49152 B 门槛差 27792 B，当前没有已验证的进一步容量优化路径；前两失败轮历史读数各保留原范围，不将同镜像不同轮次相减为收益。当轮按计划第 12.10 节请求维护者决定硬件／功能约束，并在等待期间保持原 48 KiB 等合同；现已由 2026-10-05 双目标统一 16,384 B 的明确决定替代等待，历史失败不改判，现行合同与新鲜轮见页首。满合法队列与 processing、largest、联合 Flash 争用、寿命 Y/f、ESP32、断电／72 小时及正式交付保持开放。
-
-## 产品事件先准入后分配
-
-- [x] ✅ 产品事件准入源码修正：2026-10-04，真实 `esp_base_container_product_offer_event` 保留参数和初始UNAVAILABLE检查，在既有FIFO锁内核准当前包、准入状态及空位后才malloc／copy。BUSY／INVALID／FULL先于NO_MEMORY硬切；复制后仍检查atomic停止标志，取消副本解锁后清零释放。生产MQTT调用者只消费ACCEPTED，拒绝不推进序号；队列上限、签名包、guest、停止状态和预算保持。该修改消除拒绝路径额外临时owner：合法3893 B MQTT guest载荷加48 B头的旧申请界为3941 B，不能算实测堆收益或闭合约29 KiB容量差。
-
-- [x] ✅ 双目标 host／真实签名 guest 软件回归：真实offer生命周期新增八槽全满＋一个处理中、零申请拒绝、准入OOM释放锁、最大载荷、复制中取消的清零／单次释放、旧包隔离；MQTT回归核拒绝后原序号可重试且不允许跳序。C3／ESP32普通full host与真实Container／WAMR签名guest完整入口均exit0，ASan／UBSan、各百次生命周期及Darwin资源检查通过。首次Darwin测试memcpy宏冲突导致末编译单元exit1，修正仅测试include作用域后两完整入口重跑通过，失败日志与收据保留。14份选中源码／结果／日志／收据已私存，索引 `a2bf714a6e66816163b4ded72b7631380aaa14bb39490932cbf0e1567f17f7ed`。
-
-- [x] ✅ 新 A/C 构建、验签与输入核对（软件范围）：生产源摘要 `85dabcd0c58e4508414b31c4716b7c5a3aebb821e99d8372f77d8ebb2519466a`；新A/C完整SDK构建及官方RSA验签通过，版本 `0.2.0-c3-event-admission-a/c`，signed各1183744 B；34558实际源／31468SDK核通过，仅该函数、两装配路径和生成锁摘要变化，SDK零差异。实际offer代码增加32 B、局部frame保持48 B，BSS、rodata、IRAM和堆起点保持；不能据此增加整体可用堆或证明全调用栈。分配／复制延长已有锁持有区间，最长持锁与MCU调度影响未测；没有新增锁或状态。软件只证明拒绝少一个owner，actual_saving_bytes=0、capacity=false；完整合法峰值、largest连续块和联合OTA／Flash争用仍待实测。
-
-## 相同 Wi-Fi 配置的生命周期修正
-
-- [x] ✅ 相同 Wi-Fi 配置生命周期源码修正：2026-10-03，真实 Wi-Fi owner 在输入校验后、状态修改前比较 configured／SSID／密码。相同选项且 station 正常运行时，保留已建立的连接证明、连接尝试和重连退避；稳定未配置状态保持。真实字段变化仍停止后重新配置，failed／尚未正常启动仍恢复，停止中接受最新选择且不延长原期限。没有新增状态、任务、缓冲或持久键。
-
-- [x] ✅ Wi-Fi 生命周期与双目标 host 回归：包含真实 runtime 与配置校验器的 ASan／UBSan 12 个启动阶段全部通过，新增生命周期序列覆盖三次同配置提交、连接中与退避保持、SSID／密码／configured 变化、回滚、停止中最新选择、旧 IP 事件、队列溢出、停止错误和原停机期限。C3／ESP32 两个原 host 入口在公开源码与已锁定依赖的独立装配上均 exit 0。直接公开入口缺依赖和首版测试把无效尾部误当有效配置的失败均保留；没有把这些失败改写为通过。有限源码审查 must_fix 为空。公开 Base 已保存推送 `3e8e44e9723fec4a7aaaa334ce9cd7c70cec2eec`；新 A/C 已完成完整 SDK 构建、官方验签与下节有限实体复验，容量与唯一根因资格保持未取得。
-
-## 修正后的最大记录与自然退出切片
-
-- [x] ✅ 第五轮 A/C 构建与验签（软件范围）：2026-10-04，第五轮以公开 Wi-Fi 修正为唯一新执行变更，继承第四轮实际构建的原正式预算与观察器。新版本 `0.2.0-c3-wifi-equal-a/c` 两个签名镜像各1183744 B；完整 SDK 构建与官方 RSA 验签通过。实际源核对仅 Wi-Fi 源、两处绝对装配路径与生成锁摘要变化，SDK源码零差异。A/C的FLASH code各增加160 B，rodata、IRAM、data、BSS及堆起点不变；Wi-Fi配置函数局部frame增加16 B，不据此宣称完整栈、IRQ或容量资格。来源A摘要 `5c87a51e3c3be4641162427d81a5e507d8248a5a7cd25879a19caa2404bbd563`。
-
-- [x] ✅ 第五轮 C3 最大记录／单 Pong／公开移除切片：重新取得两份一致4MiB和独读原三码，新A完整写入／读回、实际启动版本与摘要、空产品绑定通过。最大合法65536 B控制记录、同boot唯一Pong以及公开移除均成立。移除ACK为succeeded／revision3，FRP快照ready、uptime50748ms；27ms后唯一后续status为unconfigured，共两条revision3回复。158条命令＝154status＋3config.set＋1product.status；不继承第四轮80次status。
-
-- [x] ✅ 第五轮 C3 原清理前自然退出门：**driver exit0、原清理前自然退出门通过、physical_measurement_qualified=true仅属于本C3切片。** 设备明确STOP ticket1／error-19时仍持有原connection，fd53 close返回0；两次日志采样差3258us含UART和调度，成功时errno11为陈旧值。Host raw Read自然EOF，await／mux／device返回时context为none且signal／deadline均false；最后普通defer取消晚于device_return。await观察4828424us含移除前等待，不是公开停止耗时。修正后结果与去掉同Wi-Fi重启的链路一致；没有TCP FIN／RST包级交付或唯一根因证明。
-
-- [x] ✅ 第五轮 C3 有限 Flash 调用测量：最大记录wall **2544305us**；整区erase1次／65536 B／**591431us**；write68次／65536 B／累计328730us／单次最大10774us；read2435次／1179648 B／累计174923us／最大2671us，native失败0。boot recover另scope：wall540538us、erase540467us。调用计时包含锁／调度，不能当纯Flash、不可抢占或最坏上界。UART **126504 B＝126504 B＋0 B**，overflow0、read error为空、join正常，stderr为空。
-
-- [x] ✅ 第五轮 C3 恢复、释放与原档核对：结束擦全部实验数据，只恢复当轮fresh三码并逐字节读回；原boot Wi-Fi down ACK、串口和已绑定fixture PID／监听释放由Root直接核实，只声明所属资源。完整 **77 regular成员**归档摘要 `c8781fb32bebfbe594b64eefb2dfe5cf09c8ba67b3f10a03d937b29458afe47d`，私存 `c3-validation-20261003/c3-wifi-equal-physical` 六材料索引 `071cffc3508a607047baeec245dd7405310172ae9321f3d3d270d86b2c0d6dd1`。全77成员有限独核通过、must_fix为空；四成员审查归档摘要 `00edd2c9b47b4f1b8e03abe2192df2194cef1b196afc42ef4dc8360bce34d4bf`，三份私存索引 `89f45327b610d5a7e93bbfde77f9a002a909c9a7cc4d7e4cfa3ba31919630b1e`。审查只核原档，不新增测试或设备操作。前四轮失败保留原资格。该轮没有MQTT、guest或联合OTA，minheap148464 B不能外推五能力；capacity=false、联合争用／峰值／寿命=false、实际新增节省0。
-
-下一修改只处理已有产品事件准入：在现有锁内核准包与队列空间后再分配，保留复制后停止复核及失败清零释放；真实双目标host与签名guest生命周期、MQTT序号回归已通过，新A/C SDK／验签完成，联合实板继续，不提前记容量收益。停止策略继续为仅当前启动停止、重启自动运行confirmed产品。五能力容量、最大合法峰值／native、联合Flash争用、寿命Y/f、ESP32、断电／72小时及正式交付继续开放。
-
-## 原生关闭与同配置 Wi-Fi 重启
-
-2026-10-03，第四轮在原正式预算上，仅仓外增加 C 客户端既有对象、fd、停止 ticket、原 close 返回和即时 errno 的日志。关闭策略、任务、缓冲及期限保持。新的 A/C 完整 SDK 构建与官方 RSA 验签通过；版本 `0.2.0-c3-native-close-a/c`，两个签名镜像各 1183744 B，来源 A 摘要 `85b79e52296ec6c25ae1ab4a0e7c9edd788b366840cce2179428ac67ced7c0f4`。34558 项实际源核对通过，31468 项 SDK 零差异；仅两处 FRP 日志源、两处绝对装配路径与生成的锁摘要变化。实际 ELF code 增加 152 B、rodata 增加 288 B，BSS／IRAM／堆起点不变；两个关闭局部 frame 各增加 32 B，不能据此宣称完整栈或 IRQ 资格。源码、实际构建及 54 个冷输入成员的有限独核通过。驱动只更新镜像身份，不继承新镜像未执行的纯测试或旧 PC 地址资格。
-
-新实体重新读取两份一致 4 MiB 与三个独立原代码区，完整写入／读回、实际启动摘要和空产品绑定通过。最大合法 64 KiB 记录及同 boot 唯一 Pong 成立。record wall **2568064 us**，erase 1 次／590914 us，write 68 次／65536 B／累计 358809 us，read 2435 次／1179648 B／累计 175487 us，原生失败数 0；boot recover 另 scope：wall 572725 us、erase 572654 us。这些有限调用计时包含锁与调度影响，不是纯 Flash、不可抢占或最坏上界。
-
-**整轮 exit 1、physical_measurement_qualified=false。** 原自然退出检查循环再次失败。移除 ACK 为 succeeded／revision 3，FRP 快照 `network_unavailable`；随后 80 次 status 全为 unconfigured，共 81 个 revision 3 回复。211 条命令＝status 207＋config.set 3＋product.status 1。同设备日志中 fd 53 的 close 返回 0，两个采样差 943 us 包含日志与调度，成功时 errno 113 是陈旧值。随后 ticket 0／error -17 仍关联原连接，明确 STOP 的 ticket 1／error -19 到达时连接已为空。不能把前次 close 称为本次显式 STOP 调用，也不能以 close 0 证明对端 FIN／RST 交付。
-
-Host 九条阶段日志仍在 SIGTERM 取消后才出现关键返回和 FINISHED；awaitStop 观察 13502058 us 包含移除前等待，不是设备 stop 耗时。原成功边界门未执行，清理后纯重解析拒绝自然资格。连续 UART **160185 B＝159239 B＋946 B**，无溢出／读取错误，join 正常。结束擦实验数据，仅恢复本轮 fresh 三码并读回；原 boot Wi-Fi down ACK、串口、实际唯一夹具 PID／监听释放经 Root 直接核对。stderr 中 cleanup 最终要求 passed 的异常属于整轮功能失败，不能据此否定已经核实的恢复。
-
-完整 **78 个 regular 成员**归档摘要 `c9b4c1ecf62093d8645edc12c03cd63fb917c82e13eede656d92e270b4896d19`，私有保存目录 `c3-validation-20261003/c3-frp-native-close-failure` 的六份材料索引 `a8f2556a25168b492b6a1728852753625e2b4f38cbdb14fb762a8f7b7aea8b59`。当前失败全78成员有限独核通过，must_fix为空；四成员审查归档a2ad93cc71182e2048a785f6d84d32d72103535ca7ab532b89b59171a7a0e51f及三份拷贝已私存，索引7fc4a2d491eacf2ab303f909e2d26c35fb4151f2d2fdb9d2d5efb383237bc9ef。原失败均保持；恢复和审查通过不提升整轮资格。
-
-后续只读核查确认，三次请求的 Wi-Fi 字段完全相同；Base 完整 config.set 仍先无条件停止 Wi-Fi，待重新建立连接并提交配置后才重配 MQTT／FRP。源码路径与本轮 ticket 0 网络错误先于 ticket 1 明确停止的日志一致，尚未证明远端超时根因。后继已修正 Wi-Fi owner 的相同配置语义并通过宿主检查，见本页首节；正常连接或重试保持原状态，字段变化、失败恢复、停止中最新选择和真实连接证明仍由原流程处理。不增加期限、状态机或关闭策略。以上结论属于修复前第四失败轮；修复后的SDK／有限实体资格见本页首节，不改变该失败轮原资格。
-
-停止产品策略已确认：仅当前启动停止，重启自动运行 confirmed 产品，不持久化停止状态。新增节省仍 **0 B**；容量、满合法峰值／native、联合 Flash 争用、寿命 Y/f、ESP32、断电／72 小时和正式交付继续开放。
-
-## FRP 自然退出阶段复验
-
-2026-10-03，继承下述同一签名来源 A、实际 SDK／ELF、正式资源和 80 B Flash 观察成本，仅更新仓外服务端阶段观测及 Python 消费者。Go 新程序仍使用原认证、单条 65536 B 控制记录、15 个 ReqWorkConn 和唯一 Pong，不改变原 `awaitStop`／`mux.Close` 弃错行为；新增日志只含错误分类、单调时间与取消原因。原 16 项端口检查、8 项 race 检查、两次真实 native 回环及有限独审通过；回环没有复现 C3 问题，不能当实板原因。Python 当前 36 项纯验证和最终增量独审通过；父 30 项报告仅为历史。70 个后继归档成员及额外冻结收据独核通过，没有重新编译固件或 SDK。
-
-驱动保持单次 90 秒 fresh-boot capture、原 5 秒 status 与原 10 秒自然退出检查循环。在公开 unconfigured、进程退出 0／FINISHED 后、清理之前，再要求三个关键返回阶段完整且唯一；拒绝信号、截止时间和底层读超时。正常返回后的普通 defer 取消可以保留。该循环涉及状态查询，不把循环参数当严格硬实时上界；解析失败仍进入原恢复流程。
-
-第三轮实物重新读取双新鲜一致 4 MiB 和三个独立代码区，来源 A 完整写入／读回、实际启动摘要和空产品绑定通过。只配置 Wi-Fi／FRP；最大合法记录及同 boot 单 Pong 成立。移除 ACK 成功、revision 3，其 FRP 快照暂为 `network_unavailable`（uptime 47566 ms）；18 ms 后首次 status 开始，**80 次 status 全为 unconfigured**，总 81 个回复＝ACK 1＋status 80。本轮 212 条命令＝status 208＋config.set 3＋product.status 1，不继承前轮 84 次查询或 ACK 快照。
-
-本轮成本为：最大记录 wall **2578796 us**；整区 erase 1 次／**619128 us**；write 68 次／65536 B／累计 332715 us／单次最大 13858 us；read 2435 次／1179648 B／累计 174220 us／单次最大 1527 us；原生失败数 0。boot recover 另 scope，erase 552684 us、wall 552753 us。调用计时可能包含锁和调度等待，wall 还含非原生开销；两个有限实板样本不构成纯 Flash、密码学、不可抢占或最坏时长，以及联合争用／寿命证据。
-
-**整轮 exit 1、physical_measurement_qualified=false。** 原退出循环未观察到自然结束；Go `await_stop_enter` 至返回观察持续 15118291 us，包含移除前等待，不能称设备 stop 耗时。该轮先记录 `context_done=signal_sigterm`，随后 raw Read 才返回 `connection_closed`，再出现 awaitStop／mux.Close 返回、FINISHED 及仍带 SIGTERM 的 `device_return_context`。这证明当前日志的阶段／取消边界，不能证明设备 fd、FIN／RST 包或网络交付失败原因，也不回写为旧轮取消因果。清理后纯重解析拒绝自然资格；原实体驱动因循环超时没有进入成功边界内的 pre-close 门。仅本地关闭成功不能替代对端终止证据，下一步继续限定设备侧关闭链路核查，不延门或放行。
-
-连续 UART **160230 B＝159247 B＋983 B**，无溢出／reader 错误，线程 join 正常。结束擦除全部实验数据，只恢复本轮 fresh bootloader／partition／factory 并读回；原 boot Wi-Fi down ACK、串口及实际唯一夹具 PID／监听释放由 Root 核对。完整 **90 个 regular 成员**归档摘要 `d2a0bdee6f3201039d34ea3c73035a20c404c9c5ecd4b6dac01828a4ad9540af`，受限且 Git 忽略的 `c3-validation-20261003/c3-frp-flash-stop-diagnostic-failure` 保存六份材料，私有索引 `2f8e3a7433503e07576a006b345d51e74f470666df8036b9efb154c8065c8d75`。前两次失败完整保持；当前实板全90成员有限独核通过、must_fix为空，六成员审查归档12152955d5d9050faab9a17611b07e0d65510488068a3683dd50aca8820aa5c1及三份审查拷贝已私存，索引f6ea2222b05bfb915a735e3a01b1e0609dc8006dde638f101aca59adc1471f1e；恢复与分项核对不提升整轮资格。
-
-有限32选中源／配置与17实际编译单元、11个来源A完整函数机器码只读追踪未发现work池丢control fd的路径。实际A仅在native close返回0后清fd，TLS／session借用control connection；但本轮没有具体fd／close返回实测。lwIP零linger在有unsent／unacked时才abort，其他分支仍可等待FIN后续输出；源码允许tcp_output错误被忽略、FIN分配不足后等待timer重试。这些只是待区分路径，不能指定为本轮根因。后继原生关闭观察与同配置 Wi-Fi 核查见本页首节；没有增加任务、缓冲、关闭策略或延长门。只读六成员审查及三份拷贝已私存，索引c53cbbc2ba050bafcba9d98248304f8293f618e3dc200a054f975d4de5d6996c。
-
-产品停止策略保持已确认的“仅当前启动停止，重启自动运行 confirmed 产品”，不增加持久状态。实际新增节省仍 0 B；五能力容量、完整峰值／native、MQTT／OTA Flash 争用、寿命 Y/f、ESP32、断电／72 小时和正式交付仍未完成。
-
-## FRP 最大控制记录实测与移除超时
-
-2026-10-03，在下述公开运行源码、精确组件与原正式预算上，仓外叠加 Flash 成本观察器。新来源 A／目标 C 完整 SDK 构建及原测试键官方验签通过，版本为 `0.2.0-c3-flash-cost-a/c`，签名镜像各 1183744 B；目标 C 此次只有软件构建资格。唯一 provider 状态由 64 B 增至 144 B，实际 BSS 和堆起点增加 **80 B**；IRAM 50106 B＋70 B 对齐保持，观察成本不加回。34558 项实际源构建后核对通过；两 provider、两绝对装配路径及 Component Manager 生成的锁 `manifest_hash` 为五项变化，依赖版本和其余源／SDK 字节保持，新实际 ELF 和 PC 重新绑定。
-
-最大合法 65536 B 控制记录先经真实 host TLS／Yamux／原生 session 和 IDF Flash 模型消费、坏认证拒绝；这部分仍是软件。严格 decoder 25 项、第二轮 driver 30 项、adapter 10 项及单次启动 capture 15 项纯检查通过；当前第三轮消费者见本页首段。最初实物轮省略已验证的 pyserial fresh-boot capture，首 `status` 超时、运行 UART 为 0 B；整轮失败及 79 个完整成员独立保留，后继补回一次 90 秒真实 READY／empty 捕获，关闭后才打开 POSIX 单 reader，原五秒状态查询与恢复逻辑保持。新后继输入包 53 个明确成员核对通过，没有复用失败基线。
-
-第二轮重新读取两份一致 4 MiB 基线和三个独立原代码区，完整写入／读回后实际启动来源 A，公开查询绑定当前固件摘要与空产品。只配置 Wi-Fi 和 FRP，无 MQTT、OTA 或 guest。一个合法最大记录随后到达同 boot、同配置 revision 的唯一 Pong。实际原生观察如下；单位为微秒，调用数与字节均为本轮实测，不能填入其它分段形状。
-
-| 最大记录项目 | 原生调用数 | 申请／读取字节 | 原生累计耗时 us | 原生单次最大耗时 us |
-| --- | ---: | ---: | ---: | ---: |
-| 整区擦除 | 1 | 每次 65536 | 564051 | 564051 |
-| 写入 | 68 | 65536 | 348150 | 11076 |
-| 读取（含回验） | 2435 | 1179648 | 175497 | 1248 |
-
-最大记录 `begin_to_clear` 的 `wall_us=2565029`、`result=0`、`cost_valid=1`、原生失败数为 0；boot recover 另一次擦除为 554330 us、wall 为 554399 us。wall 结束于 guard 解锁后、打印前采样，包含调度与非原生开销，不是独立密码学耗时、整个回调耗时、连续不可抢占时长或最坏上界；500 ms claim 重试也不构成该上界。两项观察不含实验 ROM 整片擦除／恢复磨损。
-
-公开移除配置 revision 3 成功，同 boot 之后 **84 次只读 status 均为 unconfigured**；另有一次移除 ACK，共 85 个 revision 3 回复。driver 未在十秒联合门观察到夹具自然退出，因此 **整轮 exit 1、physical_measurement_qualified=false**，没有放行成本总体资格。Go 最终日志含 FINISHED、退出 0，但没有事件时间戳或实际 SIGTERM 发送记录，只能说明 cleanup 后最终收据看到这些结果，不能证明精确发生先后或取消因果。同精确夹具与原生客户端的两次本机认证联调均自然退出，没有复现 C3 超时；后继关闭阶段证据见本页首段，不延长或削弱退出门。
-
-启动 UART 18111 B 与保存摘要一致；运行 UART **162412 B＝consumed 162348 B＋pending 64 B**，无 reader 错误或溢出。结束擦除全部实验数据，仅恢复本轮原 bootloader／partition／factory并逐字节读回；原 boot Wi-Fi down ACK、串口释放、实际夹具 PID／唯一 LAN listener 存活时绑定及最终释放由 Root 直接核对。完整失败现场 85 个成员归档摘要 `3e276ba3f8c6bb0df2def063780c4fcdea65975b133c772724b194f19a115d06`，受限且 Git 忽略的 `c3-validation-20261003/c3-frp-flash-cost-removal-deadline-failure` 保存六份拷贝／澄清，私有索引 `2b55404e152abe0fc19ff57464fe0507b5e35eff6533123bd39d35e9154ba56c`；原首次失败与所有旧轮独立保持。
-
-源码和当前官方普通控制链确认，正常 Pong 是 8 B、4 B 两条短记录，现有独占 4096 B 窗口已在完整认证后消费，**没有 scratch begin／erase**。无失败主路径的每扇区磨损按实际 boot recover 次数 B 与大记录 begin 次数 L 计，不能按十五秒心跳直接推擦除率，也不能将整区十六个 sector再乘作每扇区次数。Y／大记录频率 f 与实物已有磨损仍未确认，本次不计算剩余寿命。实际新增节省仍 **0 B**，没有联合 OTA Flash 争用、五能力容量或完整最坏成本资格；P6-03、满合法峰值／native、ESP32、断电／72 小时与正式交付继续开放。
-
-## 同池共享状态与完整 TLS 实体诊断
-
-2026-10-03，在下述同一公开运行源码与精确组件版本上，仓外诊断将固定 **1800 B** 观察区改为逐记录20 B与精确状态77 B共享。固定部分344 B、共享池1456 B，容量条件为 `20×N + 77×D <= 1456`；68条只适用于一个状态，不承诺任意68次新低都能保存。新低不被过滤，身份、释放回填、歧义／ISR／溢出失败及原V2字段保持。25组host、ASan/UBSan、两C3单元和独立多身份回填反例通过；正式Wi-Fi RX／TX 32／32、TLS 16384／4096、64 KiB guest、任务栈和协议上限保持。
-
-实际来源A／目标C完整SDK构建及原测试键官方验签通过，版本为 `0.2.0-c3-tls-share-a/c`，签名镜像各1183744 B。IRAM50106 B加70 B对齐，堆起点 `3fc999a0` 较15槽诊断后移1024 B；history最终单函数帧96 B，不能当整链峰栈。唯一1800 B状态、六个SOURCE位置、allocator RA、IRQ闭包与实际双ELF核对；新PC表摘要 `949a2bad0c4691a596d6dd763882c0ec509265c4a15bb832bd0d3cd5b9bd5865`。全部34558实际源及实际编译输入重新绑定；观察成本不加回，实际节省为0。
-
-首版34895项冷输入全部字节与归档完整，但生成门模板仍固定旧parser摘要，实际加载拒绝、完整准入失败，未上板。后继在新driver硬切parser／schema和模板摘要，83解析恢复＋18PC测试以及实际生成门加载通过；34903项完整冷输入（34628源／275证据）与两份归档独核通过，冷索引 `016de45008c5ecb87bcb5951a10c097717cce4c885495d9914f34ecfdd7105b5`。固件和SDK没有因这个消费修正重新编译。Root首命令误从运行目录副本启动，被原路径守卫在串口前拒绝；失败保留，后继使用全新目录和原冻结入口，未修改守卫或沿用失败基线。
-
-本轮双新鲜4 MiB基线与三个独立原代码区一致。公开最大事件、原一次WRITE联合OTA持久确认、USB／认证MQTT各一次停止／启动、五原生命周期ID各写一次及只读重查、停止后重启自动运行当前固件confirmed、旧stop ID跨boot unknown、十二项业务、卸载及A/C逐字节读回通过。停止仅当前启动有效，不增加持久停止状态。完整driver实际退出0，TLS **20条、drop0、errors0、qualification=true**；保存UART严格重解析与收据相等，实际ELF后置门通过119个符合条件区间，输入前后稳定。
-
-来源下载 **147/147** 状态MQTT／FRP ready，历史minimum **19628 B < 49152 B**，20条解锁后快照中的最低current为20204 B。不同轮独立读数不相减归因，不能把解锁后快照升格原生最低堆时刻的消费者或因果证明，也不证明最大FRP记录、满队列／在途、并存事件或连续块门。458个完整任务快照、13个已观察名称栈余量至少1024 B，仅覆盖实际观察范围。UART logged727237 B＝consumed726023 B＋pending1214 B，最大队列63707／65536 B，无溢出；不称结束pending为零。
-
-结束整片擦除实验数据，仅恢复本轮独立读取的原bootloader／partition／factory并逐字节核对；reset、Wi-Fi down ACK、串口、三fixture与所属进程释放核验通过。FRPS服务与remote proxy端口在存活时直接记录，结束对五个实际listener逐项核验无监听，不恢复旧／实验NVS，不写eFuse。完整现场归档 **206文件／11目录、217成员**，摘要 `f846fade2b04cf933fa5e84ce128a2b77d69b044824d02b95e69ea18b4ef053d`；包含10个实际生成pyc输出，不称源输入或零缓存。首次归档过严“无pyc”断言失败保留，后继完整归档不删除输出。受限且Git忽略的 `c3-validation-20261003/c3-tls-owner-shared-physical` 保存完整归档和11份选中拷贝，私有索引 `4a1dc9a6091cbcdb0d957359c88e4d53dd82d0f972772c79009f726e7e54f705`；完整实体独核及21成员审查归档通过，审查归档摘要 `3392116acffcb41edbc5fced77419ea74bfbeffd651f0062bfa74fcf7d9e309c`，最终审查私存索引 `d2cd0d83e28fca387fdd2f45e8e329479e26513c4d67942f5fcb25432f0f0284`；旧失败不被覆盖。
-
-当前RX生命周期只读核查没有新准入收益：正常空闲已回到24 B，部分密文、未读明文和握手仍有真实消费者。当前confirmed代表Wasm没有data section，data_copy根本未分配，该方向可省0 B。Flash计时观察器两源增量、原5＋新7组host／ASan/UBSan和两C3单元、53选中成员独立代码审通过；该前序检查点仅软件，后继完整SDK与实物有限观察见本页首段。Base每实例DRAM增加80 B，wall截止于guard解锁后、printf前采样，可能含调度延迟，不能当精确解锁时刻、完整回调耗时或500ms操作上界。寿命Y/f仍待维护者目标，全部软件模拟不构成时延／寿命通过。
-
-**完整TLS诊断、有限联合功能与恢复通过，容量仍失败。** P6-03、满合法峰值、native全生命周期、Flash实测及寿命目标、ESP32、断电／72小时和正式交付继续开放。
-
-## 十五槽无损压缩与完整实体续验
-
-2026-10-03，在下述同一公开运行源码与精确组件版本上，仅在仓外将固定 **1800 B** 观察区的记录从120 B无损压缩为96 B，共15槽。地址编码覆盖当前C3合法DRAM／IRAM／RTC地址；范围外值、序号耗尽、身份歧义、ISR及溢出仍使资格失效。原V2导出字段、实际SOURCE位置、精确分配身份和释放回填保持，未过滤新低或放宽parser。正式Wi-Fi RX／TX 32／32、TLS 16384／4096、64 KiB guest和任务栈预算保持，不提前停止旧guest。
-
-实际来源A／目标C完整构建与原测试键官方验签通过，版本为`0.2.0-c3-tls15-a/c`，签名镜像各1183744 B，摘要分别为`97a5c5d2e74278479852e8b3ca36e71d4ae427cac2671730994dbda929c4434c`／`6a1313fcf5380be5ddb59750f96757bcb0b4c7674ed08868b88a205fcdd737d1`。完整冷输入34950项（34628源输入／322证据）和两份归档逐项核验，冷索引`369fbe656355fea6cdf8cf5c7bbc274e0c79fb43f971dbe6fe71d1d739b77da2`；实际双ELF及六个SOURCE位置重新绑定，未复用前序PC表。实际IRAM为49086 B加66 B对齐，堆起点较前序12槽诊断后移1024 B，全部计入观察成本，实际节省为0。SDK子模块自动初始化曾改变复制树的lwIP，完整源码守卫在编译前拒绝；失败副本独立保留，后继仅采用SDK已有的显式跳过检查入口，并重新核对全部SDK输入未变。
-
-本轮重新读取双新鲜一致4 MiB基线和三个独立原代码区。来源最大公开事件、原一次WRITE联合OTA持久确认、USB／认证MQTT各一次stop/start、五原ID各写一次及只读重复、停止后重启自动运行confirmed、旧stop ID跨boot unknown、十二项业务、卸载及A/C逐字节读回通过。停止仅当前启动有效，不持久化停止状态。下载150/150状态MQTT／FRP ready，历史minimum **23620 B < 49152 B**；不能与前序23464 B相减归因，不加回成本，不证明满合法峰值或连续块门。
-
-TLS探针尝试留存24个新低，实际保留15条、另9条丢弃；BEGIN／END结构完整，END为`qualified=0/errors=128`。原parser重解析与完整收据相等，保持`unqualified_observation`；重新实例化的实际ELF后置门退出2、eligible区间为0，未提升局部记录的owner或因果资格。Root实体driver会话75593实际退出1；独立报告没有落盘exit文件，诚实保留null，并另记录Root工具会话来源。**功能与恢复通过，整轮、TLS资格和容量均未通过。**
-
-463个任务快照expected/captured相等，无采样申请失败；13个已观察名称栈余量至少1024 B，范围不扩大为全部native生命周期。UART logged与consumed均732176 B，pending为0，最高64967／65536 B，无溢出。结束擦除全部实验数据，仅恢复本轮独立读取的原bootloader／partition／factory并逐字节核对；reset、Wi-Fi down ACK、串口、三fixture及所属进程释放独核通过，不恢复旧／实验NVS，不写eFuse。四个已保存host listener直接复核无占用；FRP remote端口数字未保存，只由所属FRPS关闭及零所属进程限定绑定，不虚构第五端口直接实测。
-
-189个runtime文件与10目录的完整快照归档摘要为`58327b137612d2f22d45725eb759d73ed6dad750d85ba3e94145369b9aced856`，独立审查归档为`71c2e9a7d7fce1c792850c0a71d6edb86b33d38b7f2d4ee4ae0345474d802ea2`；Root逐成员复核字节、大小、mode／执行位与集合。受限且Git忽略的`c3-validation-20261003/c3-tls-owner-history15-physical`保存22份精确拷贝及私有索引`26683226546d413a22490ce25a4f61807e035bd36c2fdc691033096ac0e4fbcd`，引用同级软件与冷输入审查检查点；前序所有失败保持独立。
-
-容量owner与当前Wi-Fi IRAM限定只读复核均无新增节省：9825 B已识别native owner仍有真实消费者，1807 B／939 B方向尚未实施；64 KiB linear申请含8 B guard，不存在第二页。Wi-Fi本机IRAM／RX IRAM／EXTRA／SLP选项已关闭，相关已装载optional段实际位于Flash，不能再算一次迁移收益，IRAM／DRAM共享窗口也不能双算。后继仅研究同池精确状态共享是否值得实现，尚无实施或新容量通过结论。P6-03、满合法峰值、native全生命周期、Flash最坏实测与寿命目标、ESP32、断电／72小时和正式交付继续开放。
-
-## TLS owner 完整软件冻结与实体历史溢出
-
-2026-10-03，在 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89` 运行源码和 FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee`、OTA `bf11916ab904be4ee9bcdfae213c85336363e96a`、Container `2b93b979b8b0760dcb96b28ac5d13fc52ae547bf` 的精确依赖上，完成仓外 C3 TLS owner 诊断组合。唯一固定记录区仍为 **1800 B**，替换旧探针；公开固件、依赖 pin、Wi-Fi 动态 RX/TX 32/32、TLS 16384/4096、任务栈与 guest 预算保持。私有 SDK 五处注入、四 provider 装配及全部五处实际 SDK guard 共 21 个精确增量；这是显式私有诊断覆盖，不是原 SDK 或生产固件原样构建。
-
-实际 A/C 均完成完整构建和官方测试键签名，镜像各 1183744 B，原 0x130000 槽保留 61440 B。实际 ELF 的唯一 1800 B 状态、IRQ 路径与六个保留 SDK SOURCE 返回位置独立核验；第七处 object 调用被合法 linker GC，没有虚构地址。签名镜像、完整源清单、配置、ELF 与 PC map 精确绑定；C3 堆起点相对旧诊断后移 512 B，只计成本，不加回读数。两份实际配置除版本外相同，原资源和信任策略没有降配。完整冷输入 **46049 项（34625 源输入／11424 软件证据）**逐项及两份归档成员复核，索引摘要 `d8f7832551feeaa8a18ce37a22eff82b181c8536f5c5c9c1ca88123b486518eb`；原历史冷输入均保留。
-
-准备失败各自保全：第一轮漏交付 Wi-Fi 配置和 FRP 控制 probe，只到空产品新固件启动，后续网络／OTA未执行，原三码恢复和数据擦除通过；补齐后新增 37 项必需输入及纯配置检查。第二轮在首写前第二次 4 MiB 基线读取中串口中断，零擦除／写入成立，另行只读复位成功；另一错误执行入口在设备调用前被路径守卫拒绝。三者不混入下述完整功能轮，也不修改原失败树或沿用失败基线。
-
-新完整实体轮重新读取双新鲜一致 4 MiB 基线与三个独立原代码区。单次 4096 B 公开帧／3893 B 来源事件返回 3912，随后原一次 WRITE 联合 OTA 持久确认、USB／认证 MQTT 各一次 stop/start、五原生命周期 ID 各写一次及只读重查、停止后重启自动运行当前固件 confirmed、旧 stop ID 在新 boot unknown、十二项业务、卸载和 A/C 精确读回通过。停止只在当前启动有效，不增加持久停止状态。来源下载 **148/148** 样本 MQTT／FRP ready，status 采样历史 minimum **23464 B < 49152 B**；不与其它轮相减归因，不加回观察成本，不证明最大 FRP 记录、满队列／并存事件或连续块门。
-
-TLS 原始 UART 的 BEGIN／END 和 12 条保留记录结构完整，但另 **3 次 probe 观察新低未保存**：BEGIN `dropped=3`，END `qualified=0/errors=128`。原严格 parser 与 Root 独立重解析完全一致，保持合法 `unqualified_observation`；后置 PC 门返回 2 并保全原对象，未把局部记录提升为完整 TLS owner 或最低堆因果证明。功能分项通过，**整轮 exit 1、TLS 资格与容量均未通过**。后继只能在同一 1800 B 内无损压缩记录，保留原新低触发和严格溢出失败；当前尚无新的编译或实体通过结论。
-
-451 个完整序列化任务快照 expected/captured 相等，无采样申请失败；13 个已观察名称栈余量至少 1024 B，最低 IDLE 1196 B，仅覆盖实际观察范围。UART logged 722383 B = consumed 721169 B + pending 1214 B，最高有界队列 63234/65536 B，无溢出；不声明结束 pending 为零。结束擦除全部实验数据，只恢复本轮独立读取的原 bootloader／partition／factory 并逐字节核对，reset／Wi-Fi down ACK、串口、三 fixture 和零所属进程释放独立通过，不恢复旧／实验 NVS，不写 eFuse。15 组事实审查通过不等于整轮通过。
-
-完整实体 **189 个成员**的字节、size、mode／执行位已核，归档摘要 `5ce3c33a02cf9f1a65cc6ccc5d7a5b0233f7463f4b2b8bc61416bc87468192d0`，索引 `f65f1b31d27fc6569ccd2f3653f29e795a8c05616aa8941a8abe5f9e0f5c5fd5`。受限且 Git 忽略的 `c3-validation-20261003/c3-tls-owner-history-overflow` 保存 23 份精确拷贝及索引 `5e51caba77b32f3c513e31502519eb0a847072e2bd966fb1ea69c2021c59ee98`；完整软件冷输入引用同级 `c3-tls-owner-actual-software` 的独立私有索引。首写前串口失败 85 个成员、两份 Flash 官方／源码成本归档及独立复核也单独保留。
-
-### Flash 成本与寿命边界
-
-只读源码核验确认，scratch 用于**入站加密控制记录**，不是每 64 KiB TCP 数据的通用缓存。超过 4096 B 的记录 begin 擦除整区一次，每次 boot recover 另擦整区一次；clear、元数据与清理重试不增擦写。C3／ESP32 的 64 KiB scratch 都不按 64 KiB block 对齐，当前 SDK 成功路径分别使用 16 次 4096 B sector erase。最大记录密文／明文为 65536 B，tag 另 16 B；写入 65536 B，正常完整消费的 17 遍读取加 provider 回验总计 **1179648 B**。来源A的单记录分段及原生调用时长已在本页首段有限观察；完整最坏、独立密码学耗时与OTA并存进展仍未证明，不能把500 ms claim重试策略当作严格最坏墙钟上界。75 个选中输入及 79 个归档成员独立核验；只证明相关 provider／SDK 子集，未宣称全树或全部实际编译路径。
-
-[ESP32-C3 官方数据表 v2.4](https://documentation.espressif.com/ESP32-C3_Datasheet_en.pdf)第 57 页表 5-10 已公布最少 100000 次 P/E 和 20 年数据保持；不能继续称官方耐久数字完全未知，也不能把保持年限等同连续写入寿命。本台 `20/4016` 仍不能唯一定位具体 Flash 型号，[XMC C](https://www.xmcwh.com/uploads/799/XM25QH32C_Ver2.1.pdf)与[D](https://www.xmcwh.com/uploads/920/XM25QH32D_Ver1.3.pdf)共享该 ID；剩余寿命没有实测绑定。
-
-参数化必要关系为 `H + B + 525960 × Y × f + F <= E`：H 为此前每扇区消耗，B 为到达擦除的 boot recover 次数，Y 为使用年数，f 为每分钟成功大控制记录，F 为未计入 f 的失败／取消／重传 begin，E 为适用器件条件下预算；若 f 已含全部 begin，不能重复计 F。维护者的 Y/f 目标仍待答，当前 H／剩余寿命未知，本式不构成寿命通过。官方 19 成员与成本 79 成员均已独立复核，无新持久磨损管理机制。
-
-当前实际新增内存节省仍 **0 B**。CA／config 生命周期复核保留真实 TLS renegotiation 消费，不提前释放仍被引用的配置；原 peer／handshake 和启动栈已释放部分不能重复计省。P6-03、满合法峰值、native 全生命周期、Flash 实板最坏成本、ESP32、断电／72 小时与正式交付继续开放。
-
-## 来源最大事件与完整生命周期续验
-
-2026-10-03，沿用 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89` 的运行源码和上一轮冻结的来源 A／目标 C 签名固件，正式 Wi-Fi、TLS、guest、任务栈、MQTT 与 FRP 预算保持。仓外新入口仅在来源产品 confirmed、网络稳态之后、原一次 OTA 之前增加一个最大事件切片；原 132 项纯测试与新增 12 项均通过，Root 独立复验新增项和入口精确差异。原 OTA ID、90 秒循环及 5 秒只读查询语义、最终绑定与恢复 finally 保持。
-
-实际公开发布帧为 **4096 B**：固定前缀 203 B，来源 `counter v0-1-0` 事件 **3893 B**，含零字节，sequence 2 只发布一次。该 guest 按全部事件字节累加，安装代表事件 19 B 后的真实结果为 **3912**；前后 Wi-Fi connected、MQTT／FRP ready，同设备／boot 和完整 confirmed 绑定保持。目标 `counter v0-2-0` 按 body 字节计数，原目标十二项业务预期不变。这是 OTA 前的单个最大事件，不证明八槽队列、outbox 满载或事件与 OTA 并存峰值。
-
-本轮整轮退出 0。一次 WRITE 联合 OTA 持久确认、USB／认证 MQTT 各一次 stop/start、五个生命周期原 ID 各写一次及重复只读、停止后重启自动运行当前固件 confirmed、旧 stop ID 在新 boot 两通道 unknown、十二项业务、卸载和 A/C 逐字节读回通过。原 OTA ID 查询为 28 次 running、2 次 `ota_result_uncertain`、1 次 succeeded；本轮没有观察到 `storage_uncertain/null`。停止只在当前启动有效，不新增持久停止状态；公开 stop 结果仍不替代独立 native join／句柄仪器。
-
-来源下载 **145/145** 样本 MQTT／FRP ready，连续 prepare 诊断保留 **11 条 NEW_HISTORY、dropped=0**，unsupported／ISR 均 0。历史各 heap minimum 合计 **23228 B < 49152 B**，窗口 current 最低 23888 B；异时历史合计不是同时存活峰值。固定记录区 1800 B、堆起点成本 2832 B 与任务采样工作区 1664 B 均保留，不加回读数，也不与旧正式或其它诊断轮相减归因。451 个完整序列化任务快照的 expected／captured 相等，无采样申请失败；13 个已观察名称的栈余量均至少 1024 B，不证明全部生命周期或满合法峰值。
-
-UART 同一 reader 在明确重启前持续捕获，无重开、错误、溢出或 join 超时；715811 B 日志完整保存，已消费 715769 B、结束待消费 42 B，最高队列量 63815／65536 B，完整诊断 parser 通过，不宣称全部字节均已消费。写前安全状态、两份新鲜一致 4 MiB 基线和三个独立原代码区核对通过；结束擦除全部数据，仅恢复原 bootloader／partition／factory 并逐字节读回，不恢复旧／实验 NVS、不写 eFuse。reset／Wi-Fi down ACK、串口、三 fixture、零所属进程与五个实际精确 listener 释放独立通过。
-
-受限且 Git 忽略的 `c3-validation-20261003/c3-source-maximum-event` 保留原 14142 文件软件冷输入、49 member 新入口 overlay 与 194 member 完整实体证据。overlay 摘要 `9c3bc5d7854595fbd2b3800f73b2c46541ca4d55dd00215912eb7735baf5a1a6`，实体归档摘要 `4be67ca4963561722de9f7d77fdd92ee7e1577c9feb94c2665dadf69d0e7143d`，私有索引 `4cc48fdf8ada092d5fc76c62051588468874c757f4cbc8ff0389ba3fa21cad2f`。Root 再次独立核对 194 个归档成员的字节、大小、mode／执行位与 19 份受限拷贝；旧两轮失败、正式 23888 B 和前轮诊断 22164 B 独立保持。
-
-固定 SDK／实际 ELF 的只读网络生命周期复核确认：未连接的默认 HTTP transport 只是 427 B 请求量，512 B 发送缓冲尚可研究缩短生命周期，两项合计 939 B 请求量不是实测收益；动态 TLS 缓冲已按原生规则释放，peer／handshake 与启动栈不能重复计省。FRP 私有 CA 动态对象量仍待实测，嵌入的常驻证书不能回收。当前实际新增节省为 0。P6-03、满合法队列／在途／并存事件、FRP 双流／最大记录／重连、native 全峰值、Flash 最坏成本、百次公开循环、ESP32、断电／72 小时与正式入口继续开放。
-
-## 连续诊断与公开生命周期复验
-
-2026-10-03，保持上一轮已冻结来源 A／目标 C 的签名固件字节、全部正式资源预算与生产信任不变，仅在仓外驱动的目标确认循环接受两种现有码未决形态：`ota_result_uncertain`／完整原操作元数据，或 `storage_uncertain`／null。后者继续同一原 OTA ID 的只读查询，不产生新 OTA 操作或重发写命令。132 项 pure mocks 通过，Root 独立重跑其中新增 10 项并核对三行精确差异、原恢复代码和全部输入。原单次 5 秒查询与 90 秒循环时序保持，success 先于总 deadline 判定的既有顺序未改，不宣称硬性 90 秒墙钟截断。
-
-新实体整轮退出 0，公开安装／一次 WRITE 联合 OTA 持久成功、USB／认证 MQTT 各一次 stop/start、五个生命周期原 ID 各写一次及重复只读均通过。原 OTA ID 的目标确认回读为 28 次 running、2 次 `ota_result_uncertain`、1 次 succeeded；本轮没有观察到 `storage_uncertain`，该分支由上一轮真实失败和本轮纯测试分别覆盖。停止后重启自动运行当前固件 confirmed，旧 boot 的 stop ID 在 USB 与 MQTT 两通道 unknown；十二项真实业务、卸载、来源 A 保持和目标 C 逐字节读回全部通过，PUBACK 仍只作传输证据。
-
-连续单 reader 从原一次 `ota.start` 前覆盖来源、目标及两种生命周期切片，明确重启请求后关闭；无 backend 重开、捕获错误、队列溢出或 join 超时，768227 B UART 全部记录并消费。64 KiB 有界队列的实际最高待消费量为 64988 B；这只证明本轮范围，不证明更大负载的捕获能力。完整 parser 保留 **10 条 NEW_HISTORY、dropped=0**，unsupported／ISR 均 0，实际 A ELF 返回位置与完整源绑定已核对。来源下载 **146/146** 样本 MQTT／FRP ready，历史各 heap minimum 合计 **22164 B < 49152 B**，窗口 current 最低 26856 B；全部观察成本保留，不与前轮独立读数相减归因或加回。
-
-原始日志另有 477 个完整存活任务快照，expected 与 captured 全部相等，无采样申请失败；13 个已观察任务名的栈余量均至少 1024 B。任务名含平台原样空格，解析保持原值。有限快照不证明全部任务生命周期或满合法峰值；公开 stop 结果与停止窗口不替代独立 native join／句柄仪器。
-
-写前重新读取安全状态、两份完整 4 MiB 基线和三个独立原代码区；初次完整实验 Flash、post-OTA A/C 与结束原三码逐字节核验通过。结束擦除全部实验数据，只恢复原 bootloader／partition／factory，不恢复旧／实验 NVS，不写 eFuse。reset／Wi-Fi down ACK、串口、三个 fixture、零所属进程及五个实测精确 listener 释放独立通过；FRPS remote port 在活动期间由所属进程实际 LISTEN 快照绑定。首次清理复核与两个 Root 只读复核并发，所属进程门禁拒绝；等其结束后原门禁单独回读通过，未减弱门禁或清理未知进程。
-
-受限且 Git 忽略的 `c3-validation-20261003/c3-heap-history-confirmed-observer` 保留原 14142 文件软件冷输入、46 member 新 driver overlay、184 member 本轮完整实体及独立证明。driver overlay 归档摘要 `18c127b4b86771f63c8f7beae6ed6e22f8f2754604ae9aab69eddee8df96401b`；实体归档摘要 `a856d4af618dfe3d1bfff0c63bad4b79206c7086aad27e0cda44271e4723f1c9`，私有索引 `3f30f1a187593e306bb0a15a20a55aee6e45820bde16503cad8e2d60098c72eb`。Root 独立复核全部成员与 19 份受限拷贝的字节、大小、mode、执行位；`c3-heap-history-confirmed-analysis` 的任务／冻结复核补充索引为 `e64ce36feae4fa77897dbde44bfb90f430962ae3deea7a4b47f33a8fb3a39154`，原冻结树未修改。两轮失败及正式 23888 B 生命周期读数均保持独立。
-
-只读内存 owner 复核没有发现第二份 64 KiB 或尚可再次回收的 10 KiB 启动栈；已识别 Container／WAMR 常驻上游申请子集至少 72578 B，不是完整总额。现有小型去重方向尚未实施或证明足以填补缺口，实际节省记为 0。满合法 MQTT 队列／在途与业务事件、FRP 双流／最大记录／重连、独立 native 全峰值、Flash 最坏成本、百次公开循环、ESP32、断电／72 小时及正式入口继续开放；本轮功能与诊断通过，P6-03／五能力容量总门未通过。
-
-## 全 prepare 历史新低诊断与查询暂态失败
-
-2026-10-03，在公开 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89`／OTA `bf11916ab904be4ee9bcdfae213c85336363e96a` 的仓外诊断组合上，捕获范围从实际 `eota_prepare` 入口至返回。固定 1800 B 记录区只保留 `NEW_HISTORY`，连续单 reader 在原一次 OTA 写命令前开启、覆盖来源与目标观测；无 reader 重开、队列溢出或后台错误。观察成本不回加，正式 Wi-Fi、TLS、任务栈与 guest 预算保持。
-
-原始 UART 完整解析出 SUMMARY 与全部 12 条历史触发，dropped、unsupported 和 ISR 均为 0。来源下载 148/148 个 `0 < received < total` 样本 MQTT／FRP ready，历史 minimum 的各 heap 合计为 **22016 B < 49152 B**，窗口 current 最低为 24652 B。两者语义和时点不同；前者不能解释为所有 heap 的同时 live 峰值。实际 A ELF 将首先观察新低的外层 allocator 返回位置映射到 `esf_buf_alloc_dynamic`、`esp_mbedtls_add_tx_buffer`、cJSON 与 RSA 验证；SDK 解锁至 hook 之间允许抢占，PC 不是唯一致因证明，也不能区分不同 TLS 实例。
-
-本轮整体验证失败。目标已启动 pending 产品，一次代表事件返回 guest 结果 2；原 ID 的 27 次只读 OTA 结果中，前 26 次 running，最后一次为代码允许的 `unknown/storage_uncertain/result:null`，过窄驱动断言立即退出。失败后的只读 Flash 快照显示 EOTA v3 308 B 收据仍 PREPARED、ECS2 v2 为 sequence 10／HEALTH_VERIFIED、目标 C 已 VALID；NVS、EOTA、ECS2 与 otadata CRC 及原操作／目标包绑定有效，未发现持久损坏。快照取得晚于查询且经历进入 ROM，不能证明当时是哪次短 Flash I/O claim 失败，也不能证明最终成功。
-
-目标最终确认、后继停止／启动／重启、十二项业务、卸载和 post-OTA A/C 镜像读回均未执行，不复用前轮结果补齐。来源 A 只通过本轮已验签新鲜整片镜像及初次 4 MiB 写后精确读回绑定；目标 C 只绑定冻结输入与原一次 OTA 请求。结束完整擦除实验数据，仅恢复本次独立读取的 bootloader／partition／factory，双新鲜全片基线、三代码区逐字节恢复、reset／Wi-Fi down ACK、串口／三个 fixture／所属进程及四个精确已声明 listener 释放独立通过；旧／实验 NVS 未恢复，无 eFuse 写入。
-
-受限且 Git 忽略的 `c3-validation-20261003/c3-heap-history-partial` 保存完整软件与失败实体证据。源／软件证据归档摘要为 `d2ebb20156cbc4732274f7335323315d4d6800467c6f867ef0ec2824d3e08177`／`f85325e20ac626d57963fb6dee3b5247e8101a81f877ddfd051c70e730918437`，14142 文件全部逐项核验；实体 157 member 归档为 `ad35148cbd3dcf08e05b39c44b36f1687932688ea61cee6e3fe95740842ee161`，私有索引为 `413ecb835748776ec524dc6ec0f77f0d989ec87d0c9b3c50a36ed7f4b333ae49`，Root 独立复核全部字节、大小、mode 与执行位。前轮缺失 SUMMARY 的失败保持独立。
-
-后继仅修仓外驱动：在原 90 秒截止时间内，对现码定义的合法暂态持续查询同一原 ID，不重发写命令、不扩期限、不放宽最终 succeeded 与目标绑定门。只读资源审计尚无实测节省；两个小型 owner 复用方向的未实现上界合计仅 1807 B，不能关闭当前缺口。满合法队列、FRP 双流及最大记录、独立 native 峰值、Flash 成本、百次公开循环、ESP32、断电／72 小时和正式入口继续开放；P6-03 与五能力总门未通过。
-
-## 2026-10-03 新低水探针：部分记录失败
-
-本轮实际运行源码为公开 Base `daf9cd8d46bb22cad7f9cc6656de995a25e4fd89`，精确消费 MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 OTA `bf11916ab904be4ee9bcdfae213c85336363e96a`；仅在仓外叠加既有实验 CA／授权、任务观测及私有分配探针。SDK／lwIP／provider、原生锁、正式 Wi-Fi 32／32、TLS 16384／4096、guest 64 KiB 及原任务栈预算保持。A／C 都为 1183744 B，分别为 `0.2.0-c3-heap-daf9-a/c`，完整构建和官方 RSA v2 验签通过；实际源 A／目标 C 摘要分别为 `76ea92a85851a9e4d535bd517b13efc2ecbbd8cb9b6066bfb753eb1659244090`／`f26c6896cbc5783271ae6b46c8cfe2a27d33164ca0d9954af2b00af02731abe5`。14289 个冻结文件及两份软件归档逐项字节、大小、模式／执行位核对通过。
-
-固定观察区 1800 B、实际 IRAM 增量 1332 B，对应普通堆起点后移 2832 B，均计入现场成本。探针在真实 `eota_prepare` 前准入，正文窗口为 `[0, 327680)`；分配 hook 在 native heap 解锁后读取计数，保留前 11 条与最新末条，largest 在任务边界延后采样。本次实际 C3 ELF 的 RAM／Retention／RTC 类型均同时含 `MALLOC_CAP_DEFAULT` 与 `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT`，两选择器匹配同一注册 heap 集合；这不扩大到其它目标或配置，也不能将各 heap 异时历史最低值与延后 largest 当作同时存活证明。
-
-公开安装、一次 WRITE OTA、USB／认证 MQTT 停止启动、停止后重启自动运行 confirmed、旧 stop ID 在新 boot unknown、十二项业务和卸载通过；五个生命周期原 ID 各写一次。来源下载 **139/139** 状态 MQTT／FRP ready，采样历史 heap **21360 B < 49152 B**。最后一个旧低水样本为 received 340928 B／25408 B，首次采到最终新低水为 349120 B／21360 B；这一区间已经超出固定探针窗。它是独立诊断 boot 的读数，不能与正式轮 23888 B 相减归因，也不加回观察成本。完整容量仍未通过。
-
-原始 UART 只保存了 index 8 的两个 heap 尾行，以及 index 9／10／11 的三个完整记录，SUMMARY 和前段记录缺失；实际 dropped／unsupported 数无法核定。完整 parser 正确拒绝 dump，`diagnostic_trigger_evidence_available=false`、整轮 `passed=false`，进程退出 1。三个完整尾记录均只有新 window-current 触发，没有 `NEW_HISTORY`；源 A 同一 SHA 的 ELF 只将其返回地址分别映射到 `http_header_init`、`esp_http_client_init`、`esf_buf_alloc_dynamic`。这不能证明历史低水的致因、完整分配时间线或 native 资源回收，不补造 SUMMARY。已确认原观察循环在正常状态查询之间关闭串口，形成无读者区间；没有发现显式 `tcflush`，不把特定 OS／设备缓冲丢弃机制写成已证实事实。
-
-任何解析错误均只聚合为失败，原恢复 finally 继续。Root 独立核对两份新鲜 4 MiB 基线、三个原代码的独立读取／切片／身份 SHA，以及实验 A/C 精确读回；结束整片擦除旧／实验数据，仅恢复原三代码区并逐字节读回，reset／Wi-Fi down ACK、三 fixture 关闭、串口释放、实验所属进程为零和四个精确 listener 不存在均通过。真实恢复没有失败，唯一聚合错误为 `heap_trigger_uart_parse: ValueError`；不写 eFuse、不恢复旧／实验 NVS。
-
-受限且 Git 忽略的 `c3-validation-20261003/c3-heap-trigger-partial` 保存全部失败输入和原始记录。软件源／证据归档 SHA-256 为 `8e450859589de8e8881cb67d3e0942f113d62095defc4be2b241d8bfb8df1bfa`／`ee8a6aee6907f620f44fac8e67110270b9acdf64d05e38fd05962f361689424f`；实体归档为 `29993f8c845062cb6dffba7d5bb322d0451beb2b95ec42f9ca21b300daddbe97`，181 个 member 全部逐项复核。私有索引为 `90c8aa0166942e9acf2f65b99345fc2e7fd23f964c041448918d043ca82fc797`。下一候选需覆盖整个实际 prepare、仅以 `NEW_HISTORY` 占用记录槽、保持连续单 reader，并重新冻结实际 A/C 字节；旧失败保持。ESP32、满合法峰值、Flash 成本、百次公开循环、掉电／72 小时和正式入口继续开放。
-
-2026-10-02，在已发布 Base `ebf2da71449d59365554e12a4efc3fe41e9b117f` 的运行源码上完成三轮私有诊断。三轮 C3 联合功能与原代码恢复均通过；诊断定位了指定窗口内的较大 TLS 分配，没有证明全部瞬时峰值或关闭 48 KiB 容量缺口。
-
-## 输入与诊断边界
-
-固定 IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c` 和 lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`，精确 MQTT `f32335852d6f823c1a3b130bfbe3a7ac4499e10a`、FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86` 及原生双目标锁保持。实际编译的 MQTT 32 份、FRP 40 份源／头文件／构建与 SDK 检查输入逐项核对。源码只在仓外增加诊断和既有实验 CA、timer 授权／一个定时器配置；Main 不含探针，SDK 源码未修改。目标 C 沿用最新精确基线已验签的既有实验镜像，保留其原收据。
-
-三轮 C3 app 均为 1183744 B，官方 RSA v2 验签通过且落在正式 `0x130000` 应用槽内；正式分区、64 KiB guest、TLS IN 16384／OUT 4096、MQTT 队列／outbox、FRP 记录上限和生产授权保持。诊断轮未验证 ESP32 实板。
-
-| 诊断输入 | 记录区／B | 记录结果 | 来源 OTA 历史 heap／B |
-| --- | ---: | --- | ---: |
-| 原生 HEAP_TRACE_LEAKS，128 条、调用栈深度 0 | 3072 | 首下载回调完整快照 41 条、高水位 54、未溢出；只剩一笔至少 1 KiB 的活跃记录 | 20368 |
-| 原生 HEAP_TRACE_ALL，256 条、调用栈深度 0 | 6144 | 周期快照 256 条且溢出；较早分配可被淘汰，不能据此推断全部早期分配 | 18476 |
-| 原分配器透传，限定 OTA 任务、至少 1 KiB、128 条 | 2560 | 10 笔完整较大 calloc 记录，无丢弃，实际 ELF 映射调用位置，10 笔释放均有记录 | 23092 |
-
-SDK 的 C3 原生调用栈追踪在没有 frame pointer 时只允许深度 0。首个深度 4 输入被原生配置约束拒绝；随后启用原生 frame pointer 的诊断构建达到 `0x131000`，超过正式槽 4096 B，未刷板。最终使用深度 0。第三轮只在私有组件链接层记录 allocator 调用的返回地址，实际反汇编确认继续调用原 `esp_mbedtls_mem_calloc`／`esp_mbedtls_mem_free`；没有修改 SDK、开启 frame pointer 或改变分配结果。一次选错依赖比对收据形态的校验失败也在刷板前停止，原输入与纠正后的收据分别保留。
-
-## 定向记录证明了什么
-
-第三轮从 `eota_prepare` 入口记录到首个下载进度回调，并继续记录这些地址的释放直到准备返回。只观察同一 OTA 任务中至少 1024 B 的指定 calloc；其它任务、其它分配入口、小分配及 worker 创建不在该统计中。
-
-| 实际 SDK 调用位置 | 捕获大小／B |
-| --- | --- |
-| `ssl_handshake_init`，由原生动态 `__wrap_mbedtls_ssl_setup` 调用 | 2448 |
-| `esp_mbedtls_add_tx_buffer` | 4770、4437 |
-| `esp_mbedtls_add_rx_buffer` | 1215、4461 |
-
-128 条容量下仅记录 10 笔且 dropped 为 0，周期串口输出覆盖全部索引 0–9；每笔大小、地址、调用位置与分配后 free 读数在重复报告中一致，随后均观察到 freed。记录中的瞬间 free 最低为 37560 B；这些时点不能代替历史低水、整个握手、其它线程或全瞬时峰值。较大 TLS 分配已释放，不足以解释全部堆低水，不能据此认定 TLS、Wi-Fi 或其它模块是唯一原因。
-
-原生 ALL 轮保留下来的较大记录包括 1024、1532、1700 B，但没有调用位置且已发生淘汰，不能直接将后两种大小全部归为 Wi-Fi。原生 LEAKS／ALL 的准备返回完整快照未被串口日志捕获；只记录已实际收到的完整快照和原始不完整行，不补写不存在的阶段证据。
-
-## 网络分配调用位置续验
-
-同日独立网络探针的 231 份私有证据逐项大小与 SHA-256 核对通过，冻结索引为 `a9856435c47441583d4e97d0c6146f96d9d8be385c96ff71b634d74a2d40d428`。窗口仍从 `eota_prepare` 入口到首个正文进度，只统计非 ISR、cache 开启时 1532／1700 B 的原生 malloc／calloc。原日志捕获四个完整保留摘要、八个组记录：Wi-Fi 的 `esf_buf_alloc_dynamic` 为 1700 B／14 次，tcpip 的 `mem_malloc` 为 1532 B／5 次。Wi-Fi 只映射到函数，源码行不可用；lwIP 为固定 SDK `mem.c:209`。这些是调用次数，不记录释放或同时存活，不证明缓冲数量和优化收益。首进度摘要截断、准备返回完整快照未捕获，保持原证据边界。
-
-实际 ELF 和 52 条保留指令独立核对；两个 wrapper、原分配器及 cache 检查均在 IRAM，cache 关闭时直接透传返回，Flash 记录器仅在 cache 开启后进入。记录区为 1024 B，heap trace／frame pointer 关闭，TLS 16384／4096 B 不变。本轮历史最低 heap 为 24956 B，139 份来源下载状态均 MQTT／FRP ready；正常固件 23800 B 保持独立读数，不能加回记录区字节。公开安装、一次 WRITE OTA、一次 MQTT restart、十二项业务、卸载、全量实验 Flash 与 A／C 镜像回读、实验数据清除和三个原代码区逐字节恢复均核验；四服务和串口释放，无 eFuse 写入。该切片仍未通过 48 KiB 门。
-
-## 联合功能与恢复
-
-每轮都独立核对本次唯一 C3、USB 身份、Flash／安全状态及原三个代码区，完整擦除数据后写入并全量回读实验 Flash。公开安装、一次 WRITE 联合 OTA、一次 MQTT restart、十二项消息计数业务、公开卸载、来源 A 保持及目标 C 镜像回读通过。三轮来源下载分别为 127／130／124 份采样，全部 MQTT／FRP ready；目标和第三 boot 保持新设备身份、revision 3、确认产品及原 OTA 成功。写命令各提交一次。
-
-结束均完整擦除实验数据，只恢复原 bootloader、partition table 和 factory app，三个代码区逐字节核对，原应用 Wi-Fi down ACK、实验 FRPS／网关／HTTPS／MQTT 停止和串口释放均确认。未恢复旧／实验 NVS，未写 eFuse 或生产服务，未操作已拔掉的 ESP32。
-
-## 原生 Wi-Fi 动态缓冲候选
-
-2026-10-02 在 Base `63ea379bb8dbb0f2ddbee44f525a4a45a9b51d1b` 的同一运行源码上，仓外候选仅将 C3 原生动态 RX 从 32 改为 6、动态 TX 从 32 改为 8；静态 RX／BA 窗口仍为 6。A／C 实际编译配置除这两项及官方版本字段外，与前轮网络输入的 active 配置一致，SDK 未改；TLS、guest、MQTT 队列／outbox 与 FRP 上限保持。仍含既有私有内存采样、实验 CA 与 timer 授权，没有 allocator 记录区。此候选未进入正式默认配置。
-
-独立 verifier 的 584 项检查通过，核对源码归档、44 份 SDK 制品、实际配置／ELF、A／C 官方 RSA v2 验签、完整 Flash 与恢复字节。两个镜像均为 1183744 B，落在正式应用槽内。公开一次安装、一次 WRITE 联合 OTA、一次 MQTT restart、十二项消息计数业务及卸载通过，133／133 份来源下载采样均 MQTT／FRP ready。来源下载历史最低 heap 为 **25180 B**，低于 49152 B；同一采样窗口 free／最大连续块／control 栈最低为 37212／27648／2376 B。control 栈为 8192 B，此读数不覆盖所有任务栈或满合法重叠峰值。
-
-本轮写前取得两份相同的完整 4 MiB 新鲜基线；实验镜像全量回读、来源 A 保持和目标 C 精确回读通过。结束整片擦除实验数据，只恢复原三个代码区并逐字节比较，原应用 Wi-Fi down ACK、四服务和串口释放已核对；旧／实验 NVS 未恢复，无 eFuse 写入。此前两次 esptool 输出形态解析失败均发生在 Flash 写入前，原输入和失败日志分别保留。
-
-307 份私有证据保存在 `wifi-dynamic-buffer-candidate`，冻结索引 SHA-256 为 `61d5d190128e9e7174d18ecd8834c057c3d7cd5345c1686f0cb96943e0219612`；独立证明 SHA-256 为 `7f73d15e14542b483e80784d22d0fe91534f0b7348d98dc267a14890170c6ec2`。正常基线 23800 B 是独立样本，不能把差额全归因于 Wi-Fi 修改，也不能据单次功能通过宣布收益或容量通过，因此正式默认值保持。满负荷、完整峰值、Flash 成本、两板、掉电和长稳仍未验收。
-
-## 冻结诊断证据与开放项
-
-ESP Tool 受限、Git 忽略的 `c3-validation-20261002` 独立保存下列输入、原始日志、ELF／map、官方验签、全量回读和清理记录；全部文件摘要核验，旧索引保持。
-
-| 私有目录 | 文件数 | 冻结索引 SHA-256 |
-| --- | ---: | --- |
-| `ota-native-heap-live-trace` | 205 | `c3c7782ab8c760681424a7e3f7d6e04271f3ab079b2f6d140ba49887e4687d8d` |
-| `ota-native-all-allocation-trace` | 193 | `77e1d2599a839fbc9f05f82ce12992b9fabe32b30b9ccb53a0e55dd184f18da6` |
-| `ota-tls-allocation-callers` | 206 | `40bf3f71d8d9b683e1b60890dde9418de1e61dec7198ec0e3f65ee88644c4601` |
-| `network-allocation-callers` | 231 | `a9856435c47441583d4e97d0c6146f96d9d8be385c96ff71b634d74a2d40d428` |
-
-- [ ] 正常固件仍沿用 [RTC 所有权检查点](rtc-config-ownership-checkpoint.md)的独立读数 23800 B，低于 49152 B 门；不向诊断读数加回记录区字节来标记通过，也不将独立样本差额归给单项修改。其它网络分配来源、满队列／outbox、FRP 双流／预备流／64 KiB 记录、最大输入、全部任务栈和合法重叠峰值、百次整机生命周期、Flash 最坏成本、掉电、72 小时、ESP32 和生产入口继续开放。P6-03 与五能力总门未通过。
-
-</details>
+### R7 仓库退役与正式交付
+
+- [x] 2026-10-09依当前请求提前完成退役运行组件本地checkout、gitlink和工作区登记清理；退役运行组件与自有引擎云端仓库均已精确删除并回读404。此项是退役事实，独立于R5／R6资格。
+- [x] 清理Base退役实验正文、不可执行入口与失效源码来源；保留原生固件、网络／OTA软件结果、当前恢复工具及既有私有原始资料，不引入替代引擎。
+- [ ] 最终冻结后再次从保留仓和锁定ESP-IDF／lwIP完成干净双目标签名构建／验签，核对实际运行候选、真实客户端与当前依赖；本轮文档／历史工具清理不冒称新构建通过。
+- [ ] 按正式产品入口交付固件及Tool Mac App／Server／Web，取得正式信任、设备独立FRP OTA、本机有线操作、Rust／Swift实际刷写恢复与旧安装验收；同步README、API与任务总览。只有R3真实路线、R5及R6取得资格后才完成正式交付。

@@ -35,7 +35,7 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_frp_management_crypto_tests.s
 
 独立crypto入口需OpenSSL与pkg-config，真实loopback TCP、HMAC、decoder和Base handler核对原status／restart固定向量、签名错误、响应篡改、原ID回放与延迟一次重启。普通listener矩阵另覆盖六新命令、绑定PUT上传、分片／预读、错HMAC、framing、截断／多余字节、并发查询、真实读线程与configure shutdown／fd回收。
 
-通用HTTPS／有界输入流、完整镜像／签名／Flash／slot机制回归归属于精确esp-ota组件，不保留第二份实现。旧Container生命周期、包source／账本、guest与专属探针测试已退役；历史证据继续保存，但没有现役编译入口。
+通用HTTPS／有界输入流、完整镜像／签名／Flash／slot机制回归归属于精确esp-ota组件，不保留第二份实现。当前测试图只覆盖保留的原生固件、网络、OTA与恢复；退役动态运行测试及专属探针已删除。
 
 宿主Python控制、FRP客户端、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。官方 FRPS 的 Python 场景消费者也位于 `tools/frps_ota_scenario.py`；C／Go 主机联调夹具归入 [frps-ota-interop](frps-ota-interop/)，本目录保留 Shell 入口；它不是 ESP-IDF 组件或 Go import 包。本轮输入／实际结果见[原生软件检查点](../../docs/operations/native_software_checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
 

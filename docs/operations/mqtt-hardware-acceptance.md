@@ -1,6 +1,6 @@
 # MQTT 实板验收记录
 
-本页是 2026-09-22 旧 Base MQTT 适配层及当时实验镜像的历史验收，不覆盖 2026-09-23 的[公开组件硬切软件候选](mqtt-hard-cut-candidate.md)。
+本页只记录2026-09-22旧Base MQTT适配层和当时独立实验镜像的真实结果，不覆盖当前公开MQTT组件与原生固件组合；当前软件及双板资格分别见[原生软件检查点](native_software_checkpoint.md)和[唯一执行计划](ota-allocation-diagnostic-checkpoint.md)。
 
 2026-09-22，在迁移基线对应的同一块 ESP32-C3、4 MiB 板卡上，完成官方 MQTT 集成实验应用的一组真实网络与故障测试。P3 仍在实施；普通 ESP Base 尚未接入 MQTT 持久配置、设备命令与 reported。
 
@@ -92,4 +92,4 @@ TLS 与最终 TCP 的每轮刷写都重新核对本轮设备、配置、OTA 选�
 
 ## 尚未关闭的验收
 
-动态订阅/退订、显式 TCP 实验、本板 station 中断恢复和逐轮任务/socket/esp_timer 采样已补齐。外部 AP 中断、WPA3 与更全面的组合资源验收仍待完成；当前采样不包括全部 FreeRTOS 软件计时器和 lwIP 内部超时。P2 的候选/Flash 提交中间态掉电、WPA3 与完整插拔矩阵继续待验。普通基座的 MQTT 配置/命令接入、FRP、OTA、工具网关与 72 小时组合测试属于后续工作；本记录不声明五能力或整个开发计划完成。
+动态订阅/退订、显式 TCP 实验、本板 station 中断恢复和逐轮任务/socket/esp_timer 采样已补齐。外部 AP 中断、WPA3 与更全面的组合资源验收仍待完成；当前采样不包括全部 FreeRTOS 软件计时器和 lwIP 内部超时。P2 的候选/Flash 提交中间态掉电、WPA3 与完整插拔矩阵继续待验。普通基座的 MQTT 配置/命令接入、FRP、OTA、工具网关与 72 小时组合测试属于后续工作；本记录不声明当前原生固件或完整交付完成。

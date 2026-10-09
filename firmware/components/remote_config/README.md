@@ -2,7 +2,7 @@
 
 拥有完整配置、单调 revision 和 NVS 提交边界。候选验证由单一控制任务调度，本组件只在连接证明成立后提交。
 
-C3 在一次 load、规范字节消费或完整 commit 中只申请一份 7618 B 编解码缓冲，commit 的前值读取、编码、写入和独立读回复用同一 owner；返回前清零释放。OOM 不开始 NVS 操作，读取与 committed 输出保持，工作配置清零。ESP32 保留已有 RTC 缓冲。C3 长期 context 由 device_protocol 放在 RTC，并在每次启动加载前清空、从 NVS 恢复；RTC 不作为持久事实。双目标故障回归及 C3 实板边界见[RTC 检查点](../../../docs/operations/rtc-config-ownership-checkpoint.md)。
+C3 在一次 load、规范字节消费或完整 commit 中只申请一份 7618 B 编解码缓冲，commit 的前值读取、编码、写入和独立读回复用同一 owner；返回前清零释放。OOM 不开始 NVS 操作，读取与 committed 输出保持，工作配置清零。ESP32 保留已有 RTC 缓冲。C3 长期 context 由 device_protocol 放在 RTC，并在每次启动加载前清空、从 NVS 恢复；RTC 不作为持久事实。双目标故障回归及 C3 实板边界见[当前资源盘点](../../../docs/operations/native_software_checkpoint.md#静态资源盘点)。
 
 ## 架构拓扑
 
@@ -23,7 +23,7 @@ USB `config.set` 使用 schema_version 3 的完整配置。Wi-Fi 为 null，或�
 
 写入前重新读取 revision，拒绝冲突和溢出；完整 blob 写入、`nvs_commit` 与读回一致后才成功。失败不回显密码、PEM 或管理密钥；status 仍仅返回现有 revision、能力与资源事实。旧迁移代码读取的 `nvs/base_config/generation` 在已核对实板上不存在，不保留兼容读取或双写。
 
-正式 Base 的启动读取和连接证明后的提交由 `device_protocol` 使用与 OTA、FRP scratch、Container 相同的短时 Flash I/O owner。启动读取无法取得 owner 时停止初始化；控制任务在 owner 忙时保留已验证候选，在原试运行期限内下一轮再尝试，不占用工作区也不执行 NVS。提交和读回期间持有 owner；释放失败按 `storage_uncertain` 处理。此软件合同尚未测量最大配置 NVS 提交的单步占用和实板并发时延。
+正式 Base 的启动读取和连接证明后的提交由 `device_protocol` 使用与 OTA、FRP scratch 相同的短时 Flash I/O owner。启动读取无法取得 owner 时停止初始化；控制任务在 owner 忙时保留已验证候选，在原试运行期限内下一轮再尝试，不占用工作区也不执行 NVS。提交和读回期间持有 owner；释放失败按 `storage_uncertain` 处理。此软件合同尚未测量最大配置 NVS 提交的单步占用和实板并发时延。
 
 配置候选只在 RAM；没有连接证明不调用写接口。写入开始后的错误为 `storage_uncertain`，不能假设原值未变，也不自动重试；控制任务重新读取真实持久状态并停止后续写命令，待重启重新核验。读取失败或格式损坏停止初始化，不自动擦除。身份 namespace 和分区布局保持不变。
 

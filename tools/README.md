@@ -21,7 +21,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 ## 原生 MQTT 业务事件
 
-`business_event.py` 从私有普通事件文件生成域隔离 HMAC帧；key 文件须0600、非符号链接，不回显key。`business_event_publish.py` 通过严格 TLS／QoS1／非 retained 仅发布一次，先核对本 boot reported 的下一连续序号，随后按 boot、序号、原始事件摘要和实际 business result 对账。没有包摘要或 guest 入口。
+`business_event.py` 从私有普通事件文件生成域隔离 HMAC帧；key 文件须0600、非符号链接，不回显key。`business_event_publish.py` 通过严格 TLS／QoS1／非 retained 仅发布一次，先核对本 boot reported 的下一连续序号，随后按 boot、序号、原始事件摘要和实际 business result 对账。输入只绑定原生业务身份。
 
 完整 event frame 最多4096 B，业务原始字节最多3924 B；输入语义与13字段reported见[设备协议](../docs/design/device-protocol.md)。Broker PUBACK不是设备执行成功；丢失结果不自动重发业务或换序号。
 
@@ -62,7 +62,9 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 原生候选／公钥／分区输入、旧C3双备份和现役AT双备份的读取先以非阻塞方式打开，再核对普通文件及原权限／尺寸规则；无写入方的FIFO会明确拒绝，不会停在打开阶段。完整受影响回归35项及原失败见[输入拒绝补审](../docs/operations/native_software_checkpoint.md#一次性迁入输入拒绝补审)；本工具仍只准备离线输入，不能代替本轮实体身份、正式信任、恢复基线和唯一租约。
 
-动态包生命周期生成器和专属NVS/QEMU构建入口已删除。历史合成证据仍在[证据目录](../firmware/tests/nvs-capacity-probe/evidence/README.md)，不作为当前构建入口。`prepare_qemu_frp_authenticated_probe.py` 仅对没有.git的独立Base副本注入通用64KiB认证记录测试任务，改用原生READY接线；它不访问真实设备、不生成生产凭据或继承旧guest资格。
+旧动态包生命周期、专属NVS容量探针与旧QEMU组合入口已删除。当前离线准备只消费明确SDK、真实旧布局终态与签名固件，工具与本轮设备写入资格分别核对。
+
+`prepare_qemu_frp_authenticated_probe.py` 仅对没有.git的独立Base副本注入通用64KiB认证记录测试任务，改用原生READY接线；它不访问真实设备、不生成生产凭据或继承旧guest资格。
 
 ## 资源与独立 MQTT 实验
 
