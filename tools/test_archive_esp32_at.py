@@ -35,7 +35,7 @@ class ArchiveTests(unittest.TestCase):
     @staticmethod
     def make_flash() -> bytearray:
         flash = bytearray(b"\xff" * archive_tool.FLASH_SIZE)
-        for index, (name, address, size) in enumerate(archive_tool.OLD_REGIONS):
+        for index, (name, address, size, preserved_size) in enumerate(archive_tool.OLD_REGIONS):
             entry = bytearray(b"\0" * 32)
             entry[:2] = b"\xaa\x50"
             entry[2] = 1
@@ -45,7 +45,9 @@ class ArchiveTests(unittest.TestCase):
             entry[28:32] = b"\xff" * 4
             at = archive_tool.TABLE_OFFSET + index * 32
             flash[at:at + 32] = entry
-            flash[address:address + archive_tool.PRESERVED_SIZE] = bytes([index + 1]) * archive_tool.PRESERVED_SIZE
+            for page in range(preserved_size // archive_tool.SECTOR_SIZE):
+                start = address + page * archive_tool.SECTOR_SIZE
+                flash[start:start + archive_tool.SECTOR_SIZE] = bytes([index * 3 + page + 1]) * archive_tool.SECTOR_SIZE
         return flash
 
     def run_tool(self, *, other: bytes | None = None, mode: int = 0o600,
@@ -64,12 +66,14 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output.stat().st_mode & 0o777, 0o600)
         archive = self.output.read_bytes()
-        self.assertEqual(len(archive), 0x4000)
-        for index, (_, address, size) in enumerate(archive_tool.OLD_REGIONS):
-            rebuilt = archive[index * 0x2000:(index + 1) * 0x2000] + b"\xff" * (size - 0x2000)
+        self.assertEqual(len(archive), 0x5000)
+        cursor = 0
+        for _, address, size, preserved_size in archive_tool.OLD_REGIONS:
+            rebuilt = archive[cursor:cursor + preserved_size] + b"\xff" * (size - preserved_size)
             original = bytes(self.flash[address:address + size])
             self.assertEqual(rebuilt, original)
             self.assertEqual(hashlib.sha256(rebuilt).digest(), hashlib.sha256(original).digest())
+            cursor += preserved_size
         self.assertNotIn("0101010101", result.stdout)
 
     def test_full_backup_mismatch_blocks_output(self) -> None:
@@ -109,14 +113,14 @@ class ArchiveTests(unittest.TestCase):
                 self.assertFalse(self.output.exists())
 
     def test_nonempty_tail_blocks_output(self) -> None:
-        for _, address, _ in archive_tool.OLD_REGIONS:
+        for _, address, _, preserved_size in archive_tool.OLD_REGIONS:
             with self.subTest(address=address):
-                original = self.flash[address + 0x2000]
-                self.flash[address + 0x2000] = 0
+                original = self.flash[address + preserved_size]
+                self.flash[address + preserved_size] = 0
                 result = self.run_tool()
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.output.exists())
-                self.flash[address + 0x2000] = original
+                self.flash[address + preserved_size] = original
 
     def test_standard_md5_record_is_verified(self) -> None:
         offset = archive_tool.TABLE_OFFSET + 2 * 32

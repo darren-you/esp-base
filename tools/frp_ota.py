@@ -85,12 +85,19 @@ class FrpClient:
         canonical_id(device_id)
         if not isinstance(key, bytes) or len(key) != 32 or not any(key):
             raise ValueError("管理 HMAC key 必须是非零 32 字节")
+        if (not isinstance(endpoint, str) or not 1 <= len(endpoint) <= 1024 or
+                any(ord(character) <= 32 or ord(character) >= 127 or character == "\\"
+                    for character in endpoint)):
+            raise ValueError("endpoint 必须是规范 ASCII 地址，不能带空白或控制字符")
         address = urlsplit(endpoint)
+        path_prefix = "" if address.path in {"", "/"} else address.path
         if (address.scheme not in {"http", "https"} or not address.hostname or
                 address.username is not None or address.password is not None or
-                address.path not in {"", "/"} or address.query or address.fragment):
-            raise ValueError("endpoint 必须是明确的 HTTP(S) 设备 FRP 地址，不能带路径或凭据")
+                "?" in endpoint or "#" in endpoint or
+                (path_prefix and not re.fullmatch(r"(?:/[a-z0-9]+(?:-[a-z0-9]+)*)+", path_prefix))):
+            raise ValueError("endpoint 必须是明确的 HTTP(S) 地址及规范受控路径前缀，不能带凭据或路径别名")
         self.address = address
+        self.path_prefix = path_prefix
         self.device_id = device_id
         self.key = key
         self.clock = clock
@@ -240,7 +247,7 @@ class FrpClient:
 
     def _headers(self, method, path, content_type, size, tag):
         host = self.address.netloc
-        return (f"{method} {path} HTTP/1.1\r\nHost: {host}\r\n"
+        return (f"{method} {self.path_prefix}{path} HTTP/1.1\r\nHost: {host}\r\n"
                 f"Content-Type: {content_type}\r\nContent-Length: {size}\r\n"
                 f"X-ESP-Management-Tag: {tag}\r\nConnection: close\r\n\r\n").encode("ascii")
 

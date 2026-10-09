@@ -66,6 +66,10 @@ class NativeMigrationTests(unittest.TestCase):
                 rows = [("nvs", "data", "nvs", "0x12000", "0xe000", ""),
                         ("at_customize", "data", "undefined", "0x20000", "0xe0000", ""),
                         ("factory", "app", "factory", "0x100000", "0x1b0000", "")]
+            elif source_layout == "c3_mqtt_factory":
+                rows = [("nvs", "data", "nvs", "0x9000", "0x6000", ""),
+                        ("phy_init", "data", "phy", "0xf000", "0x1000", ""),
+                        ("factory", "app", "factory", "0x10000", "0x100000", "")]
             else:
                 rows = [("nvs", "data", "nvs", "0x9000", "0x6000", ""),
                         ("phy_init", "data", "phy", hex(layout["phy"]), "0x1000", ""),
@@ -95,7 +99,7 @@ class NativeMigrationTests(unittest.TestCase):
             raise AssertionError(result.stderr.decode() + result.stdout.decode())
 
     @staticmethod
-    def image(target, version, key=b"", app=True):
+    def image(target, version, key=b"", app=True, project=b"esp_base", payload=b""):
         header = bytearray(24)
         header[0:2] = bytes((0xe9, 1))
         header[12:14] = (5 if target == "esp32c3" else 0).to_bytes(2, "little")
@@ -104,8 +108,9 @@ class NativeMigrationTests(unittest.TestCase):
         if app:
             data[:4] = (0xabcd5432).to_bytes(4, "little")
             data[16:16 + len(version)] = version
-            data[48:56] = b"esp_base"
+            data[48:48 + len(project)] = project
         data.extend(key)
+        data.extend(payload)
         raw = header + struct.pack("<II", 0x3c000020, len(data)) + data
         checksum = 0xef
         for byte in data:
@@ -249,7 +254,11 @@ class NativeMigrationTests(unittest.TestCase):
                 self.assertEqual(candidate[0x12000:0x20000], flash[0x12000:0x20000])
                 self.assertEqual(candidate[layout["scratch"]:layout["scratch"] + 0x10000], flash[layout["scratch"]:layout["scratch"] + 0x10000])
                 if layout_name == "esp32_product":
-                    self.assertEqual(candidate[0x3e6000:0x3ea000], flash[0x3e6000:0x3ea000])
+                    old_archive = flash[0x3e6000:0x3ea000]
+                    self.assertEqual(candidate[0x3e5000:0x3ea000],
+                                     old_archive[:0x2000] + b"\xff" * 0x1000 + old_archive[0x2000:])
+                    self.assertEqual(candidate[0x3e5000:0x3e7000], old_archive[:0x2000])
+                    self.assertEqual(candidate[0x3e8000:0x3ea000], old_archive[0x2000:])
                 offset, size = layout["store"]
                 records = migration.legacy.nvs_records(candidate, "base_store", offset, size,
                     migration.legacy.load_nvs_parser(self.components), {migration.CONFIG_KEY})
@@ -375,11 +384,86 @@ class NativeMigrationTests(unittest.TestCase):
                     migration.prepare(args)
                 self.assertFalse(args.output_directory.exists())
 
+    def test_c3_mqtt_factory_first_install_archives_source_and_clears_old_app_regions(self):
+        flash = bytearray(b"\xff" * migration.FLASH_SIZE)
+        table = self.old_tables["c3_mqtt_factory"]
+        flash[0x8000:0x8000 + len(table)] = table
+        image = self.image("esp32c3", b"lab", project=b"esp_mqtt_broker_client",
+                           payload=b"\x37" * 0x12000)
+        flash[0x10000:0x10000 + len(image)] = image
+        args = self.arguments(flash, "c3_mqtt_factory")
+        args.device_id = args.source_verification_key = None
+        args.source_efuse_mac = "01:02:03:04:05:06"
+        report = migration.prepare(args)
+        candidate = (args.output_directory / "candidate-flash.bin").read_bytes()
+        self.assertEqual((args.output_directory / "source-flash.bin").read_bytes(), flash)
+        self.assertNotIn("device_id", report)
+        self.assertEqual(flash[0x11000], 0x37)
+        self.assertEqual(report["source_efuse_mac"], "010203040506")
+        self.assertEqual(report["source_app_sha256"], migration.digest(image))
+        self.assertEqual(candidate[0x9000:0xf000], flash[0x9000:0xf000])
+        self.assertEqual(candidate[0x11000:0x20000], b"\xff" * 0xf000)
+        self.assertEqual(candidate[0x3e5000:], b"\xff" * 0x1b000)
+        self.assertEqual(migration.ota_selection(candidate, {"otadata": 0xf000}),
+                         (1, {0: 2, 1: 2}))
+        for offset in migration.APP_OFFSETS:
+            new_app = self.images[("esp32c3", "new_native")]
+            self.assertEqual(candidate[offset:offset + len(new_app)], new_app)
+        self.assertFalse(report["hardware_write_authorized"])
+
+    def test_c3_mqtt_factory_rejects_persistent_data_wrong_image_and_unbound_identity(self):
+        original = bytearray(b"\xff" * migration.FLASH_SIZE)
+        table = self.old_tables["c3_mqtt_factory"]
+        original[0x8000:0x8000 + len(table)] = table
+        image = self.image("esp32c3", b"lab", project=b"esp_mqtt_broker_client")
+        original[0x10000:0x10000 + len(image)] = image
+        for mutation in ("nvs", "tail", "image", "chip", "project", "padding", "mac", "uuid", "key", "layout"):
+            with self.subTest(mutation=mutation):
+                flash = bytearray(original)
+                if mutation == "nvs": flash[0x9000] = 0
+                elif mutation == "tail": flash[0x3e0000] = 0
+                elif mutation == "image": flash[0x10040] ^= 1
+                elif mutation == "chip": flash[0x1000c] = 0
+                elif mutation == "project":
+                    wrong = self.image("esp32c3", b"lab", project=b"another_project")
+                    flash[0x10000:0x10000 + len(wrong)] = wrong
+                elif mutation == "padding": flash[0x10000 + len(image)] = 0
+                elif mutation == "layout": flash[0x8008] ^= 1
+                args = self.arguments(flash, "c3_mqtt_factory")
+                args.output_directory = self.directory / mutation
+                args.device_id = args.source_verification_key = None
+                args.source_efuse_mac = "01:02:03:04:05:06"
+                if mutation == "mac": args.source_efuse_mac = "not-a-mac"
+                elif mutation == "uuid": args.device_id = DEVICE
+                elif mutation == "key": args.source_verification_key = self.keys["esp32c3"][1]
+                with self.assertRaises(migration.MigrationError):
+                    migration.prepare(args)
+                self.assertFalse(args.output_directory.exists())
+
     def test_esp32_at_archive_binds_physical_mac_and_does_not_invent_uuid(self):
         flash = bytearray(b"\xff" * migration.FLASH_SIZE)
         table = self.old_tables["esp32_at"]
         flash[0x8000:0x8000 + len(table)] = table
-        flash[0x12000:0x20000] = self.nvs({"phy": [("cal_mac", "base64", "AQIDBAUG")]}, 0xe000, version=1)
+        old_nvs = self.nvs({"phy": [("cal_mac", "base64", "AQIDBAUG")],
+                            "nvs.net80211": [("sta.ssid", "base64", base64.b64encode(b"\xff" * 36).decode()),
+                                             ("sta.pswd", "base64", base64.b64encode(b"\xff" * 65).decode())],
+                            "misc": [("page" + str(index), "base64",
+                                      base64.b64encode(bytes((index + 1,)) * 1000).decode())
+                                     for index in range(7)]}, 0xe000, version=1)
+        old_nvs = bytearray(old_nvs)
+        parser = migration.legacy.load_nvs_parser(self.components)
+        parsed = parser.NVS_Partition("old_at_nvs", old_nvs)
+        wifi_payload_at = None
+        for page_index, page in enumerate(parsed.pages):
+            for entry in page.entries:
+                if entry.state == "Written" and entry.key == "sta.ssid":
+                    wifi_payload_at = page_index * 0x1000 + 64 + entry.children[0].index * 32
+                    padding_at = page_index * 0x1000 + 64 + entry.children[-1].index * 32 + entry.data["size"] % 32
+                    old_nvs[padding_at] = 0x37
+        self.assertIsNotNone(wifi_payload_at)
+        self.assertNotEqual(old_nvs[0x2000:0x3000], b"\xff" * 0x1000)
+        self.assertEqual(old_nvs[0x3000:], b"\xff" * 0xb000)
+        flash[0x12000:0x20000] = old_nvs
         flash[0x20000:0x22000] = bytes((0x37,)) * 0x2000
         args = self.arguments(flash, "esp32_at")
         args.device_id = None
@@ -389,10 +473,32 @@ class NativeMigrationTests(unittest.TestCase):
         self.assertNotIn("device_id", report)
         candidate = (args.output_directory / "candidate-flash.bin").read_bytes()
         old_at = (args.output_directory / "at-old-raw.bin").read_bytes()
-        self.assertEqual(candidate[0x3e6000:0x3ea000], old_at)
-        self.assertEqual(old_at, flash[0x12000:0x14000] + flash[0x20000:0x22000])
+        self.assertEqual(candidate[0x3e5000:0x3ea000], old_at)
+        self.assertEqual(old_at, flash[0x12000:0x15000] + flash[0x20000:0x22000])
         self.assertEqual(candidate[0x9000:0xf000], b"\xff" * 0x6000)
         self.assertEqual(candidate[0x3fa000:], b"\xff" * 0x6000)
+        nonempty_wifi = bytearray(flash)
+        nonempty_wifi[0x12000 + wifi_payload_at] = 0x38
+        parsed = parser.NVS_Partition("old_at_nvs", nonempty_wifi[0x12000:0x20000])
+        for page_index, page in enumerate(parsed.pages):
+            for entry in page.entries:
+                if entry.state == "Written" and entry.key == "sta.ssid":
+                    header_at = 0x12000 + page_index * 0x1000 + 64 + entry.index * 32
+                    nonempty_wifi[header_at + 28:header_at + 32] = zlib.crc32(
+                        b"".join(bytes(child.raw) for child in entry.children)[:entry.data["size"]], 0xffffffff).to_bytes(4, "little")
+                    header = nonempty_wifi[header_at:header_at + 32]
+                    nonempty_wifi[header_at + 4:header_at + 8] = zlib.crc32(
+                        header[:4] + header[8:], 0xffffffff).to_bytes(4, "little")
+        nonempty_args = self.arguments(nonempty_wifi, "esp32_at")
+        nonempty_args.device_id = nonempty_args.source_verification_key = None
+        nonempty_args.source_efuse_mac = "01:02:03:04:05:06"
+        nonempty_args.output_directory = self.directory / "nonempty_wifi"
+        with self.assertRaisesRegex(migration.MigrationError, "非空Wi-Fi"):
+            migration.prepare(nonempty_args)
+        self.assertFalse(nonempty_args.output_directory.exists())
+        # Restore the exact original backups before checking the independent MAC rejection.
+        for path in (args.backup_a, args.backup_b):
+            path.write_bytes(flash)
         args.output_directory = self.directory / "wrong_mac"
         args.source_efuse_mac = "01:02:03:04:05:07"
         with self.assertRaises(migration.MigrationError):

@@ -24,7 +24,7 @@ flowchart LR
 
 设备独立 FRP 路线要求控制、固件字节和结果经设备隧道；不依赖 Mac 或 USB，Server／Web 的远程管理直接使用设备 FRP／MQTT。Mac App 只通过本机实际 USB 管理设备，不再作为远程 Bridge，也不依赖宿主 FRP 或远程绑定；设备身份核对与 USB 租约继续保留。有线 OTA 保留 URL 命令、设备 HTTPS 拉取；官方有线刷写／恢复另用于首次布局装配。不能把 USB 发命令称为全部固件字节走 USB；删除 App 的 FRP 功能不删除 ESP 固件自身的 FRP 能力。
 
-两个 4 MiB 目标的 app 槽均为 `0x1e0000`。C3 保留 11 页 `base_store` 与 `frp_scratch@0x3e5000`；ESP32 保留六页 `base_store`、`frp_scratch@0x3ea000` 和只读旧 AT 原字节区。布局变化须按一次性有线迁入工具准备，不由普通 app OTA 修改分区表。
+两个 4 MiB 目标的 app 槽均为 `0x1e0000`。C3 保留 11 页 `base_store` 与 `frp_scratch@0x3e5000`；ESP32 保留六页 `base_store`、`frp_scratch@0x3ea000` 和只读 `at_old_raw@0x3e5000/0x5000`，逐字节保存旧 AT NVS 前三页及 `at_customize` 前两页。布局变化须按一次性有线迁入工具准备，不由普通 app OTA 修改分区表。
 
 ## 开发入口
 

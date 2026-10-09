@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -38,6 +39,7 @@ LAYOUTS = {
     "c3_v1": {"target": "esp32c3", "apps": APP_OFFSETS, "app_size": APP_SIZE,
               "otadata": 0xf000, "store": (0x3e0000, 0x20000), "phy": 0x11000},
     "esp32_at": {"target": "esp32"},
+    "c3_mqtt_factory": {"target": "esp32c3"},
 }
 
 
@@ -115,6 +117,12 @@ def check_old_layout(flash, layout, components):
     table = parse_table(flash[TABLE_OFFSET:TABLE_OFFSET + 0x1000], components)
     if layout is LAYOUTS["esp32_at"]:
         at_archive.check_old_table(flash)
+        return table
+    if layout is LAYOUTS["c3_mqtt_factory"]:
+        require(table == {"nvs": (1, 2, 0x9000, 0x6000, 0),
+                          "phy_init": (1, 1, 0xf000, 0x1000, 0),
+                          "factory": (0, 0, 0x10000, 0x100000, 0)},
+                "源Flash不是C3 MQTT实验的精确factory布局")
         return table
     expected = {"nvs": (1, 2, 0x9000, 0x6000), "phy_init": (1, 1, layout["phy"], 0x1000),
                 "otadata": (1, 0, layout["otadata"], 0x2000),
@@ -357,6 +365,24 @@ def inspect_source(flash, source_layout, device_id, source_key, components, work
     layout = LAYOUTS[source_layout]
     check_old_layout(flash, layout, components)
     parser = legacy.load_nvs_parser(components)
+    if source_layout == "c3_mqtt_factory":
+        require(device_id is None and isinstance(efuse_mac, str) and
+                re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", efuse_mac) is not None and
+                efuse_mac not in {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"},
+                "C3 factory无Base UUID；必须绑定本轮规范eFuse MAC")
+        require(source_key is None, "C3 MQTT factory来源不是签名Base")
+        require(flash[0x9000:0xf000] == b"\xff" * 0x6000 and
+                flash[0x3e0000:] == b"\xff" * 0x20000,
+                "C3 factory含持久数据，不能按空配置首次迁入")
+        slot = flash[0x10000:0x110000]
+        image = signed_image(slot, "esp32c3", app=False, signed=False)
+        require(len(image) >= 288 and u32(image, 32) == 0xabcd5432 and
+                image[80:112].split(b"\0", 1)[0] == b"esp_mqtt_broker_client" and
+                slot[len(image):] == b"\xff" * (len(slot) - len(image)),
+                "C3 factory不是完整未签名MQTT实验镜像")
+        return {}, {"source_layout": source_layout, "source_flash_sha256": digest(flash),
+                    "source_efuse_mac": efuse_mac.replace(":", ""), "source_app_sha256": digest(image),
+                    "source_app_size_bytes": len(image), "config_revision": None}, None
     if source_layout == "esp32_at":
         require(device_id is None and efuse_mac is not None, "旧AT无Base UUID；必须绑定本轮独立eFuse MAC")
         archive = at_archive.make_archive(flash)
@@ -370,9 +396,13 @@ def inspect_source(flash, source_layout, device_id, source_key, components, work
                 "旧AT缺少可绑定物理设备的phy/cal_mac")
         mac = b"".join(bytes(child.raw) for child in phy[0].children)[:6]
         require(mac.hex() == efuse_mac.replace(":", "").lower(), "旧AT备份与本轮eFuse MAC不符")
+        wifi_sizes = {"sta.ssid": 36, "sta.pswd": 65, "ap.ssid": 36, "ap.passwd": 65}
         for entry in entries:
-            if namespaces.get(entry.metadata["namespace"]) == "nvs.net80211" and entry.key in {"sta.ssid", "sta.pswd", "ap.ssid", "ap.passwd"}:
-                require(all(byte == 0xff for child in entry.children for byte in child.raw),
+            if namespaces.get(entry.metadata["namespace"]) == "nvs.net80211" and entry.key in wifi_sizes:
+                require(entry.metadata["type"] == "blob" and entry.data["size"] == wifi_sizes[entry.key],
+                        "旧AT Wi-Fi字段类型或长度不符")
+                payload = b"".join(bytes(child.raw) for child in entry.children)[:entry.data["size"]]
+                require(len(payload) == entry.data["size"] and payload == b"\xff" * len(payload),
                         "旧AT含非空Wi-Fi字段，不能声明空配置迁入")
         return {}, {"source_layout": source_layout, "source_flash_sha256": digest(flash), "old_at_sha256": digest(archive), "source_efuse_mac": mac.hex()}, archive
     require(device_id is not None and legacy.valid_uuid_text(device_id), "Base迁入必须绑定实际UUID")
@@ -436,7 +466,12 @@ def inspect_source(flash, source_layout, device_id, source_key, components, work
               "retired_records": {"/".join(key): base64.b64encode(value).decode()
                                   for key, (_, value) in store.items() if key in RETIRED_KEYS}}
     preserved = {key: value for key, value in store.items() if key not in RETIRED_KEYS}
-    archive = flash[0x3e6000:0x3ea000] if layout["target"] == "esp32" else None
+    # The exact retired ESP32 product layout stored two NVS and two AT pages.
+    # Convert that input once; the new runtime only consumes the five-page layout.
+    archive = None
+    if layout["target"] == "esp32":
+        old_archive = flash[0x3e6000:0x3ea000]
+        archive = old_archive[:0x2000] + b"\xff" * 0x1000 + old_archive[0x2000:]
     return preserved, report, archive
 
 
@@ -490,8 +525,8 @@ def build_candidate(flash, target, app, bootloader, table, store, old_at, compon
     store_offset = 0x3f5000 if target == "esp32c3" else 0x3fa000
     candidate[store_offset:FLASH_SIZE] = store
     if target == "esp32":
-        require(old_at is not None and len(old_at) == 0x4000, "旧AT归档不完整")
-        candidate[0x3e6000:0x3ea000] = old_at
+        require(old_at is not None and len(old_at) == at_archive.ARCHIVE_SIZE, "旧AT归档不完整")
+        candidate[0x3e5000:0x3ea000] = old_at
     return bytes(candidate)
 
 
@@ -547,6 +582,10 @@ def prepare(args):
         store_size = 0xb000 if target == "esp32c3" else 0x6000
         store = generate_store(records, store_size, components, legacy.load_nvs_parser(components), work)
         source = bytearray(flash)
+        if args.source_layout == "c3_mqtt_factory":
+            # The old factory app occupies the new otadata, PHY and coredump areas.
+            # Its complete original bytes have been retained in both full backups.
+            source[0xf000:0x20000] = b"\xff" * 0x11000
         if args.source_layout == "esp32_at":
             # Old AT has no Base identity/config; keep its complete original bytes in the archive.
             source[0x9000:0xf000] = b"\xff" * 0x6000

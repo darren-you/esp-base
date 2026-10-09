@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从两份完整 ESP-AT Flash 备份生成可重建旧持久区的 16 KiB 仓外归档。"""
+"""从两份完整 ESP-AT Flash 备份生成可重建旧持久区的 20 KiB 仓外归档。"""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ FLASH_SIZE = 0x400000
 TABLE_OFFSET = 0x8000
 TABLE_SIZE = 0x1000
 SECTOR_SIZE = 0x1000
-PRESERVED_SIZE = 2 * SECTOR_SIZE
-OLD_REGIONS = (("nvs", 0x12000, 0xe000), ("at_customize", 0x20000, 0xe0000))
-ARCHIVE_SIZE = len(OLD_REGIONS) * PRESERVED_SIZE
+OLD_REGIONS = (("nvs", 0x12000, 0xe000, 3 * SECTOR_SIZE),
+               ("at_customize", 0x20000, 0xe0000, 2 * SECTOR_SIZE))
+ARCHIVE_SIZE = sum(preserved_size for _, _, _, preserved_size in OLD_REGIONS)
 
 
 class ArchiveError(Exception):
@@ -68,26 +68,27 @@ def check_old_table(flash: bytes) -> None:
         require(name and name not in entries, "旧 ESP-AT 分区标签为空或重复")
         entries[name] = (int.from_bytes(raw[4:8], "little"),
                          int.from_bytes(raw[8:12], "little"))
-    for name, address, size in OLD_REGIONS:
+    for name, address, size, _ in OLD_REGIONS:
         require(entries.get(name) == (address, size), f"旧 {name} 分区与已核对布局不符")
 
 
 def make_archive(flash: bytes) -> bytes:
     check_old_table(flash)
     parts = []
-    for name, address, size in OLD_REGIONS:
+    for name, address, size, preserved_size in OLD_REGIONS:
         original = flash[address:address + size]
-        require(original[PRESERVED_SIZE:] == b"\xff" * (size - PRESERVED_SIZE),
-                f"旧 {name} 前两页以外存在非空字节，16 KiB 归档不能无损保存")
-        parts.append(original[:PRESERVED_SIZE])
+        require(original[preserved_size:] == b"\xff" * (size - preserved_size),
+                f"旧 {name} 前 {preserved_size // SECTOR_SIZE} 页以外存在非空字节，20 KiB 归档不能无损保存")
+        parts.append(original[:preserved_size])
     archive = b"".join(parts)
     require(len(archive) == ARCHIVE_SIZE, "归档长度不符")
-    for index, (name, address, size) in enumerate(OLD_REGIONS):
+    cursor = 0
+    for name, address, size, preserved_size in OLD_REGIONS:
         original = flash[address:address + size]
-        rebuilt = archive[index * PRESERVED_SIZE:(index + 1) * PRESERVED_SIZE] + \
-                  b"\xff" * (size - PRESERVED_SIZE)
+        rebuilt = archive[cursor:cursor + preserved_size] + b"\xff" * (size - preserved_size)
         require(rebuilt == original and hashlib.sha256(rebuilt).digest() ==
                 hashlib.sha256(original).digest(), f"旧 {name} 完整分区重建不符")
+        cursor += preserved_size
     return archive
 
 
