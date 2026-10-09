@@ -44,7 +44,7 @@ python3 -m unittest discover -s tools -p 'test_*partition_table.py' -v
 ESP_BASE_IDF=/private/path/esp-base-idf
 git clone --recurse-submodules --branch master \
   https://github.com/darren-you/reference-esp-idf.git "$ESP_BASE_IDF"
-git -C "$ESP_BASE_IDF" checkout --detach b7edc1affc1fa151345ef70c13586aee87149a78
+git -C "$ESP_BASE_IDF" checkout --detach fb53f8a76df5ea913715658f5ac602e91a094e72
 git -C "$ESP_BASE_IDF" submodule update --init --recursive
 git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
   https://github.com/esp-space/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
