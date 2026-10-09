@@ -42,7 +42,7 @@ python3 -m unittest discover -s tools -p 'test_*partition_table.py' -v
 
 ```bash
 ESP_BASE_IDF=/private/path/esp-base-idf
-git clone --recurse-submodules --branch codex/fix-http-init-transport-oom \
+git clone --recurse-submodules --branch master \
   https://github.com/darren-you/reference-esp-idf.git "$ESP_BASE_IDF"
 git -C "$ESP_BASE_IDF" checkout --detach b7edc1affc1fa151345ef70c13586aee87149a78
 git -C "$ESP_BASE_IDF" submodule update --init --recursive
