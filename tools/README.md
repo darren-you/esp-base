@@ -64,8 +64,6 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 旧动态包生命周期、专属NVS容量探针与旧QEMU组合入口已删除。当前离线准备只消费明确SDK、真实旧布局终态与签名固件，工具与本轮设备写入资格分别核对。
 
-`prepare_qemu_frp_authenticated_probe.py` 仅对没有.git的独立Base副本注入通用64KiB认证记录测试任务，改用原生READY接线；它不访问真实设备、不生成生产凭据或继承旧guest资格。
-
 ## 资源与独立 MQTT 实验
 
 `capacity_observation.py` 从实验UART读取顺序周期堆／完整任务快照／退出记录，保持16384／24576／1024 B门；必须匹配真实观察器的完整启动声明、明确 target、唯一启动及非递减 uptime。缺失、错目标、重复启动、uptime 回退、损坏或不完整数据不通过，跨文件也不合并不同启动轮。原日志只读并保存摘要。它不是瞬时峰值或完整native生命周期资格，观察器成本不加回。
