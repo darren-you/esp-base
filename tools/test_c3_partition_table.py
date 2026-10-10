@@ -10,6 +10,9 @@ import sys
 import tempfile
 import unittest
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV = ROOT / "firmware/partitions/c3-partition-table.csv"

@@ -9,6 +9,7 @@ import contextlib
 import csv
 import hashlib
 from importlib import metadata, util
+import json
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,12 @@ import subprocess
 import sys
 import tempfile
 import zlib
+
+# SDK 来源保持只读；标准环境同时传给后续 Python 子进程。
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+import check_sdk as sdk_source
 
 
 FLASH_SIZE = 0x400000
@@ -37,10 +44,10 @@ SDK_NVS_TYPES = {
     ("phy", "cal_data"): "blob",
     ("phy", "cal_version"): "uint32_t",
 }
-IDF_COMMIT = "578cf89c343e388db43ba1f4ddcd602fedcb763c"
 NVS_GENERATOR_VERSION = "0.1.9"
 UUID_V4 = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 ROOT = Path(__file__).resolve().parents[1]
+IDF_COMMIT = sdk_source.read_recipe()[0]["idf"]["revision"]
 
 
 class PreflightError(Exception):
@@ -100,18 +107,18 @@ def compare_backups(first: Path, second: Path) -> bytes:
 
 
 def check_sdk(idf_path: Path) -> Path:
-    result = subprocess.run(
-        ["git", "-C", str(idf_path), "rev-parse", "HEAD"],
-        text=True, capture_output=True, check=False,
-    )
-    require(result.returncode == 0 and result.stdout.strip() == IDF_COMMIT,
-            "ESP-IDF checkout 不是本仓 sdk-lock.json 固定提交")
-    tracked_tools = ["components/partition_table/gen_esp32part.py",
-                     "components/nvs_flash/nvs_partition_tool/nvs_parser.py",
-                     "components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"]
-    unchanged = subprocess.run(["git", "-C", str(idf_path), "diff", "--quiet", "HEAD", "--", *tracked_tools],
-                               check=False)
-    require(unchanged.returncode == 0, "固定 SDK 的分区或 NVS 工具源码已修改")
+    try:
+        environment = sdk_source.git_environment()
+        result = subprocess.run(
+            sdk_source.git_command(idf_path, "rev-parse", "HEAD"),
+            text=True, capture_output=True, check=False, env=environment,
+        )
+        require(result.returncode == 0 and result.stdout.strip() == IDF_COMMIT,
+                "ESP-IDF checkout 不是本仓 sdk-lock.json 固定提交")
+        sdk_source.check(idf_path)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        raise PreflightError(f"固定 SDK 来源校验失败：{exc}") from exc
+    # 完整来源检查已直接核对这些工具的 HEAD 原始字节；不重复运行内容过滤 diff。
     components = idf_path / "components"
     require((components / "partition_table/gen_esp32part.py").is_file() and
             (components / "nvs_flash/nvs_partition_tool/nvs_parser.py").is_file(),
@@ -546,8 +553,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         require(valid_uuid_text(args.device_id), "device-id 必须为小写 UUID v4")
-        components = check_sdk(args.idf_path)
         flash = compare_backups(args.backup_a, args.backup_b)
+        components = check_sdk(args.idf_path)
         records, store = audit(flash, components, args.device_id)
         candidate_sha = write_candidate(args.output_base_store, store, components) if args.output_base_store else None
     except (OSError, PreflightError) as exc:

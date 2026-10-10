@@ -1,8 +1,21 @@
 # 原生业务与独立固件 OTA 软件检查点
 
+本文保留 2026-10-06 软件实施及文内注明的后继批次记录。除“当前 SDK 锁”一节外，下文“当前”“最新”“本轮”均指各自历史批次冻结的输入和结果，不表示当前 checkout 或当前 SDK 已完成同样验证。历史制品尺寸、SHA-256、回归数字和归档收据保持原事实，仅属于各自记录的源码、SDK 与构建输入。
+
 日期：2026-10-06。对应[唯一执行计划](ota-allocation-diagnostic-checkpoint.md)的 R1–R4 软件实施。维护者明确“先完成软件，实板稍后接入”；本轮只执行源码、离线构建和宿主回归，没有连接设备、刷写、修改 eFuse、部署生产；仓库删除在2026-10-09单独完成。R3 的真实 FRPS／公网路线、R5 双板容量与断电、R6 每板百次和连续 72 小时、2026-10-09退役仓库已删除并清理工作区；R7正式交付保持未完成。
 
 同日职责调整初次记录：ESP Tool Mac App 只做本机 ESP 管理，删除 App 内置 FRP／frpc 与远程 Bridge。当时只调整文档并回写R3待办；此前涉及Bridge的软件与测试结果仍是范围调整前真实记录。后继删除与Rust精确消费的软件结果见文末各节，旧阶段数字不赋予新阶段资格。设备自身FRP／MQTT和Server／Web直接面向设备的远程职责保持。
+
+## 当前 SDK 锁
+
+当前开发的唯一 SDK 依据为仓库根 [sdk-lock.json](../../sdk-lock.json)，本次文档校正时的精确锁如下；后续选择以该文件为准。
+
+| 来源 | 仓库身份 | 完整提交 | SDK 内路径 |
+| --- | --- | --- | --- |
+| ESP-IDF | `https://github.com/darren-you/reference-esp-idf.git` | `fb53f8a76df5ea913715658f5ac602e91a094e72` | SDK 根 |
+| lwIP 显式覆盖 | `https://github.com/darren-you/esp-lwip.git` | `f6e98c34ad65d31419b3fbb1fe27015e46060a6a` | `components/lwip/lwip` |
+
+来源准备按[宿主工具](../../tools/README.md#sdk-源码准备)执行，并由 [check_sdk.py](../../tools/check_sdk.py)核对。此次只同步当前来源身份与历史证据边界，未按以上新锁重新完成下文 MCU／LAB 固件的全量构建或验签。下文历史构建、大小、摘要、回归及归档不因此获得当前 SDK 下的固件、实板或发布资格。
 
 ## 离线输入物理名称候选
 
@@ -49,11 +62,11 @@ Fast Deploy Core／Panel 退役动态业务包专属读取能力、路由、配�
 
 ## 构建与输入对应
 
-SDK 唯一依据为 [sdk-lock.json](../../sdk-lock.json)：IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`，lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`。SDK 根的 lwIP gitlink 差异正是该显式 pin，检查器拒绝任何其他修改，不把官方 CMake 的 submodule 警告隐藏。
+该历史批次的 SDK 锁为 IDF `578cf89c343e388db43ba1f4ddcd602fedcb763c`、lwIP `2758df4cd3666b3b2a5b53830148379326425c0d`，不是当前开发锁。本节及后继 Base MCU／LAB 构建记录使用这一历史 SDK 锁，各批次制品仍分别绑定原始源码、配置和收据；下方尺寸、摘要、验签与静态资源数据均为对应历史构建证据。当时 SDK 根的 lwIP gitlink 差异正是该显式 pin，检查器拒绝其他修改，不把官方 CMake 的 submodule 警告隐藏。
 
 两份官方 Component Manager 锁冻结 OTA `8ab62f98fba2ea8e76c2822d0e7bf1cb523088a1`、FRP `989cc876d92b815aeb0b6806fb861f0ee2b39a86`、MQTT `6443b71db761f4d667503f14108687bad5e6b5ee` 与 cJSON `1.7.19~2`。未手工伪造组件摘要。两份仓外独立源码副本、独立 sdkconfig／build 和测试签名键执行全量构建；上传顺序修复后再次构建并验签，原先制品不冒充最终制品。C3 RSA v2、ESP32 ECDSA v1，signed boot/update 与 rollback 的真实配置分别核对，软件键不属于正式生产信任。
 
-上传终态顺序修复后的冻结软件制品（补审短Flash竞争修复之前，当前修复构建见文末）：
+上传终态顺序修复后的历史冻结软件制品（补审短Flash竞争修复之前，该历史实施的后继修复构建见文末）：
 
 | 目标 | 完整 signed bin／B | 每槽剩余／B | signed bin SHA-256 |
 | --- | ---: | ---: | --- |

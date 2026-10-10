@@ -528,6 +528,16 @@ class ProvidedRequestFitTest(unittest.TestCase):
         self.evidence_path.write_text(json.dumps(self.evidence))
         return analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
 
+    def test_current_source_recipe_is_bound_and_previous_sdk_digest_is_rejected(self):
+        result = self.read()["provided_request_fit"]
+        for fact in result["allocator_recipe"]["inputs"]:
+            actual = hashlib.sha256((module.ROOT / fact["path"]).read_bytes()).hexdigest()
+            self.assertEqual(fact["sha256"], actual)
+        self.assertEqual(self.lock, hashlib.sha256((module.ROOT / "sdk-lock.json").read_bytes()).hexdigest())
+        self.evidence["sdk_lock_sha256"] = "aa30328518ba10db58f00fa11f04a04a63f8efca05d08e7ae6ced59d7694aa4d"
+        with self.assertRaises(ValueError):
+            self.read()
+
     def status(self, **changes):
         signed = self.evidence["identity"]["signed_firmware"]
         row = {"protocol_version": 1, "device_id": "66666666-2222-4333-8444-555555555555",

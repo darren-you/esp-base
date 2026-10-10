@@ -42,16 +42,19 @@ python3 -m unittest discover -s tools -p 'test_*partition_table.py' -v
 
 ## SDK 源码准备
 
-本仓 `sdk-lock.json` 锁定公开 ESP-IDF fork 的 OTA 擦除失败和 HTTP 初始化低内存清理修正，以及公开 esp-lwip 的零窗口修正。首次准备独立 SDK 时，将 `ESP_BASE_IDF` 指向仓外的新路径：
+`sdk-lock.json` 的 schema 2 锁定公开受控 `reference-esp-idf@fb53f8a76df5ea913715658f5ac602e91a094e72`、`esp-lwip@f6e98c34ad65d31419b3fbb1fe27015e46060a6a` 与 IDF 原生 TLSF `46728273434655e92d7e165425e3ee5d63766b74`。原业务基线保留在受控来源的 `workspace-source.json`；当前源码只追加 Actions 退出和实际嵌套来源绑定。首次准备仓外完整 SDK：
 
 ```bash
+export PYTHONDONTWRITEBYTECODE=1
 ESP_BASE_IDF=/private/path/esp-base-idf
-git clone --recurse-submodules --branch codex/fix-http-init-transport-oom \
-  https://github.com/darren-you/esp-idf.git "$ESP_BASE_IDF"
-git -C "$ESP_BASE_IDF" checkout --detach 578cf89c343e388db43ba1f4ddcd602fedcb763c
-git -C "$ESP_BASE_IDF" submodule update --init --recursive
-git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
-  https://github.com/darren-you/esp-lwip.git 2758df4cd3666b3b2a5b53830148379326425c0d
+git clone \
+  https://github.com/darren-you/reference-esp-idf.git "$ESP_BASE_IDF"
+git -C "$ESP_BASE_IDF" checkout --detach fb53f8a76df5ea913715658f5ac602e91a094e72
+git -C "$ESP_BASE_IDF" submodule update --init --recursive --checkout --no-recommend-shallow
+git -C "$ESP_BASE_IDF/components/lwip/lwip" remote set-url origin \
+  https://github.com/darren-you/esp-lwip.git
+git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch --no-filter \
+  origin f6e98c34ad65d31419b3fbb1fe27015e46060a6a
 git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
 bash "$ESP_BASE_IDF/install.sh" esp32c3 esp32
 source "$ESP_BASE_IDF/export.sh"
@@ -59,9 +62,13 @@ python3 tools/prepare_sdk.py --path "$IDF_PATH"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
 
-`sdk-lock.json` 的 schema 2 保持 IDF `578cf89`、lwIP `2758df4` 和官方 TLSF `2867f68` 的精确基线，显式声明两份容量统计补丁、补丁摘要及每个受影响文件的原始／最终摘要。SDK 根唯一 `esp-sdk-derivation.json` 必须逐字等于该冻结 lock；装配在全部原件、Git 状态和两仓 `git apply --check` 通过后才应用，再排他创建只读 stamp。它不覆盖旧 SDK，不删除失败后的 partial，也不清除未知差异。
+标准无缓存环境必须在 SDK 安装/导出前设置，并继承到 `idf.py`、CMake、独立 Ninja及主机工具子进程；不对任何 `__pycache__` 或 ignored 内容豁免。原生迁入与预检在载入官方 Python 工具前仍完整执行本地 SDK 来源门。
 
-构建核对受管修改、SDK 索引与工作树、TLSF 和全部其他子模块及最终解析的 lwIP 组件路径。原始 SDK、坏 stamp、部分补丁、未知或暂存修改、子模块漂移、补丁／源码摘要不符均拒绝；不能声称派生 SDK 未修改。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，不能共用生成的 sdkconfig/build 目录。以上入口不访问串口或设备。三个组件的精确派生消费锁是正式双目标构建前置；单独装配 SDK 或 host 通过不代表完整固件已构建。
+唯一配方显式声明两份容量补丁与其摘要，以及八个 IDF、三个 TLSF 文件的 before/after 摘要。SDK 根唯一只读普通 `esp-sdk-derivation.json` 必须逐字等于冻结 lock。装配前完整验证所有原件、元数据、全部原始 Git 对象、HEAD tree/index/文件、递归来源与两仓真实 `git apply --check`，随后才应用冻结补丁并排他创建 stamp；已正确装配时只验证并返回，失败 partial 或未知内容保持拒绝，不覆盖、不删除。
+
+派生后，索引和 TLSF HEAD 仍等于原件；只有 lwIP 使用显式精确 gitlink override。全部 29 根来源逐项验证，只有配方精确十一文件的工作树字节可以为 after，只有根 stamp 可为指定 untracked；包括 ignored 在内的其他内容均拒绝。字段或路径重复、未知配方、坏stamp、原件/最终摘要不符、隐藏索引/类型/执行位变化、shallow/partial/sparse、借用或重定向元数据/对象、replace/grafts均不能由 stamp 自证放行。配方、补丁与 stamp 在完整验证首尾稳定读取，不缓存深来源结果。
+
+生产与迁入检查只接受完整容量派生；原件状态仅用于装配前检查。三个组件的精确派生消费锁仍是正式双目标构建前置，单独本仓来源/host通过不代表完整固件。C3和ESP32分别消费自身 Component Manager lock，并保持独立 build/sdkconfig；入口不访问串口或设备。
 
 ## 正式容量统计
 
@@ -186,3 +193,9 @@ chmod 700 /absolute/private/native-run-venv
 每次周期包含最大3924 B认证原生事件、后台上传期间业务、一次FRP固件PUT、新boot原ID成功与完整镜像对账、再次业务及暂停／恢复。PUBACK不是业务成功；必须收到本boot／序号／摘要对应的实际reported结果。上传回调只唤醒有限业务线程，记录业务待决窗口与host上传progress区间的相交，不能据此证明业务执行时刻或设备满合法峰值。丢失结果、unknown、错误身份或非预期重启均保留原ID并停止，不重发写、不换ID。区分保留ID、命令已尝试与设备实际确认准入；尝试边界不证明字节已发出。已尝试操作异常后尽力一次有限原ID只读查询，保留实际响应和独立身份裁决，不覆盖主异常或改判成功。
 
 72小时普通步骤超过10秒宿主进展空档即中断，OTA有界等待单独计时；每秒检查等待并对照墙钟／单调钟增量，任一回退或差值超过固定1秒容限中断，系统睡眠不能绕过Mac单调钟不推进的事实。并发观察在同一现有锁内采样和更新进展／OTA窗口，避免线程调度把正常递增时钟误判为回退；日志与异常处理在锁外。最终R5／容量原件摘要与已绑定前缀核对后，再执行同一宿主观察；正常摘要终点直接使用该次已核验采样，异常保留最近实际记录的原始采样，`observation_end_scope=last_recorded_host_clock_sample`。采样前失败不会伪称取得新时刻，真实回退的负时长保持，已有主中断原因不被收尾异常覆盖。后续摘要／Journal写入不计入观察时段，也不宣称检测了这段时间。OTA窗口仍只是有界等待，允许的等待时间不证明设备瞬时连续状态。两种模式始终输出 `qualified=false`／`r6_passed=false`，只记录是否完成本轮有限观察；全任务回收、连续块峰值、公网脱离Mac、断电和Flash寿命须由外部实板原件共同裁决，短轮次不能相加成为72小时。依赖／凭据／CA等Journal创建前的预检错误只返回CLI失败；Journal建立后的中断才保存run摘要。
+
+IDF 与 lwIP 的原始唯一 origin 和 Git 实际 fetch 身份必须与配方相同；支持对应 canonical HTTPS／SSH 写法，不改写来源配置。来源检查仅消费原始对象、索引与文件，不运行内容转换的 status／diff 或 Shell 子模块入口；全部 Git 查询显式禁用 fsmonitor。容量补丁装配前用原生 NUL 路径输入读取每个实际补丁文件的有效 filter 属性，只拒绝被该路径选中的非空 clean／smudge／process 驱动；未被受管补丁路径使用的 Git LFS 等注册允许保留。 `set`／`unset`／`unspecified` 的布尔或未设属性与同名字面驱动用关闭该驱动的原生空数据判别区分；判别不执行外部程序、不写 Git 对象或源码，同名真实绑定仍拒绝。全部配方仓库的受管路径检查完成后才执行首次 `git apply`，不让外部命令改写已核对的源码。
+
+容量补丁首写前通过原生 `git check-attr` 核对全部受管路径的实际 worktree／info／global／system 属性；会改写原始字节的 CRLF、非 UTF-8 工作树编码，以及受管内容中的 `$Id$` 展开均拒绝。`git apply --check` 与实际 apply 单独固定 `core.autocrlf=false`、`core.eol=lf`，不改变来源读取与 origin／promisor 的实际配置作用域；安全 LF、未设转换、禁用 text 及 UTF-8 不因此拒绝。失败拒绝发生在两仓任何受管文件或 stamp 首写之前。
+
+容量回归夹具只在临时目录创建自己的原生 Git 图，隔离宿主 system／global／命令注入配置和模板、禁用 hooks，并为每个实际克隆子仓设置本地测试身份。生产来源检查仍读取其真实配置；匿名验证不依赖宿主全局 Git 身份。

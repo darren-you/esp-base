@@ -21,7 +21,7 @@ flowchart LR
 
 将仓库 `tools/mqtt_lab_inputs_example.h` 复制到仓外权限 0700 的目录，文件设 0600，填写本轮隔离 Broker、用户名密码、CA 和 NTP。TLS 必须先收到 SNTP 同步，使用 CA 与主机名验证；认证或证书失败不切换明文。默认构建不允许 TCP；只有明文实验可在独立 sdkconfig 中显式设置 `CONFIG_EMQTT_PLAINTEXT_LAB=y`，并将私有输入设为 `.tls=false`、`.ca_pem=""`；TCP 与非空 CA 的矛盾配置会被拒绝。
 
-从仓库根构建，两个应用使用不同 build 与 sdkconfig，避免缓存混用：
+先按 [SDK 与宿主工具](../../../tools/README.md#sdk-源码准备)安装并导出锁定 SDK 环境，保留 `PYTHONDONTWRITEBYTECODE=1`，再从仓库根构建。两个应用使用不同 build 与 sdkconfig，避免缓存混用：
 
 ```bash
 idf.py -C firmware -B /private/path/mqtt-build \
