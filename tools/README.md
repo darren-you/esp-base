@@ -75,6 +75,8 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 
 每五秒既有 control pass 及四个既有主动重启点前输出完整帧，不增业务命令、任务、队列或动态内存。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
 
+当前 schema 2 要求 BEGIN 后唯一 MQTT 观测行，再读取 REGION／TASK／DOMAIN／END；schema 1 仅解析既有冻结原件，同 boot 不允许切换版本。parser 严格核对实例编号、真实所有权上限、请求字节等式、采样 `start <= until <= BEGIN`、固定成本与累计历史；计数失效保留原 flag，禁止授满输入局部观测，独立 SDK 数值门不因此冒充全部 R5。输出的 `maximum_inbound_owner_tuple_observed` 只表示同一次 partial 回调确有三个4096 B完整 owner 加一个4096 B未完成 owner，不证明业务认证、outbox最大合法状态或OTA重叠。`outbox_wire_bytes_at_rx_peak` 是同 SDK API锁期间的协议字节，不含 outbox节点／分配器元数据；原 FULL 只证明该条请求被现有 admission 拒绝。实体重叠必须以同 boot／同 operation 的真实 OTA消费锚点包住整个采样区间，并以严格 TLS peer原 MID／DUP／PUBACK账本独立核对 outbox。解析始终保留全局下一申请、R5和R6为false。
+
 统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
 
 ```bash
@@ -93,7 +95,7 @@ python3 tools/analyze_capacity.py --target esp32 \
 python3 -m unittest discover -s tools/tests -p 'test_analyze_capacity.py' -v
 ```
 
-解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。38 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
 
 需要对照具体后续申请时，在同一调用增加 `--request-evidence /absolute/private/request-evidence.json`。不带该参数的正常行为、JSON 与退出码不变。证据采用以下 strict JSON；示例中的路径、boot 和摘要须替换为本轮原件，大小是实际单次申请字节数，caps 是完整 SDK 位掩码的整数，不能只写一个较弱域：
 

@@ -7,6 +7,7 @@
 #include <string.h>
 #include "esp_heap_caps.h"
 #include "freertos/task.h"
+#include "esp_base_mqtt_owner.h"
 
 static char output[131072];
 static size_t output_length;
@@ -18,6 +19,16 @@ static UBaseType_t live_count;
 static freertos_task_capacity_stats_t task_facts;
 static char *live_names[32];
 static UBaseType_t live_hwm[32];
+static bool mqtt_available;
+static emqtt_capacity_stats_t mqtt_stats;
+static int64_t now_us = 1234000;
+int64_t esp_timer_get_time(void) { return now_us; }
+bool esp_base_mqtt_owner_capacity(emqtt_capacity_stats_t *out)
+{
+    assert(!suspend_depth);
+    *out = mqtt_stats;
+    return mqtt_available;
+}
 
 int printf(const char *format, ...)
 {
@@ -74,6 +85,8 @@ static void reset_case(void)
     memset(output, 0, sizeof output);
     output_length = 0;
     begin_seen = false;
+    mqtt_available = false;
+    memset(&mqtt_stats, 0, sizeof mqtt_stats);
     walks = snapshots = 0;
     region_count = live_count = 0;
     task_facts = (freertos_task_capacity_stats_t){.completed_minimum=UINT32_MAX, .counters_valid=1};
@@ -137,6 +150,9 @@ static void run(void)
     const char *end = line("ESP_BASE_CAPACITY_END ");
     assert(begin == output && begin < end);
     assert(value(begin,"uptime_ms") == 1234);
+    assert(value(begin,"schema") == 2);
+    assert(value(line("ESP_BASE_CAPACITY_MQTT "),"available") == (unsigned)mqtt_available);
+    assert(value(line("ESP_BASE_CAPACITY_MQTT "),"readout_copy_bytes") == sizeof mqtt_stats);
     assert(value(end,"regions") == region_count);
     assert(value(end,"allocated_tasks") == live_count);
     assert(value(end,"observation_cost_added_back") == 0);
@@ -161,6 +177,30 @@ int main(void)
     assert(value(line("ESP_BASE_CAPACITY_END "),"minimum_stack_bytes") == 1200);
     assert(strstr(output,"name_hex=776f726b657200000000000000000000"));
     puts("PASS real-emitter: late-region zero for both bounds; caps union once; aliases not duplicated; IRAM distinct; names survive resume");
+
+    reset_case();
+    mqtt_available = true;
+    mqtt_stats = (emqtt_capacity_stats_t){.runtime_instance=7, .rx_peak_valid=true,
+        .rx_peak_uptime_ms=1233, .rx_peak_observed_until_uptime_ms=1234,
+        .complete_owner_count=3, .complete_payload_bytes=12288,
+        .partial_declared_bytes=4096, .partial_received_bytes=966,
+        .owned_message_metadata_bytes=272, .owned_request_bytes=17472,
+        .outbox_wire_bytes_at_rx_peak=14000, .outbox_full_count=1,
+        .last_outbox_full_payload_bytes=767, .last_outbox_full_uptime_ms=1233,
+        .notice_count_high_water=16, .notice_full_count=1, .counters_valid=true,
+        .observation_storage_bytes=88};
+    now_us = 1236000;
+    emit("software-test-boot", "periodic", 1234);
+    assert(value(line("ESP_BASE_CAPACITY_BEGIN "),"uptime_ms") == 1236);
+    const char *mqtt_line = line("ESP_BASE_CAPACITY_MQTT ");
+    assert(value(mqtt_line,"available") == 1 && value(mqtt_line,"runtime_instance") == 7);
+    assert(value(mqtt_line,"owned_request_bytes") == 17472 &&
+           value(mqtt_line,"outbox_wire_bytes_at_rx_peak") == 14000 &&
+           value(mqtt_line,"partial_received_bytes") == 966 &&
+           value(mqtt_line,"outbox_full_count") == 1);
+    assert(mqtt_line < line("ESP_BASE_CAPACITY_DOMAIN "));
+    now_us = 1234000;
+    puts("PASS real-emitter: one owner snapshot copied before BEGIN; actual copy time bounds the tuple; no independent HWM recombination");
 
     reset_case();
     add_region(byte_caps,0,0,false,999999,900000);

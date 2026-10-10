@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_capacity.h"
+#include "esp_base_mqtt_owner.h"
+#include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
@@ -68,6 +70,12 @@ static bool emit_region(const heap_capacity_region_stats_t *region, void *opaque
 
 static void emit(const char *boot_id, const char *phase, uint64_t now_ms)
 {
+    emqtt_capacity_stats_t mqtt = {0};
+    const bool mqtt_available = esp_base_mqtt_owner_capacity(&mqtt);
+    /* Copy before BEGIN, outside every heap/task observation critical section.
+     * A callback observed while copying must not have a timestamp after BEGIN. */
+    const uint64_t copied_at_ms = (uint64_t)esp_timer_get_time() / 1000U;
+    if (copied_at_ms > now_ms) now_ms = copied_at_ms;
     if (s_frame == UINT32_MAX) s_frame_overflow = true;
     else ++s_frame;
     esp_base_capacity_frame_t frame = {.boot_id = boot_id, .frame = s_frame, .valid = !s_frame_overflow};
@@ -78,9 +86,20 @@ static void emit(const char *boot_id, const char *phase, uint64_t now_ms)
         *--digits = (char)('0' + now_ms % 10U);
         now_ms /= 10U;
     } while (now_ms);
-    printf("ESP_BASE_CAPACITY_BEGIN schema=1 boot_id=%s frame=%u phase=%s uptime_ms=%s sdk_lock_sha256=%s task_limit=%u\n",
+    printf("ESP_BASE_CAPACITY_BEGIN schema=2 boot_id=%s frame=%u phase=%s uptime_ms=%s sdk_lock_sha256=%s task_limit=%u\n",
         boot_id, (unsigned)s_frame, phase, digits,
         ESP_BASE_CAPACITY_SDK_LOCK_SHA256, CAPACITY_TASK_LIMIT);
+    printf("ESP_BASE_CAPACITY_MQTT boot_id=%s frame=%u available=%u runtime_instance=%u rx_peak_valid=%u rx_peak_uptime_ms=%llu rx_peak_observed_until_uptime_ms=%llu complete_owner_count=%u complete_payload_bytes=%u partial_declared_bytes=%u partial_received_bytes=%u owned_message_metadata_bytes=%u owned_request_bytes=%u outbox_wire_bytes_at_rx_peak=%u outbox_full_count=%u last_outbox_full_payload_bytes=%u last_outbox_full_uptime_ms=%llu notice_count_high_water=%u notice_full_count=%u counters_valid=%u observation_storage_bytes=%u readout_copy_bytes=%u\n",
+        boot_id, (unsigned)s_frame, (unsigned)mqtt_available, (unsigned)mqtt.runtime_instance,
+        (unsigned)mqtt.rx_peak_valid, (unsigned long long)mqtt.rx_peak_uptime_ms,
+        (unsigned long long)mqtt.rx_peak_observed_until_uptime_ms,
+        (unsigned)mqtt.complete_owner_count, (unsigned)mqtt.complete_payload_bytes,
+        (unsigned)mqtt.partial_declared_bytes, (unsigned)mqtt.partial_received_bytes,
+        (unsigned)mqtt.owned_message_metadata_bytes, (unsigned)mqtt.owned_request_bytes,
+        (unsigned)mqtt.outbox_wire_bytes_at_rx_peak, (unsigned)mqtt.outbox_full_count,
+        (unsigned)mqtt.last_outbox_full_payload_bytes, (unsigned long long)mqtt.last_outbox_full_uptime_ms,
+        (unsigned)mqtt.notice_count_high_water, (unsigned)mqtt.notice_full_count,
+        (unsigned)mqtt.counters_valid, (unsigned)mqtt.observation_storage_bytes, (unsigned)sizeof mqtt);
     heap_caps_walk_capacity(emit_region, &frame);
 
     freertos_task_capacity_stats_t task_stats;

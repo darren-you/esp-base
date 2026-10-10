@@ -259,3 +259,10 @@ bool esp_base_mqtt_owner_restart_result_acknowledged(void)
 {
     return s_restart_result_id > 0 && s_restart_result_acknowledged;
 }
+
+bool esp_base_mqtt_owner_capacity(emqtt_capacity_stats_t *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof *out);
+    return s_runtime && emqtt_get_capacity_snapshot(s_runtime, out);
+}

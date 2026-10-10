@@ -66,6 +66,26 @@ def render(frame):
     return "".join(row(kind, values) for kind, rows in frame.items() for values in rows)
 
 
+def mqtt_fixture(number=1, uptime=10, *, available=True, instance=1, peak=True):
+    frame = fixture(number, uptime)
+    frame["BEGIN"][0]["schema"] = 2
+    stats = {key: 0 for key in module.FIELDS["MQTT"]}
+    stats.update(boot_id=BOOT, frame=number, readout_copy_bytes=80)
+    if available:
+        stats.update(available=1, runtime_instance=instance, counters_valid=1,
+                     owned_message_metadata_bytes=272, observation_storage_bytes=92)
+        if peak:
+            stats.update(rx_peak_valid=1, rx_peak_uptime_ms=uptime-2,
+                         rx_peak_observed_until_uptime_ms=uptime-1,
+                         complete_owner_count=3, complete_payload_bytes=12288,
+                         partial_declared_bytes=4096, partial_received_bytes=966,
+                         owned_request_bytes=17472, outbox_wire_bytes_at_rx_peak=14000,
+                         outbox_full_count=1, last_outbox_full_payload_bytes=767,
+                         last_outbox_full_uptime_ms=uptime-3, notice_count_high_water=16,
+                         notice_full_count=1)
+    return {"BEGIN": frame.pop("BEGIN"), "MQTT": [stats], **frame}
+
+
 def cleanup_sequence(final_min=1100):
     first = fixture(no_final=True, stack_min=1400)
     first["TASK"][1]["minimum_stack_bytes"] = 1400
@@ -115,6 +135,75 @@ class AnalyzeCapacityTest(unittest.TestCase):
                           ({"stack_min": 1023}, "stack_gate_passed")):
             with self.subTest(args=args):
                 self.assertFalse(self.read(render(fixture(**args)))["numeric_gates"][key])
+
+    def test_actual_joint_tuple_and_full_remain_local_without_global_qualification(self):
+        result = self.read(render(mqtt_fixture()))
+        observed = result["frames"][0]["mqtt_observation"]
+        self.assertTrue(observed["maximum_inbound_owner_tuple_observed"])
+        self.assertEqual(observed["outbox_wire_bytes_at_rx_peak"], 14000)
+        self.assertEqual(observed["rx_peak_uptime_ms"], 8)
+        self.assertEqual(observed["rx_peak_observed_until_uptime_ms"], 9)
+        self.assertEqual(observed["outbox_full_count"], 1)
+        for key in ("r5_qualified", "r6_qualified", "next_maximum_legal_request_verified"):
+            self.assertFalse(result[key])
+        invalid = mqtt_fixture()
+        invalid["MQTT"][0]["counters_valid"] = 0
+        result = self.read(render(invalid))
+        self.assertTrue(result["numeric_gates_passed"])
+        self.assertFalse(result["frames"][0]["mqtt_observation"]["maximum_inbound_owner_tuple_observed"])
+
+    def test_mqtt_row_is_mandatory_unique_and_ordered_in_schema_two(self):
+        good = mqtt_fixture()
+        missing = mqtt_fixture(); missing.pop("MQTT")
+        self.reject(render(missing))
+        duplicate = mqtt_fixture(); duplicate["MQTT"] *= 2
+        self.reject(render(duplicate))
+        wrong_order = {"BEGIN": good["BEGIN"], "REGION": good["REGION"], "MQTT": good["MQTT"],
+                       "TASK": good["TASK"], "DOMAIN": good["DOMAIN"], "END": good["END"]}
+        self.reject(render(wrong_order))
+        good["BEGIN"][0]["schema"] = 1
+        self.reject(render(good))
+
+    def test_joint_tuple_rejects_impossible_sizes_identity_and_sampling_interval(self):
+        cases = (("complete_owner_count", 4), ("complete_payload_bytes", 12289),
+                 ("partial_declared_bytes", 4097), ("partial_received_bytes", 4096),
+                 ("owned_request_bytes", 17473), ("owned_message_metadata_bytes", 273),
+                 ("readout_copy_bytes", 72), ("notice_count_high_water", 17),
+                 ("runtime_instance", 0), ("rx_peak_observed_until_uptime_ms", 7),
+                 ("rx_peak_observed_until_uptime_ms", 11), ("last_outbox_full_uptime_ms", 11),
+                 ("last_outbox_full_payload_bytes", 1024), ("boot_id", "66666666-2222-4333-8444-555555555555"))
+        for key, value in cases:
+            with self.subTest(key=key):
+                bad = mqtt_fixture(); bad["MQTT"][0][key] = value
+                self.reject(render(bad))
+        absent = mqtt_fixture(available=False)
+        self.assertFalse(self.read(render(absent))["frames"][0]["mqtt_observation"]["maximum_inbound_owner_tuple_observed"])
+        absent["MQTT"][0]["runtime_instance"] = 1
+        self.reject(render(absent))
+
+    def test_same_instance_cannot_splice_hwm_or_restore_failed_counters(self):
+        first = mqtt_fixture()
+        second = mqtt_fixture(2, 5010)
+        second["MQTT"][0].update(rx_peak_uptime_ms=8, rx_peak_observed_until_uptime_ms=9,
+                                  last_outbox_full_uptime_ms=7)
+        self.assertTrue(self.read(render(first) + render(second))["valid"])
+        for key, value in (("partial_received_bytes", 967), ("outbox_wire_bytes_at_rx_peak", 13999),
+                           ("notice_count_high_water", 15), ("notice_full_count", 0),
+                           ("outbox_full_count", 0), ("runtime_instance", 0)):
+            with self.subTest(key=key):
+                old = second["MQTT"][0][key]; second["MQTT"][0][key] = value
+                self.reject(render(first) + render(second))
+                second["MQTT"][0][key] = old
+        first["MQTT"][0]["counters_valid"] = 0
+        self.reject(render(first) + render(second))
+
+    def test_new_runtime_resets_only_its_own_history_and_schema_cannot_change_in_boot(self):
+        first = mqtt_fixture(instance=2)
+        second = mqtt_fixture(2, 5010, instance=3, peak=False)
+        self.assertTrue(self.read(render(first) + render(second))["valid"])
+        second["MQTT"][0]["runtime_instance"] = 1
+        self.reject(render(first) + render(second))
+        self.reject(render(fixture()) + render(mqtt_fixture(2, 5010)))
 
     def test_late_region_does_not_raise_either_domain_lower_bound(self):
         result = self.read(render(fixture()))

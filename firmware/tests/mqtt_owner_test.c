@@ -24,13 +24,20 @@ static emqtt_config_t captured;
 static emqtt_config_t scratch;
 static emqtt_event_t events[40];
 static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands, business_events;
-static unsigned business_event_attempts;
+static unsigned business_event_attempts, capacity_copies;
 static bool accept_event = true;
 static emqtt_state_t state = EMQTT_STOPPED;
 static bool fail_stop, fail_publish;
 static char last_topic[EMQTT_TOPIC_MAX + 1], last_payload[EMQTT_PUBLISH_PAYLOAD_MAX_BYTES + 1];
 static uint8_t last_qos;
 static bool last_retain;
+bool emqtt_get_capacity_snapshot(const emqtt_runtime_t *instance, emqtt_capacity_stats_t *out)
+{
+    assert(instance == &runtime);
+    ++capacity_copies;
+    *out = (emqtt_capacity_stats_t){.runtime_instance=1,.counters_valid=true};
+    return true;
+}
 
 bool ebase_management_authenticate(const uint8_t key[EBASE_MANAGEMENT_KEY_BYTES],
     const uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES], const uint8_t *json, size_t length)
@@ -210,10 +217,16 @@ int main(void)
     esp_base_mqtt_owner_poll(0, true, true, received, received_event, &runtime);
     assert(!creates && !starts && !esp_base_mqtt_owner_ready());
     assert(!strcmp(esp_base_mqtt_owner_state(), "unconfigured"));
+    emqtt_capacity_stats_t capacity;
+    memset(&capacity, 0xff, sizeof capacity);
+    assert(!esp_base_mqtt_owner_capacity(NULL));
+    assert(!esp_base_mqtt_owner_capacity(&capacity) && !capacity_copies && !capacity.runtime_instance);
 
     ebase_mqtt_config_t mqtt = config();
     assert(configure(&mqtt) == ESP_OK);
     assert(creates == 1 && !strcmp(captured.client_id, device_id));
+    assert(esp_base_mqtt_owner_capacity(&capacity) && capacity_copies == 1 &&
+           capacity.runtime_instance == 1 && capacity.counters_valid && sends == 0 && starts == 0);
     assert(captured.tls && captured.port == 8883 && !strcmp(captured.hostname, mqtt.hostname));
     assert(!strcmp(captured.username, mqtt.username) && !strcmp(captured.password, mqtt.password));
     assert(!strcmp(captured.ca_pem, mqtt.ca_pem));

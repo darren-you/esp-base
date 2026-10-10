@@ -32,4 +32,6 @@ ESP32 自动签名构建必须使用仓外绝对路径 P-256 键，启用 signed
 
 本轮完整输入、失败记录和签名结果见[原生软件检查点](../docs/operations/native_software_checkpoint.md)；实板及正式交付边界见[执行计划](../docs/operations/ota-allocation-diagnostic-checkpoint.md)。
 
+容量帧 schema 2 在 BEGIN 前通过现有 control owner 取得 emqtt 固定 copy，BEGIN 后输出唯一 `ESP_BASE_CAPACITY_MQTT` 行；不增加任务、队列、业务指令或 SDK 统计补丁。该行记录同一未完成 DATA 回调的真实完整 owner／partial 请求字节与 outbox wire tuple、采样起止区间和原 FULL／notice 失败历史。80 B copy 栈及 emqtt 固定观测／锁成本由新候选实际 ELF／map和栈HWM承担。满输入 tuple、一次 FULL 和数值门均不自动证明最大合法 outbox、认证消费、OTA真实重叠或 R5／R6；观测与签名候选、配置、同 boot 原始进度及严格 TLS peer 原报文须另行对账。
+
 工程结构、工具链、签名制品和设备写入边界遵循[Embedded Firmware 工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。
