@@ -17,6 +17,10 @@ import sys
 import tempfile
 import zlib
 
+# SDK 来源保持只读；标准环境同时传给后续 Python 子进程。
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 import archive_esp32_at as at_archive
 import device_control
 import preflight_v3_migration as legacy

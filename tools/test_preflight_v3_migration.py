@@ -13,6 +13,9 @@ import tempfile
 import unittest
 import zlib
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFLIGHT = ROOT / "tools/preflight_v3_migration.py"
@@ -136,10 +139,11 @@ class PreflightTests(unittest.TestCase):
                     fifo = work / (name + ".fifo")
                     os.mkfifo(fifo, 0o600)
                     first, second = (fifo, regular) if name == "backup-a" else (regular, fifo)
+                    # 普通入口先核完整 SDK 历史；FIFO 仍须在有限时间内拒绝且不能等写入者。
                     result = subprocess.run([sys.executable, str(PREFLIGHT),
                         "--backup-a", str(first), "--backup-b", str(second), "--idf-path", str(self.idf),
                         "--device-id", DEVICE_ID, "--output-base-store", str(output)],
-                        text=True, capture_output=True, check=False, timeout=5)
+                        text=True, capture_output=True, check=False, timeout=90)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn("普通文件", result.stderr)
                     self.assertFalse(output.exists())

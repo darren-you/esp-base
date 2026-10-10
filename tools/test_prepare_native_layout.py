@@ -17,6 +17,9 @@ import unittest
 from unittest import mock
 import zlib
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 import prepare_native_layout as migration
 
 DEVICE = "22222222-2222-4222-8222-222222222222"

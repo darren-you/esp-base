@@ -30,6 +30,19 @@ def git(path: Path, *args: str) -> str:
     ).stdout.rstrip("\n")
 
 
+def git_boolean(path: Path, key: str) -> bool:
+    """按 Git 的作用域、include 与原生布尔规则读取最终有效值。"""
+    result = subprocess.run(
+        ["git", "-C", str(path), "config", "--bool", "--get", key],
+        text=True, capture_output=True, env=git_environment())
+    if result.returncode == 1:
+        return False
+    value = result.stdout.strip()
+    if result.returncode == 0 and value in ("true", "false"):
+        return value == "true"
+    raise ValueError(f"来源 Git 布尔配置无效：{key}：{path}\n{result.stderr.strip()}")
+
+
 def verify_object_bytes(path: Path) -> None:
     """重算独立对象库每个对象的原始 Git OID，不改写或忽略历史内容。"""
     object_format = git(path, "rev-parse", "--show-object-format")
@@ -217,21 +230,16 @@ def verify_complete_repository(path: Path, source_root: Path | None = None,
         raise ValueError(f"SDK 来源未独立初始化：{path}")
     if git(path, "rev-parse", "--is-shallow-repository") != "false":
         raise ValueError(f"SDK 来源必须保有完整历史，不能使用 shallow clone：{path}")
-    for line in git(path, "config", "--list").splitlines():
-        key, _, value = line.partition("=")
+    config_keys = set(git(path, "config", "--null", "--name-only", "--list").split("\0"))
+    for key in sorted(config_keys):
         if key == "extensions.partialclone" or (
-                key.startswith("remote.") and key.endswith((".promisor", ".partialclonefilter"))):
+                key.startswith("remote.") and key.endswith(".partialclonefilter")):
+            raise ValueError(f"SDK 来源不能使用 partial clone：{path}")
+        if key.startswith("remote.") and key.endswith(".promisor") and git_boolean(path, key):
             raise ValueError(f"SDK 来源不能使用 partial clone：{path}")
     # Git resolves include, scope precedence and every accepted boolean spelling.
     # Cone only selects a mode; it does not enable sparse checkout on its own.
-    sparse = subprocess.run(
-        ["git", "-C", str(path), "config", "--bool", "--get", "core.sparseCheckout"],
-        text=True, capture_output=True, env=git_environment())
-    effective_sparse = sparse.stdout.strip()
-    if sparse.returncode not in (0, 1) or (
-            sparse.returncode == 0 and effective_sparse not in ("true", "false")):
-        raise ValueError(f"SDK 来源 sparse checkout 配置无效：{path}\n{sparse.stderr.strip()}")
-    if sparse.returncode == 0 and effective_sparse == "true":
+    if git_boolean(path, "core.sparseCheckout"):
         raise ValueError(f"SDK 来源不能使用 sparse checkout：{path}")
     revision = revision or git(path, "rev-parse", "HEAD")
     if git(path, "rev-parse", "HEAD") != revision:
@@ -243,9 +251,9 @@ def verify_complete_repository(path: Path, source_root: Path | None = None,
         raise ValueError(f"SDK 来源对象不完整：{path}\n{result.stderr.strip()}")
 
     verify_object_bytes(path)
-    if git(path, "ls-files", "--others", "--exclude-standard", "-z"):
-        raise ValueError(f"来源存在其他修改（未提交的普通 untracked 内容）：{path}")
     verify_tracked_tree(path, source_root, gitlink_overrides or {}, revision)
+    if git(path, "ls-files", "--others", "-z"):
+        raise ValueError(f"来源存在其他修改（含 ignored 的未提交 untracked 内容）：{path}")
 
 
 

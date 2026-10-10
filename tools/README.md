@@ -31,6 +31,8 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 ## 构建与回归
 
+分区及迁入工具回归先按下方 [SDK 源码准备](#sdk-源码准备)安装并导出锁定环境；保留 `PYTHONDONTWRITEBYTECODE=1`。
+
 ```bash
 python3 -m unittest discover -s tools -p 'test_business_event*.py' -v
 python3 -m unittest discover -s tools -p 'test_device_control.py' -v
@@ -46,6 +48,7 @@ python3 -m unittest discover -s tools -p 'test_*partition_table.py' -v
 
 ```bash
 ESP_BASE_IDF=/private/path/esp-base-idf
+export PYTHONDONTWRITEBYTECODE=1
 git clone --no-checkout --branch master \
   https://github.com/darren-you/reference-esp-idf.git "$ESP_BASE_IDF"
 git -C "$ESP_BASE_IDF" checkout --detach fb53f8a76df5ea913715658f5ac602e91a094e72
@@ -57,6 +60,8 @@ bash "$ESP_BASE_IDF/install.sh" esp32c3 esp32
 source "$ESP_BASE_IDF/export.sh"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
+
+从安装和导出 SDK 环境前就设置 `PYTHONDONTWRITEBYTECODE=1`，并在同一环境执行后续 `idf.py`、CMake 和独立 Ninja／`cmake --build`。该标准变量随 Python 子进程继承，避免向完整 SDK 来源写入 `__pycache__`；来源检查仍拒绝所有未跟踪内容，包括被 Git 忽略的文件。
 
 取源显式忽略上游浅克隆建议，保留根与所有递归依赖的完整历史。构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。SDK 根 Git 元数据必须位于来源自身目录；absorbed submodule 的 gitdir 仅允许位于根来源自有 Git modules 下，并以原生 core.worktree 绑定当前子目录，独立子模块可保留自身 `.git`。来源 gitdir 与 common-dir 必须一致，对象目录与对象不得借用仓外存储；符号链接、无绑定定位文件、外置 separate-git-dir 和 linked worktree 被拒绝。Git 环境不得重定向来源、索引或对象目录，replace/grafts 历史替换一律拒绝，所有 Git 读取显式禁用对象替换。每个递归来源显式检查工作树，不受 `submodule.*.ignore` 配置影响。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，引用同一组精确组件提交，不能共用生成的 sdkconfig/build 目录。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
 

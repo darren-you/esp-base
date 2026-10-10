@@ -698,6 +698,126 @@ class SparseConfigurationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sparse"):
             self._verify()
 
+
+    def _effective_promisor(self, remote="origin"):
+        result = self._git("config", "--bool", "--get", "remote." + remote + ".promisor", check=False)
+        return result.returncode, result.stdout.strip()
+
+    def test_accepts_explicit_promisor_false(self):
+        self._set("remote.origin.promisor", "false", "--local")
+        self.assertEqual(self._effective_promisor(), (0, "false"))
+        self._verify()
+
+    def test_accepts_local_promisor_false_overriding_global_true(self):
+        self._set("remote.origin.promisor", "true", "--global")
+        self._set("remote.origin.promisor", "false", "--local")
+        self.assertEqual(self._effective_promisor(), (0, "false"))
+        self._verify()
+
+    def test_accepts_worktree_promisor_false_overriding_local_true(self):
+        self._set("remote.origin.promisor", "true", "--local")
+        self._set("extensions.worktreeConfig", "true", "--local")
+        self._set("remote.origin.promisor", "false", "--worktree")
+        self.assertEqual(self._effective_promisor(), (0, "false"))
+        self._verify()
+
+    def test_accepts_included_promisor_false_overriding_local_true(self):
+        self._set("remote.origin.promisor", "true", "--local")
+        self.included_config.write_text('[remote "origin"]\n\tpromisor = false\n')
+        self._set("include.path", str(self.included_config), "--local")
+        self.assertEqual(self._effective_promisor(), (0, "false"))
+        self._verify()
+
+    def test_accepts_false_mixed_case_remote_subsection(self):
+        self._set("remote.Mirror.Name.promisor", "false", "--local")
+        self.assertEqual(self._effective_promisor("Mirror.Name"), (0, "false"))
+        self._verify()
+
+    def test_rejects_true_mixed_case_remote_despite_lowercase_false(self):
+        self._set("remote.Mirror.Name.promisor", "true", "--local")
+        self._set("remote.mirror.name.promisor", "false", "--local")
+        self.assertEqual(self._effective_promisor("Mirror.Name"), (0, "true"))
+        self.assertEqual(self._effective_promisor("mirror.name"), (0, "false"))
+        with self.assertRaisesRegex(ValueError, "partial"):
+            self._verify()
+
+    def test_rejects_local_promisor_true_overriding_global_false(self):
+        self._set("remote.origin.promisor", "false", "--global")
+        self._set("remote.origin.promisor", "true", "--local")
+        self.assertEqual(self._effective_promisor(), (0, "true"))
+        with self.assertRaisesRegex(ValueError, "partial"):
+            self._verify()
+
+    def test_rejects_nonzero_numeric_promisor_true(self):
+        self._set("remote.origin.promisor", "2", "--local")
+        self.assertEqual(self._effective_promisor(), (0, "true"))
+        with self.assertRaisesRegex(ValueError, "partial"):
+            self._verify()
+
+    def test_rejects_implicit_promisor_true(self):
+        with (self.source / ".git/config").open("a") as output:
+            output.write('[remote "origin"]\n\tpromisor\n')
+        self.assertEqual(self._effective_promisor(), (0, "true"))
+        with self.assertRaisesRegex(ValueError, "partial"):
+            self._verify()
+
+    def test_rejects_invalid_effective_promisor_boolean(self):
+        self._set("remote.origin.promisor", "invalid-boolean", "--local")
+        self.assertNotEqual(self._effective_promisor()[0], 0)
+        with self.assertRaises((ValueError, RuntimeError, subprocess.CalledProcessError)) as raised:
+            self._verify()
+        detail = getattr(raised.exception, "stderr", "") or str(raised.exception)
+        self.assertIn("promisor", detail.lower())
+
+    def test_rejects_partial_filter_marker_with_promisor_false(self):
+        self._set("remote.origin.promisor", "false", "--local")
+        self._set("remote.origin.partialCloneFilter", "blob:none", "--local")
+        with self.assertRaisesRegex(ValueError, "partial"):
+            self._verify()
+
+    def _assert_ignored_rejected(self):
+        self.assertEqual(self._git("ls-files", "--others", "--exclude-standard").stdout, "")
+        self.assertTrue(self._git("ls-files", "--others", "-z").stdout)
+        with self.assertRaisesRegex(ValueError, "ignored|untracked"):
+            self._verify()
+
+    def test_rejects_source_hidden_by_git_info_exclude(self):
+        with (self.source / ".git/info/exclude").open("a") as output:
+            output.write("injected.c\n")
+        (self.source / "injected.c").write_text("int injected;\n")
+        self._assert_ignored_rejected()
+
+    def test_rejects_source_hidden_by_tracked_gitignore(self):
+        (self.source / ".gitignore").write_text("injected.c\n")
+        self._git("add", ".gitignore")
+        self._git("commit", "-qm", "显式源码忽略规则 fixture")
+        (self.source / "injected.c").write_text("int injected;\n")
+        self._assert_ignored_rejected()
+
+    def test_rejects_source_hidden_by_global_ignore(self):
+        ignore_file = self.root / "global.ignore"
+        ignore_file.write_text("injected.c\n")
+        self._set("core.excludesFile", str(ignore_file), "--global")
+        (self.source / "injected.c").write_text("int injected;\n")
+        self._assert_ignored_rejected()
+
+    def test_rejects_ignored_source_inside_cache_named_directory(self):
+        with (self.source / ".git/info/exclude").open("a") as output:
+            output.write("__pycache__/\n")
+        cache = self.source / "__pycache__"
+        cache.mkdir()
+        (cache / "injected.py").write_text("runtime_value = 37\n")
+        self._assert_ignored_rejected()
+
+    def test_rejects_ignored_source_symlink(self):
+        outside = self.root / "outside.c"
+        outside.write_text("int injected;\n")
+        with (self.source / ".git/info/exclude").open("a") as output:
+            output.write("injected.c\n")
+        (self.source / "injected.c").symlink_to(outside)
+        self._assert_ignored_rejected()
+
+
     def _omit_tracked_source(self):
         self._git("sparse-checkout", "set", "--no-cone", "/source.c")
         self.assertTrue((self.source / "source.c").is_file())

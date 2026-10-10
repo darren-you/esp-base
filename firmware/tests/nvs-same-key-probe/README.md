@@ -14,6 +14,7 @@
 
 ```bash
 probe_work_dir=/absolute/private/path
+export PYTHONDONTWRITEBYTECODE=1
 source "$IDF_PATH/export.sh"
 python3 ../../../tools/check_sdk.py --path "$IDF_PATH"
 idf.py -C . -B "$probe_work_dir/build-init" -D SDKCONFIG="$probe_work_dir/sdkconfig-init" -D PROBE_INIT_ONLY=ON build
