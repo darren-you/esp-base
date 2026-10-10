@@ -558,8 +558,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         require(valid_uuid_text(args.device_id), "device-id 必须为小写 UUID v4")
-        components = check_sdk(args.idf_path)
         flash = compare_backups(args.backup_a, args.backup_b)
+        components = check_sdk(args.idf_path)
         records, store = audit(flash, components, args.device_id)
         candidate_sha = write_candidate(args.output_base_store, store, components) if args.output_base_store else None
     except (OSError, PreflightError) as exc:
