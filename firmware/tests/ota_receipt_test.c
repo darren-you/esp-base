@@ -24,11 +24,24 @@ static size_t stored_size;
 static int fault, writes, commits, reads, partition_reads, handles;
 static bool flash_io_active;
 static int flash_io_acquires, flash_io_releases, flash_io_deny_at;
+static esp_base_storage_owner_t transaction_owner;
+static esp_base_storage_claim_t transaction_claim;
+static unsigned firmware_observations;
+static unsigned slot_observations, change_geometry_at_observation;
+static bool change_slots_after_observation, release_claim_after_observation, release_claim_during_commit;
 enum { NO_FAULT, INIT_FAULT, READ_FAULT, OPEN_WRITE_FAULT, SET_BEFORE_FAULT, SET_AFTER_FAULT, COMMIT_FAULT, READBACK_FAULT, READBACK_MISMATCH };
 
 static void reset(void)
 {
     assert(!flash_io_active);
+    if (esp_base_storage_claim_active(&transaction_claim))
+        assert(esp_base_storage_release(&transaction_claim));
+    esp_base_storage_owner_init(&transaction_owner);
+    transaction_claim = (esp_base_storage_claim_t){0};
+    assert(esp_base_storage_claim(&transaction_owner, &transaction_claim));
+    firmware_observations = 0;
+    slot_observations = change_geometry_at_observation = 0;
+    change_slots_after_observation = release_claim_after_observation = release_claim_during_commit = false;
     flash_io_acquires = flash_io_releases = flash_io_deny_at = 0;
     running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_0;
     source_state = EOTA_STATE_VALID;
@@ -66,22 +79,10 @@ static bool release_flash_io(void *context)
     return true;
 }
 
-static esp_base_ota_receipt_snapshot_t snapshot(void)
-{
-    esp_base_ota_receipt_snapshot_t result = {0};
-    memcpy(result.source_sha256, observed_source, 32);
-    if (target_lookup == ESP_OK && target_state == EOTA_STATE_VALID &&
-        memcmp(observed_source, observed_inactive, 32) != 0) {
-        memcpy(result.inactive_sha256, observed_inactive, 32);
-    }
-    return result;
-}
-
 static esp_base_ota_receipt_result_t register_receipt(
     const char *device_id, const esp_base_ota_request_t *request)
 {
-    const esp_base_ota_receipt_snapshot_t current = snapshot();
-    return esp_base_ota_receipt_register(device_id, request, &current);
+    return esp_base_ota_receipt_register(device_id, request, &transaction_claim);
 }
 
 esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
@@ -89,6 +90,8 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
     const eota_prepared_t *prepared, esp_base_ota_firmware_set_t *set)
 {
     assert(observation == ESP_BASE_OTA_FIRMWARE_CONFIRMED && prepared == NULL && set != NULL);
+    assert(esp_base_storage_claim_active(&transaction_claim));
+    ++firmware_observations;
     if (!firmware_observation_ok) return ESP_BASE_OTA_FIRMWARE_UNCERTAIN;
     *set = (esp_base_ota_firmware_set_t){.bootable_count = 1U};
     memcpy(set->running_firmware_sha256, observed_source, 32);
@@ -98,6 +101,8 @@ esp_base_ota_firmware_result_t esp_base_ota_observe_firmware_set(
         set->bootable_count = 2U;
         memcpy(set->bootable_firmware_sha256[1], observed_inactive, 32);
     }
+    if (change_slots_after_observation) boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+    if (release_claim_after_observation) assert(esp_base_storage_release(&transaction_claim));
     return ESP_BASE_OTA_FIRMWARE_OK;
 }
 
@@ -130,6 +135,7 @@ const char *eota_error(eota_result_t result)
 }
 eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slots)
 {
+    ++slot_observations;
     assert(policy && slots && !strcmp(policy->project_name, "esp_base") &&
            policy->chip_id == CONFIG_IDF_FIRMWARE_CHIP_ID &&
            policy->ota_0_address_bytes == ESP_BASE_OTA_0_ADDRESS_BYTES &&
@@ -152,6 +158,7 @@ eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slot
         .running_state = source_state,
         .target_state = target_lookup == ESP_ERR_NOT_FOUND ? EOTA_STATE_UNTRACKED : target_state,
     };
+    if (slot_observations == change_geometry_at_observation) slots->target_address_bytes += 0x1000;
     return target_lookup == ESP_FAIL ? EOTA_UPDATE_SLOT_UNAVAILABLE : EOTA_UPDATE_OK;
 }
 eota_result_t eota_preflight(const eota_policy_t *policy, uint32_t size, eota_slots_t *slots)
@@ -219,6 +226,7 @@ esp_err_t nvs_commit(nvs_handle_t handle)
     if (fault == COMMIT_FAULT) return ESP_FAIL;
     memcpy(stored, staged, sizeof stored);
     exists = true;
+    if (release_claim_during_commit) assert(esp_base_storage_release(&transaction_claim));
     return ESP_OK;
 }
 eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t subtype,
@@ -253,7 +261,8 @@ int main(void)
 
     reset(); ota = request(OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
-    assert(stored_size == RECEIPT_BYTES && stored[4] == 4U && writes == 1 && commits == 1);
+    assert(stored_size == RECEIPT_BYTES && stored[4] == 4U && writes == 1 && commits == 1 &&
+           firmware_observations == 1);
     assert(esp_base_ota_receipt_load_for_recovery(DEVICE, &recovery) == ESP_BASE_OTA_RECEIPT_OK &&
            recovery.status == ESP_BASE_OTA_RECEIPT_PREPARED &&
            !memcmp(recovery.source_sha256, observed_source, 32) &&
@@ -261,10 +270,13 @@ int main(void)
            recovery.source_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
            recovery.target_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_EXISTS && writes == 1);
+    assert(firmware_observations == 1);
     ota.sha256[0] ^= 1U;
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_CONFLICT && writes == 1);
+    assert(firmware_observations == 1);
     ota = request(NEXT_OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_BUSY && writes == 1);
+    assert(firmware_observations == 1);
     assert(esp_base_ota_receipt_query(DEVICE, OP, true, &view) == ESP_BASE_OTA_RECEIPT_OK &&
            view.state == ESP_BASE_OTA_OPERATION_RUNNING);
     assert(esp_base_ota_receipt_query(DEVICE, OP, false, &view) == ESP_BASE_OTA_RECEIPT_OK &&
@@ -347,12 +359,42 @@ int main(void)
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID && writes == 0);
     reset(); ota = request(OP); target_lookup = ESP_OK; target_state = EOTA_STATE_NEW;
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE && writes == 0);
-    reset(); ota = request(OP); esp_base_ota_receipt_snapshot_t current = snapshot();
-    current.source_sha256[0] ^= 1U;
-    assert(esp_base_ota_receipt_register(DEVICE, &ota, &current) ==
-           ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
     reset(); ota = request(OP); firmware_observation_ok = false;
-    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH && writes == 0);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN &&
+           firmware_observations == 1 && writes == 0);
+
+    /* One owned observation supplies both V4 identities. The before/after slot
+     * check and the live transaction token still stop stale results before NVS. */
+    reset(); ota = request(OP); target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK && firmware_observations == 1);
+    assert(!memcmp(stored + 118, observed_source, 32) &&
+           !memcmp(stored + 150, observed_inactive, 32));
+    reset(); ota = request(OP); target_lookup = ESP_OK; target_state = EOTA_STATE_VALID;
+    memcpy(observed_inactive, observed_source, 32);
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK && firmware_observations == 1);
+    const uint8_t no_inactive[32] = {0};
+    assert(!memcmp(stored + 150, no_inactive, 32));
+    reset(); ota = request(OP); change_slots_after_observation = true;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN &&
+           firmware_observations == 1 && writes == 0);
+    for (unsigned changed_call = 2; changed_call <= 3; ++changed_call) {
+        reset(); ota = request(OP); change_geometry_at_observation = changed_call;
+        assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN &&
+               firmware_observations == (changed_call == 3 ? 1U : 0U) && writes == 0);
+    }
+    reset(); ota = request(OP); release_claim_after_observation = true;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN &&
+           firmware_observations == 1 && writes == 0);
+    reset(); ota = request(OP);
+    assert(esp_base_storage_release(&transaction_claim));
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN &&
+           firmware_observations == 0 && writes == 0);
+    assert(esp_base_ota_receipt_register(DEVICE, &ota, NULL) ==
+           ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN && writes == 0);
+    reset(); ota = request(OP); release_claim_during_commit = true;
+    assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN &&
+           firmware_observations == 1 && writes == 1 && commits == 1);
+    check_balanced();
 
     /* NVS fault matrix verifies intent and terminal readback/unknown handling. */
     for (int terminal = 0; terminal < 3; ++terminal) {
@@ -393,5 +435,5 @@ int main(void)
     assert(writes == previous_writes && !flash_io_active && handles == 0);
     reset(); signed_enabled = false; ota = request(OP);
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_UNSUPPORTED && writes == 0);
-    puts("  ota_receipt passed (V4 firmware intent, active/pending/valid/rollback, legacy/corrupt blocking, NVS faults)");
+    puts("  ota_receipt passed (single owned firmware observation, stale-slot/claim blocking, V4 intent, terminal/NVS faults)");
 }

@@ -100,6 +100,7 @@ printf '  hardware       not used\n'
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" "$ROOT/components/ota_operation/esp_base_ota_receipt.c" \
+  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/tests/ota_receipt_test.c" \
   -o "$BUILD_DIR/ota_receipt_test"
 "$BUILD_DIR/ota_receipt_test"
