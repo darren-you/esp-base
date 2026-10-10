@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import shlex
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -855,6 +856,86 @@ class CapacityDerivationTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.capacity = CapacityFixture(self.root)
+
+
+    def test_check_rejects_wrong_idf_and_lwip_fetch_origins(self):
+        self.apply()
+        for name, repo in (("idf", self.capacity.sdk), ("lwip", self.capacity.lwip)):
+            with self.subTest(repository=name):
+                self.capacity.git(repo, "remote", "set-url", "origin", "https://example.invalid/untrusted.git")
+                self.reject("origin")
+                self.capacity.git(repo, "remote", "set-url", "origin", self.capacity.recipe[name]["repository"])
+
+    def test_check_rejects_fetch_url_rewrite_and_multiple_raw_origins(self):
+        self.apply()
+        repo = self.capacity.lwip
+        raw = self.capacity.recipe["lwip"]["repository"]
+        self.capacity.git(repo, "config", "url.https://example.invalid/untrusted.git.insteadOf", raw)
+        self.reject("origin")
+        self.capacity.git(repo, "config", "--remove-section", "url.https://example.invalid/untrusted.git")
+        self.capacity.git(repo, "config", "--add", "remote.origin.url", raw)
+        self.reject("origin")
+
+    def test_check_accepts_equivalent_ssh_fetch_identity(self):
+        self.apply()
+        for name, repo in (("idf", self.capacity.sdk), ("lwip", self.capacity.lwip)):
+            value = self.capacity.recipe[name]["repository"].removeprefix("https://github.com/")
+            self.capacity.git(repo, "remote", "set-url", "origin", "git@github.com:" + value)
+        self.assertEqual(self.capacity.check().returncode, 0)
+
+    def test_source_check_never_executes_fsmonitor_from_local_or_command_scope(self):
+        self.apply()
+        marker = self.root / "monitor-ran"
+        script = self.root / "monitor.sh"
+        script.write_text("#!/bin/sh\nprintf ran > " + shlex.quote(str(marker)) + "\nprintf 'token\\0'\n")
+        script.chmod(0o755)
+        for command_scope in (False, True):
+            with self.subTest(command_scope=command_scope):
+                marker.unlink(missing_ok=True)
+                environment = self.capacity.environment.copy()
+                if command_scope:
+                    self.capacity.git(self.capacity.sdk, "config", "--unset", "core.fsmonitor")
+                    environment.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.fsmonitor", GIT_CONFIG_VALUE_0=str(script))
+                else:
+                    self.capacity.git(self.capacity.sdk, "config", "core.fsmonitor", str(script))
+                result = subprocess.run([sys.executable, str(self.capacity.product / "tools/check_sdk.py"),
+                                         "--path", str(self.capacity.sdk)], capture_output=True, text=True,
+                                        env=environment, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(marker.exists(), "来源检查不得执行 fsmonitor")
+
+    def test_prepare_rejects_external_filters_before_mutation(self):
+        before = self.tracked().read_bytes()
+        marker = self.root / "apply-filter-ran"
+        command = shlex.join([sys.executable, "-c", 'import sys,pathlib; data=sys.stdin.buffer.read(); pathlib.Path(sys.argv[1]).write_text("ran"); sys.stdout.buffer.write(data)', str(marker)])
+        attributes = self.root / "outside-attributes"
+        relative = str(self.tracked().relative_to(self.capacity.sdk))
+        attributes.write_text(relative + " filter=source-probe\n")
+        self.capacity.git(self.capacity.sdk, "config", "core.attributesFile", str(attributes))
+        for kind in ("clean", "smudge", "process"):
+            with self.subTest(kind=kind):
+                key = "filter.source-probe." + kind
+                self.capacity.git(self.capacity.sdk, "config", key, command)
+                try:
+                    result = self.capacity.prepare()
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("外部 Git filter", result.stderr)
+                    self.assertFalse(marker.exists(), "补丁检查前不得执行 filter")
+                    self.assertEqual(self.tracked().read_bytes(), before)
+                    self.assertFalse(self.capacity.stamp.exists())
+                finally:
+                    self.capacity.git(self.capacity.sdk, "config", "--unset", key)
+
+    def test_layout_imports_reject_fifo_recipe_without_waiting(self):
+        for name in ("preflight_v3_migration.py", "prepare_native_layout.py", "archive_esp32_at.py", "device_control.py"):
+            shutil.copyfile(Path(__file__).with_name(name), self.capacity.product / "tools" / name)
+        lock = self.capacity.product / "sdk-lock.json"
+        lock.unlink(); os.mkfifo(lock)
+        for entry in ("preflight_v3_migration.py", "prepare_native_layout.py"):
+            with self.subTest(entry=entry):
+                result = self.capacity.command(entry, "--help", timeout=5)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("普通文件", result.stderr)
 
     def apply(self):
         self.capacity.apply()

@@ -47,7 +47,7 @@ SDK_NVS_TYPES = {
 NVS_GENERATOR_VERSION = "0.1.9"
 UUID_V4 = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 ROOT = Path(__file__).resolve().parents[1]
-IDF_COMMIT = json.loads((ROOT / "sdk-lock.json").read_text())["idf"]["revision"]
+IDF_COMMIT = sdk_source.read_recipe()[0]["idf"]["revision"]
 
 
 class PreflightError(Exception):
@@ -110,7 +110,7 @@ def check_sdk(idf_path: Path) -> Path:
     try:
         environment = sdk_source.git_environment()
         result = subprocess.run(
-            ["git", "-C", str(idf_path), "rev-parse", "HEAD"],
+            sdk_source.git_command(idf_path, "rev-parse", "HEAD"),
             text=True, capture_output=True, check=False, env=environment,
         )
         require(result.returncode == 0 and result.stdout.strip() == IDF_COMMIT,
@@ -118,12 +118,7 @@ def check_sdk(idf_path: Path) -> Path:
         sdk_source.check(idf_path)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         raise PreflightError(f"固定 SDK 来源校验失败：{exc}") from exc
-    tracked_tools = ["components/partition_table/gen_esp32part.py",
-                     "components/nvs_flash/nvs_partition_tool/nvs_parser.py",
-                     "components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"]
-    unchanged = subprocess.run(["git", "-C", str(idf_path), "diff", "--quiet", "HEAD", "--", *tracked_tools],
-                               check=False, env=environment)
-    require(unchanged.returncode == 0, "固定 SDK 的分区或 NVS 工具源码已修改")
+    # 完整来源检查已直接核对这些工具的 HEAD 原始字节；不重复运行内容过滤 diff。
     components = idf_path / "components"
     require((components / "partition_table/gen_esp32part.py").is_file() and
             (components / "nvs_flash/nvs_partition_tool/nvs_parser.py").is_file(),

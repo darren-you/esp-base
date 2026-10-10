@@ -89,6 +89,8 @@ class CapacityFixture:
                 (repo / item["path"]).write_bytes(self.original[declaration["repository"], item["path"]])
         for name in ("check_sdk.py", "prepare_sdk.py"):
             shutil.copyfile(TOOLS / name, self.product / "tools" / name)
+        self.git(self.sdk, "remote", "add", "origin", self.recipe["idf"]["repository"])
+        self.git(self.lwip, "remote", "set-url", "origin", self.recipe["lwip"]["repository"])
         self.write_recipe()
         self.raw_status = self.git(self.sdk, "status", "--porcelain", "--ignore-submodules=none")
 

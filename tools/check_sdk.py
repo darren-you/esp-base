@@ -147,16 +147,46 @@ def git_environment() -> dict:
     return {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"}
 
 
+def git_command(path: Path, *args: str) -> list[str]:
+    # 原始对象/索引读取也可能调用 fsmonitor；命令行值覆盖全部 Git 配置作用域。
+    return ["git", "-c", "core.fsmonitor=false", "-C", str(path), *args]
+
+
+def reject_external_content_filters(path: Path) -> None:
+    """装配前拒绝 Git 最终有效的外部内容驱动，避免 apply 执行未知程序。"""
+    keys = set(git(path, "config", "--null", "--name-only", "--list").split("\0"))
+    for key in keys:
+        if (key.startswith("filter.") and key.rsplit(".", 1)[-1] in ("clean", "smudge", "process")
+                and git(path, "config", "--get", key)):
+            raise ValueError(f"SDK 装配不能执行外部 Git filter：{key}：{path}")
+
+
+def verify_repository_origin(path: Path, expected: str) -> None:
+    """配方身份同时绑定原始唯一 origin 与实际 fetch URL，不接受来源重写。"""
+    pattern = r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?"
+    expected_match = re.fullmatch(pattern, expected)
+    if not expected_match:
+        raise ValueError("SDK 配方 origin 身份无效")
+    raw = git(path, "config", "--local", "--get-all", "remote.origin.url").splitlines()
+    fetch = git(path, "remote", "get-url", "--all", "origin").splitlines()
+    if len(raw) != 1 or len(fetch) != 1:
+        raise ValueError(f"SDK origin 必须解析为唯一 fetch 来源：{path}")
+    for value in raw + fetch:
+        match = re.fullmatch(pattern, value)
+        if not match or match[1].casefold() != expected_match[1].casefold():
+            raise ValueError(f"SDK origin fetch 身份与配方不符：{path}")
+
+
 def git(path: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(path), *args], check=True, capture_output=True, text=True, env=git_environment()
+        git_command(path, *args), check=True, capture_output=True, text=True, env=git_environment()
     ).stdout.rstrip("\n")
 
 
 def git_boolean(path: Path, key: str) -> bool:
     """按 Git 的作用域、include 与原生布尔规则读取最终有效值。"""
     result = subprocess.run(
-        ["git", "-C", str(path), "config", "--bool", "--get", key],
+        git_command(path, "config", "--bool", "--get", key),
         text=True, capture_output=True, env=git_environment())
     if result.returncode == 1:
         return False
@@ -172,8 +202,8 @@ def verify_object_bytes(path: Path) -> None:
     if object_format not in ("sha1", "sha256"):
         raise ValueError("来源 Git 对象摘要格式不受支持")
     with tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(["git", "-C", str(path), "cat-file", "--batch-all-objects",
-                                    "--batch", "--unordered"], stdout=subprocess.PIPE,
+        process = subprocess.Popen(git_command(path, "cat-file", "--batch-all-objects",
+                                    "--batch", "--unordered"), stdout=subprocess.PIPE,
                                    stderr=errors, env=git_environment())
         try:
             while True:
@@ -212,7 +242,7 @@ def verify_tracked_tree(path: Path, source_root: Path, gitlink_overrides: dict, 
                         capacity_files: dict | None = None, capacity_seen: set | None = None,
                         capacity_patched: bool = False, capacity_stamp: str | None = None) -> None:
     """直接以 HEAD 的 Git blob 字节与类型核对源码，不读取 index 的内容提示。"""
-    result = subprocess.run(["git", "-C", str(path), "ls-tree", "-r", "-z", revision],
+    result = subprocess.run(git_command(path, "ls-tree", "-r", "-z", revision),
                             check=True, capture_output=True, env=git_environment())
     object_format = git(path, "rev-parse", "--show-object-format")
     if object_format not in ("sha1", "sha256"):
@@ -223,7 +253,7 @@ def verify_tracked_tree(path: Path, source_root: Path, gitlink_overrides: dict, 
         header, name = entry.split(b"\t", 1)
         mode, _, object_id = header.split()
         expected_index.add((mode, object_id, b"0", name))
-    index = subprocess.run(["git", "-C", str(path), "ls-files", "--stage", "-z"],
+    index = subprocess.run(git_command(path, "ls-files", "--stage", "-z"),
                            check=True, capture_output=True, env=git_environment())
     actual_index = set()
     for entry in index.stdout.split(b"\0"):
@@ -297,7 +327,7 @@ def verify_tracked_tree(path: Path, source_root: Path, gitlink_overrides: dict, 
                     actual.st_dev, actual.st_ino, actual.st_mode):
                 raise ValueError(f"来源 tracked 文件在检查期间被替换：{file}")
         if capacity_item:
-            original = subprocess.run(["git", "-C", str(path), "cat-file", "blob", object_id.decode("ascii")],
+            original = subprocess.run(git_command(path, "cat-file", "blob", object_id.decode("ascii")),
                                       check=True, capture_output=True, env=git_environment()).stdout
             if hashlib.sha256(original).hexdigest() != capacity_item["before_sha256"]:
                 raise ValueError(f"SDK 容量原件 HEAD blob 与 before 摘要不符：{file}")
@@ -352,7 +382,7 @@ def verify_complete_repository(path: Path, source_root: Path | None = None,
         raise ValueError(f"SDK 来源不能包含 grafts 历史替换：{path}")
     if git_metadata.is_file():
         binding = subprocess.run(
-            ["git", "-C", str(path), "config", "--local", "--path", "--get", "core.worktree"],
+            git_command(path, "config", "--local", "--path", "--get", "core.worktree"),
             text=True, capture_output=True, env=git_environment())
         if binding.returncode or not binding.stdout.strip():
             raise ValueError(f"SDK Git 元数据文件必须原生绑定当前来源：{path}")
@@ -389,8 +419,8 @@ def verify_complete_repository(path: Path, source_root: Path | None = None,
     revision = revision or git(path, "rev-parse", "HEAD")
     if git(path, "rev-parse", "HEAD") != revision:
         raise ValueError(f"来源未锁定完整提交 {revision}：{path}")
-    result = subprocess.run(["git", "-C", str(path), "fsck", "--connectivity-only",
-                             "--no-dangling"], text=True, stdout=subprocess.DEVNULL,
+    result = subprocess.run(git_command(path, "fsck", "--connectivity-only",
+                             "--no-dangling"), text=True, stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE, env=git_environment())
     if result.returncode:
         raise ValueError(f"SDK 来源对象不完整：{path}\n{result.stderr.strip()}")
@@ -417,6 +447,8 @@ def check(path: Path, *, patched: bool = True) -> None:
         patch_snapshots[file] = snapshot
     idf = path.resolve(strict=True)
     lwip = idf / recipe["lwip"]["path"]
+    verify_repository_origin(idf, recipe["idf"]["repository"])
+    verify_repository_origin(lwip, recipe["lwip"]["repository"])
     if git(idf, "rev-parse", "HEAD") != recipe["idf"]["revision"]:
         raise ValueError("ESP-IDF 提交与 sdk-lock.json 不符")
     if (not lwip.is_dir()

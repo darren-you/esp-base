@@ -8,7 +8,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from check_sdk import check, git_environment, patch_inputs, read_recipe, read_source_file, repository_paths
+from check_sdk import (check, git_command, git_environment, patch_inputs, read_recipe,
+                       read_source_file, reject_external_content_filters, repository_paths)
 
 
 def prepare(path: Path) -> None:
@@ -20,6 +21,8 @@ def prepare(path: Path) -> None:
         return
     recipe, raw, identity = read_recipe()
     repositories = repository_paths(path)
+    for repository in repositories.values():
+        reject_external_content_filters(repository)
     patches = patch_inputs(recipe)
     # Git reads the two frozen verified inputs, not paths that could change after hashing.
     with tempfile.TemporaryDirectory(prefix="esp-base-capacity-patches-") as directory:
@@ -36,11 +39,11 @@ def prepare(path: Path) -> None:
             raise ValueError("SDK 配方在装配前改变")
         # Both real Git apply checks complete before the first SDK mutation.
         for declaration, file in frozen:
-            subprocess.run(["git", "-C", str(repositories[declaration["repository"]]), "apply",
-                            "--check", "--whitespace=nowarn", str(file)], check=True, env=git_environment())
+            subprocess.run(git_command(repositories[declaration["repository"]], "apply",
+                                       "--check", "--whitespace=nowarn", str(file)), check=True, env=git_environment())
         for declaration, file in frozen:
-            subprocess.run(["git", "-C", str(repositories[declaration["repository"]]), "apply",
-                            "--whitespace=nowarn", str(file)], check=True, env=git_environment())
+            subprocess.run(git_command(repositories[declaration["repository"]], "apply",
+                                       "--whitespace=nowarn", str(file)), check=True, env=git_environment())
     stamp = repositories["idf"] / recipe["derivation_stamp"]
     fd = os.open(stamp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "wb") as stream:
