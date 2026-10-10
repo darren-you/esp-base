@@ -1109,5 +1109,64 @@ class CapacityDerivationTest(unittest.TestCase):
     def test_local_recipe_change_during_real_deep_object_proof_rejected(self):
         self.change_during_full_proof("recipe")
 
+    def assert_recipe_gate_rejects_real_entries(self, reason):
+        """实际 CLI 与 SDK 容量 import 消费者都先经普通小文件门。"""
+        shutil.copyfile(Path(__file__).with_name("test_sdk_capacity.py"),
+                        self.capacity.product / "tools/test_sdk_capacity.py")
+        # A missing source must not reach path.resolve/Git/deep proof: recipe fails first.
+        unavailable = self.capacity.sdk / "uninitialized-source"
+        entries = (("check_sdk.py", "--path"), ("prepare_sdk.py", "--path"),
+                   ("test_sdk_capacity.py", "--idf-path"))
+        for entry, option in entries:
+            with self.subTest(entry=entry):
+                result = self.capacity.command(entry, option, str(unavailable), timeout=5)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(reason, result.stderr)
+                self.assertNotIn("FileNotFoundError", result.stderr)
+                self.assertNotIn("CalledProcessError", result.stderr)
+                self.assertFalse(self.capacity.stamp.exists())
+
+    def test_recipe_fifo_rejected_by_real_cli_and_import_before_source_proof(self):
+        recipe = self.capacity.product / "sdk-lock.json"
+        recipe.unlink()
+        os.mkfifo(recipe)
+        self.assert_recipe_gate_rejects_real_entries("普通文件")
+
+    def test_recipe_symlink_rejected_by_real_cli_and_import_before_source_proof(self):
+        recipe = self.capacity.product / "sdk-lock.json"
+        original = self.root / "canonical-recipe-target.json"
+        original.write_bytes(recipe.read_bytes())
+        recipe.unlink()
+        recipe.symlink_to(original)
+        self.assert_recipe_gate_rejects_real_entries("普通文件")
+
+    def test_recipe_over_64k_rejected_by_real_cli_and_import_before_source_proof(self):
+        recipe = self.capacity.product / "sdk-lock.json"
+        recipe.write_bytes(recipe.read_bytes() + b" " * 65537)
+        self.assert_recipe_gate_rejects_real_entries("大小越界")
+
+    def test_patch_change_between_verified_read_and_stable_snapshot_rejected(self):
+        self.apply()
+        declaration = self.capacity.recipe["managed_patches"][0]
+        file = self.capacity.product / declaration["path"]
+        actual_reader = SDK.read_source_file
+        calls = 0
+
+        def read_with_actual_patch_change(path, **kwargs):
+            nonlocal calls
+            if path == file:
+                calls += 1
+                if calls == 2:
+                    # Change the real file; return only the production reader's actual bytes/stat.
+                    file.write_bytes(file.read_bytes() + b"\n")
+            return actual_reader(path, **kwargs)
+
+        with patch.object(SDK, "ROOT", self.capacity.product), \
+                patch.object(SDK, "read_source_file", side_effect=read_with_actual_patch_change):
+            with self.assertRaisesRegex(ValueError, "稳定快照前改变"):
+                SDK.check(self.capacity.sdk)
+        self.assertEqual(calls, 2)
+        self.assertNotEqual(hashlib.sha256(file.read_bytes()).hexdigest(), declaration["sha256"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,6 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LOCK = json.loads((ROOT / "sdk-lock.json").read_text())
 # Official SDK Python imports and their child processes keep sources free of caches.
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -410,7 +409,12 @@ def verify_complete_repository(path: Path, source_root: Path | None = None,
 def check(path: Path, *, patched: bool = True) -> None:
     recipe, raw, recipe_identity = read_recipe()
     patches = patch_inputs(recipe)
-    patch_snapshots = {file: read_source_file(file) for _, file in patches}
+    patch_snapshots = {}
+    for declaration, file in patches:
+        snapshot = read_source_file(file)
+        if hashlib.sha256(snapshot[0]).hexdigest() != declaration["sha256"]:
+            raise ValueError("SDK 容量补丁在稳定快照前改变")
+        patch_snapshots[file] = snapshot
     idf = path.resolve(strict=True)
     lwip = idf / recipe["lwip"]["path"]
     if git(idf, "rev-parse", "HEAD") != recipe["idf"]["revision"]:
