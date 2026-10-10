@@ -126,6 +126,12 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 结果保存在 `provided_request_fit`，全局 `next_maximum_legal_request_verified`、`r5_qualified`、`r6_qualified` 始终为 false；`next_request_unclosed_reasons` 明示全合法消费者集合、动态真实输入、并发／realloc 生命周期和固件配置源码消费绑定仍未封闭。CLI 退出码仍只反映输入有效性与三个数值门；调用方须读取各请求 status，不得将退出码 0、`all_provided_requests_fit` 或一份 sidecar 当作全局资格。
 
+本产品 HTTPS OTA 头申请按 `firmware/CMakeLists.txt` 的 `HTTP_MAX_HEADER_SIZE=8192`、受管 OTA 的 RX=1024B／SDK 默认 TX=512B，以及本次正式 `SAVE_RESPONSE_HEADERS=n`／`ENABLE_GET_CONTENT_RANGE=n` 核算。单个合法响应的 key/value 或累计 Location／认证头申请保守上界为8193B（含 NUL）；拒绝路径的 CR 回调可能先于本接收片的最终计数检查，且完成首个头后仍消费本片剩余数据，故具体请求证据采用更保守的9217B，普通4B对齐 search-size为9220B，使用真实 `MALLOC_CAP_DEFAULT=4096` 完整掩码。不能将旧80KiB头申请或新上界移给未采用此产品编译宏的旧固件。
+
+令 `B=8192+1024=9216`：当前 key/value 与累计 Location／认证头合计请求最多 `2B+4=18436B`；强制移动 realloc 时保留旧块，字符串合计保守上界 `3B+5=27653B`。含 RX、TX、首个完成头所在接收片的缓存正文及缓存移动过程，整条头/缓存链的请求字节保守上界分别为20996B（稳定同存）与30213B（移动峰值）。这些是申请字节上界，不包含 client/transport/URL、TLS、各块分配器开销或其他任务；完整 R5 仍需实际并存峰值、所有消费者与配置绑定，单次 fit 不代替它。
+
+运行 `python3 tools/test_http_header_budget.py --idf-path /absolute/managed-sdk`：先核对 SDK，直接抽取实际 append、header/body callback、fetch 和 cleanup，并编译真实 parser，以 sanitizer 核对分片、相邻接受/拒绝边界、长 field/value、重复/折行辅助头、1xx 后同片消费、缓存正文、移动 realloc 与低内存失败清理。transport、事件与平台对象使用宿主替身；测试验证当前正式关闭上述两项功能的头/缓存分配链，不验证 TLS、实体时延或整个 SDK 初始化。它不访问网络或设备，不授实板 R5/R6；双目标 reconfigure 与 signed 构建输入仍须分别核对。
+
 ## 一次性有线迁入与历史输入
 
 `preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，按 NVS 前三页和 `at_customize` 前两页生成 20 KiB 原字节归档；两分区余尾必须全 FF，并逐字节重建完整原分区，不解码或打印凭据。ESP32 候选将其放入只读 `at_old_raw@0x3e5000/0x5000`。旧 `esp32_product` 的四页输入仅在一次性离线准备时补入第三 NVS 的 FF 页，运行时只消费当前五页布局。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native_software_checkpoint.md)。

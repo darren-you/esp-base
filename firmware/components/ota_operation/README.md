@@ -4,6 +4,8 @@ Base 自有的固件 OTA 约束、持久操作收据及只读签名固件集合�
 
 `device_protocol` 的 USB/MQTT `ota.start` 提供 HTTPS URL；设备 FRP 公网入口登记同一固件意图，再通过已认证的上传连接流式收取完整 signed bin。`inbound_stream` 只是内存来源标志，不属于 wire 字段。两条入口共用唯一升级事务 owner，写前完成静态请求校验、已确认固件集合复核及持久收据 commit/逐字节读回。收到相同操作 ID 不重新下载或重新创建任务；来源等待、下载、选槽和启动确认期间，另一入口不能获得升级事务。
 
+HTTPS 拉取使用产品固定的 8KiB parser 响应头计数预算和 1024B RX；计数包括状态行，分片可能提前触发 `HPE_HEADER_OVERFLOW`。SDK fetch 不直接传播 parser errno，普通单响应超限或追加失败会沿既有读取失败／原下载期限进入清理；不能把 parser errno 当作已经持久提交的 OTA 失败。关闭 HTTP client 会释放未完成的 key/value、Location、认证头和缓存正文，再销毁自有 transport。200、完整 signed 长度、非 chunked、严格 TLS 与签名校验仍逐项执行；此预算不限制 FRP 上传正文，也不改变 ACK、下载或启动确认期限。具体申请及回归入口见[容量工具说明](../../../tools/README.md#正式容量统计)。
+
 ## V4 收据与恢复
 
 唯一收据仍在 `base_store/base_ota/operation`，为固定 182 字节 `EOTA` V4：状态、A/C 物理 subtype、失败码、保留字节、C 完整签名长度、设备 UUID、原操作 UUID、C 摘要、A 摘要和原备用 B 摘要。备用 B 不存在或两个槽属于同一签名身份时，其摘要为零。删除了 V3 中包模式、包摘要、代表事件及 ECS2 sequence。V1/V2/V3、错误长度、保留位非零、损坏或读取失败均返回存储不确定，不能当成键缺失，也不能用清空 NVS 继续启动。
