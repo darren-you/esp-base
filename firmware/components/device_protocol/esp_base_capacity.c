@@ -37,11 +37,11 @@ typedef struct {
     size_t minimum_free_sum[CAPACITY_DOMAIN_COUNT];
     size_t largest_lower_bound[CAPACITY_DOMAIN_COUNT];
     bool valid;
-} capacity_frame_t;
+} esp_base_capacity_frame_t;
 
 static bool emit_region(const heap_capacity_region_stats_t *region, void *opaque)
 {
-    capacity_frame_t *frame = opaque;
+    esp_base_capacity_frame_t *frame = opaque;
     const multi_heap_capacity_stats_t *stats = &region->allocator;
     uint32_t caps = 0;
     for (unsigned i = 0; i < HEAP_CAPACITY_PRIORITIES; ++i) caps |= region->caps[i];
@@ -70,7 +70,7 @@ static void emit(const char *boot_id, const char *phase, uint64_t now_ms)
 {
     if (s_frame == UINT32_MAX) s_frame_overflow = true;
     else ++s_frame;
-    capacity_frame_t frame = {.boot_id = boot_id, .frame = s_frame, .valid = !s_frame_overflow};
+    esp_base_capacity_frame_t frame = {.boot_id = boot_id, .frame = s_frame, .valid = !s_frame_overflow};
     char uptime[21];
     char *digits = uptime + sizeof(uptime) - 1;
     *digits = '\0';
