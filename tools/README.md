@@ -93,7 +93,38 @@ python3 tools/analyze_capacity.py --target esp32 \
 python3 -m unittest discover -s tools/tests -p 'test_analyze_capacity.py' -v
 ```
 
-解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。27 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。38 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+
+需要对照具体后续申请时，在同一调用增加 `--request-evidence /absolute/private/request-evidence.json`。不带该参数的正常行为、JSON 与退出码不变。证据采用以下 strict JSON；示例中的路径、boot 和摘要须替换为本轮原件，大小是实际单次申请字节数，caps 是完整 SDK 位掩码的整数，不能只写一个较弱域：
+
+```json
+{
+  "schema_version": 1,
+  "target": "esp32",
+  "boot_id": "11111111-2222-4333-8444-555555555555",
+  "sdk_lock_sha256": "<本轮冻结 sdk-lock.json 的 64 位小写 SHA256>",
+  "allocator_recipe": "managed_tlsf_plain_32bit_v1",
+  "identity": {
+    "signed_firmware": {"path": "/absolute/private/complete-signed.bin", "sha256": "<完整文件 SHA256>"},
+    "config": {"path": "/absolute/private/consumed-config.json", "sha256": "<配置原件 SHA256>"},
+    "sources": [{"path": "/absolute/frozen-source/consumer.c", "sha256": "<源码原件 SHA256>"}],
+    "firmware_status_uart": {"path": "/absolute/private/firmware-status.uart", "sha256": "<原始 UART 文件 SHA256>"}
+  },
+  "requests": [
+    {"id": "internal-buffer", "size_bytes": 26000, "caps": 2052, "alignment_bytes": 16}
+  ]
+}
+```
+
+`firmware_status_uart` 可省略，其余字段必需。所有引用须是稳定普通文件的绝对路径及精确摘要，拒绝符号链接、FIFO、改写、重复 JSON 字段、未知字段、重复请求 id、空请求／源码集合、布尔数值和非 power-of-two 对齐。文件内容不输出；配置与源码只计算摘要。firmware.status 原件仅接受固件输出的完整 JSON 行，核对同 boot、target、device、slot、完整 signed SHA256 和文件大小；不以文件名或截断摘要代替。多个 firmware.status 记录须身份一致。
+
+请求证据的 target／boot／SDK 必须与调用及原始容量帧一致。原始容量帧没有 target、完整 signed、配置或源码摘要，故 target 在没有同 boot status 时仍由调用方提供；配置文件摘要只证明宿主原件，源码摘要只证明已引用文件，不能据此声称设备消费或 signed 构建输入已经绑定。输出 `identity.fully_bound=false` 及明确 `unbound_reasons`，可选 status 的核对结果只称 `observed`。完整 signed 文件的摘要核对也不代替独立签名与发布验收。
+
+parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch 的原件摘要，不接收调用方公式或任意 `maximum_verified`／`coverage_complete` 声明。当前 recipe 仅支持无 owner／poison、non-EXEC、无硬件 caps 改写的 `32BIT`／`8BIT`／`INTERNAL`／`DEFAULT`／`IRAM_8BIT` 完整掩码组合。双目标指针和 size_t 为 4 B，TLSF minimum block 为 12 B、block header 为 16 B：普通请求先取 `adjust=max(12, align_up(size, 4))`；alignment 低于 4 B 时按 4 B；高于 4 B 时使用真实 `tlsf_memalign_offs` 的 `search_size=align_up(adjust+alignment+16, alignment)`。DMA、EXEC alias、cache、descriptor、SIMD、其他未建模 caps 路径及目标整数溢出报告 `unknown`，不能使用 plain 域偷授资格。calloc 应提供乘积已核对的总字节数，移动 realloc 应提供新块实际申请；并存旧块费用仍由独立生命周期证据覆盖。
+
+每项从最近完整任务帧的原始 REGION 重新匹配全部 caps，三优先级求并集，一个物理 region 只计一次，晚出生 region 不贡献从启动开始的下界。只有其 `max(region min_largest)` 覆盖 search-size 才输出 `status=fit`；下界不足输出 `unknown`，不推断实际申请必然失败。结果包含原始 size／caps／alignment、search-size、总空闲与连续申请下界、margin、最弱 margin／请求 id 和可证 BEGIN 截止。不完整尾帧不能延长请求证明。`fit` 仅表示该单个已提供请求在锁定 recipe 与已读历史下界下的充分条件，不承诺并发后的未来成功。
+
+结果保存在 `provided_request_fit`，全局 `next_maximum_legal_request_verified`、`r5_qualified`、`r6_qualified` 始终为 false；`next_request_unclosed_reasons` 明示全合法消费者集合、动态真实输入、并发／realloc 生命周期和固件配置源码消费绑定仍未封闭。CLI 退出码仍只反映输入有效性与三个数值门；调用方须读取各请求 status，不得将退出码 0、`all_provided_requests_fit` 或一份 sidecar 当作全局资格。
 
 ## 一次性有线迁入与历史输入
 

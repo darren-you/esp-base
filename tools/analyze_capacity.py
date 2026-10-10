@@ -22,6 +22,17 @@ DOMAIN_CAPS = (INTERNAL_8BIT, (1 << 11) | (1 << 1),
 MARKER = b"ESP_BASE_CAPACITY_"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
 HASH = re.compile(r"[0-9a-f]{64}")
+# 此 recipe 只对应当前受管的 32-bit、无 owner／poison producer；调用方不能提供公式。
+ROOT = Path(__file__).resolve().parent.parent
+REQUEST_RECIPE = "managed_tlsf_plain_32bit_v1"
+REQUEST_RECIPE_INPUTS = {
+    "sdk-lock.json": "aa30328518ba10db58f00fa11f04a04a63f8efca05d08e7ae6ced59d7694aa4d",
+    "firmware/components/device_protocol/esp_base_capacity.c": "b10700e91c73413af4a483182fa7ef7320a229d3afefe903b8b27effbb80b8da",
+    "tools/sdk-patches/capacity-idf.patch": "bd84a200cf235f35241315b41eef9b3064294a16d29edb6ee39192dafc3e7bab",
+    "tools/sdk-patches/capacity-tlsf.patch": "afe402d3b0de6e312a4bf84e4491d0a52e1d17b4b02e0ef0fcd958dc8e55a2cd",
+}
+PLAIN_REQUEST_CAPS = (1 << 1) | (1 << 2) | (1 << 11) | (1 << 12) | (1 << 13)
+REQUEST_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
 FIELDS = {
     "BEGIN": "schema boot_id frame phase uptime_ms sdk_lock_sha256 task_limit".split(),
     "REGION": ("boot_id frame start end caps0 caps1 caps2 alias_start alias_end "
@@ -218,7 +229,186 @@ def _summary(frame: dict) -> dict:
                         for row in frame["domains"]]}
 
 
-def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) -> dict:
+def _keys(value: object, required: set[str], optional: set[str] = frozenset()) -> None:
+    if not isinstance(value, dict) or not required <= value.keys() or value.keys() - required - optional:
+        raise ValueError("请求证据对象字段缺失或未知")
+
+
+def _json_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("请求证据 JSON 字段重复")
+        result[key] = value
+    return result
+
+
+def _file_fact(path: Path, *, capture: bool = False, lines=None) -> tuple[dict, bytes]:
+    """只读一个稳定普通文件；配置／源码只计算摘要，绝不回显内容。"""
+    if not path.is_absolute():
+        raise ValueError("请求证据引用必须是绝对文件路径")
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as stream:
+        initial = os.fstat(stream.fileno())
+        if not stat.S_ISREG(initial.st_mode) or (capture and initial.st_size > 1024 * 1024):
+            raise ValueError("请求证据必须是普通文件，JSON 不超过 1 MiB")
+        digest, size, content = hashlib.sha256(), 0, bytearray()
+        while True:
+            raw = stream.readline(16385) if lines is not None else stream.read(65536)
+            if not raw:
+                break
+            if lines is not None:
+                if len(raw) > 16384 or not raw.endswith(b"\n"):
+                    raise ValueError("firmware.status 原件含过长或未完整结束的行")
+                lines(raw)
+            digest.update(raw)
+            size += len(raw)
+            if capture:
+                if size > 1024 * 1024:
+                    raise ValueError("请求证据 JSON 超过 1 MiB")
+                content.extend(raw)
+        final = os.fstat(stream.fileno())
+        if (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) != (final.st_size, final.st_mtime_ns, final.st_ctime_ns) or size != initial.st_size:
+            raise ValueError("分析期间请求证据原件发生变化")
+    return {"path": str(path), "sha256": digest.hexdigest(), "size_bytes": size}, bytes(content)
+
+
+def _reference(value: dict, *, lines=None) -> dict:
+    _keys(value, {"path", "sha256"})
+    if not isinstance(value["path"], str) or not isinstance(value["sha256"], str) or HASH.fullmatch(value["sha256"]) is None:
+        raise ValueError("请求证据文件引用或 SHA256 无效")
+    fact, _ = _file_fact(Path(value["path"]), lines=lines)
+    if fact["sha256"] != value["sha256"]:
+        raise ValueError("请求证据文件摘要不符")
+    return fact
+
+
+def _request_evidence(path: Path, target: str, boot_id: str, sdk_lock_sha256: str) -> tuple[dict, dict]:
+    input_fact, raw = _file_fact(path, capture=True)
+    try:
+        evidence = json.loads(raw.decode("utf-8"), object_pairs_hook=_json_object)
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+        raise ValueError("请求证据不是有效 UTF-8 JSON") from error
+    _keys(evidence, {"schema_version", "target", "boot_id", "sdk_lock_sha256", "allocator_recipe", "identity", "requests"})
+    if (type(evidence["schema_version"]) is not int or evidence["schema_version"] != 1 or
+            any(evidence[key] != value for key, value in (("target", target), ("boot_id", boot_id),
+                ("sdk_lock_sha256", sdk_lock_sha256), ("allocator_recipe", REQUEST_RECIPE))) or
+            sdk_lock_sha256 != REQUEST_RECIPE_INPUTS["sdk-lock.json"]):
+        raise ValueError("请求证据 target／boot／SDK／allocator recipe 与本轮不符")
+    recipe_inputs = []
+    for relative, expected in REQUEST_RECIPE_INPUTS.items():
+        fact, _ = _file_fact(ROOT / relative)
+        if fact["sha256"] != expected:
+            raise ValueError("当前源码不再匹配 parser 的锁定 allocator recipe")
+        recipe_inputs.append({"path": relative, "sha256": expected})
+    identity = evidence["identity"]
+    _keys(identity, {"signed_firmware", "config", "sources"}, {"firmware_status_uart"})
+    signed, config = _reference(identity["signed_firmware"]), _reference(identity["config"])
+    if not 0 < signed["size_bytes"] <= UINT32_MAX or not config["size_bytes"]:
+        raise ValueError("完整 signed 文件或配置文件为空／超出目标范围")
+    if not isinstance(identity["sources"], list) or not identity["sources"]:
+        raise ValueError("请求证据必须引用实际源码原件")
+    sources = [_reference(source) for source in identity["sources"]]
+    if len({source["path"] for source in sources}) != len(sources):
+        raise ValueError("请求证据源码引用重复")
+    status_rows = []
+
+    def status_line(raw: bytes) -> None:
+        if b'"firmware_sha256"' not in raw:
+            return
+        try:
+            row = json.loads(raw.decode("utf-8"), object_pairs_hook=_json_object)
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+            raise ValueError("firmware.status 必须是完整原始 JSON 行") from error
+        _keys(row, {"protocol_version", "device_id", "boot_id", "request_id", "state", "error_code", "result"})
+        result = row["result"]
+        _keys(result, {"firmware_sha256", "image_size_bytes", "target", "ota_slot"})
+        if (type(row["protocol_version"]) is not int or row["protocol_version"] != 1 or
+                not isinstance(row["device_id"], str) or UUID.fullmatch(row["device_id"]) is None or
+                not isinstance(row["request_id"], str) or UUID.fullmatch(row["request_id"]) is None or
+                row["boot_id"] != boot_id or row["state"] != "succeeded" or row["error_code"] is not None or
+                result["target"] != target + "/esp_base" or result["firmware_sha256"] != signed["sha256"] or
+                type(result["image_size_bytes"]) is not int or result["image_size_bytes"] != signed["size_bytes"] or
+                result["ota_slot"] not in ("ota_0", "ota_1")):
+            raise ValueError("firmware.status 与同 boot／target／完整 signed SHA256／大小不符")
+        status_rows.append({"device_id": row["device_id"], "ota_slot": result["ota_slot"]})
+
+    status = {"status": "not_provided"}
+    reasons = ["host_config_digest_does_not_prove_device_consumption",
+               "host_source_digests_do_not_prove_signed_image_build_inputs",
+               "capacity_frames_do_not_encode_signed_config_or_source_digests"]
+    if "firmware_status_uart" in identity:
+        status["input"] = _reference(identity["firmware_status_uart"], lines=status_line)
+        if not status_rows or any(row != status_rows[0] for row in status_rows):
+            raise ValueError("没有同 boot firmware.status 原件或设备／slot 身份改变")
+        status.update(status_rows[0], status="same_boot_target_and_signed_image_observed")
+    else:
+        reasons.append("capacity_target_is_caller_supplied_and_same_boot_signed_image_not_observed")
+    requests = evidence["requests"]
+    if not isinstance(requests, list) or not requests:
+        raise ValueError("须提供具体请求，不能以空集合声明全消费者闭合")
+    ids = set()
+    for request in requests:
+        _keys(request, {"id", "size_bytes", "caps", "alignment_bytes"})
+        if not isinstance(request["id"], str) or REQUEST_ID.fullmatch(request["id"]) is None or request["id"] in ids:
+            raise ValueError("请求 id 无效或重复")
+        ids.add(request["id"])
+        if any(type(request[key]) is not int or not 0 < request[key] <= UINT32_MAX for key in
+               ("size_bytes", "caps", "alignment_bytes")) or request["alignment_bytes"] & (request["alignment_bytes"] - 1):
+            raise ValueError("请求大小／完整 caps／power-of-two alignment 无效")
+    return evidence, {"input": input_fact, "allocator_recipe": {"id": REQUEST_RECIPE,
+            "inputs": recipe_inputs, "base_alignment_bytes": 4, "block_header_bytes": 16,
+            "minimum_block_bytes": 12, "owner_bytes": 0, "poison_bytes": 0},
+            "identity": {"signed_firmware": signed, "config": config, "sources": sources,
+                         "firmware_status": status, "fully_bound": False, "unbound_reasons": reasons}}
+
+
+def _provided_request_fit(evidence: dict, facts: dict, frame: dict | None) -> dict:
+    """下界足够才称 fit；不足或未建模不等于真实申请必定失败。"""
+    results = []
+    for request in evidence["requests"]:
+        item = dict(request, status="unknown", search_size_bytes=None, margin_bytes=None)
+        matching = [row for row in frame["regions"] if row["available_at_heap_init"] and
+                    ((row["caps0"] | row["caps1"] | row["caps2"]) & request["caps"]) == request["caps"]] if frame else []
+        bound = max((row["min_largest_request_bytes"] for row in matching), default=0)
+        item.update(minimum_free_lower_bound_bytes=sum(row["min_free_bytes"] for row in matching),
+                    largest_request_lower_bound_bytes=bound,
+                    matching_early_region_starts=[row["start"] for row in matching])
+        if frame is None:
+            item["reason"] = "no_complete_task_readout"
+        elif request["caps"] & ~PLAIN_REQUEST_CAPS:
+            item["reason"] = "exec_or_hardware_or_other_caps_path_not_modeled"
+        else:
+            alignment = max(4, request["alignment_bytes"])
+            adjusted = max(12, (request["size_bytes"] + 3) & ~3)
+            # tlsf_memalign_offs: adjust_request_size(adjust + align + sizeof(block_header_t), align)
+            search = adjusted if alignment == 4 else (adjusted + alignment + 16 + alignment - 1) & ~(alignment - 1)
+            item["effective_alignment_bytes"] = alignment
+            if search > UINT32_MAX:
+                item["reason"] = "target_size_overflow"
+            else:
+                item.update(search_size_bytes=search, margin_bytes=bound - search,
+                            status="fit" if bound >= search else "unknown",
+                            reason="conservative_lower_bound_covers_search" if bound >= search else "conservative_lower_bound_insufficient")
+        results.append(item)
+    margins = [item["margin_bytes"] for item in results if item["margin_bytes"] is not None]
+    weakest = min(margins) if margins else None
+    unclosed = ["provided_requests_are_not_a_verified_complete_legal_consumer_inventory",
+                "supplied_request_parameters_are_not_verified_against_runtime_inputs",
+                "individual_fit_does_not_prove_concurrent_requests_or_realloc_lifetimes",
+                "firmware_config_and_source_identity_not_fully_bound"]
+    if any(item["status"] != "fit" for item in results):
+        unclosed.append("provided_requests_include_unknown_fit")
+    return dict(facts, scope="individual_provided_requests_under_locked_recipe",
+                proved_until_begin_uptime_ms=frame["begin"]["uptime_ms"] if frame else None,
+                requests=results, all_provided_requests_fit=all(item["status"] == "fit" for item in results),
+                weakest_margin_bytes=weakest,
+                weakest_request_ids=[item["id"] for item in results if weakest is not None and item["margin_bytes"] == weakest],
+                next_request_unclosed_reasons=unclosed)
+
+
+def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str,
+            request_evidence: Path | None = None) -> dict:
     """输入是同一 boot 的完整原始 UART 帧；不跨文件拼残帧。"""
     if target not in ("esp32", "esp32c3") or UUID.fullmatch(boot_id) is None or HASH.fullmatch(sdk_lock_sha256) is None or not paths:
         raise ValueError("须提供明确 target、规范 boot UUID、冻结 SDK lock 摘要及原日志")
@@ -294,7 +484,7 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
     gates = {"heap_gate_passed": last_complete is not None and last_complete["minimum_free_lower_bound_bytes"] >= HEAP_GATE_BYTES,
              "largest_gate_passed": last_complete is not None and last_complete["largest_request_lower_bound_bytes"] >= LARGEST_GATE_BYTES,
              "stack_gate_passed": last_complete is not None and last_complete["minimum_stack_bytes"] >= STACK_GATE_BYTES}
-    return {"schema_version": 1, "valid": True, "target": target, "boot_id": boot_id,
+    result = {"schema_version": 1, "valid": True, "target": target, "boot_id": boot_id,
             "sdk_lock_sha256": sdk_lock_sha256, "frames": frames, "inputs": inputs,
             "proved_until_begin_uptime_ms": last_complete["begin_uptime_ms"] if last_complete else None,
             "latest_readout_begin_uptime_ms": frames[-1]["begin_uptime_ms"],
@@ -310,6 +500,10 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
                             "连续块仅为 plain 4 B 对齐、non-EXEC 口径；下一最大合法申请的实际尺寸、caps 与额外对齐费用尚未证明。",
                             "栈采用官方填充模式 HWM，涵盖计数闭合的仍分配与已最终记录实例，不是逐指令 SP 峰值。",
                             "target 由调用方提供；固件身份、真实负载、故障场景与 R5／R6 生命周期仍须独立验收。"]}
+    if request_evidence is not None:
+        evidence, facts = _request_evidence(request_evidence, target, boot_id, sdk_lock_sha256)
+        result["provided_request_fit"] = _provided_request_fit(evidence, facts, previous_complete)
+    return result
 
 
 def main() -> int:
@@ -318,10 +512,11 @@ def main() -> int:
     parser.add_argument("--boot-id", required=True)
     parser.add_argument("--sdk-lock-sha256", required=True)
     parser.add_argument("--uart-log", required=True, action="append", type=Path)
+    parser.add_argument("--request-evidence", type=Path, help="具体请求与原件引用的 strict JSON；独立判断 fit，不授全局下一申请资格")
     parser.add_argument("--json", action="store_true", help="只输出机器可读 JSON")
     args = parser.parse_args()
     try:
-        result = analyze(args.uart_log, args.target, args.boot_id, args.sdk_lock_sha256)
+        result = analyze(args.uart_log, args.target, args.boot_id, args.sdk_lock_sha256, args.request_evidence)
     except (OSError, ValueError) as error:
         result = {"valid": False, "error": str(error), "r5_qualified": False, "r6_qualified": False}
         if args.json:
@@ -345,6 +540,10 @@ def main() -> int:
             print(f"  全实例栈HWM  {last['minimum_stack_bytes']} B / {STACK_GATE_BYTES} B")
         else:
             print("  数值门       尚无任务计数闭合帧可授组合证明")
+        if "provided_request_fit" in result:
+            for request in result["provided_request_fit"]["requests"]:
+                print(f"  请求 {request['id']}  {request['status']} / margin {request['margin_bytes']} B / {request['reason']}")
+            print("  配置／源码   宿主原件摘要已核；设备消费绑定与全消费者集合未闭合")
         print("  后缀／下一申请／R5／R6  未获资格；观察成本不加回")
     return 0 if result["numeric_gates_passed"] else 1
 

@@ -1,11 +1,14 @@
 """正式连续统计帧的解析、保守下界与不授资格回归；不访问设备。"""
 import importlib.util
+import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TOOLS = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("analyze_capacity", TOOLS / "analyze_capacity.py")
@@ -407,6 +410,231 @@ class AnalyzeCapacityTest(unittest.TestCase):
                 analyze([link], "esp32", BOOT, LOCK)
             with self.assertRaises((ValueError, OSError)):
                 analyze([Path(directory)], "esp32", BOOT, LOCK)
+
+
+class ProvidedRequestFitTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.lock = module.REQUEST_RECIPE_INPUTS["sdk-lock.json"]
+        self.uart = self.root / "raw.uart"
+        self.evidence_path = self.root / "request-evidence.json"
+        signed = self.reference("signed.bin", b"synthetic complete signed fixture")
+        config = self.reference("config.json", b'{"private_key":"never echo this fixture"}')
+        source = self.reference("consumer.c", b"heap_caps_malloc(size, caps);\n")
+        self.evidence = {"schema_version": 1, "target": "esp32", "boot_id": BOOT,
+                         "sdk_lock_sha256": self.lock, "allocator_recipe": module.REQUEST_RECIPE,
+                         "identity": {"signed_firmware": signed, "config": config, "sources": [source]},
+                         "requests": [{"id": "request", "size_bytes": 25600,
+                                       "caps": module.INTERNAL_8BIT, "alignment_bytes": 4}]}
+
+    def reference(self, name, raw):
+        path = self.root / name
+        path.write_bytes(raw)
+        return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    def read(self, *frames):
+        self.uart.write_text("".join(render(frame).replace(LOCK, self.lock) for frame in (frames or [fixture()])))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        return analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+
+    def status(self, **changes):
+        signed = self.evidence["identity"]["signed_firmware"]
+        row = {"protocol_version": 1, "device_id": "66666666-2222-4333-8444-555555555555",
+               "boot_id": BOOT, "request_id": "77777777-2222-4333-8444-555555555555",
+               "state": "succeeded", "error_code": None,
+               "result": {"firmware_sha256": signed["sha256"],
+                          "image_size_bytes": Path(signed["path"]).stat().st_size,
+                          "target": "esp32/esp_base", "ota_slot": "ota_0"}}
+        for key, value in changes.items():
+            (row["result"] if key in row["result"] else row)[key] = value
+        self.evidence["identity"]["firmware_status_uart"] = self.reference("status.uart", (json.dumps(row) + "\n").encode())
+
+    def test_optional_input_preserves_old_output_and_never_closes_global_qualification(self):
+        result = self.read()
+        plain = analyze([self.uart], "esp32", BOOT, self.lock)
+        self.assertNotIn("provided_request_fit", plain)
+        self.assertEqual({key: value for key, value in result.items() if key != "provided_request_fit"}, plain)
+        fit = result["provided_request_fit"]
+        self.assertTrue(fit["all_provided_requests_fit"])
+        self.assertEqual(fit["weakest_margin_bytes"], 400)
+        self.assertFalse(fit["identity"]["fully_bound"])
+        self.assertTrue(fit["identity"]["unbound_reasons"])
+        self.assertTrue(fit["next_request_unclosed_reasons"])
+        self.assertNotIn("never echo", json.dumps(result))
+        for key in ("next_maximum_legal_request_verified", "r5_qualified", "r6_qualified"):
+            self.assertFalse(result[key])
+
+    def test_higher_alignment_search_overhead_changes_a_raw_payload_fit_to_unknown(self):
+        self.evidence["requests"] = [dict(self.evidence["requests"][0], size_bytes=26000, alignment_bytes=1),
+                                     dict(self.evidence["requests"][0], id="aligned", size_bytes=26000, alignment_bytes=16)]
+        fit = self.read()["provided_request_fit"]
+        plain, aligned = fit["requests"]
+        self.assertEqual((plain["effective_alignment_bytes"], plain["search_size_bytes"], plain["status"]), (4, 26000, "fit"))
+        self.assertEqual((aligned["search_size_bytes"], aligned["margin_bytes"], aligned["status"]), (26032, -32, "unknown"))
+        self.assertEqual(fit["weakest_request_ids"], ["aligned"])
+        self.assertFalse(fit["all_provided_requests_fit"])
+        self.evidence["requests"][0].update(size_bytes=1)
+        self.assertEqual(self.read()["provided_request_fit"]["requests"][0]["search_size_bytes"], 12)
+
+    def test_full_caps_priority_union_and_late_birth_are_used_instead_of_weaker_domains(self):
+        frame = fixture()
+        # 更强请求只能使用 IRAM，不能借 INTERNAL|32BIT 域的 DRAM 下界。
+        self.evidence["requests"][0].update(size_bytes=10001, caps=(1 << 11) | (1 << 13) | (1 << 1))
+        iram = frame["REGION"][2]
+        iram["caps0"], iram["caps1"] = (1 << 13) | 1, (1 << 11) | (1 << 1)
+        fit = self.read(frame)["provided_request_fit"]["requests"][0]
+        self.assertEqual(fit["matching_early_region_starts"], [0x30000])
+        self.assertEqual(fit["largest_request_lower_bound_bytes"], 10000)
+        self.assertEqual(fit["search_size_bytes"], 10004)
+        self.assertEqual(fit["status"], "unknown")
+        self.evidence["requests"][0].update(size_bytes=40000, caps=module.INTERNAL_8BIT)
+        fit = self.read()["provided_request_fit"]["requests"][0]
+        self.assertEqual(fit["largest_request_lower_bound_bytes"], 26000)
+        self.assertEqual(fit["matching_early_region_starts"], [0x10000])
+        self.assertEqual(fit["status"], "unknown")
+
+    def test_exec_hardware_caps_and_integer_overflow_remain_unknown(self):
+        for caps in (IRAM_CAPS, module.INTERNAL_8BIT | (1 << 3), (1 << 17), 1 << 31):
+            with self.subTest(caps=caps):
+                self.evidence["requests"][0].update(size_bytes=1, caps=caps)
+                row = self.read()["provided_request_fit"]["requests"][0]
+                self.assertEqual(row["status"], "unknown")
+                self.assertEqual(row["reason"], "exec_or_hardware_or_other_caps_path_not_modeled")
+                self.assertIsNone(row["search_size_bytes"])
+        self.evidence["requests"][0].update(size_bytes=module.UINT32_MAX, caps=module.INTERNAL_8BIT)
+        row = self.read()["provided_request_fit"]["requests"][0]
+        self.assertEqual(row["reason"], "target_size_overflow")
+        self.assertIsNone(row["margin_bytes"])
+
+    def test_incomplete_tail_cannot_extend_request_fit_or_retroactively_replace_the_closed_frame(self):
+        first, gap, _ = cleanup_sequence()
+        gap["REGION"][0].update(min_free_bytes=16000, min_largest_request_bytes=12000,
+                                 free_bytes=16500, largest_request_bytes=12100)
+        for domain in gap["DOMAIN"][:4]:
+            domain.update(minimum_free_lower_bound_bytes=16000 + (16000 if domain["caps"] == (1 << 11) | (1 << 1) else 0),
+                          largest_request_lower_bound_bytes=12000)
+        fit = self.read(first, gap)["provided_request_fit"]
+        self.assertEqual(fit["proved_until_begin_uptime_ms"], 10)
+        self.assertEqual(fit["requests"][0]["largest_request_lower_bound_bytes"], 26000)
+        self.assertEqual(fit["requests"][0]["status"], "fit")
+        _, gap, _ = cleanup_sequence()
+        fit = self.read(gap)["provided_request_fit"]
+        self.assertIsNone(fit["proved_until_begin_uptime_ms"])
+        self.assertEqual(fit["requests"][0]["reason"], "no_complete_task_readout")
+        self.assertIsNone(fit["weakest_margin_bytes"])
+
+    def test_same_boot_status_checks_full_signed_digest_size_and_target_but_config_sources_stay_unbound(self):
+        self.status()
+        identity = self.read()["provided_request_fit"]["identity"]
+        self.assertEqual(identity["firmware_status"]["status"], "same_boot_target_and_signed_image_observed")
+        self.assertFalse(identity["fully_bound"])
+        for changes in ({"boot_id": "88888888-2222-4333-8444-555555555555"},
+                        {"target": "esp32c3/esp_base"}, {"firmware_sha256": "b" * 64},
+                        {"image_size_bytes": 1}, {"image_size_bytes": True}, {"state": "unknown"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.status(**changes)
+                self.read()
+
+    def test_identity_binding_schema_boolean_numeric_and_fake_coverage_claims_reject(self):
+        original = json.dumps(self.evidence)
+        changes = [(None, "target", "esp32c3"), (None, "boot_id", "88888888-2222-4333-8444-555555555555"),
+                   (None, "sdk_lock_sha256", "b" * 64), (None, "allocator_recipe", "caller-formula"),
+                   (None, "maximum_verified", True), ("identity", "coverage_complete", True),
+                   ("request", "size_bytes", True), ("request", "alignment_bytes", 3),
+                   ("request", "alignment_bytes", 0), ("request", "caps", 0),
+                   ("request", "caps", module.UINT32_MAX + 1), ("request", "search_size_bytes", 1)]
+        for parent, key, value in changes:
+            self.evidence = json.loads(original)
+            owner = self.evidence["requests"][0] if parent == "request" else self.evidence[parent] if parent else self.evidence
+            owner[key] = value
+            with self.subTest(parent=parent, key=key), self.assertRaises(ValueError):
+                self.read()
+        self.evidence = json.loads(original)
+        self.evidence["requests"].append(dict(self.evidence["requests"][0]))
+        with self.assertRaises(ValueError):
+            self.read()
+        self.evidence["requests"] = []
+        with self.assertRaises(ValueError):
+            self.read()
+        self.evidence = json.loads(original)
+        self.read()
+        self.evidence_path.write_text(original.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'))
+        with self.assertRaises(ValueError):
+            analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+
+    def test_tampered_nonregular_symlink_and_relative_identity_references_reject(self):
+        original = json.dumps(self.evidence)
+        for key in ("signed_firmware", "config", "sources"):
+            self.evidence = json.loads(original)
+            reference = self.evidence["identity"][key][0] if key == "sources" else self.evidence["identity"][key]
+            reference["sha256"] = "b" * 64
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.read()
+        self.evidence = json.loads(original)
+        source = self.evidence["identity"]["sources"][0]
+        link = self.root / "linked.c"
+        link.symlink_to(source["path"])
+        source["path"] = str(link)
+        with self.assertRaises(OSError):
+            self.read()
+        fifo = self.root / "fifo.c"
+        os.mkfifo(fifo)
+        source["path"] = str(fifo)
+        with self.assertRaises(ValueError):
+            self.read()
+        source["path"] = "consumer.c"
+        with self.assertRaises(ValueError):
+            self.read()
+
+    def test_changed_local_allocator_recipe_is_rejected_instead_of_accepting_a_caller_formula(self):
+        read_file = module._file_fact
+
+        def changed_recipe(path, **kwargs):
+            fact, raw = read_file(path, **kwargs)
+            if path == module.ROOT / "tools/sdk-patches/capacity-tlsf.patch":
+                fact["sha256"] = "b" * 64
+            return fact, raw
+
+        with mock.patch.object(module, "_file_fact", side_effect=changed_recipe), self.assertRaises(ValueError):
+            self.read()
+
+    def test_non_utf8_excessive_nesting_and_prefixed_or_truncated_status_are_rejected(self):
+        self.read()
+        for raw in (json.dumps(self.evidence).encode("utf-16"), b"[" * 2000 + b"]" * 2000,
+                    b"\xef\xbb\xbf" + json.dumps(self.evidence).encode()):
+            self.evidence_path.write_bytes(raw)
+            with self.assertRaises(ValueError):
+                analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+        self.status()
+        reference = self.evidence["identity"]["firmware_status_uart"]
+        raw = Path(reference["path"]).read_bytes()
+        for changed in (b"log: " + raw, raw.rstrip(b"\n")):
+            self.evidence["identity"]["firmware_status_uart"] = self.reference("status.uart", changed)
+            with self.assertRaises(ValueError):
+                self.read()
+
+    def test_cli_exposes_provided_fit_separately_and_numeric_success_never_grants_unknown_request(self):
+        self.evidence["requests"][0]["size_bytes"] = 40000
+        self.read()
+        args = [sys.executable, str(TOOLS / "analyze_capacity.py"), "--target", "esp32", "--boot-id", BOOT,
+                "--sdk-lock-sha256", self.lock, "--uart-log", str(self.uart),
+                "--request-evidence", str(self.evidence_path)]
+        result = subprocess.run(args + ["--json"], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        body = json.loads(result.stdout)
+        self.assertEqual(body["provided_request_fit"]["requests"][0]["status"], "unknown")
+        self.assertFalse(body["provided_request_fit"]["all_provided_requests_fit"])
+        self.assertFalse(body["next_maximum_legal_request_verified"])
+        self.assertNotIn("never echo", result.stdout)
+        text = subprocess.run(args, capture_output=True, text=True)
+        self.assertEqual((text.returncode, text.stderr), (0, ""))
+        self.assertIn("unknown / margin -14000 B", text.stdout)
+        self.evidence_path.write_text('{"maximum_verified":true}')
+        rejected = subprocess.run(args + ["--json"], capture_output=True, text=True)
+        self.assertEqual((rejected.returncode, rejected.stderr), (1, ""))
+        self.assertFalse(json.loads(rejected.stdout)["valid"])
 
 
 if __name__ == "__main__":
