@@ -276,19 +276,20 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
 
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const char *device_id, const esp_base_ota_request_t *request,
-    const esp_base_ota_receipt_snapshot_t *snapshot)
+    const esp_base_storage_claim_t *claim)
 {
     if (!eota_available()) return ESP_BASE_OTA_RECEIPT_UNSUPPORTED;
-    if (!valid_uuid(device_id) || request == NULL || !valid_uuid(request->operation_id) ||
-        snapshot == NULL) {
+    if (!valid_uuid(device_id) || request == NULL || !valid_uuid(request->operation_id)) {
         return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
     }
+    if (!esp_base_storage_claim_active(claim)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     eota_image_t image = {.image_url = request->image_url,
                           .image_size_bytes = request->image_size_bytes};
     memcpy(image.sha256, request->sha256, sizeof image.sha256);
     const size_t prefix_bytes = sizeof(esp_image_header_t) +
         sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t);
-    if ((request->inbound_stream && (request->image_url[0] != '\0' ||
+    if (zero_sha256(request->sha256) ||
+        (request->inbound_stream && (request->image_url[0] != '\0' ||
                                     request->image_size_bytes < prefix_bytes)) ||
         (!request->inbound_stream && eota_validate_image_request(&image) != EOTA_UPDATE_OK)) {
         return ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE;
@@ -310,9 +311,11 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     if (slots.target_state != EOTA_STATE_UNTRACKED && slots.target_state != EOTA_STATE_UNDEFINED &&
         slots.target_state != EOTA_STATE_VALID && slots.target_state != EOTA_STATE_INVALID &&
         slots.target_state != EOTA_STATE_ABORTED) return ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN;
-    if (eota_preflight(&policy, request->image_size_bytes, &slots) != EOTA_UPDATE_OK) {
+    eota_slots_t preflight_slots = {0};
+    if (eota_preflight(&policy, request->image_size_bytes, &preflight_slots) != EOTA_UPDATE_OK) {
         return ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE;
     }
+    if (!same_slots(&slots, &preflight_slots)) return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     receipt_t previous;
     esp_base_ota_receipt_result_t existing = load(&previous);
     if (existing != ESP_BASE_OTA_RECEIPT_NOT_FOUND && existing != ESP_BASE_OTA_RECEIPT_OK) return existing;
@@ -328,11 +331,6 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
             return ESP_BASE_OTA_RECEIPT_BUSY;
         }
     }
-    if (zero_sha256(request->sha256) || zero_sha256(snapshot->source_sha256) ||
-        (!zero_sha256(snapshot->inactive_sha256) &&
-         memcmp(snapshot->source_sha256, snapshot->inactive_sha256, 32) == 0)) {
-        return ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH;
-    }
     esp_base_ota_firmware_set_t observed = {0};
     eota_slots_t after = {0};
     if (esp_base_ota_observe_firmware_set(
@@ -340,12 +338,14 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
         eota_observe_slots(&policy, &after) != EOTA_UPDATE_OK ||
         !same_slots(&slots, &after) ||
         (observed.bootable_count != 1U && observed.bootable_count != 2U) ||
-        memcmp(observed.running_firmware_sha256, snapshot->source_sha256, 32) != 0 ||
-        memcmp(observed.bootable_firmware_sha256[0], snapshot->source_sha256, 32) != 0 ||
-        memcmp(observed.bootable_firmware_sha256[1], snapshot->inactive_sha256, 32) != 0 ||
-        (observed.bootable_count == 1U && !zero_sha256(snapshot->inactive_sha256)) ||
-        (observed.bootable_count == 2U && zero_sha256(snapshot->inactive_sha256))) {
-        return ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH;
+        zero_sha256(observed.running_firmware_sha256) ||
+        memcmp(observed.bootable_firmware_sha256[0], observed.running_firmware_sha256, 32) != 0 ||
+        (observed.bootable_count == 1U && !zero_sha256(observed.bootable_firmware_sha256[1])) ||
+        (observed.bootable_count == 2U &&
+         (zero_sha256(observed.bootable_firmware_sha256[1]) ||
+          memcmp(observed.running_firmware_sha256, observed.bootable_firmware_sha256[1], 32) == 0)) ||
+        !esp_base_storage_claim_active(claim)) {
+        return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     }
     /* Only the independently rechecked signed A identity can reject C as a
      * same-image update. Do so before writing the intent or retiring old B. */
@@ -357,9 +357,10 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     memcpy(next.device_id, device_id, sizeof next.device_id);
     memcpy(next.operation_id, request->operation_id, sizeof next.operation_id);
     memcpy(next.sha256, request->sha256, sizeof next.sha256);
-    memcpy(next.source_sha256, snapshot->source_sha256, sizeof next.source_sha256);
-    memcpy(next.inactive_sha256, snapshot->inactive_sha256, sizeof next.inactive_sha256);
-    return store(&next);
+    memcpy(next.source_sha256, observed.running_firmware_sha256, sizeof next.source_sha256);
+    memcpy(next.inactive_sha256, observed.bootable_firmware_sha256[1], sizeof next.inactive_sha256);
+    const esp_base_ota_receipt_result_t result = store(&next);
+    return esp_base_storage_claim_active(claim) ? result : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
 }
 
 esp_base_ota_receipt_result_t esp_base_ota_receipt_record_failure(

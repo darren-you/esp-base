@@ -635,8 +635,15 @@ def write_verified(path, raw):
 
 
 def prepare(args):
-    components = legacy.check_sdk(args.idf_path)
+    # 无效普通输入先拒绝；后续官方解析与验签只消费这一份字节快照。
     flash = legacy.compare_backups(args.backup_a, args.backup_b)
+    source_key_bytes = read_file(args.source_verification_key, maximum=4096) \
+        if args.source_verification_key is not None else None
+    verification_key_bytes = read_file(args.verification_key, maximum=4096)
+    app = read_file(args.app, maximum=APP_SIZE)
+    bootloader = read_file(args.bootloader, maximum=TABLE_OFFSET)
+    table = read_file(args.partition_table, maximum=0x1000)
+    components = legacy.check_sdk(args.idf_path)
     layout = LAYOUTS[args.source_layout]
     target = layout["target"]
     original_state = getattr(args, "original_state", False)
@@ -644,19 +651,16 @@ def prepare(args):
     with tempfile.TemporaryDirectory(prefix="native_layout_prepare_") as scratch:
         work = Path(scratch)
         source_key = None
-        if args.source_verification_key is not None:
+        if source_key_bytes is not None:
             source_key = work / "source_verification_key.bin"
-            write_verified(source_key, read_file(args.source_verification_key, maximum=4096))
+            write_verified(source_key, source_key_bytes)
         verification_key = work / "verification_key.bin"
-        write_verified(verification_key, read_file(args.verification_key, maximum=4096))
+        write_verified(verification_key, verification_key_bytes)
         records, report, old_at = inspect_source(flash, args.source_layout, args.device_id,
             source_key, components, work, args.source_efuse_mac)
-        app = read_file(args.app, maximum=APP_SIZE)
         require(signed_image(app, target) == app, "新app不是精确完整签名镜像")
         verify_signature(app, verification_key, target, work, "new_app")
-        bootloader = read_file(args.bootloader, maximum=TABLE_OFFSET)
         require(signed_image(bootloader, target, app=False, signed=False) == bootloader, "新bootloader镜像完整性或长度不符")
-        table = read_file(args.partition_table, maximum=0x1000)
         if target == "esp32":
             verify_signature(table, verification_key, target, work, "new_table")
             key_bytes = read_file(verification_key, maximum=512)

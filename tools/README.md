@@ -80,6 +80,8 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 
 每五秒既有 control pass 及四个既有主动重启点前输出完整帧，不增业务命令、任务、队列或动态内存。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
 
+当前 schema 2 要求 BEGIN 后唯一 MQTT 观测行，再读取 REGION／TASK／DOMAIN／END；schema 1 仅解析既有冻结原件，同 boot 不允许切换版本。parser 严格核对实例编号、真实所有权上限、请求字节等式、采样 `start <= until <= BEGIN`、固定成本与累计历史；计数失效保留原 flag，禁止授满输入局部观测，独立 SDK 数值门不因此冒充全部 R5。输出的 `maximum_inbound_owner_tuple_observed` 只表示同一次 partial 回调确有三个4096 B完整 owner 加一个4096 B未完成 owner，不证明业务认证、outbox最大合法状态或OTA重叠。`outbox_wire_bytes_at_rx_peak` 是同 SDK API锁期间的协议字节，不含 outbox节点／分配器元数据；原 FULL 只证明该条请求被现有 admission 拒绝。实体重叠必须以同 boot／同 operation 的真实 OTA消费锚点包住整个采样区间，并以严格 TLS peer原 MID／DUP／PUBACK账本独立核对 outbox。解析始终保留全局下一申请、R5和R6为false。
+
 统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
 
 ```bash
@@ -98,7 +100,44 @@ python3 tools/analyze_capacity.py --target esp32 \
 python3 -m unittest discover -s tools/tests -p 'test_analyze_capacity.py' -v
 ```
 
-解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。27 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+
+需要对照具体后续申请时，在同一调用增加 `--request-evidence /absolute/private/request-evidence.json`。不带该参数的正常行为、JSON 与退出码不变。证据采用以下 strict JSON；示例中的路径、boot 和摘要须替换为本轮原件，大小是实际单次申请字节数，caps 是完整 SDK 位掩码的整数，不能只写一个较弱域：
+
+```json
+{
+  "schema_version": 1,
+  "target": "esp32",
+  "boot_id": "11111111-2222-4333-8444-555555555555",
+  "sdk_lock_sha256": "<本轮冻结 sdk-lock.json 的 64 位小写 SHA256>",
+  "allocator_recipe": "managed_tlsf_plain_32bit_v1",
+  "identity": {
+    "signed_firmware": {"path": "/absolute/private/complete-signed.bin", "sha256": "<完整文件 SHA256>"},
+    "config": {"path": "/absolute/private/consumed-config.json", "sha256": "<配置原件 SHA256>"},
+    "sources": [{"path": "/absolute/frozen-source/consumer.c", "sha256": "<源码原件 SHA256>"}],
+    "firmware_status_uart": {"path": "/absolute/private/firmware-status.uart", "sha256": "<原始 UART 文件 SHA256>"}
+  },
+  "requests": [
+    {"id": "internal-buffer", "size_bytes": 26000, "caps": 2052, "alignment_bytes": 16}
+  ]
+}
+```
+
+`firmware_status_uart` 可省略，其余字段必需。所有引用须是稳定普通文件的绝对路径及精确摘要，拒绝符号链接、FIFO、改写、重复 JSON 字段、未知字段、重复请求 id、空请求／源码集合、布尔数值和非 power-of-two 对齐。文件内容不输出；配置与源码只计算摘要。firmware.status 原件仅接受固件输出的完整 JSON 行，核对同 boot、target、device、slot、完整 signed SHA256 和文件大小；不以文件名或截断摘要代替。多个 firmware.status 记录须身份一致。
+
+请求证据的 target／boot／SDK 必须与调用及原始容量帧一致。原始容量帧没有 target、完整 signed、配置或源码摘要，故 target 在没有同 boot status 时仍由调用方提供；配置文件摘要只证明宿主原件，源码摘要只证明已引用文件，不能据此声称设备消费或 signed 构建输入已经绑定。输出 `identity.fully_bound=false` 及明确 `unbound_reasons`，可选 status 的核对结果只称 `observed`。完整 signed 文件的摘要核对也不代替独立签名与发布验收。
+
+parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch 的原件摘要，不接收调用方公式或任意 `maximum_verified`／`coverage_complete` 声明。当前 recipe 仅支持无 owner／poison、non-EXEC、无硬件 caps 改写的 `32BIT`／`8BIT`／`INTERNAL`／`DEFAULT`／`IRAM_8BIT` 完整掩码组合。双目标指针和 size_t 为 4 B，TLSF minimum block 为 12 B、block header 为 16 B：普通请求先取 `adjust=max(12, align_up(size, 4))`；alignment 低于 4 B 时按 4 B；高于 4 B 时使用真实 `tlsf_memalign_offs` 的 `search_size=align_up(adjust+alignment+16, alignment)`。DMA、EXEC alias、cache、descriptor、SIMD、其他未建模 caps 路径及目标整数溢出报告 `unknown`，不能使用 plain 域偷授资格。calloc 应提供乘积已核对的总字节数，移动 realloc 应提供新块实际申请；并存旧块费用仍由独立生命周期证据覆盖。
+
+每项从最近完整任务帧的原始 REGION 重新匹配全部 caps，三优先级求并集，一个物理 region 只计一次，晚出生 region 不贡献从启动开始的下界。只有其 `max(region min_largest)` 覆盖 search-size 才输出 `status=fit`；下界不足输出 `unknown`，不推断实际申请必然失败。结果包含原始 size／caps／alignment、search-size、总空闲与连续申请下界、margin、最弱 margin／请求 id 和可证 BEGIN 截止。不完整尾帧不能延长请求证明。`fit` 仅表示该单个已提供请求在锁定 recipe 与已读历史下界下的充分条件，不承诺并发后的未来成功。
+
+结果保存在 `provided_request_fit`，全局 `next_maximum_legal_request_verified`、`r5_qualified`、`r6_qualified` 始终为 false；`next_request_unclosed_reasons` 明示全合法消费者集合、动态真实输入、并发／realloc 生命周期和固件配置源码消费绑定仍未封闭。CLI 退出码仍只反映输入有效性与三个数值门；调用方须读取各请求 status，不得将退出码 0、`all_provided_requests_fit` 或一份 sidecar 当作全局资格。
+
+本产品 HTTPS OTA 头申请按 `firmware/CMakeLists.txt` 的 `HTTP_MAX_HEADER_SIZE=8192`、受管 OTA 的 RX=1024B／SDK 默认 TX=512B，以及本次正式 `SAVE_RESPONSE_HEADERS=n`／`ENABLE_GET_CONTENT_RANGE=n` 核算。单个合法响应的 key/value 或累计 Location／认证头申请保守上界为8193B（含 NUL）；拒绝路径的 CR 回调可能先于本接收片的最终计数检查，且完成首个头后仍消费本片剩余数据，故具体请求证据采用更保守的9217B，普通4B对齐 search-size为9220B，使用真实 `MALLOC_CAP_DEFAULT=4096` 完整掩码。不能将旧80KiB头申请或新上界移给未采用此产品编译宏的旧固件。
+
+令 `B=8192+1024=9216`：当前 key/value 与累计 Location／认证头合计请求最多 `2B+4=18436B`；强制移动 realloc 时保留旧块，字符串合计保守上界 `3B+5=27653B`。含 RX、TX、首个完成头所在接收片的缓存正文及缓存移动过程，整条头/缓存链的请求字节保守上界分别为20996B（稳定同存）与30213B（移动峰值）。这些是申请字节上界，不包含 client/transport/URL、TLS、各块分配器开销或其他任务；完整 R5 仍需实际并存峰值、所有消费者与配置绑定，单次 fit 不代替它。
+
+运行 `python3 tools/test_http_header_budget.py --idf-path /absolute/managed-sdk`：先核对 SDK，直接抽取实际 append、header/body callback、fetch 和 cleanup，并编译真实 parser，以 sanitizer 核对分片、相邻接受/拒绝边界、长 field/value、重复/折行辅助头、1xx 后同片消费、缓存正文、移动 realloc 与低内存失败清理。transport、事件与平台对象使用宿主替身；测试验证当前正式关闭上述两项功能的头/缓存分配链，不验证 TLS、实体时延或整个 SDK 初始化。它不访问网络或设备，不授实板 R5/R6；双目标 reconfigure 与 signed 构建输入仍须分别核对。
 
 ## 一次性有线迁入与历史输入
 

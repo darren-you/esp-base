@@ -13,7 +13,8 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT
 CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}')"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -DCONFIG_HEAP_POISONING_DISABLED=1 -DESP_BASE_CAPACITY_SDK_LOCK_SHA256=\""$CAPACITY_LOCK_SHA256"\" \
-  -I "$ROOT/tests/fakes/capacity" -I "$ROOT/components/device_protocol/include" \
+  -I "$ROOT/tests/fakes/capacity" -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
+  -I "$COMPONENTS_DIR/mqtt/runtime/include" \
   "$ROOT/tests/producer_capacity_test.c" -o "$BUILD_DIR/producer_capacity_test"
 "$BUILD_DIR/producer_capacity_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -100,6 +101,7 @@ printf '  hardware       not used\n'
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_ota_policy.c" "$ROOT/components/ota_operation/esp_base_ota_receipt.c" \
+  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/tests/ota_receipt_test.c" \
   -o "$BUILD_DIR/ota_receipt_test"
 "$BUILD_DIR/ota_receipt_test"

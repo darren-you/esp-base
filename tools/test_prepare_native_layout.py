@@ -26,6 +26,57 @@ DEVICE = "22222222-2222-4222-8222-222222222222"
 OPERATION = "44444444-4444-4444-8444-444444444444"
 
 
+def ordinary_arguments(directory, idf):
+    backups = (directory / "backup-a.bin", directory / "backup-b.bin")
+    for path in backups:
+        path.write_bytes(b"\xff" * migration.FLASH_SIZE)
+        path.chmod(0o600)
+    inputs = {}
+    for name in ("source_verification_key", "verification_key", "app", "bootloader", "partition_table"):
+        path = directory / (name + ".bin")
+        path.write_bytes(b"ordinary-input-placeholder")
+        path.chmod(0o600)
+        inputs[name] = path
+    return argparse.Namespace(backup_a=backups[0], backup_b=backups[1], idf_path=idf,
+        source_layout="c3_product", device_id=DEVICE, source_efuse_mac=None,
+        output_directory=directory / "prepared", **inputs)
+
+
+class InputPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="native_layout_input_preflight_")
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.arguments = ordinary_arguments(self.directory, self.directory / "missing-sdk")
+
+    def run_prepare_cli(self, args):
+        command = [sys.executable, str(migration.ROOT / "tools/prepare_native_layout.py")]
+        for field, value in vars(args).items():
+            if value is not None:
+                command.extend(["--" + field.replace("_", "-"), str(value)])
+        return subprocess.run(command, text=True, capture_output=True, check=False, timeout=5)
+
+    def test_fifo_inputs_reject_before_sdk_audit_without_creating_candidate(self):
+        for name in ("backup_a", "backup_b", "source_verification_key", "verification_key",
+                     "app", "bootloader", "partition_table"):
+            with self.subTest(input=name):
+                args = argparse.Namespace(**vars(self.arguments))
+                fifo = self.directory / (name + ".fifo")
+                os.mkfifo(fifo, 0o600)
+                setattr(args, name, fifo)
+                result = self.run_prepare_cli(args)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("普通文件", result.stderr)
+                self.assertNotIn("sdk-lock.json", result.stderr)
+                self.assertFalse(args.output_directory.exists())
+
+    def test_ordinary_inputs_still_require_controlled_sdk_before_output(self):
+        result = self.run_prepare_cli(self.arguments)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("sdk-lock.json", result.stderr)
+        self.assertFalse(self.arguments.output_directory.exists())
+
+
 class SdkSelectionTests(unittest.TestCase):
     def test_current_sdk_lock_is_consumed(self):
         idf = Path(os.environ["IDF_PATH"])
@@ -33,7 +84,7 @@ class SdkSelectionTests(unittest.TestCase):
         self.assertEqual(migration.legacy.IDF_COMMIT, selected)
         self.assertEqual(migration.legacy.check_sdk(idf), idf / "components")
 
-    def test_native_prepare_rejects_linked_sdk_before_reading_inputs(self):
+    def test_native_prepare_rejects_linked_sdk_before_official_processing(self):
         idf = Path(os.environ["IDF_PATH"])
         with tempfile.TemporaryDirectory(prefix="native_layout_linked_sdk_") as directory:
             linked = Path(directory) / "idf"
@@ -43,12 +94,14 @@ class SdkSelectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(migration.legacy.PreflightError, "SDK"):
                     migration.legacy.check_sdk(linked)
                 with self.assertRaisesRegex(migration.legacy.PreflightError, "SDK"):
-                    migration.prepare(argparse.Namespace(idf_path=linked))
+                    args = ordinary_arguments(Path(directory), linked)
+                    migration.prepare(args)
+                self.assertFalse(args.output_directory.exists())
             finally:
                 subprocess.run(["git", "-C", str(idf), "worktree", "remove", str(linked)],
                                check=True, capture_output=True)
 
-    def test_native_prepare_rejects_previous_sdk_before_reading_inputs(self):
+    def test_native_prepare_rejects_previous_sdk_before_official_processing(self):
         idf = Path(os.environ["IDF_PATH"])
         with tempfile.TemporaryDirectory(prefix="native_layout_old_sdk_") as directory:
             previous = Path(directory) / "idf"
@@ -58,7 +111,9 @@ class SdkSelectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(migration.legacy.PreflightError, "sdk-lock.json"):
                     migration.legacy.check_sdk(previous)
                 with self.assertRaisesRegex(migration.legacy.PreflightError, "sdk-lock.json"):
-                    migration.prepare(argparse.Namespace(idf_path=previous))
+                    args = ordinary_arguments(Path(directory), previous)
+                    migration.prepare(args)
+                self.assertFalse(args.output_directory.exists())
             finally:
                 subprocess.run(["git", "-C", str(idf), "worktree", "remove", str(previous)],
                                check=True, capture_output=True)
@@ -509,8 +564,8 @@ class NativeMigrationTests(unittest.TestCase):
                 for field, value in vars(args).items():
                     if value is not None:
                         command.extend(["--" + field.replace("_", "-"), str(value)])
-                # 普通入口先核完整 SDK 历史；FIFO 仍须在有限时间内拒绝且不能等写入者。
-                result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=90)
+                # 输入类型在 SDK 深度审计、来源解析与验签前拒绝，不等待 FIFO 写入者。
+                result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=5)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn("普通文件", result.stderr)
                 self.assertFalse(args.output_directory.exists())

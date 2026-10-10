@@ -6,6 +6,7 @@
 #include "esp_base_config.h"
 #include "esp_err.h"
 #include "emqtt_contract.h"
+#include "emqtt.h"
 #include "esp_base_mqtt_event.h"
 
 typedef void (*ebase_mqtt_command_handler_t)(const uint8_t *json, size_t length, void *context);
@@ -37,3 +38,5 @@ bool esp_base_mqtt_owner_reported(const char *json, size_t length);
  * PUBACK proves broker delivery only. Session loss revokes that evidence. */
 bool esp_base_mqtt_owner_restart_result(const char *json, size_t length);
 bool esp_base_mqtt_owner_restart_result_acknowledged(void);
+/* Control-owner copy only; does not wait on the SDK or sample its outbox. */
+bool esp_base_mqtt_owner_capacity(emqtt_capacity_stats_t *out);

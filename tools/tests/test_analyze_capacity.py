@@ -1,11 +1,14 @@
 """正式连续统计帧的解析、保守下界与不授资格回归；不访问设备。"""
 import importlib.util
+import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TOOLS = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("analyze_capacity", TOOLS / "analyze_capacity.py")
@@ -63,6 +66,26 @@ def render(frame):
     return "".join(row(kind, values) for kind, rows in frame.items() for values in rows)
 
 
+def mqtt_fixture(number=1, uptime=10, *, available=True, instance=1, peak=True):
+    frame = fixture(number, uptime)
+    frame["BEGIN"][0]["schema"] = 2
+    stats = {key: 0 for key in module.FIELDS["MQTT"]}
+    stats.update(boot_id=BOOT, frame=number, readout_copy_bytes=80)
+    if available:
+        stats.update(available=1, runtime_instance=instance, counters_valid=1,
+                     owned_message_metadata_bytes=272, observation_storage_bytes=92)
+        if peak:
+            stats.update(rx_peak_valid=1, rx_peak_uptime_ms=uptime-2,
+                         rx_peak_observed_until_uptime_ms=uptime-1,
+                         complete_owner_count=3, complete_payload_bytes=12288,
+                         partial_declared_bytes=4096, partial_received_bytes=966,
+                         owned_request_bytes=17472, outbox_wire_bytes_at_rx_peak=14000,
+                         outbox_full_count=1, last_outbox_full_payload_bytes=767,
+                         last_outbox_full_uptime_ms=uptime-3, notice_count_high_water=16,
+                         notice_full_count=1)
+    return {"BEGIN": frame.pop("BEGIN"), "MQTT": [stats], **frame}
+
+
 def cleanup_sequence(final_min=1100):
     first = fixture(no_final=True, stack_min=1400)
     first["TASK"][1]["minimum_stack_bytes"] = 1400
@@ -112,6 +135,75 @@ class AnalyzeCapacityTest(unittest.TestCase):
                           ({"stack_min": 1023}, "stack_gate_passed")):
             with self.subTest(args=args):
                 self.assertFalse(self.read(render(fixture(**args)))["numeric_gates"][key])
+
+    def test_actual_joint_tuple_and_full_remain_local_without_global_qualification(self):
+        result = self.read(render(mqtt_fixture()))
+        observed = result["frames"][0]["mqtt_observation"]
+        self.assertTrue(observed["maximum_inbound_owner_tuple_observed"])
+        self.assertEqual(observed["outbox_wire_bytes_at_rx_peak"], 14000)
+        self.assertEqual(observed["rx_peak_uptime_ms"], 8)
+        self.assertEqual(observed["rx_peak_observed_until_uptime_ms"], 9)
+        self.assertEqual(observed["outbox_full_count"], 1)
+        for key in ("r5_qualified", "r6_qualified", "next_maximum_legal_request_verified"):
+            self.assertFalse(result[key])
+        invalid = mqtt_fixture()
+        invalid["MQTT"][0]["counters_valid"] = 0
+        result = self.read(render(invalid))
+        self.assertTrue(result["numeric_gates_passed"])
+        self.assertFalse(result["frames"][0]["mqtt_observation"]["maximum_inbound_owner_tuple_observed"])
+
+    def test_mqtt_row_is_mandatory_unique_and_ordered_in_schema_two(self):
+        good = mqtt_fixture()
+        missing = mqtt_fixture(); missing.pop("MQTT")
+        self.reject(render(missing))
+        duplicate = mqtt_fixture(); duplicate["MQTT"] *= 2
+        self.reject(render(duplicate))
+        wrong_order = {"BEGIN": good["BEGIN"], "REGION": good["REGION"], "MQTT": good["MQTT"],
+                       "TASK": good["TASK"], "DOMAIN": good["DOMAIN"], "END": good["END"]}
+        self.reject(render(wrong_order))
+        good["BEGIN"][0]["schema"] = 1
+        self.reject(render(good))
+
+    def test_joint_tuple_rejects_impossible_sizes_identity_and_sampling_interval(self):
+        cases = (("complete_owner_count", 4), ("complete_payload_bytes", 12289),
+                 ("partial_declared_bytes", 4097), ("partial_received_bytes", 4096),
+                 ("owned_request_bytes", 17473), ("owned_message_metadata_bytes", 273),
+                 ("readout_copy_bytes", 72), ("notice_count_high_water", 17),
+                 ("runtime_instance", 0), ("rx_peak_observed_until_uptime_ms", 7),
+                 ("rx_peak_observed_until_uptime_ms", 11), ("last_outbox_full_uptime_ms", 11),
+                 ("last_outbox_full_payload_bytes", 1024), ("boot_id", "66666666-2222-4333-8444-555555555555"))
+        for key, value in cases:
+            with self.subTest(key=key):
+                bad = mqtt_fixture(); bad["MQTT"][0][key] = value
+                self.reject(render(bad))
+        absent = mqtt_fixture(available=False)
+        self.assertFalse(self.read(render(absent))["frames"][0]["mqtt_observation"]["maximum_inbound_owner_tuple_observed"])
+        absent["MQTT"][0]["runtime_instance"] = 1
+        self.reject(render(absent))
+
+    def test_same_instance_cannot_splice_hwm_or_restore_failed_counters(self):
+        first = mqtt_fixture()
+        second = mqtt_fixture(2, 5010)
+        second["MQTT"][0].update(rx_peak_uptime_ms=8, rx_peak_observed_until_uptime_ms=9,
+                                  last_outbox_full_uptime_ms=7)
+        self.assertTrue(self.read(render(first) + render(second))["valid"])
+        for key, value in (("partial_received_bytes", 967), ("outbox_wire_bytes_at_rx_peak", 13999),
+                           ("notice_count_high_water", 15), ("notice_full_count", 0),
+                           ("outbox_full_count", 0), ("runtime_instance", 0)):
+            with self.subTest(key=key):
+                old = second["MQTT"][0][key]; second["MQTT"][0][key] = value
+                self.reject(render(first) + render(second))
+                second["MQTT"][0][key] = old
+        first["MQTT"][0]["counters_valid"] = 0
+        self.reject(render(first) + render(second))
+
+    def test_new_runtime_resets_only_its_own_history_and_schema_cannot_change_in_boot(self):
+        first = mqtt_fixture(instance=2)
+        second = mqtt_fixture(2, 5010, instance=3, peak=False)
+        self.assertTrue(self.read(render(first) + render(second))["valid"])
+        second["MQTT"][0]["runtime_instance"] = 1
+        self.reject(render(first) + render(second))
+        self.reject(render(fixture()) + render(mqtt_fixture(2, 5010)))
 
     def test_late_region_does_not_raise_either_domain_lower_bound(self):
         result = self.read(render(fixture()))
@@ -407,6 +499,241 @@ class AnalyzeCapacityTest(unittest.TestCase):
                 analyze([link], "esp32", BOOT, LOCK)
             with self.assertRaises((ValueError, OSError)):
                 analyze([Path(directory)], "esp32", BOOT, LOCK)
+
+
+class ProvidedRequestFitTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.lock = module.REQUEST_RECIPE_INPUTS["sdk-lock.json"]
+        self.uart = self.root / "raw.uart"
+        self.evidence_path = self.root / "request-evidence.json"
+        signed = self.reference("signed.bin", b"synthetic complete signed fixture")
+        config = self.reference("config.json", b'{"private_key":"never echo this fixture"}')
+        source = self.reference("consumer.c", b"heap_caps_malloc(size, caps);\n")
+        self.evidence = {"schema_version": 1, "target": "esp32", "boot_id": BOOT,
+                         "sdk_lock_sha256": self.lock, "allocator_recipe": module.REQUEST_RECIPE,
+                         "identity": {"signed_firmware": signed, "config": config, "sources": [source]},
+                         "requests": [{"id": "request", "size_bytes": 25600,
+                                       "caps": module.INTERNAL_8BIT, "alignment_bytes": 4}]}
+
+    def reference(self, name, raw):
+        path = self.root / name
+        path.write_bytes(raw)
+        return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    def read(self, *frames):
+        self.uart.write_text("".join(render(frame).replace(LOCK, self.lock) for frame in (frames or [fixture()])))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        return analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+
+    def test_current_source_recipe_is_bound_and_previous_sdk_digest_is_rejected(self):
+        result = self.read()["provided_request_fit"]
+        for fact in result["allocator_recipe"]["inputs"]:
+            actual = hashlib.sha256((module.ROOT / fact["path"]).read_bytes()).hexdigest()
+            self.assertEqual(fact["sha256"], actual)
+        self.assertEqual(self.lock, hashlib.sha256((module.ROOT / "sdk-lock.json").read_bytes()).hexdigest())
+        self.evidence["sdk_lock_sha256"] = "aa30328518ba10db58f00fa11f04a04a63f8efca05d08e7ae6ced59d7694aa4d"
+        with self.assertRaises(ValueError):
+            self.read()
+
+    def status(self, **changes):
+        signed = self.evidence["identity"]["signed_firmware"]
+        row = {"protocol_version": 1, "device_id": "66666666-2222-4333-8444-555555555555",
+               "boot_id": BOOT, "request_id": "77777777-2222-4333-8444-555555555555",
+               "state": "succeeded", "error_code": None,
+               "result": {"firmware_sha256": signed["sha256"],
+                          "image_size_bytes": Path(signed["path"]).stat().st_size,
+                          "target": "esp32/esp_base", "ota_slot": "ota_0"}}
+        for key, value in changes.items():
+            (row["result"] if key in row["result"] else row)[key] = value
+        self.evidence["identity"]["firmware_status_uart"] = self.reference("status.uart", (json.dumps(row) + "\n").encode())
+
+    def test_optional_input_preserves_old_output_and_never_closes_global_qualification(self):
+        result = self.read()
+        plain = analyze([self.uart], "esp32", BOOT, self.lock)
+        self.assertNotIn("provided_request_fit", plain)
+        self.assertEqual({key: value for key, value in result.items() if key != "provided_request_fit"}, plain)
+        fit = result["provided_request_fit"]
+        self.assertTrue(fit["all_provided_requests_fit"])
+        self.assertEqual(fit["weakest_margin_bytes"], 400)
+        self.assertFalse(fit["identity"]["fully_bound"])
+        self.assertTrue(fit["identity"]["unbound_reasons"])
+        self.assertTrue(fit["next_request_unclosed_reasons"])
+        self.assertNotIn("never echo", json.dumps(result))
+        for key in ("next_maximum_legal_request_verified", "r5_qualified", "r6_qualified"):
+            self.assertFalse(result[key])
+
+    def test_higher_alignment_search_overhead_changes_a_raw_payload_fit_to_unknown(self):
+        self.evidence["requests"] = [dict(self.evidence["requests"][0], size_bytes=26000, alignment_bytes=1),
+                                     dict(self.evidence["requests"][0], id="aligned", size_bytes=26000, alignment_bytes=16)]
+        fit = self.read()["provided_request_fit"]
+        plain, aligned = fit["requests"]
+        self.assertEqual((plain["effective_alignment_bytes"], plain["search_size_bytes"], plain["status"]), (4, 26000, "fit"))
+        self.assertEqual((aligned["search_size_bytes"], aligned["margin_bytes"], aligned["status"]), (26032, -32, "unknown"))
+        self.assertEqual(fit["weakest_request_ids"], ["aligned"])
+        self.assertFalse(fit["all_provided_requests_fit"])
+        self.evidence["requests"][0].update(size_bytes=1)
+        self.assertEqual(self.read()["provided_request_fit"]["requests"][0]["search_size_bytes"], 12)
+
+    def test_full_caps_priority_union_and_late_birth_are_used_instead_of_weaker_domains(self):
+        frame = fixture()
+        # 更强请求只能使用 IRAM，不能借 INTERNAL|32BIT 域的 DRAM 下界。
+        self.evidence["requests"][0].update(size_bytes=10001, caps=(1 << 11) | (1 << 13) | (1 << 1))
+        iram = frame["REGION"][2]
+        iram["caps0"], iram["caps1"] = (1 << 13) | 1, (1 << 11) | (1 << 1)
+        fit = self.read(frame)["provided_request_fit"]["requests"][0]
+        self.assertEqual(fit["matching_early_region_starts"], [0x30000])
+        self.assertEqual(fit["largest_request_lower_bound_bytes"], 10000)
+        self.assertEqual(fit["search_size_bytes"], 10004)
+        self.assertEqual(fit["status"], "unknown")
+        self.evidence["requests"][0].update(size_bytes=40000, caps=module.INTERNAL_8BIT)
+        fit = self.read()["provided_request_fit"]["requests"][0]
+        self.assertEqual(fit["largest_request_lower_bound_bytes"], 26000)
+        self.assertEqual(fit["matching_early_region_starts"], [0x10000])
+        self.assertEqual(fit["status"], "unknown")
+
+    def test_exec_hardware_caps_and_integer_overflow_remain_unknown(self):
+        for caps in (IRAM_CAPS, module.INTERNAL_8BIT | (1 << 3), (1 << 17), 1 << 31):
+            with self.subTest(caps=caps):
+                self.evidence["requests"][0].update(size_bytes=1, caps=caps)
+                row = self.read()["provided_request_fit"]["requests"][0]
+                self.assertEqual(row["status"], "unknown")
+                self.assertEqual(row["reason"], "exec_or_hardware_or_other_caps_path_not_modeled")
+                self.assertIsNone(row["search_size_bytes"])
+        self.evidence["requests"][0].update(size_bytes=module.UINT32_MAX, caps=module.INTERNAL_8BIT)
+        row = self.read()["provided_request_fit"]["requests"][0]
+        self.assertEqual(row["reason"], "target_size_overflow")
+        self.assertIsNone(row["margin_bytes"])
+
+    def test_incomplete_tail_cannot_extend_request_fit_or_retroactively_replace_the_closed_frame(self):
+        first, gap, _ = cleanup_sequence()
+        gap["REGION"][0].update(min_free_bytes=16000, min_largest_request_bytes=12000,
+                                 free_bytes=16500, largest_request_bytes=12100)
+        for domain in gap["DOMAIN"][:4]:
+            domain.update(minimum_free_lower_bound_bytes=16000 + (16000 if domain["caps"] == (1 << 11) | (1 << 1) else 0),
+                          largest_request_lower_bound_bytes=12000)
+        fit = self.read(first, gap)["provided_request_fit"]
+        self.assertEqual(fit["proved_until_begin_uptime_ms"], 10)
+        self.assertEqual(fit["requests"][0]["largest_request_lower_bound_bytes"], 26000)
+        self.assertEqual(fit["requests"][0]["status"], "fit")
+        _, gap, _ = cleanup_sequence()
+        fit = self.read(gap)["provided_request_fit"]
+        self.assertIsNone(fit["proved_until_begin_uptime_ms"])
+        self.assertEqual(fit["requests"][0]["reason"], "no_complete_task_readout")
+        self.assertIsNone(fit["weakest_margin_bytes"])
+
+    def test_same_boot_status_checks_full_signed_digest_size_and_target_but_config_sources_stay_unbound(self):
+        self.status()
+        identity = self.read()["provided_request_fit"]["identity"]
+        self.assertEqual(identity["firmware_status"]["status"], "same_boot_target_and_signed_image_observed")
+        self.assertFalse(identity["fully_bound"])
+        for changes in ({"boot_id": "88888888-2222-4333-8444-555555555555"},
+                        {"target": "esp32c3/esp_base"}, {"firmware_sha256": "b" * 64},
+                        {"image_size_bytes": 1}, {"image_size_bytes": True}, {"state": "unknown"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.status(**changes)
+                self.read()
+
+    def test_identity_binding_schema_boolean_numeric_and_fake_coverage_claims_reject(self):
+        original = json.dumps(self.evidence)
+        changes = [(None, "target", "esp32c3"), (None, "boot_id", "88888888-2222-4333-8444-555555555555"),
+                   (None, "sdk_lock_sha256", "b" * 64), (None, "allocator_recipe", "caller-formula"),
+                   (None, "maximum_verified", True), ("identity", "coverage_complete", True),
+                   ("request", "size_bytes", True), ("request", "alignment_bytes", 3),
+                   ("request", "alignment_bytes", 0), ("request", "caps", 0),
+                   ("request", "caps", module.UINT32_MAX + 1), ("request", "search_size_bytes", 1)]
+        for parent, key, value in changes:
+            self.evidence = json.loads(original)
+            owner = self.evidence["requests"][0] if parent == "request" else self.evidence[parent] if parent else self.evidence
+            owner[key] = value
+            with self.subTest(parent=parent, key=key), self.assertRaises(ValueError):
+                self.read()
+        self.evidence = json.loads(original)
+        self.evidence["requests"].append(dict(self.evidence["requests"][0]))
+        with self.assertRaises(ValueError):
+            self.read()
+        self.evidence["requests"] = []
+        with self.assertRaises(ValueError):
+            self.read()
+        self.evidence = json.loads(original)
+        self.read()
+        self.evidence_path.write_text(original.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1'))
+        with self.assertRaises(ValueError):
+            analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+
+    def test_tampered_nonregular_symlink_and_relative_identity_references_reject(self):
+        original = json.dumps(self.evidence)
+        for key in ("signed_firmware", "config", "sources"):
+            self.evidence = json.loads(original)
+            reference = self.evidence["identity"][key][0] if key == "sources" else self.evidence["identity"][key]
+            reference["sha256"] = "b" * 64
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.read()
+        self.evidence = json.loads(original)
+        source = self.evidence["identity"]["sources"][0]
+        link = self.root / "linked.c"
+        link.symlink_to(source["path"])
+        source["path"] = str(link)
+        with self.assertRaises(OSError):
+            self.read()
+        fifo = self.root / "fifo.c"
+        os.mkfifo(fifo)
+        source["path"] = str(fifo)
+        with self.assertRaises(ValueError):
+            self.read()
+        source["path"] = "consumer.c"
+        with self.assertRaises(ValueError):
+            self.read()
+
+    def test_changed_local_allocator_recipe_is_rejected_instead_of_accepting_a_caller_formula(self):
+        read_file = module._file_fact
+
+        def changed_recipe(path, **kwargs):
+            fact, raw = read_file(path, **kwargs)
+            if path == module.ROOT / "tools/sdk-patches/capacity-tlsf.patch":
+                fact["sha256"] = "b" * 64
+            return fact, raw
+
+        with mock.patch.object(module, "_file_fact", side_effect=changed_recipe), self.assertRaises(ValueError):
+            self.read()
+
+    def test_non_utf8_excessive_nesting_and_prefixed_or_truncated_status_are_rejected(self):
+        self.read()
+        for raw in (json.dumps(self.evidence).encode("utf-16"), b"[" * 2000 + b"]" * 2000,
+                    b"\xef\xbb\xbf" + json.dumps(self.evidence).encode()):
+            self.evidence_path.write_bytes(raw)
+            with self.assertRaises(ValueError):
+                analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+        self.status()
+        reference = self.evidence["identity"]["firmware_status_uart"]
+        raw = Path(reference["path"]).read_bytes()
+        for changed in (b"log: " + raw, raw.rstrip(b"\n")):
+            self.evidence["identity"]["firmware_status_uart"] = self.reference("status.uart", changed)
+            with self.assertRaises(ValueError):
+                self.read()
+
+    def test_cli_exposes_provided_fit_separately_and_numeric_success_never_grants_unknown_request(self):
+        self.evidence["requests"][0]["size_bytes"] = 40000
+        self.read()
+        args = [sys.executable, str(TOOLS / "analyze_capacity.py"), "--target", "esp32", "--boot-id", BOOT,
+                "--sdk-lock-sha256", self.lock, "--uart-log", str(self.uart),
+                "--request-evidence", str(self.evidence_path)]
+        result = subprocess.run(args + ["--json"], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        body = json.loads(result.stdout)
+        self.assertEqual(body["provided_request_fit"]["requests"][0]["status"], "unknown")
+        self.assertFalse(body["provided_request_fit"]["all_provided_requests_fit"])
+        self.assertFalse(body["next_maximum_legal_request_verified"])
+        self.assertNotIn("never echo", result.stdout)
+        text = subprocess.run(args, capture_output=True, text=True)
+        self.assertEqual((text.returncode, text.stderr), (0, ""))
+        self.assertIn("unknown / margin -14000 B", text.stdout)
+        self.evidence_path.write_text('{"maximum_verified":true}')
+        rejected = subprocess.run(args + ["--json"], capture_output=True, text=True)
+        self.assertEqual((rejected.returncode, rejected.stderr), (1, ""))
+        self.assertFalse(json.loads(rejected.stdout)["valid"])
 
 
 if __name__ == "__main__":

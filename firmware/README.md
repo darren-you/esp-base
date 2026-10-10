@@ -28,6 +28,10 @@ ESP32 自动签名构建必须使用仓外绝对路径 P-256 键，启用 signed
 
 精确公开依赖来自 [唯一组件清单](components/device_protocol/idf_component.yml)与 [C3](dependencies.lock)／[ESP32](dependencies.lock.esp32)锁。host 使用这些已解析组件，不从相邻源仓运行时 import。构建图只读取当前锁定的 MQTT／OTA／FRP 与 cJSON，不读取退役运行组件。
 
+普通 `esp_base` 产品在本目录唯一 CMake 入口按 SDK `http_parser.h` 公开的编译合同设置 `HTTP_MAX_HEADER_SIZE=8192`，限制 HTTPS URL OTA 的响应头计数（包括状态行），不修改 SDK 源码或派生 recipe。parser 可能因接收分片的计数提前拒绝，所以 8KiB 是上界，不保证任意 8KiB wire 头都可接受。当前正式配置关闭响应头保存与 Content-Range 解析；双目标冻结须核对这两项及实际 `compile_commands.json` 中 parser 的唯一宏。URL 语法解析不使用该头计数；FRP 流式固件正文不走此 HTTP client。
+
 本轮完整输入、失败记录和签名结果见[原生软件检查点](../docs/operations/native_software_checkpoint.md)；实板及正式交付边界见[执行计划](../docs/operations/ota-allocation-diagnostic-checkpoint.md)。
+
+容量帧 schema 2 在 BEGIN 前通过现有 control owner 取得 emqtt 固定 copy，BEGIN 后输出唯一 `ESP_BASE_CAPACITY_MQTT` 行；不增加任务、队列、业务指令或 SDK 统计补丁。该行记录同一未完成 DATA 回调的真实完整 owner／partial 请求字节与 outbox wire tuple、采样起止区间和原 FULL／notice 失败历史。80 B copy 栈及 emqtt 固定观测／锁成本由新候选实际 ELF／map和栈HWM承担。满输入 tuple、一次 FULL 和数值门均不自动证明最大合法 outbox、认证消费、OTA真实重叠或 R5／R6；观测与签名候选、配置、同 boot 原始进度及严格 TLS peer 原报文须另行对账。
 
 工程结构、工具链、签名制品和设备写入边界遵循[Embedded Firmware 工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。

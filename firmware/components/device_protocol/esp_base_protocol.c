@@ -868,16 +868,12 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         if (!esp_base_storage_claim(s_context.storage_owner, &s_ota_storage_claim)) {
             save_outcome(slot, "failed", "operation_busy", false); return;
         }
-        esp_base_ota_receipt_snapshot_t snapshot = {0};
-        esp_base_ota_firmware_set_t set = {0};
-        if (esp_base_ota_observe_firmware_set(ESP_BASE_OTA_FIRMWARE_CONFIRMED, NULL, &set) != ESP_BASE_OTA_FIRMWARE_OK) {
-            if (!esp_base_storage_release(&s_ota_storage_claim)) s_config_uncertain = true;
-            save_outcome(slot, "unknown", "storage_uncertain", false); return;
-        }
-        memcpy(snapshot.source_sha256, set.running_firmware_sha256, 32);
-        if (set.bootable_count == 2) memcpy(snapshot.inactive_sha256, set.bootable_firmware_sha256[1], 32);
+        const uint64_t registration_started_ms = uptime_ms();
         const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(
-            s_context.device_id, command->ota, &snapshot);
+            s_context.device_id, command->ota, &s_ota_storage_claim);
+        ESP_LOGI("base_ota", "ESP_BASE_OTA_REGISTRATION operation_id=%s elapsed_ms=%" PRIu64 " receipt=%u",
+            command->ota->operation_id, uptime_ms() - registration_started_ms, (unsigned)receipt);
+        (void)registration_started_ms;
         if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
             const char *receipt_error = receipt == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
                 receipt == ESP_BASE_OTA_RECEIPT_CONFLICT ? "ota_operation_conflict" :
@@ -887,7 +883,6 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
                 receipt == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID ? "ota_source_not_valid" :
                 receipt == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE ? "ota_target_not_safe" :
                 receipt == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
-                receipt == ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH ? "ota_snapshot_mismatch" :
                 receipt == ESP_BASE_OTA_RECEIPT_SAME_IMAGE ? "ota_same_image" :
                 receipt == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
             bool uncertain = receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;

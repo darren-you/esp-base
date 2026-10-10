@@ -34,6 +34,12 @@ if(IDF_TARGET STREQUAL "esp32")
 endif()
 
 project(${ESP_BASE_PROJECT})
+if(ESP_BASE_APP STREQUAL "esp_base")
+    # http_parser.h explicitly supports this -D contract. Bound the product's
+    # HTTPS OTA response headers without changing the managed SDK or URL parser.
+    idf_component_get_property(esp_base_http_parser_library http_parser COMPONENT_LIB)
+    target_compile_definitions(${esp_base_http_parser_library} PRIVATE HTTP_MAX_HEADER_SIZE=8192)
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../tools/check_sdk.py"
     --path "${IDF_PATH}"

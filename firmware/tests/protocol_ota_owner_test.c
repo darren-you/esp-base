@@ -51,7 +51,7 @@ static bool allow_config_load, fake_frp_response_pending, mqtt_restart_enqueue_o
 static esp_err_t config_commit_result, config_load_result;
 static esp_base_remote_config_t config_load_output;
 static esp_base_ota_request_t registered_request;
-static esp_base_ota_receipt_snapshot_t registered_snapshot;
+static uint8_t registered_source_sha256[32];
 static const char *fake_frp_state;
 static uint32_t fake_free_heap;
 static uint64_t fake_now_ms;
@@ -116,7 +116,7 @@ static void reset_case(void)
     config_commit_result = config_load_result = ESP_OK;
     config_load_output = (esp_base_remote_config_t){.revision = 7};
     memset(&registered_request, 0, sizeof registered_request);
-    registered_snapshot = (esp_base_ota_receipt_snapshot_t){0};
+    memset(registered_source_sha256, 0x41, sizeof registered_source_sha256);
     fake_now_ms = 1000; fake_frp_state = "ready"; fake_free_heap = 16384;
     latest_reply[0] = latest_reported[0] = '\0';
     ota_request_releases = 0; last_decoded_ota_request = NULL;
@@ -352,12 +352,13 @@ psa_status_t psa_hash_compute(int algorithm, const uint8_t *bytes, size_t length
 
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const char *device_id, const esp_base_ota_request_t *request,
-    const esp_base_ota_receipt_snapshot_t *snapshot)
+    const esp_base_storage_claim_t *claim)
 {
-    assert(!strcmp(device_id, s_context.device_id) && request && snapshot);
+    assert(!strcmp(device_id, s_context.device_id) && request && claim == &s_ota_storage_claim);
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && task_calls == 0);
-    ++register_calls; registered_request = *request; registered_snapshot = *snapshot;
-    return register_result;
+    assert(snapshot_calls == 0);
+    ++register_calls; registered_request = *request;
+    return snapshot_ok ? register_result : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
 }
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
     const char *device_id, esp_base_ota_receipt_recovery_t *receipt)
@@ -371,7 +372,7 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
         .image_size_bytes = registered_request.image_size_bytes};
     strcpy(receipt->operation_id, registered_request.operation_id);
     memcpy(receipt->candidate_sha256, registered_request.sha256, 32);
-    memcpy(receipt->source_sha256, registered_snapshot.source_sha256, 32);
+    memcpy(receipt->source_sha256, registered_source_sha256, 32);
     if (receipt_mismatch) receipt->candidate_sha256[0] ^= 1U;
     return load_result;
 }
@@ -426,7 +427,7 @@ eota_result_t eota_retire_inactive(const eota_policy_t *policy, uint8_t target,
     const uint8_t source_sha256[32])
 {
     assert(policy && target == ESP_PARTITION_SUBTYPE_APP_OTA_1 &&
-        !memcmp(source_sha256, registered_snapshot.source_sha256, 32));
+        !memcmp(source_sha256, registered_source_sha256, 32));
     assert(esp_base_storage_claim_active(&s_ota_storage_claim));
     ++retire_calls;
     return retire_calls == 1 ? retire_result : second_retire_result;
@@ -597,7 +598,7 @@ int main(void)
     check_frp_ota();
     reset_case(); start_valid(1); expect_reply("running", NULL);
     assert(s_ota_request && s_ota_request == last_decoded_ota_request && register_calls == 1 && task_calls == 1);
-    assert(!owner_available() && !ota_request_releases && snapshot_calls == 1);
+    assert(!owner_available() && !ota_request_releases && snapshot_calls == 0);
     esp_base_ota_request_t *accepted = s_ota_request;
     query(1); expect_reply("unknown", "ota_operation_not_found");
     start_valid(2); expect_reply("failed", "ota_in_progress");
@@ -647,7 +648,7 @@ int main(void)
         assert(owner_available() == (refuses[i] != ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
     }
     reset_case(); snapshot_ok = false; start_valid(1); expect_reply("unknown", "storage_uncertain");
-    assert(register_calls == 0 && task_calls == 0 && owner_available());
+    assert(register_calls == 1 && task_calls == 0 && !owner_available() && s_config_uncertain);
     reset_case(); esp_base_storage_claim_t other_entry = {0};
     assert(esp_base_storage_claim(&owner, &other_entry));
     start_valid(1); expect_reply("failed", "operation_busy");

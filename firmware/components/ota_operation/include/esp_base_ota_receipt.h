@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "esp_base_ota_policy.h"
+#include "esp_base_storage_owner.h"
 
 typedef enum {
     ESP_BASE_OTA_RECEIPT_OK,
@@ -17,7 +18,6 @@ typedef enum {
     ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID,
     ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE,
     ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN,
-    ESP_BASE_OTA_RECEIPT_SNAPSHOT_MISMATCH,
     ESP_BASE_OTA_RECEIPT_SAME_IMAGE,
     ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE,
     ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN,
@@ -38,14 +38,6 @@ typedef struct {
     uint32_t image_size_bytes;
     uint8_t target_subtype;
 } esp_base_ota_receipt_view_t;
-
-/* Captured under the app/otadata owner immediately before intent registration.
- * Identities are the verified distinct signed Base firmware set; a zero inactive
- * digest denotes an A-only set. */
-typedef struct esp_base_ota_receipt_snapshot {
-    uint8_t source_sha256[EOTA_SHA256_BYTES];
-    uint8_t inactive_sha256[EOTA_SHA256_BYTES];
-} esp_base_ota_receipt_snapshot_t;
 
 typedef enum {
     ESP_BASE_OTA_RECEIPT_PREPARED = 1,
@@ -68,10 +60,15 @@ typedef struct {
  * Commit and byte-for-byte readback precede target retirement. New operations
  * replace only proven terminal results; the same ID never starts twice.
  * Old V1/V2/V3 and corrupt records are uncertain, never absent. Their migration
- * must be resolved explicitly in the first wired layout assembly. */
+ * must be resolved explicitly in the first wired layout assembly. The caller
+ * holds the existing app/otadata upgrade transaction claim throughout this call
+ * and its later worker. Registration observes the signed firmware set once and
+ * consumes that local result before returning; no caller-supplied identities
+ * or cached observations can authorize an intent. Short physical Flash claims
+ * remain separate and are acquired by the existing policy callbacks. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const char *device_id, const esp_base_ota_request_t *request,
-    const esp_base_ota_receipt_snapshot_t *snapshot);
+    const esp_base_storage_claim_t *claim);
 /* Load the exact V4 intent. Reading never authorizes erasure or advancement;
  * the caller must prove the receipt-bound physical state. */
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
