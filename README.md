@@ -4,7 +4,7 @@
 
 2026-10-09 维护者要求立即完成退役清理，运行组件及自有引擎的云端仓库已删除，工作区登记、本地checkout和历史构建入口已退出。Base 的生产源码、组件清单和双目标锁此前已改为原生业务与独立固件 OTA，本轮清理退役实验正文和失效入口，保留有效凭据、当前恢复工具及既有私有原始资料。
 
-后续以[唯一执行计划](docs/operations/ota-allocation-diagnostic-checkpoint.md)为准。R1／R2／R4和R3软件子项已有离线结果；真实公网／App／USB、双板容量／断电／百次／连续72小时与正式交付仍未完成，维护者安排实板稍后接入。软件输入与限定结果见[原生软件检查点](docs/operations/native_software_checkpoint.md)。仓库删除不等于取得设备或生产资格。
+后续以[唯一执行计划](docs/operations/ota-allocation-diagnostic-checkpoint.md)为准。R1／R2／R4和R3软件子项已有离线结果；两块测试板现已具备 USB 接入条件，由 USB 供电，维护者可手动拔插实施断电与重新上电恢复，具体接线见[受控实板接入说明](https://github.com/darren-you/esp-tool/blob/master/docs/operations/hardware-lab.md)。真实公网／App／USB、双板容量／断电／百次／连续72小时与正式交付仍未完成。软件输入与限定结果见[原生软件检查点](docs/operations/native_software_checkpoint.md)。仓库删除或实板接入不等于取得设备或生产资格。
 实板接入前已补官方FRPS宿主六场景互操作、双目标LAB容量观察签名构建和百次／72小时有限驱动；输入、运行命令与未取得的实板资格见[宿主工具](tools/README.md)和[准备检查点](docs/operations/native_software_checkpoint.md#实板接入前的软件验证准备)。
 
 ## 运行链路
