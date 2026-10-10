@@ -33,6 +33,7 @@ APP_SIZE = 0x1e0000
 RETIRED_KEYS = {("base_ota", "operation"), ("base_pkg", "slots"),
                 ("base_product", "operations")}
 CONFIG_KEY = ("base_config", "committed")
+NATIVE_OPERATION_KEY = ("base_ota", "operation")
 LAYOUTS = {
     "c3_product": {"target": "esp32c3", "apps": (0x20000, 0x150000), "app_size": 0x130000,
                    "otadata": 0xf000, "store": (0x3f5000, 0xb000), "packages": (0x280000, 0x165000),
@@ -44,6 +45,12 @@ LAYOUTS = {
               "otadata": 0xf000, "store": (0x3e0000, 0x20000), "phy": 0x11000},
     "esp32_at": {"target": "esp32"},
     "c3_mqtt_factory": {"target": "esp32c3"},
+    "c3_native": {"target": "esp32c3", "native": True, "apps": APP_OFFSETS,
+                  "app_size": APP_SIZE, "otadata": 0xf000,
+                  "store": (0x3f5000, 0xb000), "phy": 0x11000, "scratch": 0x3e5000},
+    "esp32_native": {"target": "esp32", "native": True, "apps": APP_OFFSETS,
+                     "app_size": APP_SIZE, "otadata": 0x10000,
+                     "store": (0x3fa000, 0x6000), "phy": 0xf000, "scratch": 0x3ea000},
 }
 
 
@@ -107,11 +114,12 @@ def parse_table(raw, components):
     return entries
 
 
-def table_from_csv(path, components):
+def table_from_csv(path, components, *, disable_md5=False):
     with tempfile.TemporaryDirectory(prefix="native_layout_table_") as work:
         output = Path(work, "table.bin")
         result = subprocess.run([sys.executable, str(components / "partition_table/gen_esp32part.py"),
-            "--quiet", "--offset", "0x8000", "--flash-size", "4MB", str(path), str(output)],
+            "--quiet", "--offset", "0x8000", "--flash-size", "4MB",
+            *(["--disable-md5"] if disable_md5 else []), str(path), str(output)],
             capture_output=True, check=False)
         require(result.returncode == 0, "固定SDK无法生成目标分区表")
         return output.read_bytes()
@@ -119,6 +127,14 @@ def table_from_csv(path, components):
 
 def check_old_layout(flash, layout, components):
     table = parse_table(flash[TABLE_OFFSET:TABLE_OFFSET + 0x1000], components)
+    if layout.get("native"):
+        target = layout["target"]
+        expected = table_from_csv(ROOT / "firmware/partitions" /
+            ("c3-partition-table.csv" if target == "esp32c3" else "esp32-partition-table.csv"),
+            components, disable_md5=target == "esp32")
+        require(flash[TABLE_OFFSET:TABLE_OFFSET + len(expected)] == expected and
+                table == parse_table(expected, components), "来源不是当前目标的精确原生分区正文")
+        return table
     if layout is LAYOUTS["esp32_at"]:
         at_archive.check_old_table(flash)
         return table
@@ -365,6 +381,56 @@ def validate_v3_receipt(blob, device_id, flash, layout, selected, states, images
     return {"operation_id": blob[50:86].decode(), "state": "succeeded" if blob[5] == 3 else "failed"}
 
 
+def validate_v4_receipt(blob, device_id, selected, states, images):
+    require(len(blob) == 182 and blob[:5] == b"EOTA\x04" and blob[5] in {2, 3} and
+            (blob[6], blob[7]) in {(0x10, 0x11), (0x11, 0x10)} and blob[9] == 0,
+            "原生V4收据损坏、未知或仍PREPARED，停止准备")
+    require(blob[14:50] == device_id.encode() and legacy.valid_uuid_text(blob[50:86].decode("ascii", errors="replace")) and
+            288 <= u32(blob, 10) <= APP_SIZE and any(blob[86:118]) and any(blob[118:150]) and
+            blob[86:118] != blob[118:150] and
+            (not any(blob[150:182]) or blob[150:182] != blob[118:150]), "原生V4收据身份或镜像字段无效")
+    source_slot, target_slot = blob[6] - 0x10, blob[7] - 0x10
+    require(states.get(source_slot) == 2 and source_slot in images and
+            hashlib.sha256(images[source_slot]).digest() == blob[118:150], "原生V4原A不是可信VALID完整镜像")
+    if blob[5] == 3:
+        require(blob[8] == 0 and selected == target_slot and states.get(target_slot) == 2 and
+                target_slot in images and len(images[target_slot]) == u32(blob, 10) and
+                hashlib.sha256(images[target_slot]).digest() == blob[86:118], "原生V4成功终态与当前选中C不符")
+    else:
+        require(blob[8] in {1, 2, 3, 4, 5, 6, 7, 8, 10} and selected == source_slot,
+                "原生V4失败终态与当前选中A不符")
+        if states.get(target_slot) == 2:
+            expected = blob[150:182] if any(blob[150:182]) else blob[118:150]
+            require(target_slot in images and hashlib.sha256(images[target_slot]).digest() == expected,
+                    "原生V4失败后的VALID备用镜像不是原B或同A基座")
+    return {"operation_id": blob[50:86].decode(), "state": "succeeded" if blob[5] == 3 else "failed"}
+
+
+def inspect_native_store(flash, layout, device_id, source_key, parser, work):
+    store_offset, store_size = layout["store"]
+    records = legacy.nvs_records(flash, "base_store", store_offset, store_size, parser,
+                                 {CONFIG_KEY, NATIVE_OPERATION_KEY})
+    require(all(kind == "blob" for kind, _ in records.values()), "原生活动记录必须是blob")
+    revision = validate_v3_config(records[CONFIG_KEY][1]) if CONFIG_KEY in records else None
+    selected, states = ota_selection(flash, layout)
+    images = {}
+    for slot, offset in enumerate(layout["apps"]):
+        if states.get(slot) == 2:
+            image = signed_image(flash[offset:offset + APP_SIZE], layout["target"])
+            verify_signature(image, source_key, layout["target"], work, "native_ota_" + str(slot))
+            images[slot] = image
+        else:
+            require(flash[offset:offset + 0x1000] == b"\xff" * 0x1000,
+                    "原生非VALID槽仍可能被bootloader加载，不能作为清理完成来源")
+    require(selected in images, "原生选中槽没有可信完整签名镜像")
+    terminal = validate_v4_receipt(records[NATIVE_OPERATION_KEY][1], device_id, selected, states, images) \
+        if NATIVE_OPERATION_KEY in records else None
+    return records, {"config_revision": revision, "selected_slot": "ota_" + str(selected),
+                     "old_operation": terminal, "old_slots": {
+                         "ota_" + str(slot): {"size_bytes": len(image), "sha256": digest(image)}
+                         for slot, image in images.items()}, "retired_records": {}}, images[selected]
+
+
 def inspect_source(flash, source_layout, device_id, source_key, components, work, efuse_mac=None):
     layout = LAYOUTS[source_layout]
     check_old_layout(flash, layout, components)
@@ -418,6 +484,17 @@ def inspect_source(flash, source_layout, device_id, source_key, components, work
     require(not phy_keys or phy_keys == {key for key in legacy.SDK_NVS_TYPES if key[0] == "phy"}, "PHY记录不完整")
     if phy_keys:
         require(len(identity[("phy", "cal_mac")][1]) == 6 and bool(identity[("phy", "cal_data")][1]), "PHY记录长度无效")
+    if layout.get("native"):
+        require(efuse_mac is None, "原生来源绑定既有UUID，不接受首次迁入MAC身份字段")
+        if layout["target"] == "esp32":
+            verify_signature(flash[TABLE_OFFSET:TABLE_OFFSET + 3140], source_key, "esp32", work, "native_table")
+        records, report, _ = inspect_native_store(flash, layout, device_id, source_key, parser, work)
+        report.update(source_layout=source_layout, source_flash_sha256=digest(flash), device_id=device_id,
+                      source_verification_key_sha256=digest(read_file(source_key, maximum=4096)))
+        archive = flash[0x3e5000:0x3ea000] if layout["target"] == "esp32" else None
+        if archive is not None:
+            report["old_at_sha256"] = digest(archive)
+        return records, report, archive
     store_offset, store_size = layout["store"]
     allowed = {CONFIG_KEY, *RETIRED_KEYS}
     store = legacy.nvs_records(flash, "base_store", store_offset, store_size, parser, allowed)
@@ -562,6 +639,8 @@ def prepare(args):
     flash = legacy.compare_backups(args.backup_a, args.backup_b)
     layout = LAYOUTS[args.source_layout]
     target = layout["target"]
+    original_state = getattr(args, "original_state", False)
+    require(not original_state or layout.get("native"), "原态候选只接受明确的当前原生来源")
     with tempfile.TemporaryDirectory(prefix="native_layout_prepare_") as scratch:
         work = Path(scratch)
         source_key = None
@@ -584,7 +663,8 @@ def prepare(args):
             require(len(key_bytes) == 64 and key_bytes in app and key_bytes in bootloader,
                     "ESP32公钥未同时嵌入新app与bootloader")
         store_size = 0xb000 if target == "esp32c3" else 0x6000
-        store = generate_store(records, store_size, components, legacy.load_nvs_parser(components), work)
+        store = flash[layout["store"][0]:layout["store"][0] + store_size] if layout.get("native") else \
+            generate_store(records, store_size, components, legacy.load_nvs_parser(components), work)
         source = bytearray(flash)
         if args.source_layout == "c3_mqtt_factory":
             # The old factory app occupies the new otadata, PHY and coredump areas.
@@ -599,12 +679,25 @@ def prepare(args):
         elif args.source_layout == "c3_v1":
             # The legacy store occupies the new scratch/tail. Its complete bytes are archived.
             source[0x3e5000:0x3f5000] = b"\xff" * 0x10000
-        candidate = build_candidate(bytes(source), target, app, bootloader, table, store, old_at, components)
+        selected_slot = "ota_1"
+        if layout.get("native") and (original_state or NATIVE_OPERATION_KEY in records):
+            selected_slot = report["selected_slot"]
+            selected_offset = layout["apps"][int(selected_slot[-1])]
+            boot_offset = 0 if target == "esp32c3" else 0x1000
+            original_app = signed_image(flash[selected_offset:selected_offset + APP_SIZE], target)
+            original_boot = signed_image(flash[boot_offset:TABLE_OFFSET], target, app=False, signed=False)
+            table_size = 3072 if target == "esp32c3" else 3140
+            require(app == original_app and bootloader == original_boot and
+                    table == flash[TABLE_OFFSET:TABLE_OFFSET + table_size],
+                    "原态或V4终态来源必须使用当前选中app及原boot/table；不同新app须走OTA协调器")
+            candidate = flash
+        else:
+            candidate = build_candidate(bytes(source), target, app, bootloader, table, store, old_at, components)
         report.update(schema_version=1, target=target + "/esp_base", idf_commit=legacy.IDF_COMMIT,
                       candidate_flash_sha256=digest(candidate), candidate_app_sha256=digest(app),
                       candidate_app_size_bytes=len(app), verification_key_sha256=digest(read_file(verification_key, maximum=4096)),
                       bootloader_sha256=digest(bootloader), partition_table_sha256=digest(table),
-                      candidate_selected_slot="ota_1", candidate_state="software_only",
+                      candidate_selected_slot=selected_slot, candidate_state="software_only",
                       hardware_write_authorized=False, device_verified=False,
                       old_operation_runtime_result="unknown_after_wired_identity_change",
                       preserved_records={"/".join(k): digest(v) for k, (_, v) in records.items()})
@@ -628,6 +721,8 @@ def main():
     parser.add_argument("--device-id")
     parser.add_argument("--source-efuse-mac")
     parser.add_argument("--source-verification-key", type=Path)
+    parser.add_argument("--original-state", action="store_true",
+                        help="仅当前原生来源：使用真实选中app和原boot/table生成逐字节相同的4MiB原态候选")
     parser.add_argument("--app", type=Path, required=True)
     parser.add_argument("--bootloader", type=Path, required=True)
     parser.add_argument("--partition-table", type=Path, required=True)

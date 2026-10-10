@@ -1,0 +1,269 @@
+--- a/components/freertos/FreeRTOS-Kernel/include/freertos/task.h
++++ b/components/freertos/FreeRTOS-Kernel/include/freertos/task.h
+@@ -2976,6 +2976,23 @@
+  */
+ void vTaskInternalSetTimeOutState( TimeOut_t * const pxTimeOut ) PRIVILEGED_FUNCTION;
+ 
++/* Always-on managed non-SMP task-instance coverage. High-water values use StackType_t units.
++ * completed_minimum is captured only after a task has stopped, before its stack is destroyed.
++ * Names describe the worst completed instance; they are never identity or a deduplication key.
++ */
++typedef struct {
++    UBaseType_t created_instances;
++    UBaseType_t finalized_instances;
++    UBaseType_t completed_minimum;
++    UBaseType_t worst_completed_instance;
++    char worst_completed_name[configMAX_TASK_NAME_LEN];
++    BaseType_t counters_valid;
++} freertos_task_capacity_stats_t;
++
++/* Caller supplies fixed storage. Zero with incomplete coverage must not grant qualification. */
++UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t *tasks, UBaseType_t task_limit,
++                                     freertos_task_capacity_stats_t *stats) PRIVILEGED_FUNCTION;
++
+ /** @endcond */
+ 
+ /* *INDENT-OFF* */
+--- a/components/freertos/FreeRTOS-Kernel/tasks.c
++++ b/components/freertos/FreeRTOS-Kernel/tasks.c
+@@ -533,6 +533,13 @@
+ PRIVILEGED_DATA static volatile BaseType_t xYieldPending[ configNUMBER_OF_CORES ] = { pdFALSE };
+ PRIVILEGED_DATA static volatile BaseType_t xNumOfOverflows = ( BaseType_t ) 0;
+ PRIVILEGED_DATA static UBaseType_t uxTaskNumber = ( UBaseType_t ) 0U;
++
++#if ( configUSE_TRACE_FACILITY == 1 )
++    PRIVILEGED_DATA static freertos_task_capacity_stats_t s_freertos_task_capacity_stats = {
++        .completed_minimum = (UBaseType_t)~0U,
++        .counters_valid = pdTRUE,
++    };
++#endif
+ PRIVILEGED_DATA static volatile TickType_t xNextTaskUnblockTime = ( TickType_t ) 0U;     /* Initialised to portMAX_DELAY before the scheduler starts. */
+ PRIVILEGED_DATA static TaskHandle_t xIdleTaskHandle[ configNUMBER_OF_CORES ] = { NULL }; /*< Holds the handle of the idle task.  The idle task is created automatically when the scheduler is started. */
+ 
+@@ -1304,6 +1311,11 @@
+         {
+             /* Add a counter into the TCB for tracing only. */
+             pxNewTCB->uxTCBNumber = uxTaskNumber;
++            if (uxTaskNumber == 0U || s_freertos_task_capacity_stats.created_instances == (UBaseType_t)~0U) {
++                s_freertos_task_capacity_stats.counters_valid = pdFALSE;
++            } else {
++                ++s_freertos_task_capacity_stats.created_instances;
++            }
+         }
+         #endif /* configUSE_TRACE_FACILITY */
+         traceTASK_CREATE( pxNewTCB );
+@@ -1379,6 +1391,9 @@
+              * portPRE_TASK_DELETE_HOOK() as in the Windows port that macro will
+              * not return. */
+             uxTaskNumber++;
++            #if ( configUSE_TRACE_FACILITY == 1 )
++                if (uxTaskNumber == 0U) s_freertos_task_capacity_stats.counters_valid = pdFALSE;
++            #endif
+ 
+             /* Check if the task is deleting itself, or is currently running on
+              * the other core. */
+@@ -2966,6 +2981,19 @@
+ /*-----------------------------------------------------------*/
+ 
+ #if ( configUSE_TRACE_FACILITY == 1 )
++
++    UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t *tasks, UBaseType_t task_limit,
++                                          freertos_task_capacity_stats_t *stats)
++    {
++        /* Managed builds reject SMP. Nested suspend keeps the official enumeration and counters together. */
++        vTaskSuspendAll();
++        const UBaseType_t count = uxTaskGetSystemState(tasks, task_limit, NULL);
++        taskENTER_CRITICAL(&xKernelLock);
++        *stats = s_freertos_task_capacity_stats;
++        taskEXIT_CRITICAL(&xKernelLock);
++        (void)xTaskResumeAll();
++        return count;
++    }
+ 
+     UBaseType_t uxTaskGetSystemState( TaskStatus_t * const pxTaskStatusArray,
+                                       const UBaseType_t uxArraySize,
+@@ -4894,6 +4922,32 @@
+ 
+     static void prvDeleteTCB( TCB_t * pxTCB )
+     {
++        #if ( configUSE_TRACE_FACILITY == 1 )
++        {
++            /* The stopped instance's stack is still intact, including its final context save. */
++            #if portSTACK_GROWTH < 0
++                const uint8_t *stack_end = (const uint8_t *)pxTCB->pxStack;
++            #else
++                const uint8_t *stack_end = (const uint8_t *)pxTCB->pxEndOfStack;
++            #endif
++            const UBaseType_t minimum = (UBaseType_t)prvTaskCheckFreeStackSpace(stack_end);
++            taskENTER_CRITICAL(&xKernelLock);
++            {
++                if (s_freertos_task_capacity_stats.finalized_instances == (UBaseType_t)~0U) {
++                    s_freertos_task_capacity_stats.counters_valid = pdFALSE;
++                } else {
++                    ++s_freertos_task_capacity_stats.finalized_instances;
++                }
++                if (minimum < s_freertos_task_capacity_stats.completed_minimum) {
++                    s_freertos_task_capacity_stats.completed_minimum = minimum;
++                    s_freertos_task_capacity_stats.worst_completed_instance = pxTCB->uxTCBNumber;
++                    memcpy(s_freertos_task_capacity_stats.worst_completed_name, pxTCB->pcTaskName, configMAX_TASK_NAME_LEN);
++                }
++            }
++            taskEXIT_CRITICAL(&xKernelLock);
++        }
++        #endif
++
+         /* This call is required specifically for the TriCore port.  It must be
+          * above the vPortFree() calls.  The call is also used by ports/demos that
+          * want to allocate and clean RAM statically. */
+--- a/components/heap/heap_caps.c
++++ b/components/heap/heap_caps.c
+@@ -14,6 +14,7 @@
+ #include "esp_log.h"
+ #include "heap_private.h"
+ #include "esp_system.h"
++#include "esp_memory_utils.h"
+ 
+ /*
+ This file, combined with a region allocator that supports multiple heaps, solves the problem that the ESP32 has RAM
+@@ -313,6 +314,35 @@
+         }
+     }
+     return ret;
++}
++
++void heap_caps_walk_capacity(heap_capacity_region_cb_t callback, void *user)
++{
++    _Static_assert(SOC_MEMORY_TYPE_NO_PRIOS == HEAP_CAPACITY_PRIORITIES, "capacity priorities differ");
++    heap_t *heap;
++    SLIST_FOREACH(heap, &registered_heaps, next) {
++        if (heap->heap == NULL) continue;
++        heap_capacity_region_stats_t region = {
++            .start = heap->start, .end = heap->end,
++            .available_at_heap_init = heap->capacity_available_at_heap_init,
++        };
++        memcpy(region.caps, heap->caps, sizeof(region.caps));
++        uintptr_t first = 0, last = 0;
++        if (!esp_dram_match_iram() && esp_ptr_in_diram_dram((void *)heap->start)) {
++            first = (uintptr_t)esp_ptr_diram_dram_to_iram((void *)heap->start);
++            last = (uintptr_t)esp_ptr_diram_dram_to_iram((void *)(heap->end - sizeof(uint32_t)));
++        } else if (!esp_rtc_dram_match_rtc_iram() && esp_ptr_in_rtc_dram_fast((void *)heap->start)) {
++            first = (uintptr_t)esp_ptr_rtc_dram_to_iram((void *)heap->start);
++            last = (uintptr_t)esp_ptr_rtc_dram_to_iram((void *)(heap->end - sizeof(uint32_t)));
++        }
++        if (first) {
++            region.alias_inverted = first > last;
++            region.alias_start = MIN(first, last);
++            region.alias_end = MAX(first, last) + sizeof(uint32_t);
++        }
++        multi_heap_get_capacity_stats(heap->heap, &region.allocator);
++        if (!callback(&region, user)) break;
++    }
+ }
+ 
+ size_t heap_caps_get_largest_free_block( uint32_t caps )
+--- a/components/heap/heap_caps_init.c
++++ b/components/heap/heap_caps_init.c
+@@ -160,6 +160,8 @@
+         memcpy(heap->caps, type->caps, sizeof(heap->caps));
+         heap->start = region->start;
+         heap->end = region->start + region->size;
++        /* Delayed startup-stack regions were not allocatable at heap initialization. */
++        heap->capacity_available_at_heap_init = !region->startup_stack;
+         MULTI_HEAP_LOCK_INIT(&heap->heap_mux);
+         if (region->startup_stack) {
+             /* Will be registered when OS scheduler starts */
+@@ -313,6 +315,8 @@
+     memcpy(p_new->caps, caps, sizeof(p_new->caps));
+     p_new->start = start;
+     p_new->end = end;
++    /* A newly born region cannot improve a guarantee for its absent prefix. */
++    p_new->capacity_available_at_heap_init = false;
+     MULTI_HEAP_LOCK_INIT(&p_new->heap_mux);
+     p_new->heap = multi_heap_register((void *)start, end - start);
+     SLIST_NEXT(p_new, next) = NULL;
+--- a/components/heap/heap_private.h
++++ b/components/heap/heap_private.h
+@@ -31,6 +31,7 @@
+     uint32_t caps[SOC_MEMORY_TYPE_NO_PRIOS]; ///< Capabilities for the type of memory in this heap (as a prioritised set). Copied from soc_memory_types so it's in RAM not flash.
+     intptr_t start;
+     intptr_t end;
++    bool capacity_available_at_heap_init;
+     multi_heap_lock_t heap_mux;
+     multi_heap_handle_t heap;
+     SLIST_ENTRY(heap_t_) next;
+--- a/components/heap/include/esp_heap_caps.h
++++ b/components/heap/include/esp_heap_caps.h
+@@ -16,6 +16,24 @@
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
++
++#define HEAP_CAPACITY_PRIORITIES 3
++typedef struct {
++    intptr_t start;
++    intptr_t end;
++    uint32_t caps[HEAP_CAPACITY_PRIORITIES];
++    uintptr_t alias_start;
++    uintptr_t alias_end;
++    bool alias_inverted;
++    bool available_at_heap_init;
++    multi_heap_capacity_stats_t allocator;
++} heap_capacity_region_stats_t;
++
++/* One callback per physical registered heap, never one callback per overlapping capability/alias.
++ * Each allocator fact is copied under that heap's lock. There is no simultaneous global snapshot.
++ * A late-born region contributes zero to bounds that begin at heap initialization. */
++typedef bool (*heap_capacity_region_cb_t)(const heap_capacity_region_stats_t *region, void *user);
++void heap_caps_walk_capacity(heap_capacity_region_cb_t callback, void *user);
+ 
+ #if CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH
+ #define HEAP_IRAM_ATTR
+--- a/components/heap/include/multi_heap.h
++++ b/components/heap/include/multi_heap.h
+@@ -18,8 +18,20 @@
+ extern "C" {
+ #endif
+ 
++/* Managed non-ROM single-pool allocator facts, continuously retained from registration.
++ * The caller-facing getter takes the original per-heap allocator lock. */
++typedef struct {
++    size_t current_free_bytes;
++    size_t minimum_free_bytes;
++    size_t current_largest_allocatable_bytes;
++    size_t minimum_largest_allocatable_bytes;
++    size_t allocator_metadata_bytes;
++} multi_heap_capacity_stats_t;
++
+ /** @brief Opaque handle to a registered heap */
+ typedef struct multi_heap_info *multi_heap_handle_t;
++
++void multi_heap_get_capacity_stats(multi_heap_handle_t heap, multi_heap_capacity_stats_t *stats);
+ 
+ /**
+  * @brief allocate a chunk of memory with specific alignment
+--- a/components/heap/multi_heap.c
++++ b/components/heap/multi_heap.c
+@@ -413,6 +413,23 @@
+     return true;
+ }
+ 
++void multi_heap_get_capacity_stats(multi_heap_handle_t heap, multi_heap_capacity_stats_t *stats)
++{
++    memset(stats, 0, sizeof(*stats));
++    if (heap == NULL) {
++        return;
++    }
++    multi_heap_internal_lock(heap);
++    tlsf_capacity_stats_t tlsf_stats;
++    tlsf_get_capacity_stats(heap->heap_data, &tlsf_stats);
++    stats->current_free_bytes = tlsf_stats.current_free_bytes;
++    stats->minimum_free_bytes = tlsf_stats.minimum_free_bytes;
++    stats->current_largest_allocatable_bytes = tlsf_stats.current_largest_allocatable_bytes;
++    stats->minimum_largest_allocatable_bytes = tlsf_stats.minimum_largest_allocatable_bytes;
++    stats->allocator_metadata_bytes = sizeof(heap_t) + tlsf_size(heap->heap_data);
++    multi_heap_internal_unlock(heap);
++}
++
+ void multi_heap_get_info_impl(multi_heap_handle_t heap, multi_heap_info_t *info)
+ {
+     uint32_t overhead;

@@ -36,7 +36,7 @@ static pthread_mutex_t io_mutex = PTHREAD_MUTEX_INITIALIZER;
 static esp_base_storage_owner_t io_owner;
 static esp_base_storage_claim_t io_claim;
 static const char *nvs_file;
-static uint64_t clock_started_ms, confirm_started_ms;
+static uint64_t clock_started_us, confirm_started_ms;
 static efrp_client_t *frp_client;
 static efrp_work_status_t retired_work;
 
@@ -44,7 +44,11 @@ static uint64_t monotonic_ms(void) {
     struct timespec t; assert(clock_gettime(CLOCK_MONOTONIC, &t)==0);
     return (uint64_t)t.tv_sec*1000+(uint64_t)t.tv_nsec/1000000;
 }
-int64_t esp_timer_get_time(void) { return (int64_t)(monotonic_ms()-clock_started_ms+1000)*1000; }
+static uint64_t monotonic_us(void) {
+    struct timespec t; assert(clock_gettime(CLOCK_MONOTONIC, &t)==0);
+    return (uint64_t)t.tv_sec*1000000+(uint64_t)t.tv_nsec/1000;
+}
+int64_t esp_timer_get_time(void) { return (int64_t)(monotonic_us()-clock_started_us+1000000); }
 void vTaskDelay(TickType_t ticks) { (void)poll(NULL,0,(int)ticks); }
 void vTaskDelete(TaskHandle_t task) { (void)task; }
 static void *ota_entry(void *argument) { ota_task(argument); return NULL; }
@@ -201,7 +205,7 @@ static void stop_client(void) {
     assert(efrp_stop(frp_client,5000)==EFRP_OK && efrp_destroy(&frp_client,5000)==EFRP_OK && !frp_client);
 }
 int main(int argc,char **argv) {
-    assert(argc==7); clock_started_ms=monotonic_ms(); reset_case();
+    assert(argc==7); clock_started_us=monotonic_us(); reset_case();
 #if EOTA_TEST_CHIP_ID == 0
     s_context.chip_model="esp32";
 #else
@@ -214,7 +218,8 @@ int main(int argc,char **argv) {
     source_size=load_image(argv[4],flash[0]);
     uint8_t *candidate=malloc(0x1e0000);assert(candidate);image_size=load_image(argv[3],candidate);
     assert(source_size!=image_size || memcmp(candidate,flash[0],image_size)); free(candidate);
-    write_failure=strcmp(argv[5],"success")!=0; nvs_failure=!strcmp(argv[5],"nvs_failure");
+    write_failure=strcmp(argv[5],"success")!=0 && strcmp(argv[5],"paused_success")!=0;
+    nvs_failure=!strcmp(argv[5],"nvs_failure");
     char receipt_path[1024];assert(snprintf(receipt_path,sizeof receipt_path,"%s/receipt.bin",argv[6])>0); nvs_file=receipt_path;
     uint8_t ca[EFRP_TLS_MAX_CA_BYTES];FILE *certificate=fopen(argv[2],"rb");assert(certificate);
     size_t ca_size=fread(ca,1,sizeof ca,certificate);assert(ca_size && ca_size<sizeof ca && fclose(certificate)==0);

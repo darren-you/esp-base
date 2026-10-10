@@ -249,8 +249,17 @@ static void *blocking_upload_reader(void *unused)
 {
     (void)unused;
     uint8_t byte;
+    struct timespec started; assert(clock_gettime(CLOCK_MONOTONIC, &started) == 0);
+    const int64_t deadline_us = (int64_t)started.tv_sec * 1000000 + started.tv_nsec / 1000 + 1000000;
     atomic_store(&reader_started, true);
-    reader_result = esp_base_frp_management_upload_read(NULL, &byte, 1, 1000);
+    reader_result = -2;
+    do {
+        struct timespec now; assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+        const int64_t left_us = deadline_us - ((int64_t)now.tv_sec * 1000000 + now.tv_nsec / 1000);
+        if (left_us < 1000) break;
+        const uint32_t timeout_ms = left_us / 1000 > 1000 ? 1000 : (uint32_t)(left_us / 1000);
+        reader_result = esp_base_frp_management_upload_read(NULL, &byte, 1, timeout_ms);
+    } while (reader_result == -2);
     return NULL;
 }
 

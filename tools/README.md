@@ -31,8 +31,6 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 ## 构建与回归
 
-分区及迁入工具回归先按下方 [SDK 源码准备](#sdk-源码准备)安装并导出锁定环境；保留 `PYTHONDONTWRITEBYTECODE=1`。
-
 ```bash
 python3 -m unittest discover -s tools -p 'test_business_event*.py' -v
 python3 -m unittest discover -s tools -p 'test_device_control.py' -v
@@ -44,12 +42,12 @@ python3 -m unittest discover -s tools -p 'test_*partition_table.py' -v
 
 ## SDK 源码准备
 
-本仓 `sdk-lock.json` 锁定公开 ESP-IDF 受控来源 的 OTA 擦除失败和 HTTP 初始化低内存清理修正，以及公开 esp-lwip 的零窗口修正。首次准备独立 SDK 时，将 `ESP_BASE_IDF` 指向仓外的新路径：
+`sdk-lock.json` 的 schema 2 锁定公开受控 `reference-esp-idf@fb53f8a76df5ea913715658f5ac602e91a094e72`、`esp-lwip@f6e98c34ad65d31419b3fbb1fe27015e46060a6a` 与 IDF 原生 TLSF `46728273434655e92d7e165425e3ee5d63766b74`。原业务基线保留在受控来源的 `workspace-source.json`；当前源码只追加 Actions 退出和实际嵌套来源绑定。首次准备仓外完整 SDK：
 
 ```bash
-ESP_BASE_IDF=/private/path/esp-base-idf
 export PYTHONDONTWRITEBYTECODE=1
-git clone --no-checkout --branch master \
+ESP_BASE_IDF=/private/path/esp-base-idf
+git clone \
   https://github.com/darren-you/reference-esp-idf.git "$ESP_BASE_IDF"
 git -C "$ESP_BASE_IDF" checkout --detach fb53f8a76df5ea913715658f5ac602e91a094e72
 git -C "$ESP_BASE_IDF" submodule update --init --recursive --checkout --no-recommend-shallow
@@ -58,12 +56,49 @@ git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
 git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
 bash "$ESP_BASE_IDF/install.sh" esp32c3 esp32
 source "$ESP_BASE_IDF/export.sh"
+python3 tools/prepare_sdk.py --path "$IDF_PATH"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
 
-从安装和导出 SDK 环境前就设置 `PYTHONDONTWRITEBYTECODE=1`，并在同一环境执行后续 `idf.py`、CMake 和独立 Ninja／`cmake --build`。该标准变量随 Python 子进程继承，避免向完整 SDK 来源写入 `__pycache__`；来源检查仍拒绝所有未跟踪内容，包括被 Git 忽略的文件。
+标准无缓存环境必须在 SDK 安装/导出前设置，并继承到 `idf.py`、CMake、独立 Ninja及主机工具子进程；不对任何 `__pycache__` 或 ignored 内容豁免。原生迁入与预检在载入官方 Python 工具前仍完整执行本地 SDK 来源门。
 
-取源显式忽略上游浅克隆建议，保留根与所有递归依赖的完整历史。构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。SDK 根 Git 元数据必须位于来源自身目录；absorbed submodule 的 gitdir 仅允许位于根来源自有 Git modules 下，并以原生 core.worktree 绑定当前子目录，独立子模块可保留自身 `.git`。来源 gitdir 与 common-dir 必须一致，对象目录与对象不得借用仓外存储；符号链接、无绑定定位文件、外置 separate-git-dir 和 linked worktree 被拒绝。Git 环境不得重定向来源、索引或对象目录，replace/grafts 历史替换一律拒绝，所有 Git 读取显式禁用对象替换。每个递归来源显式检查工作树，不受 `submodule.*.ignore` 配置影响。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，引用同一组精确组件提交，不能共用生成的 sdkconfig/build 目录。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
+唯一配方显式声明两份容量补丁与其摘要，以及八个 IDF、三个 TLSF 文件的 before/after 摘要。SDK 根唯一只读普通 `esp-sdk-derivation.json` 必须逐字等于冻结 lock。装配前完整验证所有原件、元数据、全部原始 Git 对象、HEAD tree/index/文件、递归来源与两仓真实 `git apply --check`，随后才应用冻结补丁并排他创建 stamp；已正确装配时只验证并返回，失败 partial 或未知内容保持拒绝，不覆盖、不删除。
+
+派生后，索引和 TLSF HEAD 仍等于原件；只有 lwIP 使用显式精确 gitlink override。全部 29 根来源逐项验证，只有配方精确十一文件的工作树字节可以为 after，只有根 stamp 可为指定 untracked；包括 ignored 在内的其他内容均拒绝。字段或路径重复、未知配方、坏stamp、原件/最终摘要不符、隐藏索引/类型/执行位变化、shallow/partial/sparse、借用或重定向元数据/对象、replace/grafts均不能由 stamp 自证放行。配方、补丁与 stamp 在完整验证首尾稳定读取，不缓存深来源结果。
+
+生产与迁入检查只接受完整容量派生；原件状态仅用于装配前检查。三个组件的精确派生消费锁仍是正式双目标构建前置，单独本仓来源/host通过不代表完整固件。C3和ESP32分别消费自身 Component Manager lock，并保持独立 build/sdkconfig；入口不访问串口或设备。
+
+## 正式容量统计
+
+正式原生源码始终编译 `esp_base_capacity.c`，要求非 ROM TLSF、单核非 SMP、官方 trace 实例编号，禁用 poisoning、task-owner 字节和 LAB 观察副本。统计不是 malloc hook 或定时 heap 遍历：TLSF 每个真实单 pool region 在原分配器锁内维护最低连续合法普通申请和最低总空闲，覆盖真实分配、calloc 下层、aligned／定址、原地及移动 realloc、free 和初始化。移动 realloc 的新旧块共存必须记录；失败／零申请不制造空值。最高有效 TLSF bin 经官方 `tlsf_fit_size` 得到与官方 largest 相同的普通申请边界，更新为恒定成本，不扫描链表。
+
+诊断输出读取真实注册 region 的范围、三优先级 caps 和地址 alias，一个物理堆只计一次。延迟启动堆和动态出生 region 的缺席前缀按零处理；它们仍报告自身注册以来的最低值，但不能抬高从堆初始化起的保证。匹配 caps 的 `sum(region min_free)` 与 `max(region min_largest)` 分别是总空闲和最大单次申请的严格保守下界，均不称全局精确历史峰值。五个实际域包含 `INTERNAL|8BIT`、`INTERNAL|32BIT`、`INTERNAL|DMA`、`DEFAULT` 和 ESP32 配置工作对象使用的 `INTERNAL|IRAM_8BIT`。
+
+`alignment_bytes=4` 仅表示受管无 owner／poison、非 EXEC 的普通合法申请。真实后续请求必须另外绑定大小和 caps；更高 alignment、硬件对齐、EXEC alias 前缀或其他开销须按锁定分配路径单独证明，不能以 24 KiB 数字替代。历史保证不承诺查询后存在并发时下一次申请仍成功。
+
+SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后且清理／释放栈之前采官方 HWM，静态、自删和他删都覆盖。所有创建／最终采集实例计数、最差真实实例及全局最低值保留；名称只作展示，不去重。存活与待清理实例由官方完整列表核对，必须满足 `created = finalized + allocated`；清理间隙、列表容量不足、编号／计数溢出和无效计数不给栈资格。当前双目标 `StackType_t` 为 1 B，输出仍显式按其大小转换。
+
+每五秒既有 control pass 及四个既有主动重启点前输出完整帧，不增业务命令、任务、队列或动态内存。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
+
+统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
+
+```bash
+IDF_PATH=/absolute/managed-sdk python3 tools/test_managed_sdk.py
+python3 tools/test_sdk_capacity.py --idf-path /absolute/managed-sdk
+```
+
+前者先实际核对 SDK，再以隔离夹具验证拒绝边界；后者直接编译受管 SDK 的 TLSF 和实际任务最终采集片段，包含 100000 次碎片化操作、逐稳定状态 walk oracle 与移动 realloc 共存反例。host 及 sanitizer 结果不替代 MCU、正式签名或双板容量验收。
+
+正式诊断使用既有 stdout／VFS，沿用已配置的 USB Serial/JTAG／UART no-driver 路径；不直接使用缺少源码超时保证且不支持 long long 的 ROM formatter。C3 VFS 在无连接时返回 EIO，FIFO 无 host 读取时按最后成功输出起 50 ms 后丢字节；完整帧仍须由原始日志确认。UART 按实际字符数和 115200／8N1 计线路费用，不等待 host ACK；SDK FIFO轮询、stdio锁、USB慢读和 MCU 调度成本仍须实测，不以线路预算冒充最坏时延。丢帧或丢尾不得补成覆盖。
+
+```bash
+python3 tools/analyze_capacity.py --target esp32 \
+  --boot-id <本轮bootUUID> --sdk-lock-sha256 <冻结sdk-lock文件SHA256> \
+  --uart-log /absolute/private/raw-uart.log --json
+python3 -m unittest discover -s tools/tests -p 'test_analyze_capacity.py' -v
+```
+
+解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。19 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
 
 ## 一次性有线迁入与历史输入
 
@@ -81,20 +116,7 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 `capacity_observation.py` 从实验UART读取顺序周期堆／完整任务快照／退出记录，保持16384／24576／1024 B门；必须匹配真实观察器的完整启动声明、明确 target、唯一启动及非递减 uptime。缺失、错目标、重复启动、uptime 回退、损坏或不完整数据不通过，跨文件也不合并不同启动轮。原日志只读并保存摘要。它不是瞬时峰值或完整native生命周期资格，观察器成本不加回。
 
-`prepare_capacity_observer.py` 仅在仓外、0700、无 Git 或链接的独立源码副本加入观察器。必须提供本轮软件收据和所有冻结源根；副本的原生产输入逐项与 canonical／收据核对，重复实验、错误 target、旧 anchor 和不稳定输入拒绝。实验使用既有控制 pass 每5秒枚举最多32个真实任务；锁定 SDK 的官方 task pre-deletion hook 在正常清理前复制任务名、编号与最低栈，启动早期、FRP、MQTT、SDK任务都按实际 RTOS 清理记录。64条退出缓存不新增任务／队列／堆申请，每次 control pass 最多输出64条；溢出标记使本轮解析失格，另保留OTA worker完成前记录。
-
-构建须显式启用 `ESP_BASE_CAPACITY_OBSERVER_LAB=ON`，加载生成的 `capacity_observer_lab.defaults` 中 trace／pre-deletion hook，使用锁定单核非SMP的独立 sdkconfig／build。版本和收据标记 `0.2.0-capacity-lab`／`LAB_ONLY`，没有生产发布资格；正式发布门尚未接入，不能仅靠标记声称平台已经拒绝该制品。异常重启／panic／尚未清理任务、日志丢失、非任务栈、其他内存能力域及瞬时峰值仍缺资格，不能把实验读数移给已冻结生产镜像。5秒采样的 largest 不能证明全程最低连续块；锁定 SDK 的 heap hooks 不提供安全、完整的全域重建依据，本工具不在 allocator／ISR 中遍历 heap。
-
-```bash
-python3 tools/prepare_capacity_observer.py \
-  --source-root /private/path/esp32c3/base --target esp32c3 \
-  --baseline-receipt /absolute/private/native_software_20261006/receipt.json \
-  --frozen-source-root /absolute/private/frozen-build-root \
-  --frozen-source-root /absolute/private/native_software_20261006
-python3 tools/capacity_observation.py --target esp32c3 --uart-log /absolute/private/uart.log --json
-```
-
-两个目标分别复制、生成和构建。只在该私有副本中移除第三方 `.git` 元数据；不能改 canonical、SDK 或冻结归档。解析器不跨日志拼接残缺任务帧，也不合并多个 boot 获得长稳资格。
+旧 `prepare_capacity_observer.py` 及 `LAB_ONLY` 5 秒观察仅解释已冻结历史副本；当前正式源码拒绝 `ESP_BASE_CAPACITY_OBSERVER_LAB`，不要从活动 canonical 再生成该副本。`capacity_observation.py` 可离线解析旧日志，始终不授完整峰值或生产资格。旧 pre-deletion／存活采样、64 条退出缓存、日志丢失及异常重启的边界仍保留，不能把旧数值移给正式统计新候选。原件不改写，也不跨日志或 boot 拼接。
 
 `mqtt_lab_check.py`／`mqtt_resource_report.py` 继续用于独立MQTT实验的严格TLS、往返、计数／栈和回收。实验输入必须位于仓外，不混入普通Base，独立实验不替代本轮FRP／MQTT／原生业务／OTA同存验收。
 
@@ -124,5 +146,3 @@ chmod 700 /absolute/private/native-run-venv
 每次周期包含最大3924 B认证原生事件、后台上传期间业务、一次FRP固件PUT、新boot原ID成功与完整镜像对账、再次业务及暂停／恢复。PUBACK不是业务成功；必须收到本boot／序号／摘要对应的实际reported结果。上传回调只唤醒有限业务线程，记录业务待决窗口与host上传progress区间的相交，不能据此证明业务执行时刻或设备满合法峰值。丢失结果、unknown、错误身份或非预期重启均保留原ID并停止，不重发写、不换ID。区分保留ID、命令已尝试与设备实际确认准入；尝试边界不证明字节已发出。已尝试操作异常后尽力一次有限原ID只读查询，保留实际响应和独立身份裁决，不覆盖主异常或改判成功。
 
 72小时普通步骤超过10秒宿主进展空档即中断，OTA有界等待单独计时；每秒检查等待并对照墙钟／单调钟增量，任一回退或差值超过固定1秒容限中断，系统睡眠不能绕过Mac单调钟不推进的事实。并发观察在同一现有锁内采样和更新进展／OTA窗口，避免线程调度把正常递增时钟误判为回退；日志与异常处理在锁外。最终R5／容量原件摘要与已绑定前缀核对后，再执行同一宿主观察；正常摘要终点直接使用该次已核验采样，异常保留最近实际记录的原始采样，`observation_end_scope=last_recorded_host_clock_sample`。采样前失败不会伪称取得新时刻，真实回退的负时长保持，已有主中断原因不被收尾异常覆盖。后续摘要／Journal写入不计入观察时段，也不宣称检测了这段时间。OTA窗口仍只是有界等待，允许的等待时间不证明设备瞬时连续状态。两种模式始终输出 `qualified=false`／`r6_passed=false`，只记录是否完成本轮有限观察；全任务回收、连续块峰值、公网脱离Mac、断电和Flash寿命须由外部实板原件共同裁决，短轮次不能相加成为72小时。依赖／凭据／CA等Journal创建前的预检错误只返回CLI失败；Journal建立后的中断才保存run摘要。
-
-SDK 的 Actions 退出来源以原 `esp-space/esp-idf@578cf89c343e388db43ba1f4ddcd602fedcb763c` 为业务基线，只追加源码退出与实际嵌套来源绑定；受控来源的 `workspace-source.json` 保留精确上游追溯。lwIP 锁需在源码退出 PR 合入 `darren-you/esp-lwip` canonical `master` 后再选择精确版本，当前不使用未合并任务 head；源码变更不代表固件、Broker、实板或发布已完成。

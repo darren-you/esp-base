@@ -1,5 +1,8 @@
 """用真实 Git 对象库验证 SDK 来源不得借用外部对象。"""
 import importlib.util
+import hashlib
+import json
+import sys
 import os
 from pathlib import Path
 import subprocess
@@ -7,6 +10,7 @@ import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
+from sdk_capacity_fixture import CapacityFixture
 
 SPEC = importlib.util.spec_from_file_location("check_sdk", Path(__file__).with_name("check_sdk.py"))
 SDK = importlib.util.module_from_spec(SPEC)
@@ -115,9 +119,11 @@ class SDKObjectOwnershipTest(unittest.TestCase):
         self.git(sdk, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
         # submodule update resets lwIP; restore the single intentional override.
         self.git(lwip, "checkout", "-q", "--detach", corrected)
-        lock = {"idf": {"revision": sdk_revision},
-                "lwip": {"path": "components/lwip/lwip", "revision": corrected}}
-        with patch.object(SDK, "LOCK", lock):
+        capacity_root = self.root / "capacity-contract"
+        capacity_root.mkdir()
+        capacity = CapacityFixture(capacity_root, sdk=sdk)
+        capacity.apply()
+        with patch.object(SDK, "ROOT", capacity.product):
             SDK.check(sdk)
             self.git(sdk, "config", "submodule.framework.ignore", "all")
             self.git(sdk / "framework", "config", "submodule.leaf.ignore", "all")
@@ -503,9 +509,13 @@ class SDKMainRecursiveSourceTest(unittest.TestCase):
         self.lwip_fixed = self._commit(lwip_upstream)
         self._git(self.lwip, "fetch", "-q", "origin")
         self._git(self.lwip, "checkout", "-q", "--detach", self.lwip_fixed)
-        self.lock = {"schema_version": 1,
-                     "idf": {"revision": self.sdk_original},
-                     "lwip": {"revision": self.lwip_fixed, "path": "components/lwip/lwip"}}
+        capacity_root = self.root / "capacity-contract"
+        capacity_root.mkdir()
+        self.capacity = CapacityFixture(capacity_root, sdk=self.sdk)
+        self.sdk_original = self.capacity.recipe["idf"]["revision"]
+        self.raw_status = self.capacity.raw_status
+        self.capacity.apply()
+        self.lock = self.capacity.recipe
         self.assertTrue((self.sdk / ".git").is_dir())
         self.assertTrue((self.leaf / ".git").is_file())
         leaf_metadata = Path(self._git(self.leaf, "rev-parse", "--absolute-git-dir")).resolve()
@@ -526,7 +536,7 @@ class SDKMainRecursiveSourceTest(unittest.TestCase):
     def _assert_main(self, accepted, error=None):
         stdout = io.StringIO()
         stderr = io.StringIO()
-        injection = patch.object(SDK, "LOCK", self.lock)
+        injection = patch.object(SDK, "ROOT", self.capacity.product)
         argv = ["source-fixture", "--path", str(self.sdk)]
         with injection, patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout), \
                 contextlib.redirect_stderr(stderr):
@@ -548,8 +558,8 @@ class SDKMainRecursiveSourceTest(unittest.TestCase):
         self.assertEqual(self._git(self.sdk, "rev-parse", "HEAD"), self.sdk_original)
         self.assertEqual(self._git(self.sdk, "rev-parse", "HEAD:components/lwip/lwip"), self.lwip_original)
         self.assertEqual(self._git(self.lwip, "rev-parse", "HEAD"), self.lwip_fixed)
-        self.assertEqual(self._git(self.sdk, "status", "--porcelain", "--ignore-submodules=none"),
-                         "M components/lwip/lwip")
+        self.assertEqual(self.raw_status, "M components/lwip/lwip")
+        self.assertEqual(len(self._git(self.sdk, "status", "--porcelain", "--ignore-submodules=none").splitlines()), 11)
         self._assert_main(True)
         self._hide_child_status()
         self._assert_main(True)
@@ -836,6 +846,268 @@ class SparseConfigurationTest(unittest.TestCase):
         with self.assertRaises((ValueError, FileNotFoundError)):
             self._verify()
 
+
+
+class CapacityDerivationTest(unittest.TestCase):
+    """真实 Git 正负图执行同一生产 CLI，stamp不能替代原件/索引/对象证明。"""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="base-capacity-source-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.capacity = CapacityFixture(self.root)
+
+    def apply(self):
+        self.capacity.apply()
+        self.assertEqual(self.capacity.check().returncode, 0)
+
+    def reject(self, text=None):
+        result = self.capacity.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        if text:
+            self.assertIn(text, result.stderr)
+
+    def tracked(self, repository="idf"):
+        declaration = next(item for item in self.capacity.recipe["managed_patches"] if item["repository"] == repository)
+        path = self.capacity.sdk if repository == "idf" else self.capacity.tlsf
+        return path / declaration["files"][0]["path"]
+
+    def metadata(self):
+        result = []
+        for repository in (self.capacity.sdk, self.capacity.lwip, self.capacity.tlsf, self.capacity.extra):
+            metadata = Path(self.capacity.git(repository, "rev-parse", "--absolute-git-dir"))
+            result.append((self.capacity.git(repository, "rev-parse", "HEAD"),
+                           (metadata / "index").read_bytes(), (metadata / "config").read_bytes(),
+                           self.capacity.git(repository, "for-each-ref", "--format=%(refname) %(objectname)")))
+        return result
+
+    def test_real_prepare_complete_derivation_and_idempotency_keep_original_git(self):
+        original = self.metadata()
+        self.reject("缺失")
+        self.apply()
+        self.assertEqual(self.metadata(), original)
+        self.assertEqual(self.capacity.stamp.read_bytes(), (self.capacity.product / "sdk-lock.json").read_bytes())
+        self.assertEqual(self.capacity.stamp.stat().st_mode & 0o777, 0o400)
+        before = {(name, item["path"]): (repo / item["path"]).read_bytes()
+                  for name, repo in (("idf", self.capacity.sdk), ("tlsf", self.capacity.tlsf))
+                  for declaration in self.capacity.recipe["managed_patches"] if declaration["repository"] == name
+                  for item in declaration["files"]}
+        self.assertEqual(self.capacity.prepare().returncode, 0)
+        self.assertEqual(self.metadata(), original)
+        self.assertEqual(before, {(name, item["path"]): (repo / item["path"]).read_bytes()
+                                 for name, repo in (("idf", self.capacity.sdk), ("tlsf", self.capacity.tlsf))
+                                 for declaration in self.capacity.recipe["managed_patches"] if declaration["repository"] == name
+                                 for item in declaration["files"]})
+
+    def test_correct_stamp_on_raw_sdk_is_rejected(self):
+        self.capacity.stamp.write_bytes((self.capacity.product / "sdk-lock.json").read_bytes())
+        self.capacity.stamp.chmod(0o400)
+        self.reject("精确派生摘要")
+
+    def test_partial_patch_without_stamp_rejects_before_prepare_mutation(self):
+        file = self.tracked()
+        key = "idf", self.capacity.recipe["managed_patches"][0]["files"][0]["path"]
+        file.write_bytes(self.capacity.after[key])
+        original = self.metadata()
+        before = file.read_bytes()
+        result = self.capacity.prepare()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(file.read_bytes(), before)
+        self.assertEqual(self.metadata(), original)
+        self.assertFalse(self.capacity.stamp.exists())
+
+    def test_complete_patch_missing_stamp_is_rejected(self):
+        self.apply()
+        self.capacity.stamp.unlink()
+        self.reject("缺失")
+        self.assertEqual(self.capacity.prepare().returncode, 1)
+
+    def test_one_managed_file_restored_to_before_is_rejected(self):
+        self.apply()
+        for repository in ("idf", "tlsf"):
+            declaration = next(item for item in self.capacity.recipe["managed_patches"] if item["repository"] == repository)
+            item = declaration["files"][0]
+            file = self.tracked(repository)
+            file.write_bytes(self.capacity.original[repository, item["path"]])
+            self.reject("精确派生摘要")
+            file.write_bytes(self.capacity.after[repository, item["path"]])
+
+    def test_stamp_cannot_self_authorize_changed_final_source(self):
+        self.apply()
+        self.tracked().write_text("int attacker_source;\n")
+        stamp = json.loads(self.capacity.stamp.read_bytes())
+        stamp["managed_patches"][0]["files"][0]["after_sha256"] = hashlib.sha256(self.tracked().read_bytes()).hexdigest()
+        self.capacity.stamp.chmod(0o600)
+        self.capacity.stamp.write_text(json.dumps(stamp))
+        self.capacity.stamp.chmod(0o400)
+        self.reject("canonical")
+
+    def test_before_digest_is_checked_from_actual_head_blob(self):
+        self.apply()
+        self.capacity.recipe["managed_patches"][0]["files"][0]["before_sha256"] = "0" * 64
+        self.capacity.write_recipe(stamp=True)
+        self.reject("HEAD blob")
+
+    def test_duplicate_recipe_json_field_rejected(self):
+        file = self.capacity.product / "sdk-lock.json"
+        file.write_bytes(file.read_bytes().replace(b'"schema_version": 2,', b'"schema_version": 2, "schema_version": 2,', 1))
+        self.reject("重复字段")
+
+    def test_duplicate_managed_path_rejected(self):
+        self.capacity.recipe["managed_patches"][0]["files"][1]["path"] = self.capacity.recipe["managed_patches"][0]["files"][0]["path"]
+        self.capacity.write_recipe()
+        self.reject("重复")
+
+    def test_unknown_recipe_field_rejected(self):
+        self.capacity.recipe["source_override"] = "anything"
+        self.capacity.write_recipe()
+        self.reject("未知字段")
+
+    def test_escaping_or_metadata_recipe_path_rejected(self):
+        for path in ("../outside.c", "/outside.c", "a//b.c", "a/./b.c", "a\\b.c", ".git/config"):
+            with self.subTest(path=path):
+                self.capacity.recipe["managed_patches"][0]["files"][0]["path"] = path
+                self.capacity.write_recipe()
+                self.reject("相对路径")
+
+    def test_tlsf_revision_must_equal_original_parent_gitlink(self):
+        self.capacity.recipe["tlsf"]["revision"] = "0" * 40
+        self.capacity.write_recipe()
+        self.reject("原生 gitlink")
+
+    def test_managed_executable_and_symlink_types_rejected(self):
+        self.apply()
+        file = self.tracked()
+        file.chmod(0o755)
+        self.reject("文件类型或执行位")
+        file.chmod(0o644)
+        outside = self.root / "same-bytes.c"
+        outside.write_bytes(file.read_bytes())
+        file.unlink(); file.symlink_to(outside)
+        self.reject("文件类型或执行位")
+
+    def test_managed_parent_symlink_rejected(self):
+        self.apply()
+        parent = self.tracked().parent
+        moved = self.root / "moved-source"
+        parent.rename(moved)
+        parent.symlink_to(moved, target_is_directory=True)
+        self.reject("父目录类型")
+
+    def test_root_and_tlsf_managed_index_changes_rejected(self):
+        self.apply()
+        for repository in (self.capacity.sdk, self.capacity.tlsf):
+            with self.subTest(repository=repository):
+                file = self.tracked("idf" if repository == self.capacity.sdk else "tlsf")
+                self.capacity.git(repository, "add", "--", file.relative_to(repository).as_posix())
+                self.reject("索引")
+                self.capacity.git(repository, "reset", "-q", "HEAD", "--", file.relative_to(repository).as_posix())
+
+    def test_unknown_ignored_source_in_all_actual_roots_rejected(self):
+        self.apply()
+        for repository in (self.capacity.sdk, self.capacity.tlsf, self.capacity.extra):
+            with self.subTest(repository=repository):
+                metadata = Path(self.capacity.git(repository, "rev-parse", "--absolute-git-dir"))
+                (metadata / "info/exclude").write_text("unknown.c\n")
+                file = repository / "unknown.c"
+                file.write_text("int hidden_source;\n")
+                self.reject("ignored")
+                file.unlink()
+
+    def test_same_stamp_name_in_child_source_has_no_exemption(self):
+        self.apply()
+        child = self.capacity.tlsf / self.capacity.stamp.name
+        child.write_bytes(self.capacity.stamp.read_bytes())
+        child.chmod(0o400)
+        self.reject("ignored")
+
+    def test_stamp_directory_symlink_fifo_and_writable_mode_rejected(self):
+        self.apply()
+        stamp = self.capacity.stamp
+        raw = stamp.read_bytes()
+        stamp.chmod(0o600)
+        self.reject("权限")
+        stamp.unlink(); stamp.mkdir()
+        self.reject("普通文件")
+        stamp.rmdir()
+        other = self.root / "same-stamp.json"
+        other.write_bytes(raw)
+        stamp.symlink_to(other)
+        self.reject("普通文件")
+        stamp.unlink(); os.mkfifo(stamp, 0o400)
+        self.reject("普通文件")
+
+    def test_partial_and_sparse_child_not_hidden_by_valid_derivation(self):
+        self.apply()
+        self.capacity.git(self.capacity.tlsf, "config", "remote.origin.promisor", "true")
+        self.reject("partial")
+        self.capacity.git(self.capacity.tlsf, "config", "remote.origin.promisor", "false")
+        self.capacity.git(self.capacity.extra, "config", "core.sparseCheckout", "true")
+        self.reject("sparse")
+
+    def test_corrupt_dangling_object_not_hidden_by_valid_derivation(self):
+        self.apply()
+        repo = self.capacity.tlsf
+        payload = b"unreferenced original capacity object;\n"
+        result = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"], input=payload,
+                                check=True, capture_output=True, env=self.capacity.environment)
+        blob = result.stdout.decode().strip()
+        metadata = Path(self.capacity.git(repo, "rev-parse", "--absolute-git-dir"))
+        file = metadata / "objects" / blob[:2] / blob[2:]
+        self.assertTrue(file.is_file())
+        file.chmod(0o600)
+        evil = b"attacker dangling object;\n"
+        file.write_bytes(zlib.compress(b"blob " + str(len(evil)).encode() + b"\0" + evil))
+        self.capacity.git(repo, "fsck", "--connectivity-only", "--no-dangling")
+        self.reject("原始字节与 OID")
+
+    def change_during_full_proof(self, target):
+        self.apply()
+        executable = shutil.which("git")
+        wrapper = self.root / "git-observer"
+        wrapper.mkdir()
+        ready, release = self.root / "proof-ready", self.root / "proof-release"
+        script = wrapper / "git"
+        script.write_text("#!/usr/bin/env python3\nimport os,sys,time\nfrom pathlib import Path\n"
+                          f"ready=Path({str(ready)!r});release=Path({str(release)!r})\n"
+                          "if '--batch-all-objects' in sys.argv and not ready.exists():\n"
+                          " ready.write_text('actual Git proof paused')\n"
+                          " deadline=time.monotonic()+10\n"
+                          " while not release.exists():\n"
+                          "  if time.monotonic()>deadline: raise SystemExit(91)\n"
+                          "  time.sleep(0.01)\n"
+                          f"os.execv({executable!r},[{executable!r},*sys.argv[1:]])\n")
+        script.chmod(0o755)
+        environment = {**self.capacity.environment, "PATH": str(wrapper) + os.pathsep + os.environ["PATH"]}
+        process = subprocess.Popen([sys.executable, str(self.capacity.product / "tools/check_sdk.py"),
+                                    "--path", str(self.capacity.sdk)], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, env=environment)
+        try:
+            import time
+            deadline = time.monotonic() + 10
+            while not ready.exists():
+                self.assertIsNone(process.poll(), "生产 checker 尚未完成实际 Git 深来源读取")
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            file = self.capacity.stamp if target == "stamp" else self.capacity.product / "sdk-lock.json"
+            raw = file.read_bytes()
+            file.chmod(0o600)
+            file.write_bytes(raw + b"\n")
+            if target == "stamp": file.chmod(0o400)
+            release.write_text("continue actual Git")
+            stdout, stderr = process.communicate(timeout=20)
+            self.assertEqual(process.returncode, 1, stdout + stderr)
+            self.assertIn("检查期间改变", stderr)
+        finally:
+            release.write_text("finish")
+            if process.poll() is None:
+                process.terminate()
+                process.communicate(timeout=10)
+
+    def test_stamp_change_during_real_deep_object_proof_rejected(self):
+        self.change_during_full_proof("stamp")
+
+    def test_local_recipe_change_during_real_deep_object_proof_rejected(self):
+        self.change_during_full_proof("recipe")
 
 if __name__ == "__main__":
     unittest.main()

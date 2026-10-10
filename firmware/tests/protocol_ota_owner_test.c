@@ -11,6 +11,11 @@ static void protocol_test_free(void *data);
 #include "../components/device_protocol/esp_base_protocol.c"
 #undef free
 
+void esp_base_capacity_poll(const char *boot_id, uint64_t now_ms)
+{ (void)boot_id; (void)now_ms; }
+void esp_base_capacity_before_reset(const char *boot_id, uint64_t now_ms)
+{ (void)boot_id; (void)now_ms; }
+
 static unsigned ota_request_releases;
 static void *last_decoded_ota_request;
 

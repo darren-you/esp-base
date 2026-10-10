@@ -4,12 +4,18 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPONENTS_DIR="${ESP_BASE_TEST_COMPONENTS_DIR:-$ROOT/managed_components}"
 EOTA_DIR="${ESP_BASE_TEST_OTA_DIR:-$COMPONENTS_DIR/esp_ota}"
 case "${ESP_BASE_TEST_TARGET:-esp32c3}" in
-  esp32c3) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32C3 ;;
-  esp32) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32 ;;
+  esp32c3) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32C3 ; OTA_TEST_CHIP_ID=5 ;;
+  esp32) TARGET_DEFINE=CONFIG_IDF_TARGET_ESP32 ; OTA_TEST_CHIP_ID=0 ;;
   *) printf 'esp-base host tests\n  error  ESP_BASE_TEST_TARGET must be esp32c3 or esp32.\n' >&2; exit 2 ;;
 esac
 BUILD_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$BUILD_DIR"' EXIT
+CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}')"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -DCONFIG_HEAP_POISONING_DISABLED=1 -DESP_BASE_CAPACITY_SDK_LOCK_SHA256=\""$CAPACITY_LOCK_SHA256"\" \
+  -I "$ROOT/tests/fakes/capacity" -I "$ROOT/components/device_protocol/include" \
+  "$ROOT/tests/producer_capacity_test.c" -o "$BUILD_DIR/producer_capacity_test"
+"$BUILD_DIR/producer_capacity_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/components/device_protocol/include" \
   "$ROOT/components/device_protocol/command_guard.c" \
@@ -114,6 +120,14 @@ if [[ "$(uname -s)" == Darwin ]]; then
 else
   PROTOCOL_LINK_GC=(-Wl,--gc-sections)
 fi
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -DEOTA_TEST_CHIP_ID="$OTA_TEST_CHIP_ID" \
+  -pthread -Wall -Wextra -Werror -Wno-unused-function \
+  -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
+  -I "$EOTA_DIR" -I "$EOTA_DIR/include" -I "$EOTA_DIR/src" \
+  -I "$ROOT/tests/frps-ota-interop/fakes" -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" \
+  -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
+  "$ROOT/tests/frp_ota_stream_budget_test.c" -o "$BUILD_DIR/frp_ota_stream_budget_test"
+"$BUILD_DIR/frp_ota_stream_budget_test"
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
