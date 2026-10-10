@@ -8,7 +8,7 @@ typedef struct {
     UBaseType_t worst_completed_instance;
     char worst_completed_name[configMAX_TASK_NAME_LEN];
     BaseType_t counters_valid;
-} TaskCapacityStats_t;
+} freertos_task_capacity_stats_t;
 void vTaskSuspendAll(void);
 BaseType_t xTaskResumeAll(void);
-UBaseType_t uxTaskGetCapacitySnapshot(TaskStatus_t*,UBaseType_t,TaskCapacityStats_t*);
+UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t*,UBaseType_t,freertos_task_capacity_stats_t*);

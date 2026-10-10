@@ -18,17 +18,17 @@
     {
       "repository": "idf",
       "path": "tools/sdk-patches/capacity-idf.patch",
-      "sha256": "6cd818d1d50d6efcd27087baadb439aa569a23b707989ecc00f70d57b86fcef1",
+      "sha256": "bd84a200cf235f35241315b41eef9b3064294a16d29edb6ee39192dafc3e7bab",
       "files": [
         {
           "path": "components/freertos/FreeRTOS-Kernel/include/freertos/task.h",
           "before_sha256": "34fa5db62cfcb5b0007d3a3b79eabd4217554f8f8201f7f43dac68592fe0fb04",
-          "after_sha256": "9f4cfec4b70bd069b960ff2608825e913fc94b8e73a1a54f5a6f5f6fea259fe4"
+          "after_sha256": "7ea65a700bd1368a30fae3c4834c1d3891561adca2f1f01a2f04fdcf8bb7c10f"
         },
         {
           "path": "components/freertos/FreeRTOS-Kernel/tasks.c",
           "before_sha256": "193c3d8379acc847097632da8e6d4dd2ee0bf8e069d78979d68dd26b653d48df",
-          "after_sha256": "4b9c8f9bb5bf950b2f7963f74733c3f1c1a6067e2e44f62f91ca5ee63ae49019"
+          "after_sha256": "0c3a1c2020968b25757ab0dc289750d2d4ffc27b208c2fbb79a1f832ae1ab414"
         },
         {
           "path": "components/heap/heap_caps.c",

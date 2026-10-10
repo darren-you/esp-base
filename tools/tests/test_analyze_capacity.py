@@ -215,6 +215,18 @@ class AnalyzeCapacityTest(unittest.TestCase):
             bad[kind][index][key] = value
             self.reject(render(fixture()) + render(bad))
 
+    def test_same_named_new_instances_and_final_capture_close_without_reusing_identity(self):
+        later = fixture(2, 5010, stack_min=1100)
+        later["TASK"][0]["instance"] = 2
+        later["TASK"][1]["instance"] = 5
+        later["END"][0].update(created_instances=4, finalized_instances=2, worst_completed_instance=1)
+        self.assertTrue(self.read(render(fixture()) + render(later))["numeric_gates_passed"])
+        reused = fixture(3, 10010, stack_min=1000)
+        reused["TASK"][0]["instance"] = 2
+        reused["TASK"][1]["instance"] = 1
+        reused["END"][0].update(created_instances=5, finalized_instances=3, worst_completed_instance=6)
+        self.reject(render(fixture()) + render(later) + render(reused))
+
     def test_region_disappearance_and_late_birth_claims_reject(self):
         bad = fixture(2, 5010)
         bad["REGION"].pop(1)  # 晚出生不贡献下界，域数值不变，也仍必须完整报告。

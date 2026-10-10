@@ -15,11 +15,11 @@ static bool begin_seen;
 static heap_capacity_region_stats_t regions[8];
 static size_t region_count;
 static UBaseType_t live_count;
-static TaskCapacityStats_t task_facts;
+static freertos_task_capacity_stats_t task_facts;
 static char *live_names[32];
 static UBaseType_t live_hwm[32];
 
-int esp_rom_printf(const char *format, ...)
+int printf(const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
@@ -49,7 +49,7 @@ BaseType_t xTaskResumeAll(void)
     }
     return 0;
 }
-UBaseType_t uxTaskGetCapacitySnapshot(TaskStatus_t *tasks, UBaseType_t limit, TaskCapacityStats_t *stats)
+UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t *tasks, UBaseType_t limit, freertos_task_capacity_stats_t *stats)
 {
     assert(begin_seen && suspend_depth == 1);
     ++snapshots;
@@ -76,7 +76,7 @@ static void reset_case(void)
     begin_seen = false;
     walks = snapshots = 0;
     region_count = live_count = 0;
-    task_facts = (TaskCapacityStats_t){.completed_minimum=UINT32_MAX, .counters_valid=1};
+    task_facts = (freertos_task_capacity_stats_t){.completed_minimum=UINT32_MAX, .counters_valid=1};
     memset(live_hwm, 0, sizeof live_hwm);
     for (unsigned i = 0; i < 32; ++i) assert(live_names[i] == NULL);
 }

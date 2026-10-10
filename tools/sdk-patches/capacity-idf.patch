@@ -15,11 +15,11 @@
 +    UBaseType_t worst_completed_instance;
 +    char worst_completed_name[configMAX_TASK_NAME_LEN];
 +    BaseType_t counters_valid;
-+} TaskCapacityStats_t;
++} freertos_task_capacity_stats_t;
 +
 +/* Caller supplies fixed storage. Zero with incomplete coverage must not grant qualification. */
-+UBaseType_t uxTaskGetCapacitySnapshot(TaskStatus_t *tasks, UBaseType_t task_limit,
-+                                     TaskCapacityStats_t *stats) PRIVILEGED_FUNCTION;
++UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t *tasks, UBaseType_t task_limit,
++                                     freertos_task_capacity_stats_t *stats) PRIVILEGED_FUNCTION;
 +
  /** @endcond */
  
@@ -32,7 +32,7 @@
  PRIVILEGED_DATA static UBaseType_t uxTaskNumber = ( UBaseType_t ) 0U;
 +
 +#if ( configUSE_TRACE_FACILITY == 1 )
-+    PRIVILEGED_DATA static TaskCapacityStats_t xCapacityStats = {
++    PRIVILEGED_DATA static freertos_task_capacity_stats_t s_freertos_task_capacity_stats = {
 +        .completed_minimum = (UBaseType_t)~0U,
 +        .counters_valid = pdTRUE,
 +    };
@@ -44,10 +44,10 @@
          {
              /* Add a counter into the TCB for tracing only. */
              pxNewTCB->uxTCBNumber = uxTaskNumber;
-+            if (uxTaskNumber == 0U || xCapacityStats.created_instances == (UBaseType_t)~0U) {
-+                xCapacityStats.counters_valid = pdFALSE;
++            if (uxTaskNumber == 0U || s_freertos_task_capacity_stats.created_instances == (UBaseType_t)~0U) {
++                s_freertos_task_capacity_stats.counters_valid = pdFALSE;
 +            } else {
-+                ++xCapacityStats.created_instances;
++                ++s_freertos_task_capacity_stats.created_instances;
 +            }
          }
          #endif /* configUSE_TRACE_FACILITY */
@@ -57,7 +57,7 @@
               * not return. */
              uxTaskNumber++;
 +            #if ( configUSE_TRACE_FACILITY == 1 )
-+                if (uxTaskNumber == 0U) xCapacityStats.counters_valid = pdFALSE;
++                if (uxTaskNumber == 0U) s_freertos_task_capacity_stats.counters_valid = pdFALSE;
 +            #endif
  
              /* Check if the task is deleting itself, or is currently running on
@@ -67,14 +67,14 @@
  
  #if ( configUSE_TRACE_FACILITY == 1 )
 +
-+    UBaseType_t uxTaskGetCapacitySnapshot(TaskStatus_t *tasks, UBaseType_t task_limit,
-+                                          TaskCapacityStats_t *stats)
++    UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t *tasks, UBaseType_t task_limit,
++                                          freertos_task_capacity_stats_t *stats)
 +    {
 +        /* Managed builds reject SMP. Nested suspend keeps the official enumeration and counters together. */
 +        vTaskSuspendAll();
 +        const UBaseType_t count = uxTaskGetSystemState(tasks, task_limit, NULL);
 +        taskENTER_CRITICAL(&xKernelLock);
-+        *stats = xCapacityStats;
++        *stats = s_freertos_task_capacity_stats;
 +        taskEXIT_CRITICAL(&xKernelLock);
 +        (void)xTaskResumeAll();
 +        return count;
@@ -97,15 +97,15 @@
 +            const UBaseType_t minimum = (UBaseType_t)prvTaskCheckFreeStackSpace(stack_end);
 +            taskENTER_CRITICAL(&xKernelLock);
 +            {
-+                if (xCapacityStats.finalized_instances == (UBaseType_t)~0U) {
-+                    xCapacityStats.counters_valid = pdFALSE;
++                if (s_freertos_task_capacity_stats.finalized_instances == (UBaseType_t)~0U) {
++                    s_freertos_task_capacity_stats.counters_valid = pdFALSE;
 +                } else {
-+                    ++xCapacityStats.finalized_instances;
++                    ++s_freertos_task_capacity_stats.finalized_instances;
 +                }
-+                if (minimum < xCapacityStats.completed_minimum) {
-+                    xCapacityStats.completed_minimum = minimum;
-+                    xCapacityStats.worst_completed_instance = pxTCB->uxTCBNumber;
-+                    memcpy(xCapacityStats.worst_completed_name, pxTCB->pcTaskName, configMAX_TASK_NAME_LEN);
++                if (minimum < s_freertos_task_capacity_stats.completed_minimum) {
++                    s_freertos_task_capacity_stats.completed_minimum = minimum;
++                    s_freertos_task_capacity_stats.worst_completed_instance = pxTCB->uxTCBNumber;
++                    memcpy(s_freertos_task_capacity_stats.worst_completed_name, pxTCB->pcTaskName, configMAX_TASK_NAME_LEN);
 +                }
 +            }
 +            taskEXIT_CRITICAL(&xKernelLock);

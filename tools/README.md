@@ -84,6 +84,17 @@ python3 tools/test_sdk_capacity.py --idf-path /absolute/managed-sdk
 
 前者先实际核对 SDK，再以隔离夹具验证拒绝边界；后者直接编译受管 SDK 的 TLSF 和实际任务最终采集片段，包含 100000 次碎片化操作、逐稳定状态 walk oracle 与移动 realloc 共存反例。host 及 sanitizer 结果不替代 MCU、正式签名或双板容量验收。
 
+正式诊断使用既有 stdout／VFS，沿用已配置的 USB Serial/JTAG／UART no-driver 路径；不直接使用缺少源码超时保证且不支持 long long 的 ROM formatter。C3 VFS 在无连接时返回 EIO，FIFO 无 host 读取时按最后成功输出起 50 ms 后丢字节；完整帧仍须由原始日志确认。UART 按实际字符数和 115200／8N1 计线路费用，不等待 host ACK；SDK FIFO轮询、stdio锁、USB慢读和 MCU 调度成本仍须实测，不以线路预算冒充最坏时延。丢帧或丢尾不得补成覆盖。
+
+```bash
+python3 tools/analyze_capacity.py --target esp32 \
+  --boot-id <本轮bootUUID> --sdk-lock-sha256 <冻结sdk-lock文件SHA256> \
+  --uart-log /absolute/private/raw-uart.log --json
+python3 -m unittest discover -s tools/tests -p 'test_analyze_capacity.py' -v
+```
+
+解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。19 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+
 ## 一次性有线迁入与历史输入
 
 `preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，按 NVS 前三页和 `at_customize` 前两页生成 20 KiB 原字节归档；两分区余尾必须全 FF，并逐字节重建完整原分区，不解码或打印凭据。ESP32 候选将其放入只读 `at_old_raw@0x3e5000/0x5000`。旧 `esp32_product` 的四页输入仅在一次性离线准备时补入第三 NVS 的 FF 页，运行时只消费当前五页布局。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native_software_checkpoint.md)。
@@ -100,20 +111,7 @@ python3 tools/test_sdk_capacity.py --idf-path /absolute/managed-sdk
 
 `capacity_observation.py` 从实验UART读取顺序周期堆／完整任务快照／退出记录，保持16384／24576／1024 B门；必须匹配真实观察器的完整启动声明、明确 target、唯一启动及非递减 uptime。缺失、错目标、重复启动、uptime 回退、损坏或不完整数据不通过，跨文件也不合并不同启动轮。原日志只读并保存摘要。它不是瞬时峰值或完整native生命周期资格，观察器成本不加回。
 
-`prepare_capacity_observer.py` 仅在仓外、0700、无 Git 或链接的独立源码副本加入观察器。必须提供本轮软件收据和所有冻结源根；副本的原生产输入逐项与 canonical／收据核对，重复实验、错误 target、旧 anchor 和不稳定输入拒绝。实验使用既有控制 pass 每5秒枚举最多32个真实任务；锁定 SDK 的官方 task pre-deletion hook 在正常清理前复制任务名、编号与最低栈，启动早期、FRP、MQTT、SDK任务都按实际 RTOS 清理记录。64条退出缓存不新增任务／队列／堆申请，每次 control pass 最多输出64条；溢出标记使本轮解析失格，另保留OTA worker完成前记录。
-
-构建须显式启用 `ESP_BASE_CAPACITY_OBSERVER_LAB=ON`，加载生成的 `capacity_observer_lab.defaults` 中 trace／pre-deletion hook，使用锁定单核非SMP的独立 sdkconfig／build。版本和收据标记 `0.2.0-capacity-lab`／`LAB_ONLY`，没有生产发布资格；正式发布门尚未接入，不能仅靠标记声称平台已经拒绝该制品。异常重启／panic／尚未清理任务、日志丢失、非任务栈、其他内存能力域及瞬时峰值仍缺资格，不能把实验读数移给已冻结生产镜像。5秒采样的 largest 不能证明全程最低连续块；锁定 SDK 的 heap hooks 不提供安全、完整的全域重建依据，本工具不在 allocator／ISR 中遍历 heap。
-
-```bash
-python3 tools/prepare_capacity_observer.py \
-  --source-root /private/path/esp32c3/base --target esp32c3 \
-  --baseline-receipt /absolute/private/native_software_20261006/receipt.json \
-  --frozen-source-root /absolute/private/frozen-build-root \
-  --frozen-source-root /absolute/private/native_software_20261006
-python3 tools/capacity_observation.py --target esp32c3 --uart-log /absolute/private/uart.log --json
-```
-
-两个目标分别复制、生成和构建。只在该私有副本中移除第三方 `.git` 元数据；不能改 canonical、SDK 或冻结归档。解析器不跨日志拼接残缺任务帧，也不合并多个 boot 获得长稳资格。
+旧 `prepare_capacity_observer.py` 及 `LAB_ONLY` 5 秒观察仅解释已冻结历史副本；当前正式源码拒绝 `ESP_BASE_CAPACITY_OBSERVER_LAB`，不要从活动 canonical 再生成该副本。`capacity_observation.py` 可离线解析旧日志，始终不授完整峰值或生产资格。旧 pre-deletion／存活采样、64 条退出缓存、日志丢失及异常重启的边界仍保留，不能把旧数值移给正式统计新候选。原件不改写，也不跨日志或 boot 拼接。
 
 `mqtt_lab_check.py`／`mqtt_resource_report.py` 继续用于独立MQTT实验的严格TLS、往返、计数／栈和回收。实验输入必须位于仓外，不混入普通Base，独立实验不替代本轮FRP／MQTT／原生业务／OTA同存验收。
 

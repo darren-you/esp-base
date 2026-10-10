@@ -183,11 +183,27 @@ def _check_history(previous: dict, current: dict, seen: dict[int, dict], retired
             raise ValueError("已退出实例重新出现或同实例名称／最低栈改变")
 
 
+def _summary(frame: dict) -> dict:
+    domain = next(row for row in frame["domains"] if row["caps"] == INTERNAL_8BIT)
+    return {"frame": frame["begin"]["frame"], "phase": frame["begin"]["phase"],
+            "proved_until_begin_uptime_ms": frame["begin"]["uptime_ms"],
+            "regions": len(frame["regions"]), "allocated_tasks": len(frame["tasks"]),
+            "created_instances": frame["end"]["created_instances"],
+            "finalized_instances": frame["end"]["finalized_instances"],
+            "minimum_free_lower_bound_bytes": domain["minimum_free_lower_bound_bytes"],
+            "largest_request_lower_bound_bytes": domain["largest_request_lower_bound_bytes"],
+            "minimum_stack_bytes": frame["end"]["minimum_stack_bytes"],
+            "domains": [{key: row[key] for key in ("caps", "alignment_bytes",
+                         "minimum_free_lower_bound_bytes", "largest_request_lower_bound_bytes")}
+                        for row in frame["domains"]]}
+
+
 def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) -> dict:
     """输入是同一 boot 的完整原始 UART 帧；不跨文件拼残帧。"""
     if target not in ("esp32", "esp32c3") or UUID.fullmatch(boot_id) is None or HASH.fullmatch(sdk_lock_sha256) is None or not paths:
         raise ValueError("须提供明确 target、规范 boot UUID、冻结 SDK lock 摘要及原日志")
     frames, inputs, seen, retired = [], [], {}, set()
+    previous = None  # 72 小时日志不驻留全部原始 REGION／TASK 帧。
     for path in paths:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(fd, "rb") as stream:
@@ -223,12 +239,13 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
                             continue
                         frame["end"] = row
                         _finish(frame)
-                        if frames:
-                            _check_history(frames[-1], frame, seen, retired)
+                        if previous is not None:
+                            _check_history(previous, frame, seen, retired)
                         seen.update({task["instance"]: task for task in frame["tasks"]})
                         if row["finalized_instances"]:
                             retired.add(row["worst_completed_instance"])
-                        frames.append(frame)
+                        frames.append(_summary(frame))
+                        previous = frame
                         frame, stage = None, None
                 except ValueError as error:
                     raise ValueError(f"日志 {len(inputs) + 1} 第 {line_number} 行：{error}") from error
@@ -240,24 +257,12 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
             inputs.append({"sha256": digest.hexdigest(), "size_bytes": size})
     if not frames:
         raise ValueError("没有完整正式容量帧")
-    summaries = []
-    for frame in frames:
-        domain = next(row for row in frame["domains"] if row["caps"] == INTERNAL_8BIT)
-        summaries.append({"frame": frame["begin"]["frame"], "phase": frame["begin"]["phase"],
-                          "proved_until_begin_uptime_ms": frame["begin"]["uptime_ms"],
-                          "regions": len(frame["regions"]), "allocated_tasks": len(frame["tasks"]),
-                          "created_instances": frame["end"]["created_instances"],
-                          "finalized_instances": frame["end"]["finalized_instances"],
-                          "minimum_free_lower_bound_bytes": domain["minimum_free_lower_bound_bytes"],
-                          "largest_request_lower_bound_bytes": domain["largest_request_lower_bound_bytes"],
-                          "minimum_stack_bytes": frame["end"]["minimum_stack_bytes"],
-                          "domains": frame["domains"]})
-    last = summaries[-1]
+    last = frames[-1]
     gates = {"heap_gate_passed": last["minimum_free_lower_bound_bytes"] >= HEAP_GATE_BYTES,
              "largest_gate_passed": last["largest_request_lower_bound_bytes"] >= LARGEST_GATE_BYTES,
              "stack_gate_passed": last["minimum_stack_bytes"] >= STACK_GATE_BYTES}
     return {"schema_version": 1, "valid": True, "target": target, "boot_id": boot_id,
-            "sdk_lock_sha256": sdk_lock_sha256, "frames": summaries, "inputs": inputs,
+            "sdk_lock_sha256": sdk_lock_sha256, "frames": frames, "inputs": inputs,
             "proved_until_begin_uptime_ms": last["proved_until_begin_uptime_ms"],
             "history_start": "heap_initialization_complete_and_task_instance_creation",
             "metrics_source": "continuous_sdk_statistics_read_by_complete_frames",

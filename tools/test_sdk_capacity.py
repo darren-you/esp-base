@@ -17,21 +17,21 @@ src = args.idf_path / 'components/freertos/FreeRTOS-Kernel'
 tasks = (src / 'tasks.c').read_text()
 header = (src / 'include/freertos/task.h').read_text()
 
-def function(anchor):
-    start = tasks.index(anchor)
-    pos = tasks.index('{', start)
+def function(anchor, source=tasks):
+    start = source.index(anchor)
+    pos = source.index('{', start)
     level = 1
     pos += 1
     while level:
-        if tasks.startswith('/*', pos):
-            pos = tasks.index('*/', pos + 2) + 2
+        if source.startswith('/*', pos):
+            pos = source.index('*/', pos + 2) + 2
             continue
-        if tasks[pos] == '{': level += 1
-        elif tasks[pos] == '}': level -= 1
+        if source[pos] == '{': level += 1
+        elif source[pos] == '}': level -= 1
         pos += 1
-    return tasks[start:pos]
+    return source[start:pos]
 
-struct = re.search(r'typedef struct \{\n    UBaseType_t created_instances;.*?\} TaskCapacityStats_t;', header, re.S).group()
+struct = re.search(r'typedef struct \{\n    UBaseType_t created_instances;.*?\} freertos_task_capacity_stats_t;', header, re.S).group()
 create_begin = tasks.index('            pxNewTCB->uxTCBNumber = uxTaskNumber;')
 create_end = tasks.index('        }\n        #endif /* configUSE_TRACE_FACILITY */', create_begin)
 create_body = tasks[create_begin:create_end]
@@ -93,10 +93,10 @@ static UBaseType_t uxTaskGetSystemState(TaskStatus_t *tasks, UBaseType_t limit, 
 }
 '''
 middle = r'''
-static TaskCapacityStats_t xCapacityStats = {.completed_minimum=UINT32_MAX,.counters_valid=pdTRUE};
+static freertos_task_capacity_stats_t s_freertos_task_capacity_stats = {.completed_minimum=UINT32_MAX,.counters_valid=pdTRUE};
 static void cleanup(TCB_t *tcb)
 {
-    assert(xCapacityStats.finalized_instances == cleanup_calls+1);
+    assert(s_freertos_task_capacity_stats.finalized_instances == cleanup_calls+1);
     ++cleanup_calls;
     memset(tcb->pxStack, 0, 128);
 }
@@ -122,59 +122,59 @@ int main(void)
         created(&instances[i]);
         assert(instances[i].uxTCBNumber==i+1);
     }
-    assert(xCapacityStats.created_instances==3);
+    assert(s_freertos_task_capacity_stats.created_instances==3);
     /* Early trace-delete could see 120 free bytes. The real stopped context uses another 24. */
     stacks[0][96]=0;
     prvDeleteTCB(&instances[0]);
-    assert(xCapacityStats.completed_minimum*sizeof(StackType_t)==96);
-    assert(xCapacityStats.worst_completed_instance==1);
+    assert(s_freertos_task_capacity_stats.completed_minimum*sizeof(StackType_t)==96);
+    assert(s_freertos_task_capacity_stats.worst_completed_instance==1);
     assert(stack_free_calls==1 && tcb_free_calls==1);
     stacks[1][32]=0;
     prvDeleteTCB(&instances[1]);
-    assert(xCapacityStats.completed_minimum*sizeof(StackType_t)==32);
-    assert(xCapacityStats.worst_completed_instance==2);
-    assert(xCapacityStats.finalized_instances==2);
+    assert(s_freertos_task_capacity_stats.completed_minimum*sizeof(StackType_t)==32);
+    assert(s_freertos_task_capacity_stats.worst_completed_instance==2);
+    assert(s_freertos_task_capacity_stats.finalized_instances==2);
     assert(stack_free_calls==1 && tcb_free_calls==2);
     /* Static TCB+stack still needs final capture even though neither is freed. */
     stacks[2][64]=0;
     prvDeleteTCB(&instances[2]);
-    assert(xCapacityStats.finalized_instances==3 && cleanup_calls==3);
+    assert(s_freertos_task_capacity_stats.finalized_instances==3 && cleanup_calls==3);
     assert(stack_free_calls==1 && tcb_free_calls==2);
-    assert(xCapacityStats.completed_minimum*sizeof(StackType_t)==32);
-    assert(strcmp(xCapacityStats.worst_completed_name,"same_worker")==0);
-    TaskCapacityStats_t stats;
+    assert(s_freertos_task_capacity_stats.completed_minimum*sizeof(StackType_t)==32);
+    assert(strcmp(s_freertos_task_capacity_stats.worst_completed_name,"same_worker")==0);
+    freertos_task_capacity_stats_t stats;
     TaskStatus_t live[4];
     fake_live_count=0;
-    assert(uxTaskGetCapacitySnapshot(live,4,&stats)==0);
+    assert(freertos_task_get_capacity_snapshot(live,4,&stats)==0);
     assert(stats.created_instances==3 && stats.finalized_instances==3 && stats.counters_valid);
     /* Removed-from-list but not finalized is a transient incomplete snapshot, not lost evidence. */
-    stats=xCapacityStats;
-    ++xCapacityStats.created_instances;
+    stats=s_freertos_task_capacity_stats;
+    ++s_freertos_task_capacity_stats.created_instances;
     fake_live_count=0;
-    uxTaskGetCapacitySnapshot(live,4,&stats);
+    freertos_task_get_capacity_snapshot(live,4,&stats);
     assert(stats.created_instances-stats.finalized_instances != fake_live_count);
     assert(stats.counters_valid);
     fake_live_count=1;
-    uxTaskGetCapacitySnapshot(live,4,&stats);
+    freertos_task_get_capacity_snapshot(live,4,&stats);
     assert(stats.created_instances-stats.finalized_instances==fake_live_count);
-    assert(uxTaskGetCapacitySnapshot(live,0,&stats)==0);
+    assert(freertos_task_get_capacity_snapshot(live,0,&stats)==0);
     assert(critical_depth==0 && suspend_depth==0);
-    xCapacityStats.created_instances=UINT32_MAX;
+    s_freertos_task_capacity_stats.created_instances=UINT32_MAX;
     created(&instances[0]);
-    assert(!xCapacityStats.counters_valid && xCapacityStats.created_instances==UINT32_MAX);
-    xCapacityStats.counters_valid=pdTRUE;
+    assert(!s_freertos_task_capacity_stats.counters_valid && s_freertos_task_capacity_stats.created_instances==UINT32_MAX);
+    s_freertos_task_capacity_stats.counters_valid=pdTRUE;
     uxTaskNumber=UINT32_MAX;
-    xCapacityStats.created_instances=4;
+    s_freertos_task_capacity_stats.created_instances=4;
     created(&instances[0]);
-    assert(!xCapacityStats.counters_valid && xCapacityStats.created_instances==4);
-    printf("task-final coverage passed; StackType_t bytes=%zu; SDK summary bytes=%zu\n", sizeof(StackType_t),sizeof(TaskCapacityStats_t));
+    assert(!s_freertos_task_capacity_stats.counters_valid && s_freertos_task_capacity_stats.created_instances==4);
+    printf("task-final coverage passed; StackType_t bytes=%zu; SDK summary bytes=%zu\n", sizeof(StackType_t),sizeof(freertos_task_capacity_stats_t));
     return 0;
 }
 '''
 source = (prefix + struct + middle + create_body + '\n}\n' +
           function('    static configSTACK_DEPTH_TYPE prvTaskCheckFreeStackSpace( const uint8_t * pucStackByte )\n    {') + '\n' +
           function('    static void prvDeleteTCB( TCB_t * pxTCB )\n    {') + '\n' +
-          function('    UBaseType_t uxTaskGetCapacitySnapshot(TaskStatus_t *tasks, UBaseType_t task_limit,') + '\n' + tests.removeprefix('\n}\n'))
+          function('    UBaseType_t freertos_task_get_capacity_snapshot(TaskStatus_t *tasks, UBaseType_t task_limit,') + '\n' + tests.removeprefix('\n}\n'))
 workspace = tempfile.TemporaryDirectory(prefix='esp-base-sdk-capacity-')
 work = Path(workspace.name)
 out = work / 'task_capacity_extracted_test.c'
@@ -193,4 +193,48 @@ subprocess.run([os.environ.get('CC','cc'), '-std=c11','-Wall','-Wextra','-Werror
                 str(args.idf_path/'components/heap/tlsf/tlsf.c'),
                 str(root/'firmware/tests/allocator_capacity_test.c'),'-o',str(allocator)],check=True)
 subprocess.run([str(allocator)],check=True)
+usb_vfs = (args.idf_path / 'components/esp_driver_usb_serial_jtag/src/usb_serial_jtag_vfs.c').read_text()
+usb_anchor = 'static void usb_serial_jtag_tx_char_no_driver(int fd, int c)\n{'
+usb_function = function(usb_anchor, usb_vfs)
+assert '#define TX_FLUSH_TIMEOUT_US (50*1000LL)' in usb_vfs
+usb_test = work / 'usb_console_timeout_test.c'
+usb_test.write_text(r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#define TX_FLUSH_TIMEOUT_US (50*1000LL)
+typedef void (*tx_func_t)(int,int);
+static struct { int64_t last_tx_ts; int write_lock, tx_mode; tx_func_t tx_func; } s_ctx;
+static int64_t clock_us;
+static unsigned writes, flushes, polls;
+static bool writable;
+static bool usb_serial_jtag_ll_txfifo_writable(void) { ++polls; return writable; }
+static void usb_serial_jtag_ll_write_txfifo(const uint8_t *bytes, unsigned length)
+{ (void)bytes; assert(length==1); ++writes; }
+static void usb_serial_jtag_ll_txfifo_flush(void) { ++flushes; }
+static int64_t esp_timer_get_time(void) { clock_us+=100; return clock_us; }
+''' + usb_function + r'''
+int main(void)
+{
+    usb_serial_jtag_tx_char_no_driver(0,'x');
+    assert(clock_us==50000 && polls==500 && writes==0);
+    unsigned before=polls;
+    usb_serial_jtag_tx_char_no_driver(0,'y');
+    assert(polls==before+1 && writes==0);
+    writable=true;
+    usb_serial_jtag_tx_char_no_driver(0,'\n');
+    assert(writes==1 && flushes==1 && s_ctx.last_tx_ts==clock_us);
+    writable=false;
+    before=polls;
+    usb_serial_jtag_tx_char_no_driver(0,'z');
+    assert(polls==before+500 && writes==1);
+    puts("actual SDK USB VFS no-host timeout/drop/recovery source test passed; simulated clock/HAL, no device timing qualification");
+    return 0;
+}
+''')
+usb_binary = work / 'usb-console-timeout-test'
+subprocess.run([os.environ.get('CC','cc'), '-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-parameter',
+                '-fsanitize=address,undefined',str(usb_test),'-o',str(usb_binary)],check=True)
+subprocess.run([str(usb_binary)],check=True)
 workspace.cleanup()
