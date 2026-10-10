@@ -21,8 +21,9 @@ def prepare(path: Path) -> None:
         return
     recipe, raw, identity = read_recipe()
     repositories = repository_paths(path)
-    for repository in repositories.values():
-        reject_external_content_filters(repository)
+    for declaration in recipe["managed_patches"]:
+        reject_external_content_filters(repositories[declaration["repository"]],
+                                        [item["path"] for item in declaration["files"]])
     patches = patch_inputs(recipe)
     # Git reads the two frozen verified inputs, not paths that could change after hashing.
     with tempfile.TemporaryDirectory(prefix="esp-base-capacity-patches-") as directory:

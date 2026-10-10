@@ -993,6 +993,98 @@ class CapacityDerivationTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(marker.exists(), "来源检查不得执行 fsmonitor")
 
+    def test_prepare_allows_unselected_native_lfs_drivers(self):
+        for scope in ("system", "global", "command"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as directory:
+                capacity = CapacityFixture(Path(directory))
+                configuration = Path(directory) / "registered-lfs"
+                pairs = (("clean", "git-lfs clean -- %f"), ("smudge", "git-lfs smudge -- %f"),
+                         ("process", "git-lfs filter-process"))
+                for kind, command in pairs:
+                    capacity.git(capacity.root, "config", "--file", str(configuration), "filter.lfs." + kind, command)
+                capacity.environment.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
+                                            GIT_CONFIG_NOSYSTEM="0", GIT_CONFIG_COUNT="0")
+                if scope == "command":
+                    capacity.environment.update(GIT_CONFIG_COUNT="3")
+                    for index, (kind, command) in enumerate(pairs):
+                        capacity.environment["GIT_CONFIG_KEY_" + str(index)] = "filter.lfs." + kind
+                        capacity.environment["GIT_CONFIG_VALUE_" + str(index)] = command
+                else:
+                    capacity.environment["GIT_CONFIG_" + scope.upper()] = str(configuration)
+                result = capacity.prepare()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(capacity.check().returncode, 0)
+                self.assertEqual(capacity.stamp.read_bytes(), (capacity.product / "sdk-lock.json").read_bytes())
+
+    def test_prepare_allows_filter_bound_only_to_unmodified_file(self):
+        marker = self.root / "unused-filter-ran"
+        command = shlex.join([sys.executable, "-c", 'import pathlib,sys; pathlib.Path(sys.argv[1]).write_text("ran")', str(marker)])
+        (self.capacity.sdk / ".git/info/attributes").write_text(".gitmodules filter=source-probe\n")
+        self.capacity.git(self.capacity.sdk, "config", "filter.source-probe.clean", command)
+        result = self.capacity.prepare()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.capacity.check().returncode, 0)
+        self.assertFalse(marker.exists())
+
+    def test_prepare_distinguishes_boolean_attributes_from_same_named_drivers(self):
+        for setting in ("", " !filter", " filter", " -filter"):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as directory:
+                capacity = CapacityFixture(Path(directory))
+                marker = Path(directory) / "sentinel-driver-ran"
+                command = shlex.join([sys.executable, "-c",
+                    'import pathlib,sys; pathlib.Path(sys.argv[1]).write_text("ran")', str(marker)])
+                for driver in ("set", "unset", "unspecified"):
+                    for kind in ("clean", "smudge", "process"):
+                        capacity.git(capacity.sdk, "config", "filter." + driver + "." + kind, command)
+                relative = capacity.recipe["managed_patches"][0]["files"][-1]["path"]
+                (capacity.sdk / ".git/info/attributes").write_text(relative + setting + "\n" if setting else "")
+                def objects():
+                    return {str(path.relative_to(capacity.sdk)): path.read_bytes()
+                            for path in capacity.sdk.rglob("*") if path.is_file() and "/objects/" in str(path)}
+                original_objects = objects()
+                result = capacity.prepare()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(objects(), original_objects, "属性判别不得写入 Git 对象")
+                self.assertFalse(marker.exists(), "布尔和未设置属性不得执行同名驱动")
+                self.assertEqual(capacity.check().returncode, 0)
+
+    def test_prepare_rejects_same_named_literal_drivers_without_execution(self):
+        for driver in ("set", "unset", "unspecified", "unspecified=other"):
+            with self.subTest(driver=driver), tempfile.TemporaryDirectory() as directory:
+                capacity = CapacityFixture(Path(directory))
+                marker = Path(directory) / "literal-driver-ran"
+                command = shlex.join([sys.executable, "-c",
+                    'import pathlib,sys; pathlib.Path(sys.argv[1]).write_text("ran")', str(marker)])
+                capacity.git(capacity.sdk, "config", "filter." + driver + ".clean", command)
+                relative = capacity.recipe["managed_patches"][0]["files"][-1]["path"]
+                (capacity.sdk / ".git/info/attributes").write_text(relative + " filter=" + driver + "\n")
+                original = {(name, file): (capacity.sdk if name == "idf" else capacity.tlsf).joinpath(file).read_bytes()
+                            for name, file in capacity.original}
+                result = capacity.prepare()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("外部 Git filter", result.stderr)
+                self.assertFalse(marker.exists())
+                self.assertFalse(capacity.stamp.exists())
+                for (name, file), content in original.items():
+                    self.assertEqual((capacity.sdk if name == "idf" else capacity.tlsf).joinpath(file).read_bytes(), content)
+
+    def test_prepare_rejects_later_repository_filter_before_any_write(self):
+        before = {(name, relative): (self.capacity.sdk if name == "idf" else self.capacity.tlsf).joinpath(relative).read_bytes()
+                  for name, relative in self.capacity.original}
+        marker = self.root / "late-repository-filter-ran"
+        command = shlex.join([sys.executable, "-c", 'import pathlib,sys; pathlib.Path(sys.argv[1]).write_text("ran")', str(marker)])
+        metadata = Path(self.capacity.git(self.capacity.tlsf, "rev-parse", "--absolute-git-dir"))
+        relative = self.capacity.recipe["managed_patches"][1]["files"][-1]["path"]
+        (metadata / "info/attributes").write_text(relative + " filter=source-probe\n")
+        self.capacity.git(self.capacity.tlsf, "config", "filter.source-probe.clean", command)
+        result = self.capacity.prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("外部 Git filter", result.stderr)
+        for (name, relative), content in before.items():
+            self.assertEqual((self.capacity.sdk if name == "idf" else self.capacity.tlsf).joinpath(relative).read_bytes(), content)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.capacity.stamp.exists())
+
     def test_prepare_rejects_external_filters_before_mutation(self):
         before = self.tracked().read_bytes()
         marker = self.root / "apply-filter-ran"
@@ -1001,19 +1093,33 @@ class CapacityDerivationTest(unittest.TestCase):
         relative = str(self.tracked().relative_to(self.capacity.sdk))
         attributes.write_text(relative + " filter=source-probe\n")
         self.capacity.git(self.capacity.sdk, "config", "core.attributesFile", str(attributes))
-        for kind in ("clean", "smudge", "process"):
-            with self.subTest(kind=kind):
-                key = "filter.source-probe." + kind
-                self.capacity.git(self.capacity.sdk, "config", key, command)
-                try:
-                    result = self.capacity.prepare()
-                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIn("外部 Git filter", result.stderr)
-                    self.assertFalse(marker.exists(), "补丁检查前不得执行 filter")
-                    self.assertEqual(self.tracked().read_bytes(), before)
-                    self.assertFalse(self.capacity.stamp.exists())
-                finally:
-                    self.capacity.git(self.capacity.sdk, "config", "--unset", key)
+        original_environment = self.capacity.environment.copy()
+        for scope in ("local", "global", "system", "command"):
+            for kind in ("clean", "smudge", "process"):
+                with self.subTest(scope=scope, kind=kind):
+                    key = "filter.source-probe." + kind
+                    self.capacity.environment = original_environment.copy()
+                    configuration = self.root / (scope + "-filter-config")
+                    configuration.write_text("")
+                    if scope == "local":
+                        self.capacity.git(self.capacity.sdk, "config", key, command)
+                    elif scope == "command":
+                        self.capacity.environment.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=key, GIT_CONFIG_VALUE_0=command)
+                    else:
+                        self.capacity.git(self.root, "config", "--file", str(configuration), key, command)
+                        self.capacity.environment["GIT_CONFIG_" + scope.upper()] = str(configuration)
+                        self.capacity.environment["GIT_CONFIG_NOSYSTEM"] = "0"
+                    try:
+                        result = self.capacity.prepare()
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertIn("外部 Git filter", result.stderr)
+                        self.assertFalse(marker.exists(), "补丁检查前不得执行 filter")
+                        self.assertEqual(self.tracked().read_bytes(), before)
+                        self.assertFalse(self.capacity.stamp.exists())
+                    finally:
+                        if scope == "local":
+                            self.capacity.git(self.capacity.sdk, "config", "--unset", key)
+                        self.capacity.environment = original_environment.copy()
 
     def test_layout_imports_reject_fifo_recipe_without_waiting(self):
         for name in ("preflight_v3_migration.py", "prepare_native_layout.py", "archive_esp32_at.py", "device_control.py"):
