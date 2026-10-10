@@ -76,7 +76,7 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 `alignment_bytes=4` 仅表示受管无 owner／poison、非 EXEC 的普通合法申请。真实后续请求必须另外绑定大小和 caps；更高 alignment、硬件对齐、EXEC alias 前缀或其他开销须按锁定分配路径单独证明，不能以 24 KiB 数字替代。历史保证不承诺查询后存在并发时下一次申请仍成功。
 
-SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后且清理／释放栈之前采官方 HWM，静态、自删和他删都覆盖。所有创建／最终采集实例计数、最差真实实例及全局最低值保留；名称只作展示，不去重。存活与待清理实例由官方完整列表核对，必须满足 `created = finalized + allocated`；清理间隙、列表容量不足、编号／计数溢出和无效计数不给栈资格。当前双目标 `StackType_t` 为 1 B，输出仍显式按其大小转换。
+SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后且清理／释放栈之前采官方 HWM，静态、自删和他删都覆盖。所有创建／最终采集实例计数、最差真实实例及全局最低值保留；名称只作展示，不去重。存活与待清理实例由官方完整列表核对，必须满足 `created = finalized + allocated`。正常清理间隙和列表容量不足不授该帧截止资格，保留原始帧，等待后续计数闭合与累计最终 HWM 补齐前缀；末尾不完整帧或不完整 `before_reset` 不延长可证截止。编号／计数溢出和无效计数仍拒绝。当前双目标 `StackType_t` 为 1 B，输出仍显式按其大小转换。
 
 每五秒既有 control pass 及四个既有主动重启点前输出完整帧，不增业务命令、任务、队列或动态内存。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
 
@@ -98,7 +98,7 @@ python3 tools/analyze_capacity.py --target esp32 \
 python3 -m unittest discover -s tools/tests -p 'test_analyze_capacity.py' -v
 ```
 
-解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。19 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
+解析只接受完整原始 UART 行，绑定 boot／SDK lock、帧序号、region 和任务实例，复算保守下界并明确截至 BEGIN；不会接受文本前缀、跨文件残帧、未知字段、坏计数或最低值回退。任务生命周期只以最近两个完整快照为锚点，正常不完整快照不据缺失实例推断退休，也不丢弃原始日志。27 项定向软件回归与真实 producer 输出组合不授予真实下一申请、R5／R6 或 MCU时延资格。
 
 ## 一次性有线迁入与历史输入
 

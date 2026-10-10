@@ -63,6 +63,18 @@ def render(frame):
     return "".join(row(kind, values) for kind, rows in frame.items() for values in rows)
 
 
+def cleanup_sequence(final_min=1100):
+    first = fixture(no_final=True, stack_min=1400)
+    first["TASK"][1]["minimum_stack_bytes"] = 1400
+    gap = fixture(2, 5010, no_final=True, stack_min=1400)
+    gap["TASK"].pop()
+    gap["END"][0].update(allocated_tasks=1, task_snapshot_complete=0)
+    after = fixture(3, 10010, stack_min=final_min)
+    after["TASK"].pop()
+    after["END"][0].update(created_instances=2, allocated_tasks=1, worst_completed_instance=2)
+    return first, gap, after
+
+
 class AnalyzeCapacityTest(unittest.TestCase):
     def read(self, *contents, target="esp32", boot=BOOT, lock=LOCK):
         with tempfile.TemporaryDirectory() as directory:
@@ -71,7 +83,10 @@ class AnalyzeCapacityTest(unittest.TestCase):
                 path = Path(directory) / f"uart-{index}.log"
                 path.write_text(content)
                 paths.append(path)
-            return analyze(paths, target, boot, lock)
+            result = analyze(paths, target, boot, lock)
+            for path, content in zip(paths, contents):
+                self.assertEqual(path.read_text(), content)
+            return result
 
     def reject(self, text):
         with self.assertRaises(ValueError):
@@ -226,6 +241,120 @@ class AnalyzeCapacityTest(unittest.TestCase):
         reused["TASK"][1]["instance"] = 1
         reused["END"][0].update(created_instances=5, finalized_instances=3, worst_completed_instance=6)
         self.reject(render(fixture()) + render(later) + render(reused))
+
+    def test_normal_cleanup_gap_is_retained_then_later_final_hwm_closes_prefix(self):
+        for minimum, passed in ((1100, True), (896, False)):
+            with self.subTest(final_min=minimum):
+                first, gap, after = cleanup_sequence(minimum)
+                result = self.read(render(first) + render(gap) + render(after))
+                self.assertTrue(result["valid"])
+                self.assertEqual(len(result["frames"]), 3)
+                self.assertEqual(result["incomplete_task_readouts"], 1)
+                self.assertIsNone(result["frames"][1]["proved_until_begin_uptime_ms"])
+                self.assertIsNone(result["frames"][1]["minimum_stack_bytes"])
+                self.assertEqual(result["frames"][1]["reported_minimum_stack_bytes"], 1400)
+                self.assertEqual(result["proved_until_begin_uptime_ms"], 10010)
+                self.assertEqual(result["frames"][-1]["minimum_stack_bytes"], minimum)
+                self.assertEqual(result["numeric_gates_passed"], passed)
+                self.assertTrue(result["task_history_closed_at_latest_readout"])
+                self.assertFalse(result["r5_qualified"])
+                self.assertFalse(result["r6_qualified"])
+
+    def test_incomplete_overall_minimum_can_rise_without_becoming_a_task_anchor(self):
+        first, gap, after = cleanup_sequence()
+        first["TASK"][1]["minimum_stack_bytes"] = 1100
+        first["END"][0]["minimum_stack_bytes"] = 1100
+        result = self.read(render(first) + render(gap) + render(after))
+        self.assertEqual([f["reported_minimum_stack_bytes"] for f in result["frames"]], [1100, 1400, 1100])
+        self.assertTrue(result["numeric_gates_passed"])
+        after["END"][0].update(minimum_stack_bytes=1200, completed_stack_min_bytes=1200)
+        self.reject(render(first) + render(gap) + render(after))
+
+    def test_last_gap_and_incomplete_before_reset_never_extend_the_cutoff(self):
+        first, gap, after = cleanup_sequence()
+        for phase in ("periodic", "before_reset"):
+            gap["BEGIN"][0]["phase"] = phase
+            result = self.read(render(first) + render(gap))
+            self.assertEqual(result["proved_until_begin_uptime_ms"], 10)
+            self.assertEqual(result["latest_readout_begin_uptime_ms"], 5010)
+            self.assertFalse(result["task_history_closed_at_latest_readout"])
+            self.assertIsNone(result["frames"][-1]["proved_until_begin_uptime_ms"])
+            self.assertFalse(result["r5_qualified"])
+            self.assertFalse(result["r6_qualified"])
+        self.reject(render(first) + render(gap) + render(after))
+
+    def test_without_any_complete_snapshot_no_combined_proof_is_granted(self):
+        _, gap, after = cleanup_sequence()
+        result = self.read(render(gap))
+        self.assertTrue(result["valid"])
+        self.assertIsNone(result["proved_until_begin_uptime_ms"])
+        self.assertFalse(result["numeric_gates_passed"])
+        self.assertFalse(any(result["numeric_gates"].values()))
+        recovered = self.read(render(gap) + render(after))
+        self.assertEqual(recovered["proved_until_begin_uptime_ms"], 10010)
+        self.assertTrue(recovered["numeric_gates_passed"])
+
+    def test_capacity_zero_capture_does_not_retire_live_instances_and_later_final_min_covers_hidden_exits(self):
+        first = fixture(no_final=True, stack_min=1400)
+        gap = fixture(2, 5010, no_final=True)
+        gap["TASK"] = []
+        gap["END"][0].update(created_instances=33, allocated_tasks=0, minimum_stack_bytes=0,
+                             task_snapshot_complete=0)
+        after = fixture(3, 10010, stack_min=1100)
+        after["END"][0].update(created_instances=33, finalized_instances=31, worst_completed_instance=3)
+        result = self.read(render(first) + render(gap) + render(after))
+        self.assertTrue(result["numeric_gates_passed"])
+        self.assertEqual(result["frames"][1]["task_snapshot_issue"], "task_list_capacity_not_complete")
+        self.assertEqual(result["frames"][-1]["allocated_tasks"], 2)
+        self.assertEqual(result["frames"][-1]["finalized_instances"], 31)
+
+    def test_gap_does_not_hide_corruption_missing_rows_invalid_flags_or_saturation(self):
+        first, gap, after = cleanup_sequence()
+        prefix, suffix = render(first), render(after)
+        for key, value in (("counters_valid", 0), ("facts_valid", 0), ("task_snapshot_complete", 1),
+                           ("created_instances", module.UINT32_MAX), ("finalized_instances", 3)):
+            bad = cleanup_sequence()[1]
+            bad["END"][0][key] = value
+            self.reject(prefix + render(bad) + suffix)
+        bad = cleanup_sequence()[1]
+        bad["TASK"] = []
+        self.reject(prefix + render(bad) + suffix)
+        bad["END"][0].update(allocated_tasks=0, minimum_stack_bytes=0)
+        self.reject(prefix + render(bad) + suffix)  # 两个实例无法触发官方 32 项列表容量拒绝。
+        bad = cleanup_sequence()[1]
+        bad["DOMAIN"].pop()
+        self.reject(prefix + render(bad) + suffix)
+        bad = cleanup_sequence()[1]
+        bad["BEGIN"][0]["sdk_lock_sha256"] = "b" * 64
+        self.reject(prefix + render(bad) + suffix)
+        bad["BEGIN"][0]["sdk_lock_sha256"] = LOCK
+        bad["TASK"][0]["boot_id"] = "66666666-2222-4333-8444-555555555555"
+        self.reject(prefix + render(bad) + suffix)
+
+    def test_gap_counters_and_regions_still_have_continuous_history(self):
+        first, gap, after = cleanup_sequence()
+        for kind, index, key, value in (("REGION", 0, "min_free_bytes", 30001),
+                                       ("REGION", 1, "available_at_heap_init", 1),
+                                       ("END", 0, "workspace_bytes", 512)):
+            bad = cleanup_sequence()[1]
+            bad[kind][index][key] = value
+            self.reject(render(first) + render(bad) + render(after))
+        after["END"][0]["created_instances"] = 1
+        self.reject(render(first) + render(gap) + render(after))
+
+    def test_explicit_finalized_worst_instance_cannot_reappear_after_a_gap(self):
+        first = fixture()
+        gap = fixture(2, 5010, stack_min=1100)
+        gap["TASK"].pop()
+        gap["END"][0].update(created_instances=4, finalized_instances=2, allocated_tasks=1,
+                             task_snapshot_complete=0, worst_completed_instance=4)
+        after = fixture(3, 10010, stack_min=1050)
+        after["TASK"][1]["instance"] = 5
+        after["END"][0].update(created_instances=5, finalized_instances=3, worst_completed_instance=2)
+        self.assertTrue(self.read(render(first) + render(gap) + render(after))["numeric_gates_passed"])
+        # 不依赖不足列表的缺席；gap 的显式 finalized-worst=4 已证明该实例停止并最终记录。
+        after["TASK"][1]["instance"] = 4
+        self.reject(render(first) + render(gap) + render(after))
 
     def test_region_disappearance_and_late_birth_claims_reject(self):
         bad = fixture(2, 5010)
