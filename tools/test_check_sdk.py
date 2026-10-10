@@ -18,6 +18,48 @@ SDK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SDK)
 
 
+class CapacityFixtureIsolationTest(unittest.TestCase):
+    def anonymous_environment(self, root):
+        environment = dict(os.environ)
+        for name in list(environment):
+            if name.startswith(("GIT_CONFIG", "GIT_AUTHOR_", "GIT_COMMITTER_")) or name == "EMAIL":
+                environment.pop(name)
+        environment.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"),
+                           GIT_CONFIG_SYSTEM="/dev/null", GIT_CONFIG_GLOBAL="/dev/null")
+        return environment
+
+    def test_fixture_ignores_inherited_system_global_and_command_filters(self):
+        for scope in ("system", "global", "command"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                configuration = root / "host-gitconfig"
+                configuration.write_text("[filter \"lfs\"]\n\tclean = cat\n\tsmudge = cat\n")
+                environment = self.anonymous_environment(root)
+                if scope == "command":
+                    environment.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="filter.lfs.clean", GIT_CONFIG_VALUE_0="cat")
+                else:
+                    environment["GIT_CONFIG_" + scope.upper()] = str(configuration)
+                with patch.dict(os.environ, environment, clear=True):
+                    capacity = CapacityFixture(root)
+                    capacity.apply()
+                    self.assertEqual(capacity.check().returncode, 0)
+
+    def test_managed_wrong_child_commit_uses_owned_identity_without_host_identity(self):
+        import test_managed_sdk
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict(os.environ, self.anonymous_environment(root), clear=True):
+                capacity = CapacityFixture(root)
+                capacity.apply()
+                case = test_managed_sdk.ManagedSDKTests("test_unavailable_or_wrong_other_submodule")
+                case.root = root
+                case.capacity = capacity
+                try:
+                    case.test_unavailable_or_wrong_other_submodule()
+                except subprocess.CalledProcessError as error:
+                    self.fail("匿名夹具原生子仓 commit 失败：" + error.stderr.decode(errors="replace"))
+
+
 class SDKObjectOwnershipTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -857,6 +899,26 @@ class CapacityDerivationTest(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.capacity = CapacityFixture(self.root)
 
+    def test_prepare_rejects_crlf_on_each_managed_repository_before_first_write(self):
+        for name in ("idf", "tlsf"):
+            with self.subTest(repository=name), tempfile.TemporaryDirectory() as directory:
+                capacity = CapacityFixture(Path(directory))
+                declaration = next(item for item in capacity.recipe["managed_patches"] if item["repository"] == name)
+                repository = capacity.sdk if name == "idf" else capacity.tlsf
+                relative = declaration["files"][-1]["path"]
+                metadata = Path(capacity.git(repository, "rev-parse", "--absolute-git-dir"))
+                (metadata / "info/attributes").write_text(relative + " text eol=crlf\n")
+                originals = {(item["repository"], file["path"]):
+                             (capacity.sdk if item["repository"] == "idf" else capacity.tlsf).joinpath(file["path"]).read_bytes()
+                             for item in capacity.recipe["managed_patches"] for file in item["files"]}
+                result = capacity.prepare()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("内置 Git", result.stderr)
+                for (repo_name, path), content in originals.items():
+                    actual = (capacity.sdk if repo_name == "idf" else capacity.tlsf) / path
+                    self.assertEqual(actual.read_bytes(), content, "任何受管路径首写前必须已拒绝")
+                self.assertFalse(capacity.stamp.exists())
+
 
     def test_check_rejects_wrong_idf_and_lwip_fetch_origins(self):
         self.apply()
@@ -875,6 +937,33 @@ class CapacityDerivationTest(unittest.TestCase):
         self.capacity.git(repo, "config", "--remove-section", "url.https://example.invalid/untrusted.git")
         self.capacity.git(repo, "config", "--add", "remote.origin.url", raw)
         self.reject("origin")
+
+    def test_prepare_rejects_encoding_before_first_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            capacity = CapacityFixture(Path(directory))
+            metadata = Path(capacity.git(capacity.tlsf, "rev-parse", "--absolute-git-dir"))
+            relative = capacity.recipe["managed_patches"][1]["files"][-1]["path"]
+            (metadata / "info/attributes").write_text(relative + " working-tree-encoding=UTF-16LE\n")
+            before = {(name, path): (capacity.sdk if name == "idf" else capacity.tlsf).joinpath(path).read_bytes()
+                      for name, path in capacity.original}
+            result = capacity.prepare()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("内置 Git", result.stderr)
+            for (name, path), raw in before.items():
+                self.assertEqual((capacity.sdk if name == "idf" else capacity.tlsf).joinpath(path).read_bytes(), raw)
+            self.assertFalse(capacity.stamp.exists())
+
+    def test_prepare_preserves_safe_lf_and_utf8_with_host_crlf_defaults(self):
+        for attribute in ("text eol=lf", "-text eol=crlf", "working-tree-encoding=UTF-8", "ident"):
+            with self.subTest(attribute=attribute), tempfile.TemporaryDirectory() as directory:
+                capacity = CapacityFixture(Path(directory))
+                capacity.git(capacity.sdk, "config", "core.autocrlf", "true")
+                capacity.git(capacity.sdk, "config", "core.eol", "crlf")
+                relative = capacity.recipe["managed_patches"][0]["files"][-1]["path"]
+                (capacity.sdk / ".git/info/attributes").write_text(relative + " " + attribute + "\n")
+                capacity.apply()
+                self.assertEqual(capacity.check().returncode, 0)
+                self.assertEqual(capacity.stamp.read_bytes(), (capacity.product / "sdk-lock.json").read_bytes())
 
     def test_check_accepts_equivalent_ssh_fetch_identity(self):
         self.apply()

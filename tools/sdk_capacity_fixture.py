@@ -19,7 +19,14 @@ class CapacityFixture:
         self.product = root / "base-source"
         self.product.mkdir()
         self.sdk = sdk or root / "sdk"
-        self.environment = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "PYTHONDONTWRITEBYTECODE": "1"}
+        # 夹具拥有自己的小 Git 图，不消费宿主驱动、模板、身份或来源重定向。
+        self.environment = {name: value for name, value in os.environ.items()
+                            if not name.startswith(("GIT_CONFIG", "GIT_AUTHOR_", "GIT_COMMITTER_"))
+                            and name not in ("EMAIL", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                                             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_TEMPLATE_DIR")}
+        self.environment.update(GIT_CONFIG_SYSTEM="/dev/null", GIT_CONFIG_GLOBAL="/dev/null",
+                                GIT_CONFIG_COUNT="0", GIT_TEMPLATE_DIR="", GIT_OPTIONAL_LOCKS="0",
+                                PYTHONDONTWRITEBYTECODE="1")
         self.recipe = json.loads((TOOLS.parent / "sdk-lock.json").read_bytes())
         self.original = {}
         self.after = {}
@@ -67,6 +74,10 @@ class CapacityFixture:
         self.lwip = self.sdk / self.recipe["lwip"]["path"]
         self.tlsf = self.sdk / self.recipe["tlsf"]["path"]
         self.extra = self.sdk / "framework"
+        # submodule clone 不复制 upstream 的 local 身份；只给实际夹具仓设置测试身份。
+        for repository in (self.sdk, self.lwip, self.tlsf, self.extra):
+            if repository.exists():
+                self.configure_identity(repository)
         if sdk is None:
             (lwip_upstream / "tcp.c").write_text("int corrected_lwip;\n")
             corrected = self.commit(lwip_upstream)
@@ -95,7 +106,8 @@ class CapacityFixture:
         self.raw_status = self.git(self.sdk, "status", "--porcelain", "--ignore-submodules=none")
 
     def run_git(self, path: Path, *args) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", "--no-optional-locks", "-C", str(path), *args],
+        return subprocess.run(["git", "--no-optional-locks", "-c", "core.hooksPath=/dev/null", "-c", "init.templateDir=",
+                               "-C", str(path), *args],
                               check=True, capture_output=True, env=self.environment)
 
     def git(self, path: Path, *args) -> str:
@@ -104,6 +116,11 @@ class CapacityFixture:
     def init(self, path: Path) -> None:
         path.mkdir(parents=True)
         self.git(path, "init", "-q", "-b", "master")
+        self.configure_identity(path)
+
+    def configure_identity(self, path: Path) -> None:
+        # 空模板不提供 info 目录；真实原生 Gitdir 的测试属性仍由夹具显式写入。
+        (Path(self.git(path, "rev-parse", "--absolute-git-dir")) / "info").mkdir(exist_ok=True)
         self.git(path, "config", "user.name", "容量来源fixture")
         self.git(path, "config", "user.email", "sdk-capacity@example.invalid")
 

@@ -8,8 +8,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from check_sdk import (check, git_command, git_environment, patch_inputs, read_recipe,
-                       read_source_file, reject_external_content_filters, repository_paths)
+from check_sdk import (apply_git_command, check, git_environment, patch_inputs, read_recipe,
+                       read_source_file, reject_builtin_content_conversions, reject_external_content_filters, repository_paths)
 
 
 def prepare(path: Path) -> None:
@@ -39,10 +39,12 @@ def prepare(path: Path) -> None:
             raise ValueError("SDK 配方在装配前改变")
         # Both real Git apply checks complete before the first SDK mutation.
         for declaration, file in frozen:
-            subprocess.run(git_command(repositories[declaration["repository"]], "apply",
+            repository = repositories[declaration["repository"]]
+            reject_builtin_content_conversions(repository, [item["path"] for item in declaration["files"]], file.read_bytes())
+            subprocess.run(apply_git_command(repository, "apply",
                                        "--check", "--whitespace=nowarn", str(file)), check=True, env=git_environment())
         for declaration, file in frozen:
-            subprocess.run(git_command(repositories[declaration["repository"]], "apply",
+            subprocess.run(apply_git_command(repositories[declaration["repository"]], "apply",
                                        "--whitespace=nowarn", str(file)), check=True, env=git_environment())
     stamp = repositories["idf"] / recipe["derivation_stamp"]
     fd = os.open(stamp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
