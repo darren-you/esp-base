@@ -10,6 +10,12 @@ case "${ESP_BASE_TEST_TARGET:-esp32c3}" in
 esac
 BUILD_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$BUILD_DIR"' EXIT
+CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}')"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -DCONFIG_HEAP_POISONING_DISABLED=1 -DESP_BASE_CAPACITY_SDK_LOCK_SHA256=\""$CAPACITY_LOCK_SHA256"\" \
+  -I "$ROOT/tests/fakes/capacity" -I "$ROOT/components/device_protocol/include" \
+  "$ROOT/tests/producer_capacity_test.c" -o "$BUILD_DIR/producer_capacity_test"
+"$BUILD_DIR/producer_capacity_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/components/device_protocol/include" \
   "$ROOT/components/device_protocol/command_guard.c" \

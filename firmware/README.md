@@ -15,7 +15,7 @@ C3 使用 USB Serial/JTAG VFS；ESP32 使用 UART0。控制任务栈 8,192 B，�
 
 ## 构建
 
-先读取 [SDK 与宿主工具](../tools/README.md)，导出锁定 SDK 环境。显式 target、sdkconfig、defaults 与 build 目录，分别解析两目标锁。组件版本变化必须让官方 Component Manager 重新解析实际目标 lock；`update-dependencies` 默认 lock 名不能代替 ESP32 自定义 lock 的核对。
+先读取 [SDK 与宿主工具](../tools/README.md)，在独立官方基线装配 schema 2 的唯一受管容量统计派生，并导出 SDK 环境。显式 target、sdkconfig、defaults 与 build 目录，分别解析两目标锁。组件版本变化必须让官方 Component Manager 重新解析实际目标 lock；`update-dependencies` 默认 lock 名不能代替 ESP32 自定义 lock 的核对。
 
 ```bash
 idf.py -C firmware -B /absolute/build-c3 -DIDF_TARGET=esp32c3 reconfigure

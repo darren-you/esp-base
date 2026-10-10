@@ -55,10 +55,34 @@ git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
 git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
 bash "$ESP_BASE_IDF/install.sh" esp32c3 esp32
 source "$ESP_BASE_IDF/export.sh"
+python3 tools/prepare_sdk.py --path "$IDF_PATH"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
 
-构建同时核对两个精确提交、SDK 索引与工作树、所有其他子模块及最终解析的 lwIP 组件路径；SDK 工作树只允许这一个锁定 lwIP gitlink 差异。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，引用同一组精确组件提交，不能共用生成的 sdkconfig/build 目录。以上准备和检查不访问串口或写设备；实验应用仍须提供仓外输入，并按固件 README 使用独立 build 与 sdkconfig。
+`sdk-lock.json` 的 schema 2 保持 IDF `578cf89`、lwIP `2758df4` 和官方 TLSF `2867f68` 的精确基线，显式声明两份容量统计补丁、补丁摘要及每个受影响文件的原始／最终摘要。SDK 根唯一 `esp-sdk-derivation.json` 必须逐字等于该冻结 lock；装配在全部原件、Git 状态和两仓 `git apply --check` 通过后才应用，再排他创建只读 stamp。它不覆盖旧 SDK，不删除失败后的 partial，也不清除未知差异。
+
+构建核对受管修改、SDK 索引与工作树、TLSF 和全部其他子模块及最终解析的 lwIP 组件路径。原始 SDK、坏 stamp、部分补丁、未知或暂存修改、子模块漂移、补丁／源码摘要不符均拒绝；不能声称派生 SDK 未修改。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，不能共用生成的 sdkconfig/build 目录。以上入口不访问串口或设备。三个组件的精确派生消费锁是正式双目标构建前置；单独装配 SDK 或 host 通过不代表完整固件已构建。
+
+## 正式容量统计
+
+正式原生源码始终编译 `esp_base_capacity.c`，要求非 ROM TLSF、单核非 SMP、官方 trace 实例编号，禁用 poisoning、task-owner 字节和 LAB 观察副本。统计不是 malloc hook 或定时 heap 遍历：TLSF 每个真实单 pool region 在原分配器锁内维护最低连续合法普通申请和最低总空闲，覆盖真实分配、calloc 下层、aligned／定址、原地及移动 realloc、free 和初始化。移动 realloc 的新旧块共存必须记录；失败／零申请不制造空值。最高有效 TLSF bin 经官方 `tlsf_fit_size` 得到与官方 largest 相同的普通申请边界，更新为恒定成本，不扫描链表。
+
+诊断输出读取真实注册 region 的范围、三优先级 caps 和地址 alias，一个物理堆只计一次。延迟启动堆和动态出生 region 的缺席前缀按零处理；它们仍报告自身注册以来的最低值，但不能抬高从堆初始化起的保证。匹配 caps 的 `sum(region min_free)` 与 `max(region min_largest)` 分别是总空闲和最大单次申请的严格保守下界，均不称全局精确历史峰值。五个实际域包含 `INTERNAL|8BIT`、`INTERNAL|32BIT`、`INTERNAL|DMA`、`DEFAULT` 和 ESP32 配置工作对象使用的 `INTERNAL|IRAM_8BIT`。
+
+`alignment_bytes=4` 仅表示受管无 owner／poison、非 EXEC 的普通合法申请。真实后续请求必须另外绑定大小和 caps；更高 alignment、硬件对齐、EXEC alias 前缀或其他开销须按锁定分配路径单独证明，不能以 24 KiB 数字替代。历史保证不承诺查询后存在并发时下一次申请仍成功。
+
+SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后且清理／释放栈之前采官方 HWM，静态、自删和他删都覆盖。所有创建／最终采集实例计数、最差真实实例及全局最低值保留；名称只作展示，不去重。存活与待清理实例由官方完整列表核对，必须满足 `created = finalized + allocated`；清理间隙、列表容量不足、编号／计数溢出和无效计数不给栈资格。当前双目标 `StackType_t` 为 1 B，输出仍显式按其大小转换。
+
+每五秒既有 control pass 及四个既有主动重启点前输出完整帧，不增业务命令、任务、队列或动态内存。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
+
+统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
+
+```bash
+IDF_PATH=/absolute/managed-sdk python3 tools/test_managed_sdk.py
+python3 tools/test_sdk_capacity.py --idf-path /absolute/managed-sdk
+```
+
+前者先实际核对 SDK，再以隔离夹具验证拒绝边界；后者直接编译受管 SDK 的 TLSF 和实际任务最终采集片段，包含 100000 次碎片化操作、逐稳定状态 walk oracle 与移动 realloc 共存反例。host 及 sanitizer 结果不替代 MCU、正式签名或双板容量验收。
 
 ## 一次性有线迁入与历史输入
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_protocol.h"
+#include "esp_base_capacity.h"
 #include "control_state.h"
 #include "esp_base_command.h"
 #include "esp_base_identity.h"
@@ -498,6 +499,7 @@ static void poll_frp_restart(uint64_t now)
     if (esp_base_frp_management_listener_response_pending() &&
         now - s_frp_restart_since_ms < 2000U) return;
     s_frp_restart_pending = false;
+    esp_base_capacity_before_reset(s_boot_id, uptime_ms());
     esp_restart();
 }
 
@@ -509,6 +511,7 @@ static void poll_mqtt_restart(uint64_t now)
     if (!esp_base_mqtt_owner_restart_result_acknowledged() &&
         now - s_mqtt_restart_since_ms < 2000U) return;
     s_mqtt_restart_pending = false;
+    esp_base_capacity_before_reset(s_boot_id, uptime_ms());
     esp_restart();
 }
 
@@ -741,6 +744,7 @@ static void poll_ota(void)
          * local self-test and stability window before it becomes valid. */
         save_outcome(s_ota_slot, "running", NULL, false);
         (void)fsync(STDOUT_FILENO);
+        esp_base_capacity_before_reset(s_boot_id, uptime_ms());
         esp_restart();
         return;
     }
@@ -972,6 +976,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     save_outcome(slot, "running", NULL, false);
     (void)fsync(STDOUT_FILENO);
     vTaskDelay(pdMS_TO_TICKS(100));
+    esp_base_capacity_before_reset(s_boot_id, uptime_ms());
     esp_restart();
 }
 
@@ -1119,6 +1124,7 @@ static void control_task(void *argument)
         poll_network_owners(now);
         poll_mqtt_restart(uptime_ms());
         poll_frp_restart(uptime_ms());
+        esp_base_capacity_poll(s_boot_id, uptime_ms());
         if (now >= next_report) { reported(); next_report = now + 5000; }
         expire_serial_input(now, last_input);
         size_t count = 0;

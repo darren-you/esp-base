@@ -22,6 +22,8 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 
 原生业务确定性测试覆盖既有十二项语义、二进制零字节、最大输入、暂停计数保持、100ms非延期窗口、恢复和重新初始化；不模拟MCU执行时延。命令解码测试覆盖新固件／业务／FRP字段、旧product.*拒绝、USB与FRP来源隔离、重复／未知字段、UTF-8、数值、分片与10000次畸形输入。分配测试核对失败不写、秘密清零、所有权与释放。
 
+`producer_capacity_test.c` 直接编译正式诊断 producer，覆盖晚出生 region 的双下界为零、caps／alias 不重复、独立 IRAM 域、BEGIN 先于 getter、任务名在 scheduler resume 后仍安全、创建／最终化／存活计数闭合、低于 1024 B 的真实输出和帧编号溢出。SDK 假件只检验输出与门，不授 MCU 成本或 R5／R6。实际 SDK 分配器／最终任务栈及派生拒绝用例另通过 tools 的 `test_sdk_capacity.py`／`test_managed_sdk.py` 验证。
+
 真实protocol owner测试编译生产decoder／guard／control／业务／协议源码，用显式SDK、NVS与OTA假件覆盖写前意图、原请求移交、双入口互斥、FRP arm／5秒无连接、任务失败、成功prepare后取消不选槽、部分清C、unknown锁保留、原ID回放和独立firmware.status。receipt／firmware测试核对182B V4、V3／损坏阻断、A/C完整签名身份、pending／VALID／失败与存储调用故障。startup两目标分别启用／禁用scratch，验证本地30秒控制进展、跨窗、rollback、确认读回不确定与短Flash仲裁。均不冒充真实NVS掉电原子性或bootloader。
 
 `flash_io_concurrency_test.c` 直接编译生产 main 的短 Flash 回调与真实 storage owner：两个宿主线程交接、8192次竞争 I/O 和原500ms BUSY期限，等待者只访问自己的局部 claim，释放前清理共享交接。公开 host 入口包含ASan／UBSan；独立TSan结果与曾复现的数据竞争另存当轮检查点。测试不模拟MCU调度、Flash最坏时延或实时栈水位。

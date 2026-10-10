@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "idf": {
     "repository": "https://github.com/darren-you/esp-idf.git",
     "revision": "578cf89c343e388db43ba1f4ddcd602fedcb763c"
@@ -8,5 +8,81 @@
     "repository": "https://github.com/darren-you/esp-lwip.git",
     "revision": "2758df4cd3666b3b2a5b53830148379326425c0d",
     "path": "components/lwip/lwip"
-  }
+  },
+  "tlsf": {
+    "path": "components/heap/tlsf",
+    "revision": "2867f6883a12920b1969ff9624c0ab0e4185c2ce"
+  },
+  "derivation_stamp": "esp-sdk-derivation.json",
+  "managed_patches": [
+    {
+      "repository": "idf",
+      "path": "tools/sdk-patches/capacity-idf.patch",
+      "sha256": "6cd818d1d50d6efcd27087baadb439aa569a23b707989ecc00f70d57b86fcef1",
+      "files": [
+        {
+          "path": "components/freertos/FreeRTOS-Kernel/include/freertos/task.h",
+          "before_sha256": "34fa5db62cfcb5b0007d3a3b79eabd4217554f8f8201f7f43dac68592fe0fb04",
+          "after_sha256": "9f4cfec4b70bd069b960ff2608825e913fc94b8e73a1a54f5a6f5f6fea259fe4"
+        },
+        {
+          "path": "components/freertos/FreeRTOS-Kernel/tasks.c",
+          "before_sha256": "193c3d8379acc847097632da8e6d4dd2ee0bf8e069d78979d68dd26b653d48df",
+          "after_sha256": "4b9c8f9bb5bf950b2f7963f74733c3f1c1a6067e2e44f62f91ca5ee63ae49019"
+        },
+        {
+          "path": "components/heap/heap_caps.c",
+          "before_sha256": "6576a54104902164e726a0a6149e01cbbbe1aa1c5a388125bc77cb587ff911b4",
+          "after_sha256": "1019f5bb038056c75dacf01f658703218f9acec21e6dabd238b2ca5320f1ccb1"
+        },
+        {
+          "path": "components/heap/heap_caps_init.c",
+          "before_sha256": "2330a477fa0647314d58e5ed22e86e353641c9524c58998af6ed7fcd8a6d1c54",
+          "after_sha256": "e2506c07ba7aa20771427aea2204fbf487ca2525b1a363a547f1dade8099d4b9"
+        },
+        {
+          "path": "components/heap/heap_private.h",
+          "before_sha256": "26995b49d6a2110c16adf3af850104456cea31eef8651dc60b6ce7372de97998",
+          "after_sha256": "2d0db2b818ed3af01ebb15439e2fdbb3f5b34d1c76ee11c696157ab83d6297bc"
+        },
+        {
+          "path": "components/heap/include/esp_heap_caps.h",
+          "before_sha256": "926eb9eada9d675c0302b34e2ed6c4977a9267963dca39e50550ee90efadad97",
+          "after_sha256": "7cb80fcc081e1f67b9bd95e7bfccbd86530406101096a060790931e251575de4"
+        },
+        {
+          "path": "components/heap/include/multi_heap.h",
+          "before_sha256": "6d9e960ee883f081b7217e71ba3071b17782ab2ec156c78c9ded045b3333ff21",
+          "after_sha256": "91550a3f028445af143543fb0224b450e1455da9bf4fb6ccda5c665b265ce4d6"
+        },
+        {
+          "path": "components/heap/multi_heap.c",
+          "before_sha256": "2647ff6bb7284a70c94491d003acbc3cd821c02a9f7d49d643aaf7241ac5f74b",
+          "after_sha256": "18c41887ce1b7bd2deca1b7765bcff9d68df881d7ae58991d513d411b6de6bef"
+        }
+      ]
+    },
+    {
+      "repository": "tlsf",
+      "path": "tools/sdk-patches/capacity-tlsf.patch",
+      "sha256": "afe402d3b0de6e312a4bf84e4491d0a52e1d17b4b02e0ef0fcd958dc8e55a2cd",
+      "files": [
+        {
+          "path": "include/tlsf.h",
+          "before_sha256": "69799f4f1e7c5f8d3a35e89f5efb8014aa00e6e49f96939b93fc39ceb95d0e8b",
+          "after_sha256": "66a8cb2f1dcdce1b4c8aedfc5f44c3ab61c68394af19f4fb88f3a6cec7275226"
+        },
+        {
+          "path": "tlsf.c",
+          "before_sha256": "ca8f8c1941e0e34a4b127a7d2bd7c77e66ad39d02450111087f32b552b2f3628",
+          "after_sha256": "4c7db01805fe122289c43dd2adffb4eb531870ecdfd3d2c599238d5fcd82d773"
+        },
+        {
+          "path": "tlsf_control_functions.h",
+          "before_sha256": "2e89b64ac4357ce8c951b540355dfe3279953f96ee46fdac0ac22972bd1d070f",
+          "after_sha256": "fc6e7b74348b7b12e501c36e06d42d656e17639b9191a39da9113519341723bf"
+        }
+      ]
+    }
+  ]
 }

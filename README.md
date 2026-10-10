@@ -28,7 +28,7 @@ flowchart LR
 
 ## 开发入口
 
-先按 [SDK 与工具说明](tools/README.md)准备仓外 SDK，使用 [sdk-lock.json](sdk-lock.json)核对 IDF／lwIP。Component Manager 从唯一 [组件清单](firmware/components/device_protocol/idf_component.yml)解析 MQTT／OTA／FRP 与 cJSON，分别生成 [C3 锁](firmware/dependencies.lock)和 [ESP32 锁](firmware/dependencies.lock.esp32)。两目标使用独立 build 与 sdkconfig，签名键保留在仓外。
+先按 [SDK 与工具说明](tools/README.md)准备仓外 SDK，使用 [sdk-lock.json](sdk-lock.json)核对 IDF／lwIP／TLSF 基线及唯一正式容量统计派生。Component Manager 从唯一 [组件清单](firmware/components/device_protocol/idf_component.yml)解析 MQTT／OTA／FRP 与 cJSON，分别生成 [C3 锁](firmware/dependencies.lock)和 [ESP32 锁](firmware/dependencies.lock.esp32)。两目标使用独立 build 与 sdkconfig，签名键保留在仓外。
 
 - [固件构建与架构](firmware/README.md)
 - [设备协议](docs/design/device-protocol.md)

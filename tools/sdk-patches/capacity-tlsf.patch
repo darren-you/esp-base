@@ -1,0 +1,146 @@
+--- a/include/tlsf.h
++++ b/include/tlsf.h
+@@ -56,6 +56,16 @@
+  */
+ size_t tlsf_fit_size(tlsf_t tlsf, size_t size);
+ 
++typedef struct tlsf_capacity_stats {
++    size_t current_free_bytes;
++    size_t minimum_free_bytes;
++    size_t current_largest_allocatable_bytes;
++    size_t minimum_largest_allocatable_bytes;
++} tlsf_capacity_stats_t;
++
++/* Managed multi_heap single-region facts. Caller holds the allocator lock. */
++void tlsf_get_capacity_stats(tlsf_t tlsf, tlsf_capacity_stats_t *stats);
++
+ /* Debugging. */
+ typedef bool (*tlsf_walker)(void* ptr, size_t size, int used, void* user);
+ void tlsf_walk_pool(pool_t pool, tlsf_walker walker, void* user);
+--- a/tlsf.c
++++ b/tlsf.c
+@@ -66,6 +66,9 @@
+ 	control->block_null.next_free = &control->block_null;
+ 	control->block_null.prev_free = &control->block_null;
+ 
++    control->current_free_bytes = 0;
++    control->minimum_free_bytes = SIZE_MAX;
++    control->minimum_largest_allocatable_bytes = SIZE_MAX;
+ 	control->fl_bitmap = 0;
+ 	control->sl_bitmap = align_ptr(control + 1, sizeof(*control->sl_bitmap));
+ 	control->blocks = align_ptr(control->sl_bitmap + control->fl_index_count, sizeof(*control->blocks));
+@@ -243,6 +246,15 @@
+ 	return integ.status;
+ }
+ 
++void tlsf_get_capacity_stats(tlsf_t tlsf, tlsf_capacity_stats_t *stats)
++{
++    control_t *control = tlsf_cast(control_t*, tlsf);
++    stats->current_free_bytes = control->current_free_bytes;
++    stats->minimum_free_bytes = control->minimum_free_bytes;
++    stats->current_largest_allocatable_bytes = capacity_largest_allocatable(control);
++    stats->minimum_largest_allocatable_bytes = control->minimum_largest_allocatable_bytes;
++}
++
+ size_t tlsf_fit_size(tlsf_t tlsf, size_t size)
+ {
+ 	if (size == 0 || tlsf == NULL) {
+@@ -335,6 +347,10 @@
+ 	block_set_used(next);
+ 	block_set_prev_free(next);
+ 
++    control_t *control = tlsf_cast(control_t*, tlsf);
++    /* Same initial free-byte convention as multi_heap_register_impl. */
++    control->current_free_bytes += bytes;
++    capacity_record(control);
+ 	return mem;
+ }
+ 
+@@ -351,6 +367,8 @@
+ 
+ 	mapping_insert(control, block_size(block), &fl, &sl);
+ 	remove_free_block(control, block, fl, sl);
++    control->current_free_bytes -= block_size(block) + tlsf_pool_overhead();
++    capacity_record(control);
+ }
+ 
+ /*
+@@ -627,11 +645,14 @@
+ 	{
+ 		control_t* control = tlsf_cast(control_t*, tlsf);
+ 		block_header_t* block = block_from_ptr(ptr);
++        const size_t released_bytes = block_size(block) + block_header_overhead;
+ 		tlsf_assert(!block_is_free(block) && "block already marked as free");
+ 		block_mark_as_free(block);
+ 		block = block_merge_prev(control, block);
+ 		block = block_merge_next(control, block);
+ 		block_insert(control, block);
++        control->current_free_bytes += released_bytes;
++        capacity_record(control);
+ 	}
+ }
+ 
+@@ -705,6 +726,9 @@
+ 
+ 			/* Trim the resulting block and return the original pointer. */
+ 			block_trim_used(control, block, adjust);
++            control->current_free_bytes += cursize;
++            control->current_free_bytes -= block_size(block);
++            capacity_record(control);
+ 			p = ptr;
+ 		}
+ 	}
+--- a/tlsf_control_functions.h
++++ b/tlsf_control_functions.h
+@@ -47,6 +47,11 @@
+ 	 * sl_bitmap and blocks )
+ 	 */
+     size_t size;
++
++    /* Always-on capacity facts for the managed non-ROM allocator. */
++    size_t current_free_bytes;
++    size_t minimum_free_bytes;
++    size_t minimum_largest_allocatable_bytes;
+ 
+     /* Bitmaps for free lists. */
+     unsigned int fl_bitmap;
+@@ -622,6 +627,30 @@
+ 	return block;
+ }
+ 
++/* The highest occupied bin has one common tlsf_fit_size boundary. */
++tlsf_decl size_t capacity_largest_allocatable(control_t *control)
++{
++    if (!control->fl_bitmap) {
++        return 0;
++    }
++    const int fl = tlsf_fls(control->fl_bitmap);
++    const int sl = tlsf_fls(control->sl_bitmap[fl]);
++    const block_header_t *block = control->blocks[fl * control->sl_index_count + sl];
++    return tlsf_fit_size(control, block_size(block));
++}
++
++/* Called only after a complete allocator operation, under the caller's heap lock. */
++tlsf_decl void capacity_record(control_t *control)
++{
++    const size_t largest = capacity_largest_allocatable(control);
++    if (largest < control->minimum_largest_allocatable_bytes) {
++        control->minimum_largest_allocatable_bytes = largest;
++    }
++    if (control->current_free_bytes < control->minimum_free_bytes) {
++        control->minimum_free_bytes = control->current_free_bytes;
++    }
++}
++
+ tlsf_decl void* block_prepare_used(control_t* control, block_header_t* block, size_t size)
+ {
+ 	void* p = 0;
+@@ -630,6 +659,8 @@
+ 		tlsf_assert(size && "size must be non-zero");
+ 		block_trim_free(control, block, size);
+ 		block_mark_as_used(block);
++        control->current_free_bytes -= block_size(block) + block_header_overhead;
++        capacity_record(control);
+ 		p = block_to_ptr(block);
+ 	}
+ 	return p;
