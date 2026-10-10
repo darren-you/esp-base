@@ -16,6 +16,10 @@ CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}
   -I "$ROOT/tests/fakes/capacity" -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
   -I "$COMPONENTS_DIR/mqtt/runtime/include" \
   "$ROOT/tests/producer_capacity_test.c" -o "$BUILD_DIR/producer_capacity_test"
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
+  "$ROOT/tests/flash_observation_test.c" -o "$BUILD_DIR/flash_observation_test"
+"$BUILD_DIR/flash_observation_test"
 "$BUILD_DIR/producer_capacity_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/components/device_protocol/include" \
@@ -130,7 +134,7 @@ fi
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
   "$ROOT/tests/frp_ota_stream_budget_test.c" -o "$BUILD_DIR/frp_ota_stream_budget_test"
 "$BUILD_DIR/frp_ota_stream_budget_test"
-"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -pthread -Wall -Wextra -Werror \
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
@@ -138,6 +142,7 @@ fi
   -I "$ROOT/components/time_runtime/include" -I "$ROOT/components/ota_operation/include" \
   -I "$EOTA_DIR/include" -I "$EFRP_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
+  "$ROOT/components/device_protocol/flash_observation.c" \
   "$ROOT/tests/flash_io_concurrency_test.c" -o "$BUILD_DIR/flash_io_concurrency_test"
 "$BUILD_DIR/flash_io_concurrency_test"
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
@@ -152,7 +157,7 @@ fi
   -ffunction-sections -fdata-sections -Debase_config_encode=ebase_config_encode_real \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/remote_config/include" \
   -c "$ROOT/components/remote_config/config_codec.c" -o "$BUILD_DIR/config_codec_real.o"
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
+"${CC:-cc}" -std=c11 -pthread -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/protocol-path" -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/device_protocol" \
@@ -165,6 +170,7 @@ fi
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/components/native_business/esp_base_business.c" \
   "$BUILD_DIR/line_feed.o" "$BUILD_DIR/config_codec_real.o" "$BUILD_DIR/cJSON.o" \
+  "$ROOT/components/device_protocol/flash_observation.c" \
   "$ROOT/tests/protocol_ota_owner_test.c" -o "$BUILD_DIR/protocol_ota_owner_test"
 "$BUILD_DIR/protocol_ota_owner_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -172,7 +178,7 @@ fi
   "$ROOT/components/device_protocol/control_state.c" "$ROOT/tests/control_state_test.c" \
   -o "$BUILD_DIR/control_state_test"
 "$BUILD_DIR/control_state_test"
-"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+"${CC:-cc}" -std=c11 -pthread -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$EOTA_DIR/include" -I "$ROOT/components/remote_config/include" \
@@ -180,6 +186,7 @@ fi
   -I "$ROOT/components/ota_operation/include" -I "$EFRP_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/apps/esp_base/main/esp_base_main.c" \
+  "$ROOT/components/device_protocol/flash_observation.c" \
   "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_test"
 "$BUILD_DIR/ota_startup_test"
 if [[ "${ESP_BASE_TEST_TARGET:-esp32c3}" == esp32c3 ]]; then
@@ -187,7 +194,7 @@ if [[ "${ESP_BASE_TEST_TARGET:-esp32c3}" == esp32c3 ]]; then
 else
   SCRATCH_OFFSET=0x3ea000
 fi
-"${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 \
+"${CC:-cc}" -std=c11 -pthread -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 \
   -DCONFIG_ESP_BASE_FRP_SCRATCH_ENABLED=1 \
   -DCONFIG_ESP_BASE_FRP_SCRATCH_LABEL=\"frp_scratch\" \
   -DCONFIG_ESP_BASE_FRP_SCRATCH_OFFSET="$SCRATCH_OFFSET" \
@@ -202,6 +209,7 @@ fi
   -I "$ROOT/components/ota_operation/include" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/apps/esp_base/main/esp_base_main.c" \
+  "$ROOT/components/device_protocol/flash_observation.c" \
   "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_scratch_test"
   "$BUILD_DIR/ota_startup_scratch_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \

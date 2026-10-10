@@ -22,6 +22,7 @@
 #include "esp_base_protocol.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_storage_owner.h"
+#include "esp_base_flash_observation.h"
 #include "esp_base_safety.h"
 #include "esp_base_time.h"
 
@@ -30,19 +31,39 @@ static esp_base_storage_owner_t s_storage_owner;
 static esp_base_storage_claim_t s_boot_storage_claim;
 static esp_base_storage_owner_t s_flash_io_owner;
 static esp_base_storage_claim_t s_ota_flash_claim;
+static int64_t s_ota_flash_held_started_us;
 static esp_base_ota_receipt_recovery_t s_boot_ota_receipt;
 
 #define ESP_BASE_FLASH_IO_WAIT_US INT64_C(500000)
 
 static bool claim_flash_io(esp_base_storage_owner_t *owner,
-                           esp_base_storage_claim_t *claim)
+                           esp_base_storage_claim_t *claim,
+                           esp_base_flash_consumer_t consumer,
+                           int64_t *held_started_us)
 {
-    if (owner == NULL || claim == NULL) return false;
+    if (owner == NULL || claim == NULL || held_started_us == NULL) return false;
     const int64_t started_us = esp_timer_get_time();
-    if (started_us < 0) return false;
+    if (started_us < 0) {
+        esp_base_flash_observation_acquire(consumer, started_us, started_us, false);
+        return false;
+    }
     do {
-        if (esp_base_storage_claim(owner, claim)) return true;
-        if (esp_timer_get_time() - started_us >= ESP_BASE_FLASH_IO_WAIT_US) return false;
+        const int64_t attempt_us = esp_timer_get_time();
+        const bool acquired = esp_base_storage_claim(owner, claim);
+        const int64_t finished_us = esp_timer_get_time();
+        const bool clock_valid = attempt_us >= started_us && finished_us >= attempt_us;
+        if (acquired) {
+            *held_started_us = attempt_us;
+            esp_base_flash_observation_acquire(consumer,
+                clock_valid ? started_us : -1, finished_us, true);
+            return true;
+        }
+        if (!clock_valid || (uint64_t)finished_us - (uint64_t)started_us >=
+            (uint64_t)ESP_BASE_FLASH_IO_WAIT_US) {
+            esp_base_flash_observation_acquire(consumer,
+                clock_valid ? started_us : -1, finished_us, false);
+            return false;
+        }
         vTaskDelay(1);
     } while (true);
 }
@@ -53,8 +74,10 @@ static bool ota_flash_acquire(void *context)
     /* Only the holder may touch the shared handoff. BUSY callers retry with
      * their own claim; the owner's acquire/release orders the handoff bytes. */
     esp_base_storage_claim_t claim = {0};
-    if (!claim_flash_io(context, &claim)) return false;
+    int64_t held_started_us = 0;
+    if (!claim_flash_io(context, &claim, ESP_BASE_FLASH_OTA, &held_started_us)) return false;
     s_ota_flash_claim = claim;
+    s_ota_flash_held_started_us = held_started_us;
     return true;
 }
 
@@ -62,12 +85,20 @@ static bool ota_flash_release(void *context)
 {
     if (context != &s_flash_io_owner) return false;
     esp_base_storage_claim_t claim = s_ota_flash_claim;
+    const int64_t held_started_us = s_ota_flash_held_started_us;
     /* Clear the handoff before publishing an idle owner. The release helper
      * then clears only this task's local copy, never the next holder's claim. */
     s_ota_flash_claim = (esp_base_storage_claim_t){0};
-    if (esp_base_storage_release(&claim)) return true;
-    s_ota_flash_claim = claim;
-    return false;
+    s_ota_flash_held_started_us = 0;
+    const bool released = esp_base_storage_release(&claim);
+    const int64_t finished_us = esp_timer_get_time();
+    if (!released) {
+        s_ota_flash_claim = claim;
+        s_ota_flash_held_started_us = held_started_us;
+    }
+    esp_base_flash_observation_release(ESP_BASE_FLASH_OTA, held_started_us,
+        finished_us, released);
+    return released;
 }
 
 static esp_err_t inspect_with_flash_io(eota_current_t *ota)
@@ -101,9 +132,13 @@ static efrp_result_t frp_scratch_with_owner(
 {
     if (owner_context == NULL || operation == NULL) return EFRP_INVALID_ARGUMENT;
     esp_base_storage_claim_t claim = {0};
-    if (!claim_flash_io(owner_context, &claim)) return EFRP_STORAGE_ERROR;
+    int64_t held_started_us = 0;
+    if (!claim_flash_io(owner_context, &claim, ESP_BASE_FLASH_FRP, &held_started_us)) return EFRP_STORAGE_ERROR;
     const efrp_result_t result = operation(operation_context);
-    return esp_base_storage_release(&claim) ? result : EFRP_STORAGE_ERROR;
+    const bool released = esp_base_storage_release(&claim);
+    esp_base_flash_observation_release(ESP_BASE_FLASH_FRP, held_started_us,
+        esp_timer_get_time(), released);
+    return released ? result : EFRP_STORAGE_ERROR;
 }
 #endif
 
@@ -113,17 +148,25 @@ static efrp_result_t frp_scratch_with_owner(
 static esp_err_t initialise_nvs(void)
 {
     esp_base_storage_claim_t claim = {0};
-    if (!claim_flash_io(&s_flash_io_owner, &claim)) return ESP_ERR_TIMEOUT;
+    int64_t held_started_us = 0;
+    if (!claim_flash_io(&s_flash_io_owner, &claim, ESP_BASE_FLASH_CONFIG, &held_started_us)) return ESP_ERR_TIMEOUT;
     const esp_err_t result = nvs_flash_init();
-    return esp_base_storage_release(&claim) ? result : ESP_FAIL;
+    const bool released = esp_base_storage_release(&claim);
+    esp_base_flash_observation_release(ESP_BASE_FLASH_CONFIG, held_started_us,
+        esp_timer_get_time(), released);
+    return released ? result : ESP_FAIL;
 }
 
 static esp_err_t read_identity_with_flash_io(esp_base_identity_t *identity)
 {
     esp_base_storage_claim_t claim = {0};
-    if (!claim_flash_io(&s_flash_io_owner, &claim)) return ESP_ERR_TIMEOUT;
+    int64_t held_started_us = 0;
+    if (!claim_flash_io(&s_flash_io_owner, &claim, ESP_BASE_FLASH_CONFIG, &held_started_us)) return ESP_ERR_TIMEOUT;
     const esp_err_t result = esp_base_identity_read(identity);
-    return esp_base_storage_release(&claim) ? result : ESP_FAIL;
+    const bool released = esp_base_storage_release(&claim);
+    esp_base_flash_observation_release(ESP_BASE_FLASH_CONFIG, held_started_us,
+        esp_timer_get_time(), released);
+    return released ? result : ESP_FAIL;
 }
 
 static uint64_t uptime_ms(void)
@@ -241,6 +284,7 @@ void app_main(void)
     esp_base_storage_owner_init(&s_storage_owner);
     esp_base_storage_owner_init(&s_flash_io_owner);
     s_ota_flash_claim = (esp_base_storage_claim_t){0};
+    s_ota_flash_held_started_us = 0;
     if (!esp_base_ota_policy_bind_flash_io((eota_flash_io_t){
             .acquire = ota_flash_acquire,
             .release = ota_flash_release,

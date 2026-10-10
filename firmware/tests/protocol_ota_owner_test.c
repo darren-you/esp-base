@@ -593,8 +593,76 @@ static void check_frp_ota(void)
         stream_prepare_calls == 0 && upload_finish_calls == 1 && failure_record_calls == 1 && owner_available());
 }
 
+static void check_config_flash_observation(void)
+{
+    reset_case();
+    s_candidate = calloc(1U, sizeof *s_candidate);
+    assert(s_candidate);
+    s_candidate->wifi.configured = true;
+    s_candidate->revision = 7U;
+    s_trial_active = true; s_trial_deadline = 1234U; s_trial_slot = 0U;
+    esp_base_remote_config_t *const original_candidate = s_candidate;
+    esp_base_storage_claim_t holder = {0};
+    assert(esp_base_storage_claim(&owner, &holder));
+    esp_base_flash_observation_t before[ESP_BASE_FLASH_CONSUMER_COUNT], after[ESP_BASE_FLASH_CONSUMER_COUNT];
+    esp_base_flash_observation_snapshot(before);
+    poll_configuration(fake_now_ms);
+    esp_base_flash_observation_snapshot(after);
+    assert(s_trial_active && s_candidate == original_candidate && s_trial_deadline == 1234U);
+    assert(config_commit_calls == 0U && esp_base_storage_claim_active(&holder));
+    assert(after[ESP_BASE_FLASH_CONFIG].acquire_failed_count ==
+           before[ESP_BASE_FLASH_CONFIG].acquire_failed_count + 1U);
+    assert(after[ESP_BASE_FLASH_CONFIG].completed_claim_count == before[ESP_BASE_FLASH_CONFIG].completed_claim_count);
+    assert(fake_now_ms == 1000U); /* Single try neither delays nor extends proof. */
+    assert(esp_base_storage_release(&holder));
+    poll_configuration(fake_now_ms);
+    esp_base_flash_observation_snapshot(after);
+    assert(config_commit_calls == 1U && !s_trial_active && s_candidate == NULL && owner_available());
+    assert(after[ESP_BASE_FLASH_CONFIG].completed_claim_count == before[ESP_BASE_FLASH_CONFIG].completed_claim_count + 1U);
+    assert(after[ESP_BASE_FLASH_CONFIG].counters_valid);
+    reset_case();
+}
+
+static void check_ota_phase_observation(void)
+{
+    reset_case();
+    FILE *capture = tmpfile();
+    assert(capture);
+    fflush(stdout);
+    const int original_stdout = dup(STDOUT_FILENO);
+    assert(original_stdout >= 0 && dup2(fileno(capture), STDOUT_FILENO) >= 0);
+    start_valid(1);
+    run_worker();
+    fflush(stdout);
+    assert(dup2(original_stdout, STDOUT_FILENO) >= 0);
+    close(original_stdout);
+    rewind(capture);
+    char output[16384] = {0};
+    assert(fread(output, 1U, sizeof output - 1U, capture) > 0U);
+    fclose(capture);
+    const char *const phases[] = {"retire_inactive", "prepare", "select"};
+    const char *cursor = output;
+    for (unsigned i = 0; i < sizeof phases / sizeof *phases; ++i) {
+        char marker[80];
+        snprintf(marker, sizeof marker, "phase=%s boundary=begin", phases[i]);
+        cursor = strstr(cursor, marker); assert(cursor);
+        snprintf(marker, sizeof marker, "phase=%s boundary=end", phases[i]);
+        cursor = strstr(cursor, marker); assert(cursor);
+    }
+    assert(strstr(cursor, "phase=select boundary=terminal"));
+    assert(strstr(cursor, "ESP_BASE_FLASH_IO boot_id="));
+    assert(strstr(output, registered_request.operation_id));
+    assert(strstr(output, s_guard.entries[s_ota_slot].request_id));
+    assert(strstr(output, "snapshot_started_us=") && strstr(output, "snapshot_finished_us="));
+    assert(strstr(output, "result=ok stage_uncertain=0"));
+    assert(restart_calls == 1U && s_ota_active && s_ota_request);
+    reset_case();
+}
+
 int main(void)
 {
+    check_config_flash_observation();
+    check_ota_phase_observation();
     check_frp_ota();
     reset_case(); start_valid(1); expect_reply("running", NULL);
     assert(s_ota_request && s_ota_request == last_decoded_ota_request && register_calls == 1 && task_calls == 1);

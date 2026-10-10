@@ -55,6 +55,7 @@ add_executable(frps_ota_peer
   "${BASE_ROOT}/firmware/components/device_protocol/frp_management_listener.c"
   "${BASE_ROOT}/firmware/components/device_protocol/command_guard.c"
   "${BASE_ROOT}/firmware/components/device_protocol/control_state.c"
+  "${BASE_ROOT}/firmware/components/device_protocol/flash_observation.c"
   "${BASE_ROOT}/firmware/components/native_business/esp_base_business.c"
   "${BASE_ROOT}/firmware/components/ota_operation/esp_base_storage_owner.c"
   "${BASE_ROOT}/firmware/components/ota_operation/esp_base_ota_policy.c"

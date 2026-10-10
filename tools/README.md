@@ -51,8 +51,10 @@ git clone \
   https://github.com/darren-you/reference-esp-idf.git "$ESP_BASE_IDF"
 git -C "$ESP_BASE_IDF" checkout --detach fb53f8a76df5ea913715658f5ac602e91a094e72
 git -C "$ESP_BASE_IDF" submodule update --init --recursive --checkout --no-recommend-shallow
-git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch \
-  https://github.com/darren-you/esp-lwip.git f6e98c34ad65d31419b3fbb1fe27015e46060a6a
+git -C "$ESP_BASE_IDF/components/lwip/lwip" remote set-url origin \
+  https://github.com/darren-you/esp-lwip.git
+git -C "$ESP_BASE_IDF/components/lwip/lwip" fetch --no-filter \
+  origin f6e98c34ad65d31419b3fbb1fe27015e46060a6a
 git -C "$ESP_BASE_IDF/components/lwip/lwip" checkout --detach FETCH_HEAD
 bash "$ESP_BASE_IDF/install.sh" esp32c3 esp32
 source "$ESP_BASE_IDF/export.sh"
@@ -83,6 +85,12 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 当前 schema 2 要求 BEGIN 后唯一 MQTT 观测行，再读取 REGION／TASK／DOMAIN／END；schema 1 仅解析既有冻结原件，同 boot 不允许切换版本。parser 严格核对实例编号、真实所有权上限、请求字节等式、采样 `start <= until <= BEGIN`、固定成本与累计历史；计数失效保留原 flag，禁止授满输入局部观测，独立 SDK 数值门不因此冒充全部 R5。输出的 `maximum_inbound_owner_tuple_observed` 只表示同一次 partial 回调确有三个4096 B完整 owner 加一个4096 B未完成 owner，不证明业务认证、outbox最大合法状态或OTA重叠。`outbox_wire_bytes_at_rx_peak` 是同 SDK API锁期间的协议字节，不含 outbox节点／分配器元数据；原 FULL 只证明该条请求被现有 admission 拒绝。实体重叠必须以同 boot／同 operation 的真实 OTA消费锚点包住整个采样区间，并以严格 TLS peer原 MID／DUP／PUBACK账本独立核对 outbox。解析始终保留全局下一申请、R5和R6为false。
 
 统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
+
+独立 `ESP_BASE_FLASH_IO` 行保留三类短 claim 的 `completed_claim_count`、`acquire_failed_count`、`release_failed_count`、`max_wait_us`、`max_held_upper_bound_us` 和 `counters_valid`。等待计时从本次入口到成功 CAS 后或失败返回前；占有上界从成功那次 CAS 前到真实 release 后，包含该窗口内的观测与调度成本。只对成功 release 的完成 claim 更新占有最大值，失败释放、负／倒退时钟或32位溢出永久令该类历史无效；计数／过长时长饱和，不回绕、不运行中清空。配置提交仍是单次尝试，BUSY 的时长不能代表跨 control pass 的排队时间；配置类也包含启动 NVS／身份／配置读取。OTA 类包含启动核验、收据及 firmware.status 的短 I/O，FRP 类也包含启动 scratch 恢复，非零计数不能独自证明某 OTA 阶段存在大 authenticated record。
+
+`ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；FRP 联合覆盖仍须真实 record／peer 轨迹，不能仅凭异时 maxima 相加或健康控制记录推定 scratch 峰值。`ESP_BASE_FRP_WORK` 的 work_active／work_waiting、attempts／ready_sessions 来自同一次 SDK 快照，五秒未采到双活跃加备用就不授该覆盖。
+
+以上行均位于容量 END 外，容量 schema2 字节与 BEGIN 截止不变；每个主动重启前及 OTA 失败持久化后、清理原请求前也保留最终 Flash 快照。观测仅使用72 B固定聚合数据、一个平台短临界锁、8 B OTA 交接时刻以及调用栈临时快照；`aggregate_storage_bytes` 仅为聚合数组与锁的 sizeof，不是全部固件开销。`ESP_BASE_FLASH_IO_OUTPUT` 记录本次快照和三行打印的实测窗口，明确不含它自身末行。所有新增代码、格式化、UART锁／线路、栈及调度成本均留在新候选的实际 ELF／资源／时延测量中，不加回门限，也不称聚合 max 覆盖了全部时间区间或未完成 holder。
 
 ```bash
 IDF_PATH=/absolute/managed-sdk python3 tools/test_managed_sdk.py
