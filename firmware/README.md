@@ -11,6 +11,8 @@
 
 C3 使用 USB Serial/JTAG VFS；ESP32 使用 UART0。控制任务栈 8,192 B，主任务至少 6,144 B。签名 C3 使用 RSA-3072 v2，ESP32 使用 ECDSA P-256 v1；目标、签名方案和几何各自核对，软件测试键不属于正式信任。
 
+Base 自有的固定 Flash 观测保留每 boot 的 OTA／FRP／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界，FRP 活跃／备用数来自同一次既有 SDK 状态快照。独立 UART 行位于容量 END 外，沿用既有五秒报告与主动重启点，不改 MQTT／FRP／OTA 公共 API 或业务 JSON，也不增加任务、定时器或动态分配。具体字段、成本与不可推导的验收范围见[宿主工具的观测说明](../tools/README.md#正式容量统计)。
+
 [C3 分区](partitions/c3-partition-table.csv)和 [ESP32 分区](partitions/esp32-partition-table.csv)均为双 `0x1e0000` app，移除业务包区。scratch、Base NVS 与 ESP32 旧 AT 区保持各自真实定位；新布局必须通过一次性有线装配迁入。旧 V3／损坏收据不能当作空状态，普通 app OTA 不能迁分区表。
 
 ## 构建

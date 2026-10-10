@@ -68,7 +68,7 @@ done
   -ffunction-sections -fdata-sections -Debase_config_encode=ebase_config_encode_real \
   -I "$test_root/tests/fakes" -I "$test_root/components/remote_config/include" \
   -c "$test_root/components/remote_config/config_codec.c" -o "$build_dir/config_codec_real.o"
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$target_define"=1 -Wall -Wextra -Werror \
+"${CC:-cc}" -std=c11 -pthread -D_POSIX_C_SOURCE=200809L -D"$target_define"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${protocol_link_gc[@]}" "${openssl_cflags[@]}" \
   -I "$test_root/tests/fakes/protocol-path" -I "$test_root/tests/fakes/ota-update" -I "$test_root/tests/fakes" \
   -I "$test_root/components/device_protocol/include" -I "$test_root/components/device_protocol" \
@@ -78,6 +78,7 @@ done
   -I "$components_dir/esp_frp/include" -I "$components_dir/mqtt/runtime/include" \
   "$test_root/components/device_protocol/command_guard.c" "$test_root/components/device_protocol/control_state.c" \
   "$test_root/components/native_business/esp_base_business.c" "$test_root/components/ota_operation/esp_base_storage_owner.c" \
+  "$test_root/components/device_protocol/flash_observation.c" \
   "$build_dir/command_decoder_real.o" "$build_dir/config_codec_real.o" "$build_dir/cjson.o" \
   "$build_dir/network_auth.o" "$build_dir/frp_management_listener.o" "$build_dir/psa_openssl_port.o" \
   "$test_root/tests/frp_management_owner_crypto_test.c" "${openssl_libs[@]}" -lm \

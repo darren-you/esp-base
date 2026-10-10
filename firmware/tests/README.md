@@ -2,7 +2,7 @@
 
 公开入口 `bash firmware/tests/run_host_tests.sh` 使用官方Component Manager解析的同target组件，开启ASan／UBSan和严格编译诊断。ESP_BASE_TEST_TARGET选择esp32c3或esp32；ESP_BASE_TEST_COMPONENTS_DIR可指向本轮独立源码副本的已解析managed_components，不从相邻源仓import。
 
-运行前先按[固件构建说明](../README.md)准备锁定SDK，并对所选target执行官方Component Manager重新解析。`managed_components`是生成目录，新检出或清理生成物后须先恢复该输入；host入口本身不下载依赖。使用已冻结的独立构建输入时，分别指定各target对应的完整组件目录，不能把空目录、另一轮缓存或相邻源仓当成本轮组件：
+运行前先按[固件构建说明](../README.md)准备锁定SDK，并对所选target执行官方Component Manager重新解析。`managed_components`是生成目录，新检出或清理生成物后须先恢复该输入；host入口本身不下载依赖。使用已冻结的独立构建输入时，分别指定各target对应的组件目录，不能把空目录、另一轮缓存或相邻源仓当成本轮组件。也可提取该入口实际读取的源码／头文件子集，但必须逐文件核对长度与摘要、绑定原target锁和解析来源；子集通过只证明host消费，不等于完整SDK解析或固件构建：
 
 ```bash
 ESP_BASE_TEST_TARGET=esp32c3 \
@@ -27,6 +27,8 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 真实protocol owner测试编译生产decoder／guard／control／业务／协议源码，用显式SDK、NVS与OTA假件覆盖写前意图、原请求移交、双入口互斥、FRP arm／5秒无连接、任务失败、成功prepare后取消不选槽、部分清C、unknown锁保留、原ID回放和独立firmware.status。receipt／firmware测试核对登记只消费一次真实观察入口、现有事务 claim、槽状态／几何变化与 claim 失效停止、坏签名及未决前次阻断、182B V4、V3／损坏阻断、A/C完整签名身份、pending／VALID／失败与存储调用故障。观察测试分别编译真实 firmware observer 与 receipt register，SDK验签/NVS假件验证控制边界；不冒充实体密码学或公网 ACK 时延。startup两目标分别启用／禁用scratch，验证本地30秒控制进展、跨窗、rollback、确认读回不确定与短Flash仲裁。均不冒充真实NVS掉电原子性或bootloader。
 
 `flash_io_concurrency_test.c` 直接编译生产 main 的短 Flash 回调与真实 storage owner：两个宿主线程交接、8192次竞争 I/O 和原500ms BUSY期限，等待者只访问自己的局部 claim，释放前清理共享交接。公开 host 入口包含ASan／UBSan；独立TSan结果与曾复现的数据竞争另存当轮检查点。测试不模拟MCU调度、Flash最坏时延或实时栈水位。
+
+Flash 回调测试同时核对 held 起点随 claim 交接、释放失败成对恢复、倒退时钟不使 BUSY 无限等待，以及成功取得 claim 后仍走真实释放。`flash_observation_test.c` 直接编译 Base 自有观测原语，覆盖三类并发快照、32位计数与时长饱和、负／倒退时钟永久失效、失败释放不混入完成 claim 最大值和独立 UART 前缀。协议 owner 测试核对配置单次 BUSY 不延后原 Wi-Fi proof deadline，下一次真实成功才增加完成计数；这些均不授实体联合延迟或 R5。
 
 MQTT owner／认证测试保持QoS1、non-retained、严格TLS、双SUBACK、4096入站／5120发布／16384outbox、原生事件boot／连续序号及HMAC、重配／重连／失败释放。Wi-Fi／时间测试验证真实组件的初始化失败与恢复，但不模拟无线AP、DNS或NTP。
 

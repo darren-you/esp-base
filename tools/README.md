@@ -79,6 +79,12 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 
 统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
 
+独立 `ESP_BASE_FLASH_IO` 行保留三类短 claim 的 `completed_claim_count`、`acquire_failed_count`、`release_failed_count`、`max_wait_us`、`max_held_upper_bound_us` 和 `counters_valid`。等待计时从本次入口到成功 CAS 后或失败返回前；占有上界从成功那次 CAS 前到真实 release 后，包含该窗口内的观测与调度成本。只对成功 release 的完成 claim 更新占有最大值，失败释放、负／倒退时钟或32位溢出永久令该类历史无效；计数／过长时长饱和，不回绕、不运行中清空。配置提交仍是单次尝试，BUSY 的时长不能代表跨 control pass 的排队时间；配置类也包含启动 NVS／身份／配置读取。OTA 类包含启动核验、收据及 firmware.status 的短 I/O，FRP 类也包含启动 scratch 恢复，非零计数不能独自证明某 OTA 阶段存在大 authenticated record。
+
+`ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；FRP 联合覆盖仍须真实 record／peer 轨迹，不能仅凭异时 maxima 相加或健康控制记录推定 scratch 峰值。`ESP_BASE_FRP_WORK` 的 work_active／work_waiting、attempts／ready_sessions 来自同一次 SDK 快照，五秒未采到双活跃加备用就不授该覆盖。
+
+以上行均位于容量 END 外，容量 schema2 字节与 BEGIN 截止不变；每个主动重启前及 OTA 失败持久化后、清理原请求前也保留最终 Flash 快照。观测仅使用72 B固定聚合数据、一个平台短临界锁、8 B OTA 交接时刻以及调用栈临时快照；`aggregate_storage_bytes` 仅为聚合数组与锁的 sizeof，不是全部固件开销。`ESP_BASE_FLASH_IO_OUTPUT` 记录本次快照和三行打印的实测窗口，明确不含它自身末行。所有新增代码、格式化、UART锁／线路、栈及调度成本均留在新候选的实际 ELF／资源／时延测量中，不加回门限，也不称聚合 max 覆盖了全部时间区间或未完成 holder。
+
 ```bash
 IDF_PATH=/absolute/managed-sdk python3 tools/test_managed_sdk.py
 python3 tools/test_sdk_capacity.py --idf-path /absolute/managed-sdk

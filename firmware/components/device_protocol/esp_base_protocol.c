@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_protocol.h"
 #include "esp_base_capacity.h"
+#include "esp_base_flash_observation.h"
 #include "control_state.h"
 #include "esp_base_command.h"
 #include "esp_base_identity.h"
@@ -176,7 +177,9 @@ static void reported(void)
 {
     const uint64_t now = uptime_ms();
     const bool time_ready = esp_base_time_ready();
+    const int64_t frp_snapshot_started_us = esp_timer_get_time();
     const esp_base_frp_snapshot_t frp = esp_base_frp_owner_snapshot();
+    const int64_t frp_snapshot_finished_us = esp_timer_get_time();
     ESP_LOGI("base_reported",
         "ESP_BASE_REPORTED schema=1 boot_id=%s uptime_ms=%" PRIu64
         " free_heap=%" PRIu32 " min_free_heap=%" PRIu32
@@ -191,6 +194,9 @@ static void reported(void)
         frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request->image_size_bytes : 0);
+    printf("ESP_BASE_FRP_WORK boot_id=%s snapshot_started_us=%" PRId64 " snapshot_finished_us=%" PRId64 " attempts=%" PRIu64 " ready_sessions=%" PRIu64 " work_active=%" PRIu32 " work_waiting=%" PRIu32 "\n",
+        s_boot_id, frp_snapshot_started_us, frp_snapshot_finished_us,
+        frp.attempts, frp.ready_sessions, frp.work_active, frp.work_waiting);
     char digest[67] = "null", completed[24] = "null", business_result[16] = "null";
     if (s_business.last_event_sequence) {
         (void)snprintf(completed, sizeof completed, "%" PRIu64, s_business.last_event_sequence);
@@ -500,6 +506,7 @@ static void poll_frp_restart(uint64_t now)
         now - s_frp_restart_since_ms < 2000U) return;
     s_frp_restart_pending = false;
     esp_base_capacity_before_reset(s_boot_id, uptime_ms());
+    esp_base_flash_observation_emit(s_boot_id);
     esp_restart();
 }
 
@@ -512,6 +519,7 @@ static void poll_mqtt_restart(uint64_t now)
         now - s_mqtt_restart_since_ms < 2000U) return;
     s_mqtt_restart_pending = false;
     esp_base_capacity_before_reset(s_boot_id, uptime_ms());
+    esp_base_flash_observation_emit(s_boot_id);
     esp_restart();
 }
 
@@ -540,18 +548,35 @@ static void clear_candidate(void)
 }
 
 static bool claim_config_flash_io(esp_base_storage_owner_t *owner,
-                                  esp_base_storage_claim_t *claim)
+                                  esp_base_storage_claim_t *claim,
+                                  int64_t *held_started_us)
 {
-    return owner != NULL && claim != NULL && esp_base_storage_claim(owner, claim);
+    if (owner == NULL || claim == NULL || held_started_us == NULL) return false;
+    const int64_t started_us = esp_timer_get_time();
+    const bool acquired = esp_base_storage_claim(owner, claim);
+    esp_base_flash_observation_acquire(ESP_BASE_FLASH_CONFIG, started_us,
+        esp_timer_get_time(), acquired);
+    if (acquired) *held_started_us = started_us;
+    return acquired;
+}
+
+static bool release_config_flash_io(esp_base_storage_claim_t *claim,
+                                    int64_t held_started_us)
+{
+    const bool released = esp_base_storage_release(claim);
+    esp_base_flash_observation_release(ESP_BASE_FLASH_CONFIG, held_started_us,
+        esp_timer_get_time(), released);
+    return released;
 }
 
 static esp_err_t load_config_with_flash_io(
     esp_base_remote_config_t *config, esp_base_storage_owner_t *owner)
 {
     esp_base_storage_claim_t claim = {0};
-    if (!claim_config_flash_io(owner, &claim)) return ESP_ERR_TIMEOUT;
+    int64_t held_started_us = 0;
+    if (!claim_config_flash_io(owner, &claim, &held_started_us)) return ESP_ERR_TIMEOUT;
     const esp_err_t result = esp_base_remote_config_load(config);
-    return esp_base_storage_release(&claim) ? result : ESP_FAIL;
+    return release_config_flash_io(&claim, held_started_us) ? result : ESP_FAIL;
 }
 
 static void poll_configuration(uint64_t now)
@@ -563,13 +588,14 @@ static void poll_configuration(uint64_t now)
         /* Another short Flash operation may finish on a later control pass.
          * Keep both the candidate and its original proof deadline intact. */
         esp_base_storage_claim_t claim = {0};
-        if (!claim_config_flash_io(s_context.flash_io_owner, &claim)) return;
+        int64_t held_started_us = 0;
+        if (!claim_config_flash_io(s_context.flash_io_owner, &claim, &held_started_us)) return;
         /* The control task is the sole reader/writer of s_context.config after
          * startup. The FRP owner borrows this boot-long canonical storage;
          * native network workers own copies made when they are created. */
         esp_base_remote_config_t *work = protocol_work_alloc(sizeof *work);
         if (work == NULL) {
-            const bool released = esp_base_storage_release(&claim);
+            const bool released = release_config_flash_io(&claim, held_started_us);
             s_trial_active = false;
             clear_candidate();
             if (released) {
@@ -585,7 +611,7 @@ static void poll_configuration(uint64_t now)
         }
         esp_err_t error = esp_base_remote_config_commit_verified(
             s_candidate, s_candidate->revision, &s_context.config, work);
-        if (!esp_base_storage_release(&claim)) error = ESP_BASE_CONFIG_UNCERTAIN;
+        if (!release_config_flash_io(&claim, held_started_us)) error = ESP_BASE_CONFIG_UNCERTAIN;
         s_trial_active = false;
         clear_candidate();
         bool reloaded = false;
@@ -625,6 +651,8 @@ static void poll_configuration(uint64_t now)
 static void clear_ota_request(void)
 {
     if (s_ota_request == NULL) return;
+    /* Preserve the completed history before the original operation is freed. */
+    esp_base_flash_observation_emit(s_boot_id);
     volatile unsigned char *bytes = (volatile unsigned char *)s_ota_request;
     for (size_t index = 0; index < sizeof *s_ota_request; ++index) bytes[index] = 0U;
     free(s_ota_request);
@@ -636,6 +664,27 @@ static void ota_progress(uint32_t received, uint32_t total, void *context)
     (void)total;
     (void)context;
     atomic_store_explicit(&s_ota_received, received, memory_order_relaxed);
+}
+
+static void observe_ota_phase(const char *phase, const char *boundary,
+                              eota_result_t result)
+{
+    esp_base_flash_observation_t metrics[ESP_BASE_FLASH_CONSUMER_COUNT];
+    const int64_t started_us = esp_timer_get_time();
+    esp_base_flash_observation_snapshot(metrics);
+    const int64_t finished_us = esp_timer_get_time();
+    const char *error = result == EOTA_UPDATE_OK ? "ok" : eota_error(result);
+    printf("ESP_BASE_OTA_PHASE boot_id=%s operation_id=%s request_id=%s phase=%s boundary=%s snapshot_started_us=%" PRId64 " snapshot_finished_us=%" PRId64 " result=%s stage_uncertain=%u ota_completed_claim_count=%" PRIu32 " frp_completed_claim_count=%" PRIu32 " config_completed_claim_count=%" PRIu32 " ota_counters_valid=%" PRIu32 " frp_counters_valid=%" PRIu32 " config_counters_valid=%" PRIu32 "\n",
+        s_boot_id, s_ota_request->operation_id, s_guard.entries[s_ota_slot].request_id,
+        phase, boundary, started_us, finished_us,
+        !strcmp(boundary, "begin") ? "pending" : error ? error : "unknown",
+        (unsigned)atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed),
+        metrics[ESP_BASE_FLASH_OTA].completed_claim_count,
+        metrics[ESP_BASE_FLASH_FRP].completed_claim_count,
+        metrics[ESP_BASE_FLASH_CONFIG].completed_claim_count,
+        metrics[ESP_BASE_FLASH_OTA].counters_valid,
+        metrics[ESP_BASE_FLASH_FRP].counters_valid,
+        metrics[ESP_BASE_FLASH_CONFIG].counters_valid);
 }
 
 static void ota_task(void *argument)
@@ -664,7 +713,9 @@ static void ota_task(void *argument)
         }
     }
     stage = "retire_inactive";
+    observe_ota_phase(stage, "begin", result);
     result = eota_retire_inactive(&policy, receipt.target_subtype, receipt.source_sha256);
+    observe_ota_phase(stage, "end", result);
     if (result != EOTA_UPDATE_OK) goto uncertain;
     mutated = true;
     eota_image_t image = {.image_url = s_ota_request->image_url,
@@ -672,26 +723,35 @@ static void ota_task(void *argument)
     memcpy(image.sha256, s_ota_request->sha256, 32);
     eota_prepared_t prepared = {0};
     stage = "prepare";
+    observe_ota_phase(stage, "begin", result);
     if (s_ota_request->inbound_stream) {
         eota_stream_t stream = {.read = esp_base_frp_management_upload_read,
             .image_size_bytes = image.image_size_bytes};
         memcpy(stream.sha256, image.sha256, 32);
         result = eota_prepare_stream(&policy, &stream, ota_progress, NULL, &prepared);
     } else result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);
+    observe_ota_phase(stage, "end", result);
     if (result == EOTA_UPDATE_OK && s_ota_request->inbound_stream) {
         stage = "upload_connection";
         if (!esp_base_frp_management_upload_connected()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
     }
     if (result == EOTA_UPDATE_OK) {
         stage = "select";
+        observe_ota_phase(stage, "begin", result);
         result = eota_select(&policy, &prepared);
+        observe_ota_phase(stage, "end", result);
     }
     if (result != EOTA_UPDATE_OK) {
         /* A receipt-bound cleanup must prove A remains VALID/selected and C's
          * first sector is erased before marking any partial write failed. */
-        if (result == EOTA_UPDATE_BOOT_STATE_UNKNOWN ||
-            (mutated && eota_retire_inactive(&policy, receipt.target_subtype,
-                                            receipt.source_sha256) != EOTA_UPDATE_OK)) goto uncertain;
+        if (result == EOTA_UPDATE_BOOT_STATE_UNKNOWN) goto uncertain;
+        if (mutated) {
+            observe_ota_phase("retire_cleanup", "begin", result);
+            const eota_result_t retired = eota_retire_inactive(&policy,
+                receipt.target_subtype, receipt.source_sha256);
+            observe_ota_phase("retire_cleanup", "end", retired);
+            if (retired != EOTA_UPDATE_OK) goto uncertain;
+        }
     }
     goto done;
 uncertain:
@@ -719,6 +779,7 @@ done:
     /* Host log fakes discard variadic arguments; production logs use both. */
     (void)stage;
     (void)upload_finished;
+    observe_ota_phase(stage, "terminal", result);
     atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);
     atomic_store_explicit(&s_ota_done, true, memory_order_release);
     vTaskDelete(NULL);
@@ -745,6 +806,7 @@ static void poll_ota(void)
         save_outcome(s_ota_slot, "running", NULL, false);
         (void)fsync(STDOUT_FILENO);
         esp_base_capacity_before_reset(s_boot_id, uptime_ms());
+        esp_base_flash_observation_emit(s_boot_id);
         esp_restart();
         return;
     }
@@ -972,6 +1034,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     (void)fsync(STDOUT_FILENO);
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_base_capacity_before_reset(s_boot_id, uptime_ms());
+    esp_base_flash_observation_emit(s_boot_id);
     esp_restart();
 }
 
@@ -1120,7 +1183,11 @@ static void control_task(void *argument)
         poll_mqtt_restart(uptime_ms());
         poll_frp_restart(uptime_ms());
         esp_base_capacity_poll(s_boot_id, uptime_ms());
-        if (now >= next_report) { reported(); next_report = now + 5000; }
+        if (now >= next_report) {
+            reported();
+            esp_base_flash_observation_emit(s_boot_id);
+            next_report = now + 5000;
+        }
         expire_serial_input(now, last_input);
         size_t count = 0;
         // Read from the selected console VFS without blocking the control loop.
