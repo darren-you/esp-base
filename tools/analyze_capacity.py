@@ -83,13 +83,19 @@ def _finish(frame: dict) -> dict:
         raise ValueError("region／任务行与 END 计数不符")
     if tuple(row["caps"] for row in domains) != DOMAIN_CAPS:
         raise ValueError("能力域缺失、未知、重复或顺序错误")
-    if not 0 < len(tasks) <= begin["task_limit"] or begin["task_limit"] != 32:
-        raise ValueError("任务快照缺失或超出正式固定工作区")
-    if any(end[key] != 1 for key in ("task_snapshot_complete", "counters_valid", "facts_valid")):
-        raise ValueError("任务覆盖不完整或连续统计已失效")
+    if len(tasks) > begin["task_limit"] or begin["task_limit"] != 32:
+        raise ValueError("任务快照超出正式固定工作区")
+    if any(end[key] != 1 for key in ("counters_valid", "facts_valid")):
+        raise ValueError("连续统计已永久失效")
     created, finalized = end["created_instances"], end["finalized_instances"]
-    if created == UINT32_MAX or finalized == UINT32_MAX or finalized > created or created - finalized != len(tasks):
-        raise ValueError("任务计数饱和或 created／finalized／仍分配实例不能闭合")
+    if created == UINT32_MAX or finalized == UINT32_MAX or finalized > created:
+        raise ValueError("任务计数饱和或 finalized 超出 created")
+    expected = created - finalized
+    complete = bool(tasks) and expected == len(tasks)
+    if end["task_snapshot_complete"] != int(complete):
+        raise ValueError("任务完整标记与 created／finalized／已报告实例矛盾")
+    if not complete and (expected <= len(tasks) or (not tasks and expected <= begin["task_limit"])):
+        raise ValueError("任务不足快照不符合清理间隙或官方列表容量边界")
     worst = end["worst_completed_instance"]
     if (finalized == 0 and (end["completed_stack_min_bytes"] != 0 or worst != 0)) or (finalized > 0 and worst == 0):
         raise ValueError("退出实例的最低栈与空集合标记不符")
@@ -99,12 +105,13 @@ def _finish(frame: dict) -> dict:
     for row in tasks:
         if re.fullmatch(r"(?:[0-9a-f]{2})+", row["name_hex"]) is None or row["state"] > 4:
             raise ValueError("任务名编码或 FreeRTOS 状态无效")
-    if len({len(row["name_hex"]) for row in tasks}) != 1:
+    if tasks and len({len(row["name_hex"]) for row in tasks}) != 1:
         raise ValueError("任务名工作区宽度不一致")
     stack_values = [row["minimum_stack_bytes"] for row in tasks]
     if finalized:
         stack_values.append(end["completed_stack_min_bytes"])
-    if min(stack_values) != end["minimum_stack_bytes"] or end["observation_cost_added_back"] != 0:
+    reported_minimum = min(stack_values) if stack_values else 0
+    if reported_minimum != end["minimum_stack_bytes"] or end["observation_cost_added_back"] != 0:
         raise ValueError("全实例最低栈不符或观察成本被加回")
     if end["workspace_bytes"] == 0:
         raise ValueError("正式观察工作区缺失")
@@ -143,7 +150,8 @@ def _finish(frame: dict) -> dict:
     return frame
 
 
-def _check_history(previous: dict, current: dict, seen: dict[int, dict], retired: set[int]) -> None:
+def _check_readout_history(previous: dict, current: dict) -> None:
+    """所有帧的运输顺序、分配器与有效累计计数都连续核对。"""
     before, after = previous["begin"], current["begin"]
     if after["frame"] != before["frame"] + 1 or after["uptime_ms"] <= before["uptime_ms"] or before["phase"] == "before_reset":
         raise ValueError("帧重复、丢失、时间回退或同 boot 复位帧后继续统计")
@@ -162,20 +170,26 @@ def _check_history(previous: dict, current: dict, seen: dict[int, dict], retired
             raise ValueError("region 身份改变或连续历史最低值回升")
     old, new = previous["end"], current["end"]
     if (new["created_instances"] < old["created_instances"] or new["finalized_instances"] < old["finalized_instances"]
-            or new["workspace_bytes"] != old["workspace_bytes"] or new["minimum_stack_bytes"] > old["minimum_stack_bytes"]):
-        raise ValueError("任务历史计数、最低栈或固定工作区改变")
+            or new["workspace_bytes"] != old["workspace_bytes"]):
+        raise ValueError("任务历史计数或固定工作区改变")
     if old["finalized_instances"] and (new["completed_stack_min_bytes"] > old["completed_stack_min_bytes"] or
             (new["completed_stack_min_bytes"] == old["completed_stack_min_bytes"] and new["worst_completed_instance"] != old["worst_completed_instance"])):
         raise ValueError("退出实例历史最低栈或最差实例不连续")
     if new["finalized_instances"] == old["finalized_instances"] and any(
             new[key] != old[key] for key in ("completed_stack_min_bytes", "worst_completed_instance")):
         raise ValueError("没有新增最终记录却改变了退出实例摘要")
+
+
+def _check_complete_task_history(previous: dict, current: dict, seen: dict[int, dict], retired: set[int]) -> None:
+    """仅完整快照的集合差及全实例 HWM 构成生命周期锚点。"""
+    old, new = previous["end"], current["end"]
+    if new["minimum_stack_bytes"] > old["minimum_stack_bytes"]:
+        raise ValueError("完整快照的全实例最低栈回升")
     previous_ids = {row["instance"] for row in previous["tasks"]}
     current_ids = {row["instance"] for row in current["tasks"]}
     if (len(current_ids - previous_ids) > new["created_instances"] - old["created_instances"] or
-            len(previous_ids - current_ids) > new["finalized_instances"] - old["finalized_instances"] or
-            len(current["tasks"][0]["name_hex"]) != len(previous["tasks"][0]["name_hex"])):
-        raise ValueError("实例集合变化超出真实创建／最终记录计数或名称宽度改变")
+            len(previous_ids - current_ids) > new["finalized_instances"] - old["finalized_instances"]):
+        raise ValueError("完整实例集合变化超出真实创建／最终记录计数")
     retired.update(previous_ids - current_ids)
     for row in current["tasks"]:
         old_task = seen.get(row["instance"])
@@ -185,14 +199,20 @@ def _check_history(previous: dict, current: dict, seen: dict[int, dict], retired
 
 def _summary(frame: dict) -> dict:
     domain = next(row for row in frame["domains"] if row["caps"] == INTERNAL_8BIT)
+    complete = bool(frame["end"]["task_snapshot_complete"])
     return {"frame": frame["begin"]["frame"], "phase": frame["begin"]["phase"],
-            "proved_until_begin_uptime_ms": frame["begin"]["uptime_ms"],
+            "begin_uptime_ms": frame["begin"]["uptime_ms"],
+            "proved_until_begin_uptime_ms": frame["begin"]["uptime_ms"] if complete else None,
+            "task_snapshot_complete": complete,
+            "task_snapshot_issue": None if complete else ("task_list_capacity_not_complete" if not frame["tasks"]
+                                                         else "created_minus_finalized_exceeds_reported_instances"),
             "regions": len(frame["regions"]), "allocated_tasks": len(frame["tasks"]),
             "created_instances": frame["end"]["created_instances"],
             "finalized_instances": frame["end"]["finalized_instances"],
             "minimum_free_lower_bound_bytes": domain["minimum_free_lower_bound_bytes"],
             "largest_request_lower_bound_bytes": domain["largest_request_lower_bound_bytes"],
-            "minimum_stack_bytes": frame["end"]["minimum_stack_bytes"],
+            "minimum_stack_bytes": frame["end"]["minimum_stack_bytes"] if complete else None,
+            "reported_minimum_stack_bytes": frame["end"]["minimum_stack_bytes"],
             "domains": [{key: row[key] for key in ("caps", "alignment_bytes",
                          "minimum_free_lower_bound_bytes", "largest_request_lower_bound_bytes")}
                         for row in frame["domains"]]}
@@ -203,7 +223,8 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
     if target not in ("esp32", "esp32c3") or UUID.fullmatch(boot_id) is None or HASH.fullmatch(sdk_lock_sha256) is None or not paths:
         raise ValueError("须提供明确 target、规范 boot UUID、冻结 SDK lock 摘要及原日志")
     frames, inputs, seen, retired = [], [], {}, set()
-    previous = None  # 72 小时日志不驻留全部原始 REGION／TASK 帧。
+    previous = previous_complete = None  # 72 小时日志不驻留全部原始 REGION／TASK 帧。
+    name_width = None
     for path in paths:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(fd, "rb") as stream:
@@ -229,7 +250,7 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
                     else:
                         if frame is None or row["frame"] != frame["begin"]["frame"]:
                             raise ValueError("容量行缺 BEGIN 或不属于当前帧")
-                        allowed = {"REGION": ("REGION", "TASK"), "TASK": ("TASK", "DOMAIN"),
+                        allowed = {"REGION": ("REGION", "TASK", "DOMAIN"), "TASK": ("TASK", "DOMAIN"),
                                    "DOMAIN": ("DOMAIN", "END")}[stage]
                         if kind not in allowed:
                             raise ValueError("REGION／TASK／DOMAIN／END 顺序错误")
@@ -239,9 +260,21 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
                             continue
                         frame["end"] = row
                         _finish(frame)
+                        if frame["tasks"]:
+                            width = len(frame["tasks"][0]["name_hex"])
+                            if name_width is not None and name_width != width:
+                                raise ValueError("冻结任务名工作区宽度改变")
+                            name_width = width
                         if previous is not None:
-                            _check_history(previous, frame, seen, retired)
-                        seen.update({task["instance"]: task for task in frame["tasks"]})
+                            _check_readout_history(previous, frame)
+                        if row["task_snapshot_complete"]:
+                            if previous_complete is not None:
+                                _check_complete_task_history(previous_complete, frame, seen, retired)
+                            if any(task["instance"] in retired for task in frame["tasks"]):
+                                raise ValueError("最终记录过的实例重新出现在完整快照")
+                            seen.update({task["instance"]: task for task in frame["tasks"]})
+                            previous_complete = frame
+                        # 已最终记录的 worst ID 是明确事实，不从不足列表的缺席推断退休。
                         if row["finalized_instances"]:
                             retired.add(row["worst_completed_instance"])
                         frames.append(_summary(frame))
@@ -257,19 +290,22 @@ def analyze(paths: list[Path], target: str, boot_id: str, sdk_lock_sha256: str) 
             inputs.append({"sha256": digest.hexdigest(), "size_bytes": size})
     if not frames:
         raise ValueError("没有完整正式容量帧")
-    last = frames[-1]
-    gates = {"heap_gate_passed": last["minimum_free_lower_bound_bytes"] >= HEAP_GATE_BYTES,
-             "largest_gate_passed": last["largest_request_lower_bound_bytes"] >= LARGEST_GATE_BYTES,
-             "stack_gate_passed": last["minimum_stack_bytes"] >= STACK_GATE_BYTES}
+    last_complete = next((frame for frame in reversed(frames) if frame["task_snapshot_complete"]), None)
+    gates = {"heap_gate_passed": last_complete is not None and last_complete["minimum_free_lower_bound_bytes"] >= HEAP_GATE_BYTES,
+             "largest_gate_passed": last_complete is not None and last_complete["largest_request_lower_bound_bytes"] >= LARGEST_GATE_BYTES,
+             "stack_gate_passed": last_complete is not None and last_complete["minimum_stack_bytes"] >= STACK_GATE_BYTES}
     return {"schema_version": 1, "valid": True, "target": target, "boot_id": boot_id,
             "sdk_lock_sha256": sdk_lock_sha256, "frames": frames, "inputs": inputs,
-            "proved_until_begin_uptime_ms": last["proved_until_begin_uptime_ms"],
+            "proved_until_begin_uptime_ms": last_complete["begin_uptime_ms"] if last_complete else None,
+            "latest_readout_begin_uptime_ms": frames[-1]["begin_uptime_ms"],
+            "incomplete_task_readouts": sum(not frame["task_snapshot_complete"] for frame in frames),
+            "task_history_closed_at_latest_readout": frames[-1]["task_snapshot_complete"],
             "history_start": "heap_initialization_complete_and_task_instance_creation",
             "metrics_source": "continuous_sdk_statistics_read_by_complete_frames",
             "current_region_values_are_sequential": True, "observation_cost_added_back": False,
             "numeric_gates": gates, "numeric_gates_passed": all(gates.values()),
             "next_maximum_legal_request_verified": False, "r5_qualified": False, "r6_qualified": False,
-            "limitations": ["每个可证截止时刻是 BEGIN uptime，END、打印、复位与 panic 后缀未获资格。",
+            "limitations": ["组合可证截止仅来自完整任务快照的 BEGIN；不足帧保留原件与原因，不插值或延长截止。END、打印、复位与 panic 后缀未获资格。",
                             "能力域是 sum(region min_free)／max(region min_largest) 保守下界；晚注册前缀贡献零，不是同一时刻快照。",
                             "连续块仅为 plain 4 B 对齐、non-EXEC 口径；下一最大合法申请的实际尺寸、caps 与额外对齐费用尚未证明。",
                             "栈采用官方填充模式 HWM，涵盖计数闭合的仍分配与已最终记录实例，不是逐指令 SP 峰值。",
@@ -296,14 +332,19 @@ def main() -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        last = result["frames"][-1]
+        last = next((frame for frame in reversed(result["frames"]) if frame["task_snapshot_complete"]), None)
         print("容量分析 summary")
         print(f"  target       {args.target}")
-        print(f"  完整帧       {len(result['frames'])}")
-        print(f"  可证截止     BEGIN uptime {result['proved_until_begin_uptime_ms']} ms")
-        print(f"  内部空闲下界 {last['minimum_free_lower_bound_bytes']} B / {HEAP_GATE_BYTES} B")
-        print(f"  连续申请下界 {last['largest_request_lower_bound_bytes']} B / {LARGEST_GATE_BYTES} B")
-        print(f"  全实例栈HWM  {last['minimum_stack_bytes']} B / {STACK_GATE_BYTES} B")
+        print(f"  记录帧       {len(result['frames'])}")
+        print(f"  任务不足帧   {result['incomplete_task_readouts']} / 最新闭合 {result['task_history_closed_at_latest_readout']}")
+        cutoff = result["proved_until_begin_uptime_ms"]
+        print(f"  可证截止     BEGIN uptime {cutoff} ms" if cutoff is not None else "  可证截止     尚无闭合快照")
+        if last is not None:
+            print(f"  内部空闲下界 {last['minimum_free_lower_bound_bytes']} B / {HEAP_GATE_BYTES} B")
+            print(f"  连续申请下界 {last['largest_request_lower_bound_bytes']} B / {LARGEST_GATE_BYTES} B")
+            print(f"  全实例栈HWM  {last['minimum_stack_bytes']} B / {STACK_GATE_BYTES} B")
+        else:
+            print("  数值门       尚无任务计数闭合帧可授组合证明")
         print("  后缀／下一申请／R5／R6  未获资格；观察成本不加回")
     return 0 if result["numeric_gates_passed"] else 1
 
