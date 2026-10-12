@@ -11,6 +11,8 @@
 
 C3 使用 USB Serial/JTAG VFS；ESP32 使用 UART0。控制任务栈 8,192 B，主任务至少 6,144 B。签名 C3 使用 RSA-3072 v2，ESP32 使用 ECDSA P-256 v1；目标、签名方案和几何各自核对，软件测试键不属于正式信任。
 
+TLS 使用 SDK 原生固定 RX／TX，内容上限保持 16,384／4,096 B。动态 adapter 按首 record 分配，而同一次握手步骤可以在 core 内重组后继 record；其分配长度与 core 的固定写入上界不能等同。固定分配让完整输入区贯穿握手及后续读取，CA／主机名、可信时间、加密套件、超时及镜像验签合同保持。每连接 RX／TX 的真实普通申请分别为 16,717／4,429 B，走 `INTERNAL|8BIT`，不能把内容上限当申请字节数。MQTT、FRP 与 URL OTA 三条 TLS 的缓冲请求合计 63,438 B，连接、握手、证书和 crypto 对象另计。该成本随新配置重新构建、签名及实板容量验证，不能继承动态缓冲候选的资源结果，也不加回观测成本。
+
 Base 自有的固定 Flash 观测保留每 boot 的 OTA／FRP／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界，FRP 活跃／备用数来自同一次既有 SDK 状态快照。独立 UART 行位于容量 END 外，沿用既有五秒报告与主动重启点，不改 MQTT／FRP／OTA 公共 API 或业务 JSON，也不增加任务、定时器或动态分配。具体字段、成本与不可推导的验收范围见[宿主工具的观测说明](../tools/README.md#正式容量统计)。
 
 [C3 分区](partitions/c3-partition-table.csv)和 [ESP32 分区](partitions/esp32-partition-table.csv)均为双 `0x1e0000` app，移除业务包区。scratch、Base NVS 与 ESP32 旧 AT 区保持各自真实定位；新布局必须通过一次性有线装配迁入。旧 V3／损坏收据不能当作空状态，普通 app OTA 不能迁分区表。
