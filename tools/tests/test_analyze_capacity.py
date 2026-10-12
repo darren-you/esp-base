@@ -523,10 +523,10 @@ class ProvidedRequestFitTest(unittest.TestCase):
         path.write_bytes(raw)
         return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
 
-    def read(self, *frames):
+    def read(self, *frames, target="esp32"):
         self.uart.write_text("".join(render(frame).replace(LOCK, self.lock) for frame in (frames or [fixture()])))
         self.evidence_path.write_text(json.dumps(self.evidence))
-        return analyze([self.uart], "esp32", BOOT, self.lock, self.evidence_path)
+        return analyze([self.uart], target, BOOT, self.lock, self.evidence_path)
 
     def status(self, **changes):
         signed = self.evidence["identity"]["signed_firmware"]
@@ -585,7 +585,8 @@ class ProvidedRequestFitTest(unittest.TestCase):
         self.assertEqual(fit["status"], "unknown")
 
     def test_exec_hardware_caps_and_integer_overflow_remain_unknown(self):
-        for caps in (IRAM_CAPS, module.INTERNAL_8BIT | (1 << 3), (1 << 17), 1 << 31):
+        for caps in (IRAM_CAPS, module.INTERNAL_8BIT | (1 << 3) | (1 << 12),
+                     (1 << 3) | (1 << 10), (1 << 17), 1 << 31):
             with self.subTest(caps=caps):
                 self.evidence["requests"][0].update(size_bytes=1, caps=caps)
                 row = self.read()["provided_request_fit"]["requests"][0]
@@ -596,6 +597,70 @@ class ProvidedRequestFitTest(unittest.TestCase):
         row = self.read()["provided_request_fit"]["requests"][0]
         self.assertEqual(row["reason"], "target_size_overflow")
         self.assertIsNone(row["margin_bytes"])
+
+    def test_locked_target_internal_dma_uses_complete_caps_and_original_search_bound(self):
+        for target in ("esp32c3", "esp32"):
+            self.evidence["target"] = target
+            for caps in (8, 2056, 2060):
+                for alignment in (1, 2, 4):
+                    with self.subTest(target=target, caps=caps, alignment=alignment):
+                        self.evidence["requests"][0].update(size_bytes=1599, caps=caps,
+                                                             alignment_bytes=alignment)
+                        result = self.read(target=target)
+                        fit = result["provided_request_fit"]
+                        row = fit["requests"][0]
+                        self.assertEqual(row["caps"], caps)
+                        self.assertEqual(row["alignment_bytes"], alignment)
+                        self.assertEqual(row["matching_early_region_starts"], [0x10000])
+                        self.assertEqual(row["effective_alignment_bytes"], 4)
+                        self.assertEqual(row["search_size_bytes"], 1600)
+                        self.assertEqual(row["status"], "fit")
+                        self.assertEqual(row["allocator_path"], "locked_target_internal_dma_plain_tlsf")
+                        self.assertFalse(fit["identity"]["fully_bound"])
+                        self.assertFalse(result["next_maximum_legal_request_verified"])
+
+    def test_dma_cannot_borrow_non_dma_or_late_regions_and_respects_union(self):
+        frame = fixture()
+        first = frame["REGION"][0]
+        first["caps0"] &= ~(1 << 3)
+        # late region 有充分 DMA 容量，仍不能贡献启动起下界。
+        for domain in frame["DOMAIN"]:
+            if domain["caps"] & (1 << 3):
+                domain.update(minimum_free_lower_bound_bytes=0, largest_request_lower_bound_bytes=0)
+        self.evidence["requests"][0].update(size_bytes=1600, caps=2056)
+        row = self.read(frame)["provided_request_fit"]["requests"][0]
+        self.assertEqual(row["matching_early_region_starts"], [])
+        self.assertEqual(row["largest_request_lower_bound_bytes"], 0)
+        self.assertEqual(row["status"], "unknown")
+        self.assertEqual(row["reason"], "conservative_lower_bound_insufficient")
+        first["caps1"] = 1 << 3
+        for domain in frame["DOMAIN"]:
+            if domain["caps"] & (1 << 3):
+                domain.update(minimum_free_lower_bound_bytes=30000, largest_request_lower_bound_bytes=26000)
+        self.evidence["requests"][0]["size_bytes"] = 26001
+        row = self.read(frame)["provided_request_fit"]["requests"][0]
+        self.assertEqual(row["matching_early_region_starts"], [0x10000])
+        self.assertEqual(row["minimum_free_lower_bound_bytes"], 30000)
+        self.assertEqual(row["search_size_bytes"], 26004)
+        self.assertEqual(row["status"], "unknown")
+
+    def test_dma_high_alignment_and_uint32_overflow_remain_unknown(self):
+        for caps in (8, 2056, 2060):
+            for alignment in (8, 16, 128):
+                with self.subTest(caps=caps, alignment=alignment):
+                    self.evidence["requests"][0].update(size_bytes=1601, caps=caps, alignment_bytes=alignment)
+                    row = self.read()["provided_request_fit"]["requests"][0]
+                    self.assertEqual(row["status"], "unknown")
+                    self.assertEqual(row["reason"], "dma_alignment_above_four_bytes_not_modeled")
+                    self.assertIsNone(row["search_size_bytes"])
+            self.evidence["requests"][0].update(size_bytes=module.UINT32_MAX, caps=caps, alignment_bytes=4)
+            row = self.read()["provided_request_fit"]["requests"][0]
+            self.assertEqual(row["reason"], "target_size_overflow")
+        evidence = dict(self.evidence, target="esp32s3")
+        facts = {"identity": {"fully_bound": False}}
+        frame = {"regions": fixture()["REGION"], "begin": {"uptime_ms": 10}}
+        row = module._provided_request_fit(evidence, facts, frame)["requests"][0]
+        self.assertEqual(row["reason"], "exec_or_hardware_or_other_caps_path_not_modeled")
 
     def test_incomplete_tail_cannot_extend_request_fit_or_retroactively_replace_the_closed_frame(self):
         first, gap, _ = cleanup_sequence()

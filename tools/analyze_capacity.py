@@ -32,6 +32,12 @@ REQUEST_RECIPE_INPUTS = {
     "tools/sdk-patches/capacity-tlsf.patch": "afe402d3b0de6e312a4bf84e4491d0a52e1d17b4b02e0ef0fcd958dc8e55a2cd",
 }
 PLAIN_REQUEST_CAPS = (1 << 1) | (1 << 2) | (1 << 11) | (1 << 12) | (1 << 13)
+# 锁定 SDK 的这两目标内部 cache alignment 为 0。这三个真实完整 DMA
+# mask 不改写 caps；caller alignment <= 4 时仍走普通 multi_heap_malloc。
+# 较高对齐会先按硬件路径圆整 size，不能套用 plain memalign 的搜索公式。
+INTERNAL_DMA_REQUEST_CAPS = frozenset((1 << 3, (1 << 3) | (1 << 11),
+                                     (1 << 3) | (1 << 11) | (1 << 2)))
+INTERNAL_DMA_REQUEST_TARGETS = frozenset(("esp32c3", "esp32"))
 REQUEST_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
 FIELDS = {
     "BEGIN": "schema boot_id frame phase uptime_ms sdk_lock_sha256 task_limit".split(),
@@ -456,6 +462,9 @@ def _provided_request_fit(evidence: dict, facts: dict, frame: dict | None) -> di
     results = []
     for request in evidence["requests"]:
         item = dict(request, status="unknown", search_size_bytes=None, margin_bytes=None)
+        internal_dma = (evidence["allocator_recipe"] == REQUEST_RECIPE and
+                        evidence["target"] in INTERNAL_DMA_REQUEST_TARGETS and
+                        request["caps"] in INTERNAL_DMA_REQUEST_CAPS)
         matching = [row for row in frame["regions"] if row["available_at_heap_init"] and
                     ((row["caps0"] | row["caps1"] | row["caps2"]) & request["caps"]) == request["caps"]] if frame else []
         bound = max((row["min_largest_request_bytes"] for row in matching), default=0)
@@ -464,9 +473,13 @@ def _provided_request_fit(evidence: dict, facts: dict, frame: dict | None) -> di
                     matching_early_region_starts=[row["start"] for row in matching])
         if frame is None:
             item["reason"] = "no_complete_task_readout"
-        elif request["caps"] & ~PLAIN_REQUEST_CAPS:
+        elif internal_dma and request["alignment_bytes"] > 4:
+            item["reason"] = "dma_alignment_above_four_bytes_not_modeled"
+        elif request["caps"] & ~PLAIN_REQUEST_CAPS and not internal_dma:
             item["reason"] = "exec_or_hardware_or_other_caps_path_not_modeled"
         else:
+            if internal_dma:
+                item["allocator_path"] = "locked_target_internal_dma_plain_tlsf"
             alignment = max(4, request["alignment_bytes"])
             adjusted = max(12, (request["size_bytes"] + 3) & ~3)
             # tlsf_memalign_offs: adjust_request_size(adjust + align + sizeof(block_header_t), align)
