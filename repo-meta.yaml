@@ -4,7 +4,6 @@ workspace_area: tooling
 archetype: tooling-repo
 lifecycle: incubating
 owner: darren-you
-governance_tier: standard
 domains:
   - embedded-firmware
 domain_roots:
@@ -15,10 +14,6 @@ delivery_surfaces:
 depends_on: []
 default_workflows:
   - release-embedded-firmware
-doc_status:
-  architecture: present
-  api: missing
-  release: missing
 github:
   repo: darren-you/esp-base
   visibility: public
