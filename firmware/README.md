@@ -15,6 +15,8 @@ TLS 使用 SDK 原生固定 RX／TX，内容上限保持 16,384／4,096 B。动�
 
 Base 自有的固定 Flash 观测保留每 boot 的 OTA／FRP／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界，FRP 活跃／备用数来自同一次既有 SDK 状态快照。独立 UART 行位于容量 END 外，沿用既有五秒报告与主动重启点，不改 MQTT／FRP／OTA 公共 API 或业务 JSON，也不增加任务、定时器或动态分配。具体字段、成本与不可推导的验收范围见[宿主工具的观测说明](../tools/README.md#正式容量统计)。
 
+锁定的 FRP 0.2 修复将 scratch 恢复和新记录擦除拆为 16 个 4 KiB 短 claim，每扇区释放后阻塞两个 tick，再申请下一扇区；全部擦除成功才发放 scratch lease。Base 的 500 ms Flash 获取预算、OTA 任务优先级与阶段期限保持。逐扇区故障和真实 FreeRTOS 调度的软件对照见 [FRP 擦除争用记录](https://github.com/darren-you/esp-frp/blob/0d9c08be7122ad73b0c24d912cf9b92a540ae3b2/docs/issues/c3-scratch-erase-owner-starvation.md)；新依赖必须重新构建、签名并验证双板实际联合运行，不能继承旧候选的容量结果。
+
 [C3 分区](partitions/c3-partition-table.csv)和 [ESP32 分区](partitions/esp32-partition-table.csv)均为双 `0x1e0000` app，移除业务包区。scratch、Base NVS 与 ESP32 旧 AT 区保持各自真实定位；新布局必须通过一次性有线装配迁入。旧 V3／损坏收据不能当作空状态，普通 app OTA 不能迁分区表。
 
 ## 构建
