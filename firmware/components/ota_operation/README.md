@@ -14,13 +14,13 @@ HTTPS 拉取使用产品固定的 8KiB parser 响应头计数预算和 1024B RX�
 
 新操作登记遇到前次 `FAILED` 收据时，在同一仍有效的事务 claim 内复用本次完整固件集合观察的来源验签摘要，并核对前次来源物理槽与当前 selector，避免在 ACK 前对相同来源重复完整验签。此结果不跨请求缓存；独立 `ota.result` 查询仍重新验证来源。来源不符、观察失败、槽变化或 claim 失效均不得覆盖前次收据。
 
-应用写入前先按原收据退役确切 inactive 槽。失败后只有未改 app，或完成原意图限定的 inactive 物理清理、来源 A 验签/摘要和选槽核对，才能持久写 `FAILED`；读回不确定仍为 unknown。FRP 上传在等待连接时取消不会先擦槽；完整 prepare 后取消也在 select 前被复核，清理候选 C 后保留原 ID 失败终态。已选择 pending C 的进度不能被当作失败清理目标。
+应用写入前先按原收据退役确切 inactive 槽。失败后只有未改 app，或完成原意图限定的 inactive 物理清理、来源 A 验签/摘要和选槽核对，才能持久写 `FAILED`；读回不确定仍为 unknown。FRP 先完成来源验证与 inactive 退役，再开放上传；因此等待连接时已完成原意图授权的退役，未连接不等于未改 inactive。完整 prepare 后取消也在 select 前被复核，清理候选 C 后保留原 ID 失败终态。已选择 pending C 的进度不能被当作失败清理目标。
 
 上传 worker 完成时只返回准备进度 `running/202` 或尚未形成持久结果的 `unknown/200`，`result` 为 null。失败提交和精确读回由控制 owner 随后执行，提交证实后才形成 `failed`；上传响应不能提前声称终态。宿主收到上传 unknown、断链或任何未经原 ID 收据证实的上传状态时，继续查询同一 `operation_id`，不重发上传或另起操作。
 
 C 的启动确认独立于 Broker、FRPS 和业务消息：本地 NVS、身份、安全状态、配置和控制任务自检健康满 30 秒，并经过窗口边界后的下一次本地检查，再调用 IDF 确认和读回同槽 `VALID`。需复核 C 完整签名身份与原收据、A 回滚身份及集合稳定性；成功收据 commit/读回完成前保持升级门禁。A 侧中断恢复先核对来源、原 ID 与精确 inactive 槽，完成清理后写失败终态。缺收据只允许首次有线装配产生的已确认 `VALID` 签名基座；无原收据的 pending 固件被拒绝。
 
-`ota.result` 查询原 ID，返回固件 SHA-256、完整长度、target 和目标槽。活跃 worker 或原收据限定的 pending C 为 running；C 已 `VALID`、签名与摘要匹配且 `SUCCEEDED` 持久终态存在才 succeeded。失败须有真实已确认 A 与来源摘要匹配的 `FAILED` 终态。VALID、INVALID、ABORTED 等 otadata 状态单独不能证明升级结果，其他不确定状态返回 unknown，查询不改收据或选槽。
+`ota.result` 查询原 ID，返回固件 SHA-256、完整长度、target 和目标槽。FRP worker 开放上传前为 accepted，开放后及其他活跃 worker 或原收据限定的 pending C 为 running；C 已 `VALID`、签名与摘要匹配且 `SUCCEEDED` 持久终态存在才 succeeded。失败须有真实已确认 A 与来源摘要匹配的 `FAILED` 终态。VALID、INVALID、ABORTED 等 otadata 状态单独不能证明升级结果，其他不确定状态返回 unknown，查询不改收据或选槽。
 
 ## 签名集合与 Flash 所有权
 
