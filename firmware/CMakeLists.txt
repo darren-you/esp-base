@@ -105,6 +105,10 @@ if(IDF_TARGET STREQUAL "esp32" AND (NOT CONFIG_PARTITION_TABLE_CUSTOM OR
     message(FATAL_ERROR "ESP32 Base requires its 4 MiB partition, six static Wi-Fi RX buffers, BA window six, STA/TLS client, single-core 8BIT IRAM, SDK IRAM TLS allocations, at least 2048-byte idle stack and v1 bootloader configuration")
 endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32" AND
+    NOT CONFIG_UART_ISR_IN_IRAM)
+    message(FATAL_ERROR "ESP32 Base requires its UART receive ISR in IRAM during flash operations")
+endif()
+if(ESP_BASE_APP STREQUAL "esp_base" AND IDF_TARGET STREQUAL "esp32" AND
     (NOT CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_LABEL STREQUAL "frp_scratch" OR
     NOT CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET EQUAL 0x3ea000))

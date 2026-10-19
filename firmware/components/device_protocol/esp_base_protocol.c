@@ -29,7 +29,12 @@
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
 #include "driver/usb_serial_jtag_vfs.h"
 #elif defined(CONFIG_IDF_TARGET_ESP32)
+#include "driver/uart.h"
 #include "driver/uart_vfs.h"
+#include "esp_intr_alloc.h"
+#if !CONFIG_UART_ISR_IN_IRAM
+#error "ESP32 serial control requires the UART receive ISR during flash operations"
+#endif
 #else
 #error "ESP Base serial control supports only esp32c3 and esp32"
 #endif
@@ -1191,8 +1196,8 @@ static void control_task(void *argument)
         expire_serial_input(now, last_input);
         size_t count = 0;
         // Read from the selected console VFS without blocking the control loop.
-        // The C3 USB FIFO backpressures the host; UART0 has no such guarantee
-        // and needs its own physical overload check before device acceptance.
+        // C3 backpressures USB. ESP32 receives into the SDK driver ring while
+        // this owner reports capacity, verifies an image or performs flash I/O.
         while (count < sizeof bytes && read(STDIN_FILENO, bytes + count, 1) == 1) ++count;
         if (count > 0) {
             last_input = uptime_ms();
@@ -1220,6 +1225,32 @@ esp_err_t esp_base_protocol_load_config(uint32_t *revision,
     return ESP_OK;
 }
 
+static esp_err_t start_serial_console(void)
+{
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+    usb_serial_jtag_vfs_use_nonblocking();
+    // IDF 6.1 USB no-driver VFS prefetches with O_NONBLOCK clear.
+    int flags = fcntl(STDIN_FILENO, F_GETFL);
+    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK) < 0) return ESP_FAIL;
+#else
+    /* UART has no USB backpressure. Reserve one complete legal command plus
+     * its newline in the SDK RX ring; keep TX unbuffered and add no event
+     * queue or task. IRAM ISR and internal RX storage remain usable with the
+     * flash cache disabled. This does not promise unlimited host input. */
+    esp_err_t error = uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM,
+        EBASE_LINE_LIMIT + 1, 0, 0, NULL, ESP_INTR_FLAG_IRAM);
+    if (error != ESP_OK) return error;
+    uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+    int flags = fcntl(STDIN_FILENO, F_GETFL);
+    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) {
+        uart_vfs_dev_use_nonblocking(CONFIG_ESP_CONSOLE_UART_NUM);
+        (void)uart_driver_delete(CONFIG_ESP_CONSOLE_UART_NUM);
+        return ESP_FAIL;
+    }
+#endif
+    return ESP_OK;
+}
+
 esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
 {
     if (!context || !ebase_is_uuid(context->device_id) || context->storage_owner == NULL ||
@@ -1230,18 +1261,8 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
         context->flash_io_owner != s_context.flash_io_owner) return ESP_ERR_INVALID_STATE;
     esp_err_t error = esp_base_identity_generate_uuid(s_boot_id, sizeof s_boot_id);
     if (error != ESP_OK) return error;
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
-    usb_serial_jtag_vfs_use_nonblocking();
-    // IDF 6.1 USB no-driver VFS prefetches with O_NONBLOCK clear.
-    int flags = fcntl(STDIN_FILENO, F_GETFL);
-    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK) < 0) return ESP_FAIL;
-#else
-    uart_vfs_dev_use_nonblocking(CONFIG_ESP_CONSOLE_UART_NUM);
-    // UART0 has no USB packet backpressure; keep reads nonblocking so the
-    // control loop continues OTA progress and network owner polling.
-    int flags = fcntl(STDIN_FILENO, F_GETFL);
-    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) return ESP_FAIL;
-#endif
+    error = start_serial_console();
+    if (error != ESP_OK) return error;
     /* Config was loaded into s_context before starting this task. Copy only
      * immutable metadata; replacing the whole context would erase it. */
     s_context.device_id = context->device_id;

@@ -4,12 +4,76 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <stdarg.h>
 
 /* Exercise the real command branch and its asynchronous completion branch. */
 static void protocol_test_free(void *data);
+static int protocol_test_fcntl(int fd, int command, ...);
 #define free protocol_test_free
+#define fcntl protocol_test_fcntl
 #include "../components/device_protocol/esp_base_protocol.c"
 #undef free
+#undef fcntl
+
+static int serial_flags, serial_failure, serial_vfs_mode;
+static bool serial_installed;
+static int protocol_test_fcntl(int fd, int command, ...)
+{
+    assert(fd == STDIN_FILENO);
+    if (command == F_GETFL) return serial_failure == 1 ? -1 : serial_flags;
+    assert(command == F_SETFL);
+    if (serial_failure == 2) return -1;
+    va_list args; va_start(args, command); serial_flags = va_arg(args, int); va_end(args);
+    return 0;
+}
+#if defined(CONFIG_IDF_TARGET_ESP32)
+esp_err_t uart_driver_install(uart_port_t port, int rx_bytes, int tx_bytes,
+                             int queue_size, void *queue, int flags)
+{
+    assert(port == CONFIG_ESP_CONSOLE_UART_NUM && !serial_installed);
+    assert(rx_bytes >= EBASE_LINE_LIMIT + 1 && tx_bytes == 0 && queue_size == 0 && !queue);
+    assert(flags & ESP_INTR_FLAG_IRAM);
+    if (serial_failure == 3) return ESP_ERR_NO_MEM;
+    serial_installed = true;
+    return ESP_OK;
+}
+esp_err_t uart_driver_delete(uart_port_t port)
+{
+    assert(port == CONFIG_ESP_CONSOLE_UART_NUM && serial_installed && serial_vfs_mode == 0);
+    serial_installed = false;
+    return ESP_OK;
+}
+void uart_vfs_dev_use_nonblocking(int port)
+{ assert(port == CONFIG_ESP_CONSOLE_UART_NUM); serial_vfs_mode = 0; }
+void uart_vfs_dev_use_driver(int port)
+{ assert(port == CONFIG_ESP_CONSOLE_UART_NUM && serial_installed); serial_vfs_mode = 1; }
+#else
+void usb_serial_jtag_vfs_use_nonblocking(void) { serial_vfs_mode = 0; }
+#endif
+
+static void check_serial_console(void)
+{
+    for (int failure = 0; failure < 4; ++failure) {
+        serial_flags = O_RDWR | O_NONBLOCK;
+        serial_failure = failure; serial_installed = false; serial_vfs_mode = 0;
+        const esp_err_t result = start_serial_console();
+        if (failure == 1 || failure == 2) {
+            assert(result == ESP_FAIL && !serial_installed && serial_vfs_mode == 0);
+        } else {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+            if (failure == 3) {
+                assert(result == ESP_ERR_NO_MEM && !serial_installed && serial_vfs_mode == 0);
+            } else {
+                assert(result == ESP_OK && serial_installed && serial_vfs_mode == 1);
+                assert(serial_flags == (O_RDWR | O_NONBLOCK));
+            }
+#else
+            assert(result == ESP_OK && !serial_installed && serial_flags == O_RDWR);
+#endif
+        }
+    }
+}
 
 void esp_base_capacity_poll(const char *boot_id, uint64_t now_ms)
 { (void)boot_id; (void)now_ms; }
@@ -661,6 +725,7 @@ static void check_ota_phase_observation(void)
 
 int main(void)
 {
+    check_serial_console();
     check_config_flash_observation();
     check_ota_phase_observation();
     check_frp_ota();

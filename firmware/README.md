@@ -11,6 +11,8 @@
 
 C3 使用 USB Serial/JTAG VFS；ESP32 使用 UART0。控制任务栈 8,192 B，主任务至少 6,144 B。签名 C3 使用 RSA-3072 v2，ESP32 使用 ECDSA P-256 v1；目标、签名方案和几何各自核对，软件测试键不属于正式信任。
 
+ESP32 UART0 使用锁定 SDK 的 RX 驱动与 IRAM 中断，接收环请求 9,217 B，容纳一条 9,216 B 上限命令及换行。容量输出、验签及 Flash 停用 cache 时仍由 SDK 中断接收；控制 owner 保持非阻塞读取、原命令期限和解析上限。没有新增 TX 环、事件队列或任务，实际驱动对象、内部 RX 存储、同步对象和 IRAM 代码均计入容量；这不提供硬件流控或无限连续输入保证。C3 保持原 USB 背压路径。该改动须经真实串口、同存资源和完整候选验收，宿主初始化回归不替代实体结果。
+
 TLS 使用 SDK 原生固定 RX／TX，内容上限保持 16,384／4,096 B。动态 adapter 按首 record 分配，而同一次握手步骤可以在 core 内重组后继 record；其分配长度与 core 的固定写入上界不能等同。固定分配让完整输入区贯穿握手及后续读取，CA／主机名、可信时间、加密套件、超时及镜像验签合同保持。每连接 RX／TX 的真实普通申请分别为 16,717／4,429 B，不能把内容上限当申请字节数。C3 使用 `INTERNAL|8BIT`；ESP32 使用锁定 SDK 的 `MBEDTLS_IRAM_8BIT_MEM_ALLOC`：达到 RX 或 TX 内容阈值的大块申请优先 `INTERNAL|IRAM_8BIT`，失败时回落 `INTERNAL|8BIT`，较小申请仍使用 DRAM。该规则也可能覆盖达到阈值的其他 mbedTLS 对象，不能把它缩写为仅搬移 TLS buffer。SDK 的非对齐访问异常处理有时间成本，必须按实际握手期限与两个内存能力域重新验收。MQTT、FRP 与 URL OTA 三条 TLS 的缓冲请求合计 63,438 B，连接、握手、证书和 crypto 对象另计。该成本随新配置重新构建、签名及实板容量验证，不能继承动态缓冲候选的资源结果，也不加回观测成本。 ESP32 idle 栈设为 2,048 B；此前 1,536 B 配置的实板最低余量 972 B 未通过 1,024 B 门。增加配置值不证明新候选栈门已通过，仍读取真实任务实例 HWM。
 
 Base 自有的固定 Flash 观测保留每 boot 的 OTA／FRP／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界，FRP 活跃／备用数来自同一次既有 SDK 状态快照。独立 UART 行位于容量 END 外，沿用既有五秒报告与主动重启点，不改 MQTT／FRP／OTA 公共 API 或业务 JSON，也不增加任务、定时器或动态分配。具体字段、成本与不可推导的验收范围见[宿主工具的观测说明](../tools/README.md#正式容量统计)。
