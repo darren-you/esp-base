@@ -92,7 +92,7 @@ python3 tools/test_sdk_capacity.py --idf-path /absolute/managed-sdk
 
 前者先实际核对 SDK，再以隔离夹具验证拒绝边界；后者直接编译受管 SDK 的 TLSF 和实际任务最终采集片段，包含 100000 次碎片化操作、逐稳定状态 walk oracle 与移动 realloc 共存反例。host 及 sanitizer 结果不替代 MCU、正式签名或双板容量验收。
 
-正式诊断使用既有 stdout／VFS，沿用已配置的 USB Serial/JTAG／UART no-driver 路径；不直接使用缺少源码超时保证且不支持 long long 的 ROM formatter。C3 VFS 在无连接时返回 EIO，FIFO 无 host 读取时按最后成功输出起 50 ms 后丢字节；完整帧仍须由原始日志确认。UART 按实际字符数和 115200／8N1 计线路费用，不等待 host ACK；SDK FIFO轮询、stdio锁、USB慢读和 MCU 调度成本仍须实测，不以线路预算冒充最坏时延。丢帧或丢尾不得补成覆盖。
+正式诊断使用既有 stdout／VFS，不直接使用缺少源码超时保证且不支持 long long 的 ROM formatter。C3 保持 USB Serial/JTAG no-driver 路径：VFS 在无连接时返回 EIO，FIFO 无 host 读取时按最后成功输出起 50 ms 后丢字节；完整帧仍须由原始日志确认。ESP32 的 VFS 绑定锁定 IDF UART 驱动，以 IRAM ISR 和 9,217 B RX ring 接收输出期间到达的请求，TX buffer／event queue 均为 0，不新增任务；初始化与失败回滚见[固件说明](../firmware/README.md)。UART 按实际字符数和 115200／8N1 计线路费用，不等待 host ACK；驱动、stdio 锁、USB 慢读和 MCU 调度成本仍须实测，不以线路预算冒充最坏时延。RX ring 与 ISR 的实际内存成本纳入同候选容量验收，丢帧或丢尾不得补成覆盖。
 
 ```bash
 python3 tools/analyze_capacity.py --target esp32 \
