@@ -24,7 +24,7 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 
 `producer_capacity_test.c` 直接编译正式诊断 producer，覆盖晚出生 region 的双下界为零、caps／alias 不重复、独立 IRAM 域、BEGIN 先于 getter、任务名在 scheduler resume 后仍安全、创建／最终化／存活计数闭合、低于 1024 B 的真实输出和帧编号溢出。SDK 假件只检验输出与门，不授 MCU 成本或 R5／R6。实际 SDK 分配器／最终任务栈及派生拒绝用例另通过 tools 的 `test_sdk_capacity.py`／`test_managed_sdk.py` 验证。
 
-真实protocol owner测试编译生产decoder／guard／control／业务／协议源码，用显式SDK、NVS与OTA假件覆盖写前意图、原请求移交、双入口互斥、FRP arm／5秒无连接、任务失败、成功prepare后取消不选槽、部分清C、unknown锁保留、原ID回放和独立firmware.status。receipt／firmware测试核对登记只消费一次真实观察入口、现有事务 claim、槽状态／几何变化与 claim 失效停止、坏签名及未决前次阻断、前次失败来源证明在同一登记事务内复用且不增加完整验签、来源摘要／物理槽不符仍保留旧收据，182B V4、V3／损坏阻断、A/C完整签名身份、pending／VALID／失败与存储调用故障。观察测试分别编译真实 firmware observer 与 receipt register，SDK验签/NVS假件验证控制边界；不冒充实体密码学或公网 ACK 时延。startup两目标分别启用／禁用scratch，验证本地30秒控制进展、跨窗、rollback、确认读回不确定与短Flash仲裁。均不冒充真实NVS掉电原子性或bootloader。
+真实protocol owner测试编译生产decoder／guard／control／业务／协议源码，用显式SDK、NVS与OTA假件覆盖写前意图、原请求移交、双入口互斥、FRP 准备中 accepted／退役后 arm／5秒无连接、任务失败、成功prepare后取消不选槽、部分清C、unknown锁保留、原ID回放和独立firmware.status。receipt／firmware测试核对登记只消费一次真实观察入口、现有事务 claim、槽状态／几何变化与 claim 失效停止、坏签名及未决前次阻断、前次失败来源证明在同一登记事务内复用且不增加完整验签、来源摘要／物理槽不符仍保留旧收据，182B V4、V3／损坏阻断、A/C完整签名身份、pending／VALID／失败与存储调用故障。观察测试分别编译真实 firmware observer 与 receipt register，SDK验签/NVS假件验证控制边界；不冒充实体密码学或公网 ACK 时延。startup两目标分别启用／禁用scratch，验证本地30秒控制进展、跨窗、rollback、确认读回不确定与短Flash仲裁。新增 6,304 ms 退役注入核对准备期间不 arm、只读进度不访问 Flash、开放后才接收；故障不开放上传，连接期限仍为 5 秒。均不冒充真实NVS掉电原子性或bootloader。
 
 同一 owner 回归还覆盖串口初始化：ESP32 RX 驱动分配失败时不切换 VFS，非阻塞设置失败时退回原 VFS 并释放本次驱动；C3 保持原读取标志。假件验证错误传播和清理，不模拟硬件 FIFO、中断调度或 Flash 停用 cache；合法最大串口输入与周期输出重叠仍须在实板验证。
 

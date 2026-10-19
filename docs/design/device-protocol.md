@@ -18,9 +18,9 @@ firmware.status 的 result 精确包含 firmware_sha256、image_size_bytes、tar
 
 USB／MQTT ota.start parameters 精确六项：operation_id、image_url、sha256、image_size_bytes、target、signature。image_url 是最多 512 B 的 HTTPS URL；sha256 为非零小写 64 位十六进制；长度必须容纳完整签名镜像并适合目标槽；signature 只含精确 scheme。FRP ota.start 精确五项，删除 image_url，固件字节通过随后绑定的入站流提供。两入口复用唯一升级 owner、V4 意图、验签、备用槽和恢复机制。
 
-受理要求签名策略可用、已确认运行 A／boot 一致、准确 inactive 槽、无 pending 或未决收据、无配置试运行／重启。来源 URL／流元数据在任何 app 擦写前静态验证；写前意图持久提交并逐字节读回后才创建 worker／FRP arm。worker 重读原意图，先使旧 inactive 镜像物理不可启动，再分块准备 C；精确长度、完整摘要、芯片／项目及官方签名均通过后才选择新 boot。部分失败只有清理 C 且证明 A 仍 VALID／selected 后才能记录 failed，否则 unknown 并保留占用。
+受理要求签名策略可用、已确认运行 A／boot 一致、准确 inactive 槽、无 pending 或未决收据、无配置试运行／重启。来源 URL／流元数据在任何 app 擦写前静态验证；写前意图持久提交并逐字节读回后才创建 worker。worker 重读原意图，先使旧 inactive 镜像物理不可启动，再分块准备 C；精确长度、完整摘要、芯片／项目及官方签名均通过后才选择新 boot。部分失败只有清理 C 且证明 A 仍 VALID／selected 后才能记录 failed，否则 unknown 并保留占用。
 
-ota.result 的 result 精确五项：operation_id、sha256、image_size_bytes、target、target_slot。原收据与实际槽一致时，活动 worker／pending C 为 running；C 为 VALID、完整身份吻合且成功收据提交读回才 succeeded；A 为 VALID／selected 且原失败收据已完成才 failed。只看 INVALID／ABORTED 或看见 VALID 而缺成功收据都不能推断终态；未登记／被后续操作替换的 ID 为 unknown。普通未签名构建拒绝固件写入与持久结果资格。
+ota.result 的 result 精确五项：operation_id、sha256、image_size_bytes、target、target_slot。原收据与实际槽一致时，FRP worker 完成原意图重读但尚未开放上传时为 accepted，开放后及其他活动 worker／pending C 为 running；C 为 VALID、完整身份吻合且成功收据提交读回才 succeeded；A 为 VALID／selected 且原失败收据已完成才 failed。只看 INVALID／ABORTED 或看见 VALID 而缺成功收据都不能推断终态；未登记／被后续操作替换的 ID 为 unknown。普通未签名构建拒绝固件写入与持久结果资格。活动 worker 重读并绑定原收据后，仅将精确目标槽发布给控制 owner；进度查询复用当前请求的原身份，不再与长 Flash 验证争抢读取。该内存观察只输出非终态，worker 结束后的查询继续核对持久收据与实际槽。
 
 新 boot 不依赖 Broker／FRPS 在线确认：本地初始化与控制进展通过完整 30 秒窗口，确认 VALID 并复核后提交成功收据。控制进展跨窗或失活重新累计窗口；确认／读回不确定保持原事实。普通 app OTA 不改变分区表。
 
@@ -54,9 +54,9 @@ restart 先回 running，延迟并让已认证回执排出；客户端必须读�
 
 唯一 loopback listener 复用既有设备 FRP 工作流。POST `/api/v1/commands/{status,restart,firmware-status,ota-start,ota-result,business-status,business-pause,business-resume}` 使用 application/json、唯一 Content-Length 和 X-ESP-Management-Tag；tag 是独立 FRP 管理 key 对实际 JSON 字节的 HMAC-SHA256。旧 status／restart body 上限 384 B、header 512 B、连接总期限 2 秒保持；新六命令 body 上限 1,024 B，控制期限仍 2 秒。认证前错误只返回空 body，不泄露状态；认证响应 tag 覆盖实际完整响应 JSON。
 
-新六命令 HTTP 映射为 invalid_request→400、failed／expired→409、running→202、succeeded／unknown→200；客户端先验响应 tag、严格字段与设备／请求身份，再读 state。旧 status／restart 映射保持。status 四字段和 8 槽／30 秒首快照缓存保持；新只读命令每次获取当前事实，写请求共用 32 槽守卫。
+新六命令 HTTP 映射为 invalid_request→400、failed／expired→409、accepted／running→202、succeeded／unknown→200；客户端先验响应 tag、严格字段与设备／请求身份，再读 state。旧 status／restart 映射保持。status 四字段和 8 槽／30 秒首快照缓存保持；新只读命令每次获取当前事实，写请求共用 32 槽守卫。
 
-FRP ota.start 接受五项固件元数据，V4 意图读回后预约唯一 upload。PUT `/api/v1/ota-images/<operation_id>` 必须为 application/octet-stream、精确 Content-Length；HMAC 原文是：
+FRP ota.start 接受五项固件元数据，V4 意图读回后返回 accepted／202，result 为 null。worker 先完成来源验证和旧 inactive 退役，再预约唯一 upload；客户端只读原 operation_id，核对原 boot、完整摘要、尺寸、目标和槽，观察 accepted 时继续等待，得到 running 才发一次 PUT。旧 running start ACK 不被新客户端当作准备证明；双方须按同一协议组合验收。PUT `/api/v1/ota-images/<operation_id>` 必须为 application/octet-stream、精确 Content-Length；HMAC 原文是：
 
 ```text
 esp-base-ota-upload-v1\n
@@ -69,6 +69,6 @@ esp-base-ota-upload-v1\n
 
 其中每行只有一个 LF，首行本身含 LF；正文不由独立第二 MAC 替代完整 signed bin 摘要／签名。上传 header／预读各最多 1,024 B，固定单槽，不把整镜像缓存在 RAM／额外 Flash。控制 owner 验证绑定后移交 fd给唯一 worker，同一 listener 可接另一条查询；占用既有两活跃流预算，不新增第三流资格。
 
-预约 5 秒内建立上传，流单次 I/O 1 秒、无进展 30 秒、总传输 300 秒；每次 Flash I/O 仅持短仲裁，网络等待释放。禁止重复长度、安全头、Transfer-Encoding、Expect、pipeline、第二上传和迟到／重放。Content-Length 界定 EOF；当时已到达的额外字节拒绝，未来字节不作预知，结束关闭该 fd。取消／重配撤销旧 key与连接，借用计数确保最终 close 不作用于复用 fd；验签后选槽前再次检查连接仍有效。
+准备查询共用原写意图窗口（Server 30 秒，宿主工具 10 秒）；任一查询丢失、错身份或超时即停止后续上传，只保留原 ID。开放后仍须在预约 5 秒内建立上传，流单次 I/O 1 秒、无进展 30 秒、总传输 300 秒；每次 Flash I/O 仅持短仲裁，网络等待释放。禁止重复长度、安全头、Transfer-Encoding、Expect、pipeline、第二上传和迟到／重放。Content-Length 界定 EOF；当时已到达的额外字节拒绝，未来字节不作预知，结束关闭该 fd。取消／重配撤销旧 key与连接，借用计数确保最终 close 不作用于复用 fd；验签后选槽前再次检查连接仍有效。
 
 PUT 上传回执只允许 running／202 或 unknown／200，result 均为 null；失败收据尚未持久化时不得回复 failed。客户端对未知、丢失或声称终态的上传响应都只读原 operation_id，不重新提交或上传。准备／选槽不是最终成功，必须在新 boot 经原 operation_id 持久查询并核对独立 firmware.status。当前验收分别覆盖设备 FRP 公网与 Mac 本机有线两条路线；App 内置 FRP／frpc 与远程 Bridge 的删除仍待实施，不再要求远程 Mac Bridge 通过验收。宿主 HTTP／模拟平台不替代公网与实板。

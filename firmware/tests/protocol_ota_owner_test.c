@@ -101,6 +101,7 @@ static esp_base_ota_receipt_result_t register_result, failure_record_result, loa
 static esp_base_ota_operation_state_t query_state;
 static eota_result_t prepare_result, select_result, retire_result, validate_result;
 static eota_result_t second_retire_result;
+static uint64_t retire_delay_ms;
 static bool upload_arm_ok, upload_connected, upload_cancel_after_prepare;
 static unsigned upload_arm_calls, upload_finish_calls, stream_prepare_calls;
 static int upload_finish_status;
@@ -181,6 +182,7 @@ static void reset_case(void)
     config_load_output = (esp_base_remote_config_t){.revision = 7};
     memset(&registered_request, 0, sizeof registered_request);
     memset(registered_source_sha256, 0x41, sizeof registered_source_sha256);
+    retire_delay_ms = 0;
     fake_now_ms = 1000; fake_frp_state = "ready"; fake_free_heap = 16384;
     latest_reply[0] = latest_reported[0] = '\0';
     ota_request_releases = 0; last_decoded_ota_request = NULL;
@@ -487,12 +489,31 @@ eota_result_t eota_prepare(const eota_policy_t *policy, const eota_image_t *imag
     memcpy(prepared->sha256, image->sha256, 32);
     return prepare_result;
 }
+static void check_live_progress(const char *state)
+{
+    char request[384], response[1024]; size_t length = 0;
+    const int count = snprintf(request, sizeof request,
+        "{\"protocol_version\":1,\"device_id\":\"%s\",\"request_id\":\"11111111-1111-4111-8111-000000000099\","
+        "\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"%s\"}}", s_context.device_id, s_ota_request->operation_id);
+    const unsigned reads = query_calls;
+    assert(handle_frp_management(ESP_BASE_FRP_MANAGEMENT_OTA_RESULT, (const uint8_t *)request,
+        (size_t)count, response, sizeof response, &length, NULL) == 202);
+    assert(query_calls == reads); /* Progress never contends with Flash proof. */
+    char expected[40]; snprintf(expected, sizeof expected, "\"state\":\"%s\"", state);
+    assert(strstr(response, expected) && strstr(response, s_ota_request->operation_id));
+}
+
 eota_result_t eota_retire_inactive(const eota_policy_t *policy, uint8_t target,
     const uint8_t source_sha256[32])
 {
     assert(policy && target == ESP_PARTITION_SUBTYPE_APP_OTA_1 &&
         !memcmp(source_sha256, registered_source_sha256, 32));
     assert(esp_base_storage_claim_active(&s_ota_storage_claim));
+    if (!retire_calls && s_ota_request->inbound_stream) {
+        assert(upload_arm_calls == 0 && !atomic_load(&s_ota_upload_ready));
+        check_live_progress("accepted");
+        fake_now_ms += retire_delay_ms;
+    }
     ++retire_calls;
     return retire_calls == 1 ? retire_result : second_retire_result;
 }
@@ -533,7 +554,7 @@ eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t su
 bool esp_base_frp_management_upload_arm(const char *operation_id, const char *device_id,
     const char *boot_id, uint32_t size, const uint8_t sha256[32], uint64_t now_ms)
 {
-    assert(register_calls == 1 && task_calls == 0 && esp_base_storage_claim_active(&s_ota_storage_claim));
+    assert(register_calls == 1 && task_calls == 1 && retire_calls == 1 && esp_base_storage_claim_active(&s_ota_storage_claim));
     assert(!strcmp(operation_id, registered_request.operation_id) && !strcmp(device_id, s_context.device_id) && !strcmp(boot_id, s_boot_id));
     assert(size == 4096 && !memcmp(sha256, registered_request.sha256, 32) && now_ms == fake_now_ms);
     ++upload_arm_calls; return upload_arm_ok;
@@ -565,6 +586,7 @@ eota_result_t eota_prepare_stream(const eota_policy_t *policy, const eota_stream
 {
     assert(policy && stream && stream->read == esp_base_frp_management_upload_read && prepared && progress);
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && upload_arm_calls == 1 && retire_calls == 1);
+    check_live_progress("running");
     ++stream_prepare_calls; progress(512, stream->image_size_bytes, context);
     *prepared = (eota_prepared_t){.image_size_bytes = stream->image_size_bytes};
     memcpy(prepared->sha256, stream->sha256, 32);
@@ -607,17 +629,17 @@ static void check_frp_ota(void)
         latest_reply, sizeof latest_reply, &invalid_length, NULL) == 400);
     expect_reply("failed", "invalid_request");
 
-    reset_case(); assert(start_frp(1) == 202); expect_reply("running", NULL);
+    reset_case(); assert(start_frp(1) == 202); expect_reply("accepted", NULL);
     assert(s_ota_request && s_ota_request->inbound_stream && s_ota_request->image_url[0] == '\0');
-    assert(upload_arm_calls == 1 && register_calls == 1 && !owner_available());
+    assert(upload_arm_calls == 0 && register_calls == 1 && !owner_available());
     esp_base_ota_request_t *accepted = s_ota_request;
     start_valid(2); expect_reply("failed", "ota_in_progress");
     assert(s_ota_request == accepted && register_calls == 1);
-    assert(start_frp(1) == 202 && upload_arm_calls == 1 && task_calls == 1);
+    assert(start_frp(1) == 202 && upload_arm_calls == 0 && task_calls == 1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; ota_task(NULL);
     assert(upload_finish_status == 200 && failure_record_calls_at_upload_finish == 0 &&
         failure_record_calls == 0 && !owner_available() && s_ota_active && s_ota_request);
-    assert(!strcmp(s_outcomes[s_ota_slot].state, "running"));
+    assert(!strcmp(s_outcomes[s_ota_slot].state, "accepted"));
     poll_ota();
     assert(stream_prepare_calls == 1 && prepare_calls == 0 && retire_calls == 2 &&
         failure_record_calls == 1 && upload_finish_calls == 1 && owner_available() &&
@@ -646,14 +668,30 @@ static void check_frp_ota(void)
         restart_calls == 0 && owner_available() && !s_ota_request && !s_ota_active);
     assert(!strcmp(s_outcomes[s_ota_slot].state, "failed"));
     reset_case(); upload_arm_ok = false;
-    assert(start_frp(1) == 409); expect_reply("failed", "resource_failure");
-    assert(task_calls == 0 && failure_record_calls == 1 && owner_available() && !s_ota_request);
+    assert(start_frp(1) == 202); run_worker();
+    assert(!strcmp(s_outcomes[s_ota_slot].state, "failed") && !strcmp(s_outcomes[s_ota_slot].error, "resource_failure"));
+    assert(task_calls == 1 && retire_calls == 1 && failure_record_calls == 1 && owner_available() && !s_ota_request);
     reset_case(); worker_created = false;
     assert(start_frp(1) == 409); expect_reply("failed", "resource_failure");
     assert(upload_finish_calls == 1 && failure_record_calls == 1 && owner_available());
+    reset_case(); retire_delay_ms = 6304;
+    assert(start_frp(1) == 202);
+    query_result = ESP_BASE_OTA_RECEIPT_OK;
+    esp_base_ota_receipt_view_t waiting;
+    assert(esp_base_ota_receipt_query(s_context.device_id, s_ota_request->operation_id, true, &waiting) == ESP_BASE_OTA_RECEIPT_OK);
+    s_frp_reply = latest_reply; s_frp_reply_capacity = sizeof latest_reply;
+    reply_ota_result("11111111-1111-4111-8111-000000000002", &waiting);
+    latest_reply[s_frp_reply_length] = 0; s_frp_reply = NULL;
+    expect_reply("accepted", NULL);
+    assert(upload_arm_calls == 0);
+    run_worker();
+    assert(fake_now_ms == 7304 && stream_prepare_calls == 1 && restart_calls == 1);
+    reset_case(); retire_result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
+    assert(start_frp(1) == 202); run_worker();
+    assert(upload_arm_calls == 0 && stream_prepare_calls == 0 && !owner_available());
     reset_case(); upload_connected = false;
     assert(start_frp(1) == 202); run_worker();
-    assert(fake_now_ms == 6000 && retire_calls == 0 && prepare_calls == 0 &&
+    assert(fake_now_ms == 6000 && retire_calls == 1 && prepare_calls == 0 &&
         stream_prepare_calls == 0 && upload_finish_calls == 1 && failure_record_calls == 1 && owner_available());
 }
 

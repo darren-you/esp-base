@@ -353,7 +353,9 @@ class FrpClient:
             if identity(before) != identity(after):
                 raise ValueError("固件在读取身份期间发生变化，未发送写命令")
             sha256 = digest.hexdigest()
+            proof_started = self.clock()
             current = self.status()
+            ready_deadline = proof_started + 10
             capabilities = current["result"].get("capabilities")
             if not isinstance(capabilities, dict) or capabilities.get("ota") != "ready":
                 raise ValueError("设备 OTA 当前不可用")
@@ -367,8 +369,24 @@ class FrpClient:
                     "signature": {"scheme": scheme}})
             if submitted["state"] in {"failed", "expired", "unknown"}:
                 return submitted
-            if submitted["state"] != "running" or submitted["result"] is not None:
-                raise ValueError("升级提交没有返回待接收状态")
+            if submitted["state"] != "accepted" or submitted["result"] is not None:
+                raise ValueError("升级提交没有返回准备状态")
+            # Retirement can exceed the FRP local-write stall budget. The
+            # original signed receipt must expose readiness before any body.
+            # This shares the existing ten-second write-intent window.
+            while True:
+                self._connection_remaining(ready_deadline)
+                ready = self.result(operation_id, expected_sha256=sha256,
+                    expected_size=before.st_size, expected_target=target,
+                    deadline=ready_deadline)
+                if ready["boot_id"] != current["boot_id"] or ready["result"] is None:
+                    raise ValueError("准备结果缺少同一 boot 的原操作身份")
+                if ready["state"] == "running":
+                    self._connection_remaining(ready_deadline)
+                    break
+                if ready["state"] != "accepted":
+                    return ready
+                time.sleep(min(poll_interval_seconds, max(0, ready_deadline - self.clock())))
             # One upload connection only. A lost response is reconciled by
             # read-only queries, never by repeating the write or opening a new op.
             transfer_deadline = self.clock() + 300

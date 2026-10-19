@@ -81,6 +81,10 @@ static size_t s_ota_slot;
 static esp_base_ota_request_t *s_ota_request;
 static atomic_bool s_ota_done;
 static atomic_bool s_ota_stage_uncertain;
+static atomic_bool s_ota_upload_ready;
+/* Published only after this worker reloads and binds the durable intent.
+ * It serves read-only progress; it never authorizes a write or a terminal. */
+static atomic_uint s_ota_target_subtype;
 static atomic_int s_ota_result;
 static atomic_uint_fast32_t s_ota_received;
 static esp_base_control_state_t s_control_state;
@@ -329,7 +333,12 @@ static void reply(const char *request_id, const char *state, const char *error, 
 
 static void reply_ota_result(const char *request_id, const esp_base_ota_receipt_view_t *view)
 {
-    const char *state = view->state == ESP_BASE_OTA_OPERATION_RUNNING ? "running" :
+    const bool preparing = view->state == ESP_BASE_OTA_OPERATION_RUNNING &&
+        s_ota_active && s_ota_request->inbound_stream &&
+        !strcmp(view->operation_id, s_ota_request->operation_id) &&
+        !atomic_load_explicit(&s_ota_upload_ready, memory_order_acquire);
+    const char *state = preparing ? "accepted" :
+        view->state == ESP_BASE_OTA_OPERATION_RUNNING ? "running" :
         view->state == ESP_BASE_OTA_OPERATION_SUCCEEDED ? "succeeded" :
         view->state == ESP_BASE_OTA_OPERATION_FAILED ? "failed" : "unknown";
     char digest[67]; digest_hex(digest, view->sha256);
@@ -499,7 +508,8 @@ static int handle_frp_management(esp_base_frp_management_command_t command,
     if (strstr(response, "\"error_code\":\"invalid_request\"")) return 400;
     if (strstr(response, "\"state\":\"failed\"") ||
         strstr(response, "\"state\":\"expired\"")) return 409;
-    return strstr(response, "\"state\":\"running\"") ? 202 : 200;
+    return strstr(response, "\"state\":\"running\"") ||
+        strstr(response, "\"state\":\"accepted\"") ? 202 : 200;
 }
 
 static void poll_frp_restart(uint64_t now)
@@ -705,9 +715,27 @@ static void ota_task(void *argument)
         receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED ||
         strcmp(receipt.operation_id, s_ota_request->operation_id) ||
         receipt.image_size_bytes != s_ota_request->image_size_bytes ||
-        memcmp(receipt.candidate_sha256, s_ota_request->sha256, 32)) goto uncertain;
+        memcmp(receipt.candidate_sha256, s_ota_request->sha256, 32) ||
+        (receipt.target_subtype != ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+         receipt.target_subtype != ESP_PARTITION_SUBTYPE_APP_OTA_1)) goto uncertain;
+    atomic_store_explicit(&s_ota_target_subtype, receipt.target_subtype, memory_order_release);
+    stage = "retire_inactive";
+    observe_ota_phase(stage, "begin", result);
+    result = eota_retire_inactive(&policy, receipt.target_subtype, receipt.source_sha256);
+    observe_ota_phase(stage, "end", result);
+    if (result != EOTA_UPDATE_OK) goto uncertain;
+    mutated = true;
     if (s_ota_request->inbound_stream) {
+        /* Source verification/retirement can exceed the FRP local-write stall
+         * budget. Do not accept a body until that work has finished. The
+         * durable original-ID query exposes readiness before the single PUT. */
         stage = "wait_upload";
+        if (!esp_base_frp_management_upload_arm(s_ota_request->operation_id,
+                s_context.device_id, s_boot_id, s_ota_request->image_size_bytes,
+                s_ota_request->sha256, uptime_ms())) {
+            result = EOTA_UPDATE_RESOURCE_FAILURE; goto done;
+        }
+        atomic_store_explicit(&s_ota_upload_ready, true, memory_order_release);
         const uint64_t started = uptime_ms();
         while (!esp_base_frp_management_upload_connected()) {
             const uint64_t now = uptime_ms();
@@ -717,12 +745,6 @@ static void ota_task(void *argument)
             vTaskDelay(1);
         }
     }
-    stage = "retire_inactive";
-    observe_ota_phase(stage, "begin", result);
-    result = eota_retire_inactive(&policy, receipt.target_subtype, receipt.source_sha256);
-    observe_ota_phase(stage, "end", result);
-    if (result != EOTA_UPDATE_OK) goto uncertain;
-    mutated = true;
     eota_image_t image = {.image_url = s_ota_request->image_url,
         .image_size_bytes = s_ota_request->image_size_bytes};
     memcpy(image.sha256, s_ota_request->sha256, 32);
@@ -867,6 +889,19 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     if (command->kind == EBASE_OTA_RESULT) {
         esp_base_ota_receipt_view_t view;
         const bool active = s_ota_active && !strcmp(s_ota_request->operation_id, command->operation_id);
+        const unsigned target = atomic_load_explicit(&s_ota_target_subtype, memory_order_acquire);
+        if (active && (target == ESP_PARTITION_SUBTYPE_APP_OTA_0 ||
+                       target == ESP_PARTITION_SUBTYPE_APP_OTA_1)) {
+            /* Avoid competing for Flash while retirement verifies the source.
+             * The live owner publishes nonterminal progress only; after it
+             * ends, every query returns to the durable physical evaluation. */
+            view = (esp_base_ota_receipt_view_t){.state = ESP_BASE_OTA_OPERATION_RUNNING,
+                .image_size_bytes = s_ota_request->image_size_bytes, .target_subtype = (uint8_t)target};
+            memcpy(view.operation_id, s_ota_request->operation_id, sizeof view.operation_id);
+            memcpy(view.sha256, s_ota_request->sha256, sizeof view.sha256);
+            reply_ota_result(command->request.request_id, &view);
+            return;
+        }
         const esp_base_ota_receipt_result_t result = esp_base_ota_receipt_query(s_context.device_id, command->operation_id, active, &view);
         if (result == ESP_BASE_OTA_RECEIPT_OK) reply_ota_result(command->request.request_id, &view);
         else reply(command->request.request_id, result == ESP_BASE_OTA_RECEIPT_UNSUPPORTED ? "failed" : "unknown",
@@ -962,20 +997,12 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         s_ota_request = command->ota;
         command->payload = NULL;
         command->payload_size_bytes = 0U;
-        if (s_ota_request->inbound_stream && !esp_base_frp_management_upload_arm(
-                s_ota_request->operation_id, s_context.device_id, s_boot_id,
-                s_ota_request->image_size_bytes, s_ota_request->sha256, uptime_ms())) {
-            const bool failed = esp_base_ota_receipt_record_failure(s_context.device_id,
-                s_ota_request->operation_id, EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
-                esp_base_storage_release(&s_ota_storage_claim);
-            clear_ota_request();
-            if (!failed) s_config_uncertain = true;
-            save_outcome(slot, failed ? "failed" : "unknown", failed ? "resource_failure" : "storage_uncertain", false); return;
-        }
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
         atomic_store_explicit(&s_ota_stage_uncertain, false, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_upload_ready, false, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_target_subtype, 0xffU, memory_order_relaxed);
         atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
         esp_base_control_state_set_ota_download_active(&s_control_state, true);
         if (xTaskCreate(ota_task, "base_ota", 12288, NULL, 4, NULL) != pdPASS) {
@@ -995,7 +1022,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             }
             return;
         }
-        save_outcome(slot, "running", NULL, false);
+        save_outcome(slot, s_ota_request->inbound_stream ? "accepted" : "running", NULL, false);
         return;
     }
     const char *write_error = restart_write_error();

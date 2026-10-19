@@ -34,6 +34,10 @@ class Fixture:
         self.lost_start_response = False
         self.status_reply_delay_seconds = 0
         self.start_reply_delay_seconds = 0
+        self.prepare_pending_queries = 0
+        self.prepare_change = {}
+        self.prepare_boot = BOOT
+        self.prepare_state = "running"
         self.reject_submit = False
         self.never_finishes = False
         self.extra_result_key = False
@@ -112,12 +116,20 @@ class Fixture:
                             else:
                                 if fixture.start_reply_delay_seconds:
                                     time.sleep(fixture.start_reply_delay_seconds)
-                                self.reply(self.envelope(request, state="running"), 202)
+                                self.reply(self.envelope(request, state="accepted"), 202)
                     elif command == "ota.result":
                         fixture.query_count += 1
                         if request["parameters"] != {"operation_id": OPERATION}:
                             raise AssertionError("original operation only")
                         parameters = fixture.start_request["parameters"]
+                        if not fixture.uploads:
+                            result = {"operation_id": OPERATION, "sha256": parameters["sha256"],
+                                "image_size_bytes": parameters["image_size_bytes"],
+                                "target": parameters["target"], "target_slot": "ota_1"}
+                            result.update(fixture.prepare_change)
+                            state = "accepted" if fixture.query_count <= fixture.prepare_pending_queries else fixture.prepare_state
+                            self.reply(self.envelope(request, state=state, boot=fixture.prepare_boot, result=result), 202)
+                            return
                         result = {"operation_id": OPERATION,
                             "sha256": "0" * 64 if fixture.bad_result_sha else parameters["sha256"],
                             "image_size_bytes": parameters["image_size_bytes"],
@@ -227,6 +239,39 @@ class FrpOtaTests(unittest.TestCase):
         self.assertEqual(len(starts), 1)
         self.assertNotIn("image_url", starts[0]["parameters"])
         self.assertIsNone(self.fixture.error)
+
+    def test_body_waits_for_original_receipt_ready(self):
+        self.fixture.prepare_pending_queries = 3
+        self.assertEqual(self.upload()["state"], "succeeded")
+        self.assertEqual(self.fixture.uploads, [self.payload])
+        self.assertGreaterEqual(self.fixture.query_count, 5)
+
+    def test_readiness_identity_mismatch_never_uploads(self):
+        for change, boot in [({"operation_id": "55555555-5555-4555-8555-555555555555"}, BOOT),
+                ({"sha256": "f" * 64}, BOOT), ({"image_size_bytes": len(self.payload) + 1}, BOOT),
+                ({"target": "esp32/esp_base"}, BOOT), ({}, NEXT_BOOT)]:
+            with self.subTest(change=change, boot=boot):
+                self.fixture.requests.clear()
+                self.fixture.prepare_change = change
+                self.fixture.prepare_boot = boot
+                with self.assertRaises(frp_ota.UnknownOperation):
+                    self.upload()
+                self.assertEqual(self.fixture.uploads, [])
+                self.assertEqual(sum(req["command"] == "ota.start" for _, req, _ in self.fixture.requests), 1)
+
+    def test_readiness_shares_original_write_deadline(self):
+        clock = [0.0]
+        self.fixture.client.clock = lambda: clock[0]
+        actual_result = self.fixture.client.result
+        def expired_result(*args, **kwargs):
+            result = actual_result(*args, **kwargs)
+            self.assertEqual(kwargs["deadline"], 10.0)
+            clock[0] = 10.0
+            return result
+        with patch.object(self.fixture.client, "result", side_effect=expired_result):
+            with self.assertRaises(frp_ota.UnknownOperation):
+                self.upload()
+        self.assertEqual(self.fixture.uploads, [])
 
     def test_registered_prefix_is_preserved_for_commands_upload_and_original_result(self):
         self.fixture.path_prefix = "/devices/esp-base-esp32c3"
@@ -350,7 +395,7 @@ class FrpOtaTests(unittest.TestCase):
         self.assertIsNone(final["result"])
         self.assertEqual(self.fixture.uploads, [self.payload])
         self.assertEqual(sum(req["command"] == "ota.start" for _, req, _ in self.fixture.requests), 1)
-        self.assertEqual(self.fixture.query_count, 1)
+        self.assertEqual(self.fixture.query_count, 2)
         self.assertIsNone(self.fixture.error)
 
     def test_upload_terminal_claims_only_use_original_result_query(self):
@@ -431,7 +476,10 @@ class FrpOtaTests(unittest.TestCase):
         clock = [0.0]
         self.fixture.client.clock = lambda: clock[0]
         captured = []
+        actual_result = self.fixture.client.result
         def late_result(operation_id, **kwargs):
+            if not self.fixture.uploads:
+                return actual_result(operation_id, **kwargs)
             captured.append(kwargs["deadline"])
             clock[0] += 4
             return {"protocol_version": 1, "device_id": DEVICE, "boot_id": NEXT_BOOT,

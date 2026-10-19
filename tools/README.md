@@ -17,7 +17,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 有线 OTA 是下发 URL 后由设备 HTTPS 拉取完整 signed bin；软件扫描本地文件得到摘要／长度，提交前核对同设备、当前 boot 与 OTA 可用状态。当前 USB CLI 提交后返回 running／unknown；持久结果须另按原 operation_id 查询，当前镜像身份须独立 `firmware.status` 核对，不能把这些分开的调用当成已自动完成新 boot 成功对账。写只提交一次，超时／unknown不重发、不另建操作。ESP Tool Mac App 的当前职责是本机有线管理，使用这些设备命令；其内置 FRP／frpc 与远程 Bridge 正按最新计划硬切删除，新本机调用链另行验收，不再作为正式使用路线。官方有线刷写／恢复由对应宿主能力执行，不能与 app OTA 混同。
 
-`frp_ota.py` 经明确设备 FRP 地址执行认证控制、固件 PUT 和原 ID 查询，固件正文不走设备直连 HTTPS。持久成功还须来自不同于提交时的新 boot，随后独立 `firmware.status` 必须在同一新 boot 精确匹配完整摘要、尺寸、target 与真实 OTA 槽；原 ID 查询和身份核对共用原终态绝对期限。迟到、错身份或未知结果保留原 ID，不重发。HTTP／HMAC／期限和命令示例见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md)。独立 FRP 不要求 Mac／USB 在线；宿主 loopback 测试不证明已经经过正式 FRPS或实板。
+`frp_ota.py` 经明确设备 FRP 地址执行认证控制、固件 PUT 和原 ID 查询；accepted start 后在原 10 秒意图窗口内核对同 boot 的原收据，running 才允许一次 PUT，准备中的查询不重新提交写入。固件正文不走设备直连 HTTPS。持久成功还须来自不同于提交时的新 boot，随后独立 `firmware.status` 必须在同一新 boot 精确匹配完整摘要、尺寸、target 与真实 OTA 槽；原 ID 查询和身份核对共用原终态绝对期限。迟到、错身份或未知结果保留原 ID，不重发。HTTP／HMAC／期限和命令示例见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md)。独立 FRP 不要求 Mac／USB 在线；宿主 loopback 测试不证明已经经过正式 FRPS或实板。
 
 宿主控制命令的 DNS、TCP／TLS 建连、发送和完整认证响应共用原始 5 秒绝对期限；调用方给出的更早期限继续生效，不在 TLS 后重新计时或压缩为 2 秒。设备 loopback 控制连接的 2 秒期限及正文上界保持原合同；该设备端期限不等于公网往返预算。`ota.start` 响应丢失或超过宿主原期限时保留原 operation_id 为 unknown，不发送 PUT、不重发 start，后续只查原 ID。
 
