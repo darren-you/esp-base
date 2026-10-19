@@ -27,6 +27,7 @@ static int flash_io_acquires, flash_io_releases, flash_io_deny_at;
 static esp_base_storage_owner_t transaction_owner;
 static esp_base_storage_claim_t transaction_claim;
 static unsigned firmware_observations;
+static unsigned verified_image_reads;
 static unsigned slot_observations, change_geometry_at_observation;
 static bool change_slots_after_observation, release_claim_after_observation, release_claim_during_commit;
 enum { NO_FAULT, INIT_FAULT, READ_FAULT, OPEN_WRITE_FAULT, SET_BEFORE_FAULT, SET_AFTER_FAULT, COMMIT_FAULT, READBACK_FAULT, READBACK_MISMATCH };
@@ -40,6 +41,7 @@ static void reset(void)
     transaction_claim = (esp_base_storage_claim_t){0};
     assert(esp_base_storage_claim(&transaction_owner, &transaction_claim));
     firmware_observations = 0;
+    verified_image_reads = 0;
     slot_observations = change_geometry_at_observation = 0;
     change_slots_after_observation = release_claim_after_observation = release_claim_during_commit = false;
     flash_io_acquires = flash_io_releases = flash_io_deny_at = 0;
@@ -232,6 +234,7 @@ esp_err_t nvs_commit(nvs_handle_t handle)
 eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t subtype,
                                          uint32_t *size, uint8_t digest[32])
 {
+    ++verified_image_reads;
     assert(policy && subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0);
     *size = IMAGE_BYTES;
     memcpy(digest, observed_source, 32);
@@ -318,8 +321,35 @@ int main(void)
            view.state == ESP_BASE_OTA_OPERATION_UNKNOWN);
     observed_source[0] ^= 1U;
     ota = request(NEXT_OP);
+    const unsigned previous_verified_reads = verified_image_reads;
     assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+    assert(verified_image_reads == previous_verified_reads && firmware_observations == 2);
     check_balanced();
+
+    /* A fresh owned image proof may resolve FAILED during registration only.
+     * It must never turn a stale source, changed slot or lost claim into a new
+     * durable intent. Independent queries still perform their own image read. */
+    for (unsigned scenario = 0; scenario < 5; ++scenario) {
+        reset(); ota = request(OP);
+        assert(register_receipt(DEVICE, &ota) == ESP_BASE_OTA_RECEIPT_OK);
+        assert(esp_base_ota_receipt_record_failure(DEVICE, OP, EOTA_UPDATE_DOWNLOAD_FAILED) ==
+               ESP_BASE_OTA_RECEIPT_OK);
+        uint8_t original_receipt[STORED_BYTES];
+        memcpy(original_receipt, stored, sizeof original_receipt);
+        const int terminal_writes = writes;
+        const unsigned terminal_verified_reads = verified_image_reads;
+        if (scenario == 0) observed_source[0] ^= 1U;
+        if (scenario == 1) running_subtype = boot_subtype = ESP_PARTITION_SUBTYPE_APP_OTA_1;
+        if (scenario == 2) firmware_observation_ok = false;
+        if (scenario == 3) change_slots_after_observation = true;
+        if (scenario == 4) release_claim_after_observation = true;
+        ota = request(NEXT_OP);
+        assert(register_receipt(DEVICE, &ota) == (scenario < 2 ?
+               ESP_BASE_OTA_RECEIPT_BUSY : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
+        assert(writes == terminal_writes && !memcmp(stored, original_receipt, sizeof stored) &&
+               verified_image_reads == terminal_verified_reads && firmware_observations == 2);
+        check_balanced();
+    }
 
     /* Old versions, oversized legacy blob and malformed intent remain blocked. */
     for (unsigned scenario = 0; scenario < 8; ++scenario) {

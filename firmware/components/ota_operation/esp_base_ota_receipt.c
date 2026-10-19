@@ -325,10 +325,12 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
             return same_request(&previous, request) ?
                    ESP_BASE_OTA_RECEIPT_EXISTS : ESP_BASE_OTA_RECEIPT_CONFLICT;
         }
-        esp_base_ota_receipt_view_t view = {0};
-        evaluate(&previous, false, &view);
-        if (view.state != ESP_BASE_OTA_OPERATION_SUCCEEDED && view.state != ESP_BASE_OTA_OPERATION_FAILED) {
-            return ESP_BASE_OTA_RECEIPT_BUSY;
+        if (previous.status != OTA_STATUS_FAILED) {
+            esp_base_ota_receipt_view_t view = {0};
+            evaluate(&previous, false, &view);
+            if (view.state != ESP_BASE_OTA_OPERATION_SUCCEEDED) {
+                return ESP_BASE_OTA_RECEIPT_BUSY;
+            }
         }
     }
     esp_base_ota_firmware_set_t observed = {0};
@@ -346,6 +348,16 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
           memcmp(observed.running_firmware_sha256, observed.bootable_firmware_sha256[1], 32) == 0)) ||
         !esp_base_storage_claim_active(claim)) {
         return ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+    }
+    /* A failed receipt is terminal only while its signed source still runs.
+     * Reuse the complete, fresh image proof made above under this same live
+     * transaction claim; querying the previous receipt first would verify and
+     * hash this identical source a second time before the start ACK. */
+    if (existing == ESP_BASE_OTA_RECEIPT_OK && previous.status == OTA_STATUS_FAILED &&
+        (slots.running_subtype != previous.source_subtype ||
+         slots.boot_subtype != previous.source_subtype ||
+         memcmp(observed.running_firmware_sha256, previous.source_sha256, 32) != 0)) {
+        return ESP_BASE_OTA_RECEIPT_BUSY;
     }
     /* Only the independently rechecked signed A identity can reject C as a
      * same-image update. Do so before writing the intent or retiring old B. */
