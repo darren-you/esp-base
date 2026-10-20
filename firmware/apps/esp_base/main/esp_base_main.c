@@ -4,6 +4,7 @@
 
 #include "sdkconfig.h"
 #include "esp_app_desc.h"
+#include "esp_base_build.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -362,6 +363,16 @@ void app_main(void)
     }
 
     const esp_app_desc_t *app = esp_app_get_description();
+    if (strcmp(app->version, esp_base_build.version) != 0) {
+        stop_after_local_failure(&ota, pending_boot, "build_identity", ESP_ERR_INVALID_STATE);
+        return;
+    }
+    ESP_LOGI(TAG,
+             "ESP_BASE_BUILD schema=1 device_id=%s version=%s build_number=%" PRIu64
+             " local_validation=%s target=%s source_commit_sha=%s input_sha256=%s run_id=%s",
+             identity.device_id, esp_base_build.version, esp_base_build.build_number,
+             esp_base_build.local_validation ? "true" : "false", esp_base_build.target,
+             esp_base_build.source_commit_sha, esp_base_build.input_sha256, esp_base_build.run_id);
     ESP_LOGI(TAG,
              "ESP_BASE_BOOT project=ESP Base device_id=%s version=%s idf=%s chip=%s revision=%d.%d flash=%" PRIu32
              " slot=%s reset=%s config_generation=%" PRIu32,

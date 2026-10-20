@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_app_desc.h"
+#include "../apps/esp_base/main/esp_base_build.h"
 #include "esp_base_identity.h"
 #include "eota.h"
 #include "esp_ota_ops.h"
@@ -23,6 +24,12 @@
 
 void app_main(void);
 
+const esp_base_build_t esp_base_build = {
+    .magic = 0x31424245, .size = 320, .schema_version = 1,
+    .version = "1.0.0", .build_number = UINT64_C(9007199254740991),
+    .target = "host-fixture", .run_id = "startup-test",
+};
+static bool mismatched_app_version, full_build_number_logged;
 static eota_state_t image_state, state_after_mark;
 static esp_err_t inspect_result, nvs_result, identity_result, safety_result, config_result;
 static esp_err_t protocol_result, mark_result, rollback_result, time_result;
@@ -61,6 +68,7 @@ static bool storage_available(void)
 
 static void reset_case(void)
 {
+    mismatched_app_version = full_build_number_logged = false;
     image_state = EOTA_STATE_PENDING_VERIFY;
     state_after_mark = EOTA_STATE_VALID;
     inspect_result = nvs_result = identity_result = safety_result = config_result = ESP_OK;
@@ -173,6 +181,8 @@ void test_log(const char *format, ...)
     va_end(arguments);
     if (strstr(line, "ESP_BASE_READY")) ++ready_logs;
     if (strstr(line, "ESP_BASE_OTA_RECOVERY_REQUIRED")) ++recovery_logs;
+    if (strstr(line, "ESP_BASE_BUILD") && strstr(line, "version=1.0.0") &&
+        strstr(line, "build_number=9007199254740991")) full_build_number_logged = true;
 }
 
 const char *esp_err_to_name(esp_err_t error)
@@ -369,7 +379,8 @@ esp_err_t esp_base_protocol_load_config(uint32_t *revision,
 
 const esp_app_desc_t *esp_app_get_description(void)
 {
-    static const esp_app_desc_t app = {.version = "test"};
+    static esp_app_desc_t app;
+    app.version = mismatched_app_version ? "0.2.0" : esp_base_build.version;
     return &app;
 }
 
@@ -468,8 +479,14 @@ int main(void)
     assert(!rebooted() && mark_calls == 1 && rollback_calls == 0 && ready_logs == 1);
     assert(now_ms >= 30000 && now_ms < 31000 && receipt_success_calls == 1);
     assert(!ota_gate_pending && ota_gate_clears == 1 && storage_available());
+    assert(full_build_number_logged);
     assert(bound_flash_io.acquire(bound_flash_io.context));
     assert(bound_flash_io.release(bound_flash_io.context));
+    reset_case(); mismatched_app_version = true;
+    assert(rebooted() && rollback_calls == 1 && protocol_calls == 0 && mark_calls == 0 &&
+           ready_logs == 0 && !full_build_number_logged);
+    reset_case();
+    assert(!rebooted() && mark_calls == 1 && full_build_number_logged);
 #if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
     assert(scratch_bind_calls == 1 && scratch_recover_calls == 1 && scratch_erase_calls == 1);
     reset_case(); scratch_bind_ok = false;

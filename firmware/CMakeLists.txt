@@ -11,7 +11,16 @@ if(NOT IDF_TARGET STREQUAL "esp32c3" AND NOT IDF_TARGET STREQUAL "esp32")
 endif()
 set(ESP_BASE_APP "esp_base" CACHE STRING "esp_base or mqtt_integration")
 if(ESP_BASE_APP STREQUAL "esp_base")
-    set(PROJECT_VER "0.2.0")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(ESP_BASE_VERSION_SUFFIX "")
+    set(ESP_BASE_IDENTITY_DIR "${CMAKE_BINARY_DIR}/esp-base-build")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../tools/build_identity.py"
+        --target "${IDF_TARGET}" "--suffix=${ESP_BASE_VERSION_SUFFIX}" --directory "${ESP_BASE_IDENTITY_DIR}"
+        RESULT_VARIABLE identity_result OUTPUT_QUIET ERROR_VARIABLE identity_error)
+    if(NOT identity_result STREQUAL "0")
+        message(FATAL_ERROR "${identity_error}")
+    endif()
+    include("${ESP_BASE_IDENTITY_DIR}/identity.cmake")
     set(ESP_BASE_PROJECT "esp_base")
 elseif(ESP_BASE_APP STREQUAL "mqtt_integration")
     set(PROJECT_VER "0.3.0-lab")
@@ -35,6 +44,24 @@ endif()
 
 project(${ESP_BASE_PROJECT})
 if(ESP_BASE_APP STREQUAL "esp_base")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/../release.json"
+        "${CMAKE_CURRENT_LIST_DIR}/../tools/build_identity.py")
+    add_custom_target(esp_base_build_identity_check
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../tools/build_identity.py"
+            --target "${IDF_TARGET}" "--suffix=${ESP_BASE_VERSION_SUFFIX}"
+            --directory "${ESP_BASE_IDENTITY_DIR}" --verify
+        COMMENT "Verify the current frozen firmware identity")
+    idf_component_get_property(esp_base_main_library main COMPONENT_LIB)
+    add_dependencies(${esp_base_main_library} esp_base_build_identity_check)
+    idf_build_get_property(esp_base_project_binary PROJECT_BIN)
+    add_custom_target(esp_base_build_image_check
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/../tools/build_identity.py"
+            --target "${IDF_TARGET}" "--suffix=${ESP_BASE_VERSION_SUFFIX}"
+            --directory "${ESP_BASE_IDENTITY_DIR}" --image "${CMAKE_BINARY_DIR}/${esp_base_project_binary}"
+        DEPENDS gen_project_binary
+        COMMENT "Read back firmware identity from the actual image")
+    add_dependencies(app esp_base_build_image_check)
     # http_parser.h explicitly supports this -D contract. Bound the product's
     # HTTPS OTA response headers without changing the managed SDK or URL parser.
     idf_component_get_property(esp_base_http_parser_library http_parser COMPONENT_LIB)

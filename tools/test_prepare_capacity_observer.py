@@ -26,7 +26,7 @@ class CapacityObserverPreparationTest(unittest.TestCase):
         self.frozen = self.directory / "frozen"
         self.frozen.mkdir(mode=0o700)
         self.members = []
-        for name in (observer.PROTOCOL, observer.CMAKE, observer.FIRMWARE_CMAKE, "sdk-lock.json",
+        for name in (observer.PROTOCOL, observer.CMAKE, observer.FIRMWARE_CMAKE, "sdk-lock.json", "release.json",
                      "firmware/dependencies.lock", "firmware/dependencies.lock.esp32",
                      "firmware/apps/mqtt_integration/main/mqtt_lab_main.c"):
             raw = (observer.ROOT / name).read_bytes()
@@ -63,7 +63,8 @@ class CapacityObserverPreparationTest(unittest.TestCase):
                 self.assertTrue(report["software_only"])
                 self.assertFalse(report["candidate_qualified"])
                 self.assertFalse(report["production_release_gate_implemented"])
-                self.assertIn('set(PROJECT_VER "0.2.0-capacity-lab")', (source / observer.FIRMWARE_CMAKE).read_text())
+                self.assertIn('set(ESP_BASE_VERSION_SUFFIX "-capacity-lab")', (source / observer.FIRMWARE_CMAKE).read_text())
+                self.assertEqual(report["project_version"], "1.0.0-capacity-lab")
                 self.assertEqual(report["worker_exit_coverage"], ["base_ota_before_done", "all_freertos_normal_cleanup"])
                 self.assertEqual(report["unobserved_worker_exits"], ["reset", "panic", "deletion_not_yet_cleaned_up"])
                 self.assertEqual(report["exit_fact_limit"], 64)

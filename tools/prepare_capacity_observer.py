@@ -24,8 +24,8 @@ TARGETS = ("esp32c3", "esp32")
 INCLUDE_ANCHOR = '#include "control_state.h"\n'
 CONTROL_ANCHOR = '        esp_base_control_state_note_progress(&s_control_state);\n'
 EXIT_ANCHOR = '    atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);\n'
-CMAKE_ANCHOR = '    SRCS "esp_base_protocol.c"'
-VERSION_ANCHOR = '    set(PROJECT_VER "0.2.0")'
+CMAKE_ANCHOR = '    SRCS "esp_base_capacity.c" "flash_observation.c" "esp_base_protocol.c"'
+VERSION_ANCHOR = '    set(ESP_BASE_VERSION_SUFFIX "")'
 MARKER = "ESP_BASE_CAPACITY_OBSERVER LAB_ONLY"
 
 HEADER = '''// SPDX-License-Identifier: Apache-2.0
@@ -305,8 +305,14 @@ def prepare(args):
             require(b"ESP_BASE_LAB_ONLY" not in raw and b"ESP_BASE_LAB_MEMORY" not in raw and
                     b"esp_base_capacity_observer" not in raw, "原生活动源码已含实验观察输入")
         before[str(relative)] = raw
-    require(PROTOCOL in before and CMAKE in before and FIRMWARE_CMAKE in before and "sdk-lock.json" in before,
+    require(PROTOCOL in before and CMAKE in before and FIRMWARE_CMAKE in before and
+            "sdk-lock.json" in before and "release.json" in before,
             "baseline缺必要输入")
+    release = json.loads(before["release.json"], object_pairs_hook=unique_object)
+    require(isinstance(release, dict) and set(release) == {"version"} and
+            isinstance(release["version"], str) and
+            re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", release["version"]),
+            "baseline产品版本无效")
     selected_lock = "firmware/dependencies.lock" + (".esp32" if args.target == "esp32" else "")
     require(selected_lock in before and re.findall(rb"(?m)^target: (\w+)$", before[selected_lock]) == [args.target.encode()],
             "target与精确依赖锁不符")
@@ -326,7 +332,7 @@ def prepare(args):
     require(all(protocol.count(anchor) == 1 for anchor in (INCLUDE_ANCHOR, CONTROL_ANCHOR, EXIT_ANCHOR)) and
             cmake.count(CMAKE_ANCHOR) == 1 and firmware_cmake.count(VERSION_ANCHOR) == 1,
             "原生源码插入anchor不唯一或不匹配")
-    firmware_cmake = firmware_cmake.replace(VERSION_ANCHOR, '    set(PROJECT_VER "0.2.0-capacity-lab")')
+    firmware_cmake = firmware_cmake.replace(VERSION_ANCHOR, '    set(ESP_BASE_VERSION_SUFFIX "-capacity-lab")')
     protocol = protocol.replace(INCLUDE_ANCHOR, INCLUDE_ANCHOR + '#include "esp_base_capacity_observer.h"\n')
     protocol = protocol.replace(CONTROL_ANCHOR, '        esp_base_capacity_observer_poll(uptime_ms());\n' + CONTROL_ANCHOR)
     # 记录必须先于done release，避免更高优先级control观察done后立即重启。
@@ -339,7 +345,7 @@ def prepare(args):
              '        message(FATAL_ERROR "Capacity observer target differs from prepared receipt")\n'
              '    endif()\n'
              'endif()\n')
-    cmake = guard + cmake.replace(CMAKE_ANCHOR, '    SRCS "esp_base_capacity_observer.c" "esp_base_protocol.c"')
+    cmake = guard + cmake.replace(CMAKE_ANCHOR, CMAKE_ANCHOR + ' "esp_base_capacity_observer.c"')
     target_guard = f'#if !defined(CONFIG_IDF_TARGET_{args.target.upper()}) || !CONFIG_IDF_TARGET_{args.target.upper()}\n#error "Prepared capacity observer target mismatch"\n#endif'
     outputs = {PROTOCOL: protocol.encode(), CMAKE: cmake.encode(), FIRMWARE_CMAKE: firmware_cmake.encode(),
                OBSERVER_C: SOURCE.replace("@@TARGET_GUARD@@", target_guard).replace("@@TARGET@@", args.target).encode(),
@@ -349,7 +355,8 @@ def prepare(args):
                     for name, raw in outputs.items()).encode()
     outputs[PATCH] = patch
     report = {"schema_version": 1, "observer_revision": 2, "artifact_kind": "lab_only_capacity_observer_source", "lab_only": True,
-              "software_only": True, "candidate_qualified": False, "project_version": "0.2.0-capacity-lab",
+              "software_only": True, "candidate_qualified": False,
+              "project_version": release["version"] + "-capacity-lab",
               "target": args.target, "source_root": str(root), "baseline_receipt_sha256": digest(baseline_bytes),
               "baseline_production_inputs": members, "lab_source_patch_sha256": digest(patch),
               "generated_files": {name: {"sha256": digest(raw), "size_bytes": len(raw)} for name, raw in outputs.items()},

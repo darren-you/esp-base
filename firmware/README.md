@@ -25,6 +25,22 @@ FRP OTA 先完成来源验证与 inactive 退役，再开放正文上传；客�
 
 ## 构建
 
+产品版本的唯一声明为仓库根 `release.json`，普通 `esp_base` 构建由
+`tools/build_identity.py` 生成 `PROJECT_VER` 和只读构建描述，不能由另一个 CMake
+常量覆盖。描述位于 SDK 规定的首个 DROM 段、`esp_app_desc_t` 后的固定偏移，
+包含完整 64 位构建号、目标、源码 SHA、输入摘要和 run。它不复用
+`secure_version`，不写 eFuse。
+
+普通 `idf.py build` 的描述为 `local_validation=true`、构建号 0；它不分配正式编号。
+正式身份只接受显式 `FAST_DEPLOY_PACKAGE_CORE_ROOT` 和同次 Core 冻结快照，
+release unit 为 `esp-base`，原生 project name 继续为 `esp_base`，
+两目标分别为 `esp32c3/riscv32` 和 `esp32/xtensa`。run 最长 127 个 ASCII 字符；
+超过原生容量会拒绝，不截断。部分正式环境、LAB 后缀、目标或源码不符均不能回落本地身份。
+每次编译前核对生成文件，`app` 构建结束后从实际 `.bin` 固定偏移回读全部字段，
+启动时输出 `ESP_BASE_BUILD`。现有 `firmware.status` 业务协议字段保持原合同。
+这些是身份接线与字节校验；正式独立包、签名资格、持久防退和旧设备迁移须分别验收，
+本地标记与构建号 0 不授予正式交付资格。
+
 先读取 [SDK 与宿主工具](../tools/README.md)，在独立官方基线装配 schema 2 的唯一受管容量统计派生，并导出 SDK 环境。显式 target、sdkconfig、defaults 与 build 目录，分别解析两目标锁。组件版本变化必须让官方 Component Manager 重新解析实际目标 lock；`update-dependencies` 默认 lock 名不能代替 ESP32 自定义 lock 的核对。
 
 ```bash
