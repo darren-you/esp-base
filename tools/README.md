@@ -31,7 +31,59 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 ## 构建与回归
 
+`build_package.py` 在锁定 SDK 环境中消费同次 Core 快照，构建、签署清单并归档
+双目标原生固件。它不分配编号，不连接设备。先保存源码，再冻结完整的已解析
+sdkconfig、公开验证键、SDK 派生、依赖锁与工具链；路径保留在仓外输入文件，
+包内只保留摘要和工具身份。私钥不进入包或清单。
+
 ```bash
+python3 tools/build_package.py freeze --target esp32c3 \
+  --sdkconfig /absolute/private/sdkconfig \
+  --public-key /absolute/private/verification-key.bin \
+  --signing-trust software-test --input /absolute/private/firmware-input.json
+```
+
+将返回的 `input_manifest_sha256` 作为本 run 的
+`FAST_DEPLOY_PROFILE_SNAPSHOT_ID`，再由显式冻结的 Core 按既有持久状态分配
+`firmware / esp-base / riscv32 / esp32c3` 或
+`firmware / esp-base / xtensa / esp32` 快照。版本必须等于数字分支和
+`release.json`；传入完整 `FAST_DEPLOY_*` context、
+`FAST_DEPLOY_PACKAGE_CORE_ROOT` 与 `FAST_DEPLOY_CLIENT_VERSION_SNAPSHOT_FILE`。
+原始 `client-version-result.json` 须与快照在同一目录。不要为此另建计数器，
+也不要以本地号 0 封装正式包。
+
+```bash
+python3 tools/build_package.py build --input /absolute/private/firmware-input.json \
+  --build-dir /absolute/private/firmware-build
+python3 tools/build_package.py package --input /absolute/private/firmware-input.json \
+  --build-dir /absolute/private/firmware-build --artifact /absolute/private/esp-base.zip
+python3 tools/build_package.py verify --artifact /absolute/private/esp-base.zip
+```
+
+每个目标使用独立仓外构建目录。入口核对真实 ELF、app 描述、镜像校验和、
+公开组件、bootloader、双槽几何、初始 OTA 数据，以及 ESP32 app／bootloader
+内嵌公钥。已完成构建和已签清单只回读复用；同 run 重试不重新生成随机 RSA-PSS
+签名。ZIP 与收据沿用 Core 的不可覆盖目录归档。
+
+外部签名路径使用 `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n`，先 `build`，
+将实际 unsigned app 交给签名事实源。ESP32 还须签署实际 unsigned 分区表。
+使用 `manifest --signed-image /absolute/signed-app.bin` 生成冻结清单；
+ESP32 同时传入 `--signed-partition /absolute/signed-partition.bin`。
+清单由相同键、相同官方 espsecure v1／v2 方案签署后，`package` 传入上述
+参数及 `--signed-manifest /absolute/signed-manifest.bin`。所有签名必须覆盖
+本次原字节，不能用旧签名或重新构建的近似输入替代。
+
+最终 ZIP 包含完整 signed app、bootstrap 文件、ELF、SDK／组件锁、公开验证键、
+Core 原始记录与已签清单。它不包含设备配置、NVS 或恢复资料，也不授予刷写
+这些 bootstrap 文件的权限。普通 `verify` 证明包内自洽；发布检查必须额外传入
+`--require-release --public-key /absolute/authorized-public-key.bin`。
+软件测试键必须标为 `software-test`，此模式会被发布检查拒绝。正式键来源、
+历史高水位、设备持久防退和旧设备迁移仍分别验收。
+
+```bash
+python3 -m unittest discover -s tools -p 'test_build_identity.py' -v
+# 使用已导出的锁定 IDF Python／espsecure 环境
+python3 -m unittest discover -s tools -p 'test_build_package.py' -v
 python3 -m unittest discover -s tools -p 'test_business_event*.py' -v
 python3 -m unittest discover -s tools -p 'test_device_control.py' -v
 python3 -m unittest discover -s tools -p 'test_frp_ota.py' -v

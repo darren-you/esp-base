@@ -23,6 +23,10 @@ def encoded(value):
 def read_json(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError("身份输入必须为普通文件")
+    return decode_json(path.read_bytes())
+
+
+def decode_json(data):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -30,7 +34,27 @@ def read_json(path):
                 raise ValueError("身份输入有重复字段")
             result[key] = value
         return result
-    return json.loads(path.read_bytes(), object_pairs_hook=pairs)
+    def constant(value):
+        raise ValueError("JSON 不允许非有限数值")
+    return json.loads(data, object_pairs_hook=pairs, parse_constant=constant)
+
+
+def validate_source_inputs(root=ROOT):
+    """正式编译的第一方输入必须全部来自已保存 Git，包括被忽略的输入。"""
+    if subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"]).strip():
+        raise ValueError("正式固件第一方源码必须已保存且干净")
+    files = []
+    for directory in ("firmware/apps", "firmware/components", "firmware/partitions", "tools"):
+        for path in (root / directory).rglob("*"):
+            if path.is_symlink():
+                raise ValueError("正式固件第一方输入不能通过链接读取")
+            if path.is_file() and (path.suffix in (".c", ".cpp", ".h", ".hpp", ".S", ".s",
+                                                  ".cmake", ".py", ".csv", ".yml") or
+                                   path.name == "CMakeLists.txt" or path.name.startswith("Kconfig")):
+                files.append(path.relative_to(root).as_posix())
+    if subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", "--", *files],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        raise ValueError("正式固件第一方编译输入必须全部属于冻结 Git")
 
 
 def resolve(target, suffix="", root=ROOT):
@@ -55,21 +79,7 @@ def resolve(target, suffix="", root=ROOT):
         value = json.loads(subprocess.check_output(command))
         if value.get("local_validation") is not False or value.get("version") != release["version"] or suffix:
             raise ValueError("正式固件不得回落本地身份或消费 LAB 版本")
-        # IDF discovers component sources and CMake input from these directories.
-        # Core already checks tracked content; ignored/untracked files must not
-        # silently become additional first-party compiler inputs.
-        files = []
-        for directory in ("firmware/apps", "firmware/components", "firmware/partitions", "tools"):
-            for path in (root / directory).rglob("*"):
-                if path.is_symlink():
-                    raise ValueError("正式固件第一方输入不能通过链接读取")
-                if path.is_file() and (path.suffix in (".c", ".cpp", ".h", ".hpp", ".S", ".s",
-                                                      ".cmake", ".py", ".csv", ".yml") or
-                                       path.name == "CMakeLists.txt" or path.name.startswith("Kconfig")):
-                    files.append(path.relative_to(root).as_posix())
-        if subprocess.run(["git", "-C", str(root), "ls-files", "--error-unmatch", "--", *files],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-            raise ValueError("正式固件第一方编译输入必须全部属于冻结 Git")
+        validate_source_inputs(root)
     else:
         value["version"] += suffix
     descriptor_bytes(value, target)
