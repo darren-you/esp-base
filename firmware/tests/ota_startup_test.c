@@ -11,9 +11,6 @@
 #include "esp_base_time.h"
 #include "esp_base_ota_receipt.h"
 #include "esp_base_ota_firmware.h"
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-#include "esp_frp_idf_flash_store.h"
-#endif
 #include "freertos/task.h"
 
 #include <assert.h>
@@ -51,12 +48,6 @@ static esp_base_storage_owner_t *storage_owner;
 static eota_flash_io_t bound_flash_io;
 static unsigned flash_io_bind_calls, ota_gate_clears;
 static jmp_buf reboot_target;
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-static esp_base_storage_owner_t *scratch_io_owner;
-static efrp_idf_flash_store_config_t scratch_config;
-static bool scratch_bind_ok, scratch_recover_ok;
-static unsigned scratch_bind_calls, scratch_recover_calls, scratch_erase_calls;
-#endif
 
 static bool storage_available(void)
 {
@@ -108,69 +99,8 @@ static void reset_case(void)
     storage_owner = NULL;
     bound_flash_io = (eota_flash_io_t){0};
     flash_io_bind_calls = 0;
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-    scratch_io_owner = NULL;
-    scratch_config = (efrp_idf_flash_store_config_t){0};
-    scratch_bind_ok = scratch_recover_ok = true;
-    scratch_bind_calls = scratch_recover_calls = scratch_erase_calls = 0;
-#endif
 }
 
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-bool efrp_idf_flash_store_bind(efrp_idf_flash_store_t *provider,
-                                const efrp_idf_flash_store_config_t *config)
-{
-    assert(provider != NULL && config != NULL &&
-           !strcmp(config->partition_label, "frp_scratch") &&
-           config->partition_type == ESP_PARTITION_TYPE_DATA &&
-           config->partition_subtype == ESP_PARTITION_SUBTYPE_DATA_UNDEFINED &&
-           config->partition_offset_bytes == CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET &&
-           config->partition_size_bytes == UINT32_C(0x10000) &&
-           config->with_owner != NULL);
-    ++scratch_bind_calls;
-    scratch_io_owner = config->owner_context;
-    scratch_config = *config;
-    provider->config = *config;
-    return scratch_bind_ok;
-}
-
-const efrp_aead_flash_store_t *efrp_idf_flash_store_callbacks(
-    const efrp_idf_flash_store_t *provider)
-{
-    static efrp_aead_flash_store_t store;
-    store.context = (void *)provider;
-    return &store;
-}
-
-static efrp_result_t scratch_erase(void *context)
-{
-    assert(context != NULL);
-    ++scratch_erase_calls;
-    esp_base_storage_claim_t competing = {0};
-    assert(scratch_io_owner != NULL &&
-           !esp_base_storage_claim(scratch_io_owner, &competing));
-    return scratch_recover_ok ? EFRP_OK : EFRP_STORAGE_ERROR;
-}
-
-static efrp_result_t scratch_during_ota(void *context)
-{
-    (void)context;
-    assert(storage_owner != NULL && scratch_io_owner != storage_owner);
-    esp_base_storage_claim_t competing = {0};
-    assert(!esp_base_storage_claim(storage_owner, &competing));
-    assert(!esp_base_storage_claim(scratch_io_owner, &competing));
-    return EFRP_OK;
-}
-
-efrp_result_t efrp_aead_flash_store_recover(const efrp_aead_flash_store_t *store)
-{
-    assert(store != NULL && store->context != NULL);
-    const efrp_idf_flash_store_t *provider = store->context;
-    ++scratch_recover_calls;
-    return provider->config.with_owner(provider->config.owner_context,
-                                       scratch_erase, (void *)provider);
-}
-#endif
 
 void test_log(const char *format, ...)
 {
@@ -299,15 +229,6 @@ esp_err_t eota_confirm_pending(eota_current_t *current)
     assert(ota_gate_pending);
     esp_base_storage_claim_t competing = {0};
     assert(storage_owner != NULL && !esp_base_storage_claim(storage_owner, &competing));
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-    const uint64_t flash_wait_started_ms = now_ms;
-    assert(scratch_config.with_owner(scratch_config.owner_context,
-                                     scratch_during_ota, NULL) == EFRP_STORAGE_ERROR);
-    /* The pending otadata write holds the short physical I/O claim. */
-    assert(now_ms - flash_wait_started_ms >= 500U &&
-           now_ms - flash_wait_started_ms <= 501U);
-    assert(!esp_base_storage_claim(storage_owner, &competing));
-#endif
     image_state = state_after_mark;
     current->state = image_state;
     return image_state == EOTA_STATE_VALID ? ESP_OK :
@@ -396,11 +317,6 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     assert(context->flash_io_owner != NULL);
     assert(flash_io_bind_calls == 1 &&
            bound_flash_io.context == context->flash_io_owner);
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-    assert(context->frp_flash_store != NULL);
-#else
-    assert(context->frp_flash_store == NULL);
-#endif
     assert(config_load_calls == 1 && config_result == ESP_OK);
     storage_owner = context->storage_owner;
     esp_base_storage_claim_t competing = {0};
@@ -487,13 +403,6 @@ int main(void)
            ready_logs == 0 && !full_build_number_logged);
     reset_case();
     assert(!rebooted() && mark_calls == 1 && full_build_number_logged);
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-    assert(scratch_bind_calls == 1 && scratch_recover_calls == 1 && scratch_erase_calls == 1);
-    reset_case(); scratch_bind_ok = false;
-    assert(!rebooted() && protocol_calls == 0 && mark_calls == 0 && ready_logs == 0);
-    reset_case(); scratch_recover_ok = false;
-    assert(!rebooted() && protocol_calls == 0 && mark_calls == 0 && ready_logs == 0);
-#endif
     reset_case(); time_result = ESP_FAIL;
     assert(!rebooted() && mark_calls == 1 && ready_logs == 1 && time_calls == 1);
     reset_case(); control_never_ready = true;
@@ -564,5 +473,5 @@ int main(void)
     assert(!rebooted() && mark_calls == 0 && ready_logs == 1);
     reset_case(); source_boot(); ota_available = false;
     assert(!rebooted() && receipt_load_calls == 0 && mark_calls == 0 && ready_logs == 1);
-    puts("  ota_startup passed (firmware-only recovery, 30-second local progress, rollback, independent scratch I/O)");
+    puts("  ota_startup passed (firmware-only recovery, 30-second local progress, rollback, short Flash I/O)");
 }

@@ -7,8 +7,7 @@
 #include "esp_base_identity.h"
 #include "esp_base_remote_config.h"
 #include "esp_base_mqtt_owner.h"
-#include "esp_base_frp_owner.h"
-#include "esp_base_frp_management_listener.h"
+#include "esp_base_mqtt_ota_transfer.h"
 #include "esp_base_wifi.h"
 #include "esp_base_time.h"
 #include "esp_base_ota_policy.h"
@@ -55,7 +54,6 @@ typedef struct {
     const char *reset_reason;
     esp_base_storage_owner_t *storage_owner;
     esp_base_storage_owner_t *flash_io_owner;
-    const efrp_aead_flash_store_t *frp_flash_store;
 } protocol_state_t;
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
 /* C3 has no byte-accessible IRAM heap. Reuse RTC data for the live config;
@@ -94,17 +92,9 @@ static esp_base_remote_config_t *s_candidate;
 /* Parsed commands and MQTT setup both live within synchronous callbacks.
  * The commit path gets separate temporary storage after the Wi-Fi proof. */
 static bool s_reply_mqtt, s_mqtt_revision_set;
-static char *s_frp_reply;
-static size_t s_frp_reply_capacity, s_frp_reply_length;
-static bool s_parse_frp;
-static ebase_command_kind_t s_frp_expected_kind;
 static uint32_t s_mqtt_revision;
-static bool s_frp_revision_set;
-static uint32_t s_frp_revision;
-static bool s_frp_restart_pending;
 static bool s_mqtt_restart_pending;
 static uint64_t s_mqtt_restart_since_ms;
-static uint64_t s_frp_restart_since_ms;
 
 const char *esp_base_protocol_boot_id(void)
 {
@@ -114,19 +104,11 @@ const char *esp_base_protocol_boot_id(void)
 /* The control task formats one result or one periodic report at a time.
  * MQTT enqueue copies the payload before returning. */
 static char s_response_json[1024];
-#define FRP_STATUS_REPLAY_SLOTS 8u
 typedef struct {
     uint64_t uptime;
     uint32_t revision, free_heap, minimum_free_heap, ota_received, ota_total;
-    const char *wifi, *mqtt, *frp, *config, *ota;
+    const char *wifi, *mqtt, *config, *ota;
 } status_snapshot_t;
-static struct {
-    char request_id[EBASE_ID_BYTES];
-    uint64_t expires_at_ms;
-    /* Capability names come from static owner state strings, not transient
-     * network buffers; retain the first read-only result for same-ID retry. */
-    status_snapshot_t status;
-} s_frp_status_seen[FRP_STATUS_REPLAY_SLOTS] IRAM_BSS_ATTR;
 typedef struct {
     const char *state, *error;
     bool has_status, via_mqtt;
@@ -186,26 +168,19 @@ static void reported(void)
 {
     const uint64_t now = uptime_ms();
     const bool time_ready = esp_base_time_ready();
-    const int64_t frp_snapshot_started_us = esp_timer_get_time();
-    const esp_base_frp_snapshot_t frp = esp_base_frp_owner_snapshot();
-    const int64_t frp_snapshot_finished_us = esp_timer_get_time();
     ESP_LOGI("base_reported",
         "ESP_BASE_REPORTED schema=1 boot_id=%s uptime_ms=%" PRIu64
         " free_heap=%" PRIu32 " min_free_heap=%" PRIu32
         " device_id=%s firmware=%s chip=%s flash=%" PRIu32 " config_generation=%" PRIu32
-        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s frp_state=%s frp_attempts=%" PRIu64 " frp_sessions=%" PRIu64 " frp_pongs=%" PRIu64 " frp_active=%" PRIu32 " frp_error=%" PRId32 " ota_received=%" PRIu32 " ota_total=%" PRIu32,
+        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s ota_received=%" PRIu32 " ota_total=%" PRIu32,
         s_boot_id, now, esp_get_free_heap_size(),
         (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT), s_context.device_id,
         s_context.firmware_version, s_context.chip_model, s_context.flash_size_bytes,
         s_context.config.revision, s_context.reset_reason,
         s_context.config.wifi.configured ? "true" : "false", esp_base_wifi_state(),
-        time_ready ? "true" : "false", esp_base_mqtt_owner_state(), frp.state,
-        frp.attempts, frp.ready_sessions, frp.pongs, frp.work_active, frp.error,
+        time_ready ? "true" : "false", esp_base_mqtt_owner_state(),
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         s_ota_active ? s_ota_request->image_size_bytes : 0);
-    printf("ESP_BASE_FRP_WORK boot_id=%s snapshot_started_us=%" PRId64 " snapshot_finished_us=%" PRId64 " attempts=%" PRIu64 " ready_sessions=%" PRIu64 " work_active=%" PRIu32 " work_waiting=%" PRIu32 "\n",
-        s_boot_id, frp_snapshot_started_us, frp_snapshot_finished_us,
-        frp.attempts, frp.ready_sessions, frp.work_active, frp.work_waiting);
     char digest[67] = "null", completed[24] = "null", business_result[16] = "null";
     if (s_business.last_event_sequence) {
         (void)snprintf(completed, sizeof completed, "%" PRIu64, s_business.last_event_sequence);
@@ -215,12 +190,12 @@ static void reported(void)
     const int size = snprintf(s_response_json, MQTT_REPORTED_JSON_BYTES,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"uptime_ms\":%" PRIu64 ",\"revision\":%" PRIu32 ","
-        "\"wifi_state\":\"%s\",\"time_ready\":%s,\"frp_state\":\"%s\","
+        "\"wifi_state\":\"%s\",\"time_ready\":%s,"
         "\"last_accepted_event_sequence\":%" PRIu64 ","
         "\"last_completed_event_sequence\":%s,\"last_completed_event_sha256\":%s,"
         "\"last_event_outcome\":\"%s\",\"last_business_result\":%s}",
         s_context.device_id, s_boot_id, now, s_context.config.revision,
-        esp_base_wifi_state(), time_ready ? "true" : "false", frp.state,
+        esp_base_wifi_state(), time_ready ? "true" : "false",
         esp_base_mqtt_owner_event_sequence(), completed, digest,
         !s_business.last_event_sequence ? "none" : s_business.last_result < 0 ? "business_failed" : "succeeded",
         business_result);
@@ -236,7 +211,6 @@ static status_snapshot_t snapshot(void)
         .ota_received = (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
         .ota_total = s_ota_active ? s_ota_request->image_size_bytes : 0,
         .wifi = esp_base_wifi_state(), .mqtt = esp_base_mqtt_owner_state(),
-        .frp = esp_base_frp_owner_snapshot().state,
         .config = s_config_uncertain || s_ota_boot_uncertain ? "failed" : "ready",
         .ota = !eota_available() ? "unsupported" : s_ota_active ? "running" : "ready"};
 }
@@ -252,13 +226,13 @@ static int format_result_json(char *response, size_t capacity,
         ",\"free_heap\":%" PRIu32 ",\"min_free_heap\":%" PRIu32
         ",\"ota_received_bytes\":%" PRIu32 ",\"ota_total_bytes\":%" PRIu32
         ",\"capabilities\":{\"wifi\":\"%s\",\"mqtt\":\"%s\","
-        "\"frp\":\"%s\",\"config\":\"%s\",\"ota\":\"%s\"}}}",
+        "\"config\":\"%s\",\"ota\":\"%s\"}}}",
         s_context.device_id, s_boot_id,
         request_id ? "\"" : "null", request_id ? request_id : "", request_id ? "\"" : "",
         state, error ? "\"" : "null", error ? error : "", error ? "\"" : "",
         status->uptime, status->revision, status->free_heap, status->minimum_free_heap,
         status->ota_received, status->ota_total, status->wifi, status->mqtt,
-        status->frp, status->config, status->ota) : snprintf(response, capacity,
+        status->config, status->ota) : snprintf(response, capacity,
         "{\"protocol_version\":1,\"device_id\":\"%s\",\"boot_id\":\"%s\","
         "\"request_id\":%s%s%s,\"state\":\"%s\",\"error_code\":%s%s%s,\"result\":null}",
         s_context.device_id, s_boot_id,
@@ -267,56 +241,10 @@ static int format_result_json(char *response, size_t capacity,
     return written >= 0 && (size_t)written < capacity ? written : -1;
 }
 
-static int handle_frp_status(const uint8_t *json, size_t json_length,
-                             char *response, size_t capacity,
-                             size_t *response_length, void *context)
-{
-    (void)context;
-    ebase_request_t request;
-    const char *parse_error = ebase_parse_frp_status((const char *)json, json_length, &request);
-    const uint64_t now = uptime_ms();
-    const char *error = parse_error;
-    const char *state = "failed";
-    int http_status = 400;
-    size_t empty = FRP_STATUS_REPLAY_SLOTS;
-    const status_snapshot_t *cached = NULL;
-    if (!error && strcmp(request.device_id, s_context.device_id)) {
-        error = "wrong_device";
-        http_status = 409;
-    }
-    if (!error) {
-        for (size_t i = 0; i < FRP_STATUS_REPLAY_SLOTS; ++i) {
-            if (s_frp_status_seen[i].expires_at_ms <= now) {
-                if (empty == FRP_STATUS_REPLAY_SLOTS) empty = i;
-            } else if (!strcmp(s_frp_status_seen[i].request_id, request.request_id)) {
-                cached = &s_frp_status_seen[i].status;
-                break;
-            }
-        }
-    }
-    if (!error && !cached && empty == FRP_STATUS_REPLAY_SLOTS) error = "capacity_exceeded";
-    if (!error && !cached) {
-        memcpy(s_frp_status_seen[empty].request_id, request.request_id, EBASE_ID_BYTES);
-        s_frp_status_seen[empty].expires_at_ms = now + EBASE_REQUEST_WINDOW_MS;
-        s_frp_status_seen[empty].status = snapshot();
-        cached = &s_frp_status_seen[empty].status;
-    }
-    const int formatted = format_result_json(response, capacity,
-        parse_error ? NULL : request.request_id,
-        error ? state : "succeeded", error, cached && !error ? cached : NULL);
-    if (formatted < 0) return 500;
-    *response_length = (size_t)formatted;
-    return error ? http_status : 200;
-}
-
 static void emit_json(int length)
 {
     if (length < 0 || (size_t)length >= sizeof s_response_json) return;
-    if (s_frp_reply) {
-        if ((size_t)length >= s_frp_reply_capacity) return;
-        memcpy(s_frp_reply, s_response_json, (size_t)length);
-        s_frp_reply_length = (size_t)length;
-    } else if (s_reply_mqtt) {
+    if (s_reply_mqtt) {
         (void)esp_base_mqtt_owner_result(s_response_json, (size_t)length);
     } else {
         flockfile(stdout);
@@ -423,107 +351,14 @@ static const char *admission_error(ebase_admission_t decision)
 static const char *restart_write_error(void)
 {
     if (s_ota_active) return "ota_in_progress";
-    if (s_frp_restart_pending || s_mqtt_restart_pending) return "operation_busy";
+    if (s_mqtt_restart_pending) return "operation_busy";
     if (s_ota_boot_uncertain) return "ota_boot_state_unknown";
     if (s_trial_active) return "configuration_busy";
     if (s_config_uncertain) return "storage_uncertain";
     return NULL;
 }
 
-static int handle_frp_restart(const uint8_t *json, size_t json_length,
-                              char *response, size_t capacity,
-                              size_t *response_length)
-{
-    ebase_request_t request;
-    const char *parse_error = ebase_parse_frp_restart((const char *)json, json_length, &request);
-    const char *error = parse_error;
-    const char *state = "failed";
-    int http_status = 400;
-    bool schedule = false;
-    const uint64_t now = uptime_ms();
-    size_t slot = 0;
-    if (!error) {
-        const ebase_admission_t decision = ebase_admit(&s_guard, &request,
-            s_context.device_id, s_boot_id, now, &slot);
-        http_status = 409;
-        if (decision == EBASE_REPLAY) {
-            /* The global table also contains USB/MQTT admissions. Reading its
-             * result never executes the write again or changes its route. */
-            state = s_outcomes[slot].state;
-            error = s_outcomes[slot].error;
-        } else if (decision != EBASE_ACCEPT) {
-            error = admission_error(decision);
-            if (decision == EBASE_EXPIRED) state = "expired";
-        } else {
-            error = esp_base_control_state_ota_pending(&s_control_state) ?
-                "ota_verification_pending" : restart_write_error();
-            state = error ? "failed" : "running";
-            s_outcomes[slot].via_mqtt = false;
-            store_outcome(slot, state, error, false);
-            schedule = !error;
-        }
-        if (!error && !strcmp(state, "running")) http_status = 202;
-    }
-    const int formatted = format_result_json(response, capacity,
-        parse_error ? NULL : request.request_id, state, error, NULL);
-    if (formatted < 0) {
-        if (schedule) store_outcome(slot, "failed", "resource_failure", false);
-        return 500;
-    }
-    *response_length = (size_t)formatted;
-    if (schedule) {
-        s_frp_restart_since_ms = now;
-        s_frp_restart_pending = true;
-    }
-    return http_status;
-}
-
 static void handle_line(const char *line, size_t length, void *context);
-
-static int handle_frp_management(esp_base_frp_management_command_t command,
-                                 const uint8_t *json, size_t json_length,
-                                 char *response, size_t capacity,
-                                 size_t *response_length, void *context)
-{
-    if (command == ESP_BASE_FRP_MANAGEMENT_STATUS)
-        return handle_frp_status(json, json_length, response, capacity, response_length, context);
-    if (command == ESP_BASE_FRP_MANAGEMENT_RESTART)
-        return handle_frp_restart(json, json_length, response, capacity, response_length);
-    switch (command) {
-    case ESP_BASE_FRP_MANAGEMENT_FIRMWARE_STATUS: s_frp_expected_kind = EBASE_FIRMWARE_STATUS; break;
-    case ESP_BASE_FRP_MANAGEMENT_OTA_START: s_frp_expected_kind = EBASE_OTA_START; break;
-    case ESP_BASE_FRP_MANAGEMENT_OTA_RESULT: s_frp_expected_kind = EBASE_OTA_RESULT; break;
-    case ESP_BASE_FRP_MANAGEMENT_BUSINESS_STATUS: s_frp_expected_kind = EBASE_BUSINESS_STATUS; break;
-    case ESP_BASE_FRP_MANAGEMENT_BUSINESS_PAUSE: s_frp_expected_kind = EBASE_BUSINESS_PAUSE; break;
-    case ESP_BASE_FRP_MANAGEMENT_BUSINESS_RESUME: s_frp_expected_kind = EBASE_BUSINESS_RESUME; break;
-    default: return 500;
-    }
-    s_frp_reply = response; s_frp_reply_capacity = capacity; s_frp_reply_length = 0;
-    s_parse_frp = true;
-    handle_line((const char *)json, json_length, NULL);
-    s_parse_frp = false; s_frp_reply = NULL;
-    *response_length = s_frp_reply_length;
-    if (*response_length < capacity) response[*response_length] = '\0';
-    if (!*response_length) return 500;
-    if (strstr(response, "\"error_code\":\"invalid_request\"")) return 400;
-    if (strstr(response, "\"state\":\"failed\"") ||
-        strstr(response, "\"state\":\"expired\"")) return 409;
-    return strstr(response, "\"state\":\"running\"") ||
-        strstr(response, "\"state\":\"accepted\"") ? 202 : 200;
-}
-
-static void poll_frp_restart(uint64_t now)
-{
-    if (!s_frp_restart_pending || now - s_frp_restart_since_ms < 100U) return;
-    /* Allow the authenticated receipt to drain, with a hard two-second bound
-     * even if the peer stops reading. Receipt loss remains unconfirmed. */
-    if (esp_base_frp_management_listener_response_pending() &&
-        now - s_frp_restart_since_ms < 2000U) return;
-    s_frp_restart_pending = false;
-    esp_base_capacity_before_reset(s_boot_id, uptime_ms());
-    esp_base_flash_observation_emit(s_boot_id);
-    esp_restart();
-}
 
 static void poll_mqtt_restart(uint64_t now)
 {
@@ -606,8 +441,7 @@ static void poll_configuration(uint64_t now)
         int64_t held_started_us = 0;
         if (!claim_config_flash_io(s_context.flash_io_owner, &claim, &held_started_us)) return;
         /* The control task is the sole reader/writer of s_context.config after
-         * startup. The FRP owner borrows this boot-long canonical storage;
-         * native network workers own copies made when they are created. */
+         * startup. Native network workers own copies made when created. */
         esp_base_remote_config_t *work = protocol_work_alloc(sizeof *work);
         if (work == NULL) {
             const bool released = release_config_flash_io(&claim, held_started_us);
@@ -665,6 +499,8 @@ static void poll_configuration(uint64_t now)
 
 static void clear_ota_request(void)
 {
+    esp_base_mqtt_owner_ota_unbind();
+    esp_base_mqtt_ota_transfer_close();
     if (s_ota_request == NULL) return;
     /* Preserve the completed history before the original operation is freed. */
     esp_base_flash_observation_emit(s_boot_id);
@@ -689,16 +525,14 @@ static void observe_ota_phase(const char *phase, const char *boundary,
     esp_base_flash_observation_snapshot(metrics);
     const int64_t finished_us = esp_timer_get_time();
     const char *error = result == EOTA_UPDATE_OK ? "ok" : eota_error(result);
-    printf("ESP_BASE_OTA_PHASE boot_id=%s operation_id=%s request_id=%s phase=%s boundary=%s snapshot_started_us=%" PRId64 " snapshot_finished_us=%" PRId64 " result=%s stage_uncertain=%u ota_completed_claim_count=%" PRIu32 " frp_completed_claim_count=%" PRIu32 " config_completed_claim_count=%" PRIu32 " ota_counters_valid=%" PRIu32 " frp_counters_valid=%" PRIu32 " config_counters_valid=%" PRIu32 "\n",
+    printf("ESP_BASE_OTA_PHASE boot_id=%s operation_id=%s request_id=%s phase=%s boundary=%s snapshot_started_us=%" PRId64 " snapshot_finished_us=%" PRId64 " result=%s stage_uncertain=%u ota_completed_claim_count=%" PRIu32 " config_completed_claim_count=%" PRIu32 " ota_counters_valid=%" PRIu32 " config_counters_valid=%" PRIu32 "\n",
         s_boot_id, s_ota_request->operation_id, s_guard.entries[s_ota_slot].request_id,
         phase, boundary, started_us, finished_us,
         !strcmp(boundary, "begin") ? "pending" : error ? error : "unknown",
         (unsigned)atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed),
         metrics[ESP_BASE_FLASH_OTA].completed_claim_count,
-        metrics[ESP_BASE_FLASH_FRP].completed_claim_count,
         metrics[ESP_BASE_FLASH_CONFIG].completed_claim_count,
         metrics[ESP_BASE_FLASH_OTA].counters_valid,
-        metrics[ESP_BASE_FLASH_FRP].counters_valid,
         metrics[ESP_BASE_FLASH_CONFIG].counters_valid);
 }
 
@@ -710,7 +544,6 @@ static void ota_task(void *argument)
     eota_result_t result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
     bool mutated = false;
     const char *stage = "receipt_load";
-    bool upload_finished = false;
     if (esp_base_ota_receipt_load_for_recovery(s_context.device_id, &receipt) != ESP_BASE_OTA_RECEIPT_OK ||
         receipt.status != ESP_BASE_OTA_RECEIPT_PREPARED ||
         strcmp(receipt.operation_id, s_ota_request->operation_id) ||
@@ -726,24 +559,14 @@ static void ota_task(void *argument)
     if (result != EOTA_UPDATE_OK) goto uncertain;
     mutated = true;
     if (s_ota_request->inbound_stream) {
-        /* Source verification/retirement can exceed the FRP local-write stall
-         * budget. Do not accept a body until that work has finished. The
-         * durable original-ID query exposes readiness before the single PUT. */
-        stage = "wait_upload";
-        if (!esp_base_frp_management_upload_arm(s_ota_request->operation_id,
-                s_context.device_id, s_boot_id, s_ota_request->image_size_bytes,
-                s_ota_request->sha256, uptime_ms())) {
+        /* The immutable receipt and inactive-slot retirement precede the first
+         * authenticated block request. The transfer owns one fixed mailbox. */
+        stage = "begin_mqtt_stream";
+        if (!esp_base_mqtt_ota_transfer_begin(s_ota_request->image_size_bytes,
+                policy.total_timeout_ms, policy.idle_timeout_ms)) {
             result = EOTA_UPDATE_RESOURCE_FAILURE; goto done;
         }
         atomic_store_explicit(&s_ota_upload_ready, true, memory_order_release);
-        const uint64_t started = uptime_ms();
-        while (!esp_base_frp_management_upload_connected()) {
-            const uint64_t now = uptime_ms();
-            if (now < started || now - started >= policy.connect_timeout_ms) {
-                result = EOTA_UPDATE_DOWNLOAD_FAILED; goto done;
-            }
-            vTaskDelay(1);
-        }
     }
     eota_image_t image = {.image_url = s_ota_request->image_url,
         .image_size_bytes = s_ota_request->image_size_bytes};
@@ -752,15 +575,16 @@ static void ota_task(void *argument)
     stage = "prepare";
     observe_ota_phase(stage, "begin", result);
     if (s_ota_request->inbound_stream) {
-        eota_stream_t stream = {.read = esp_base_frp_management_upload_read,
-            .image_size_bytes = image.image_size_bytes};
+        eota_stream_t stream = {.read = esp_base_mqtt_ota_transfer_read,
+            .image_size_bytes = image.image_size_bytes,
+            .written = esp_base_mqtt_ota_transfer_written};
         memcpy(stream.sha256, image.sha256, 32);
         result = eota_prepare_stream(&policy, &stream, ota_progress, NULL, &prepared);
     } else result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);
     observe_ota_phase(stage, "end", result);
     if (result == EOTA_UPDATE_OK && s_ota_request->inbound_stream) {
-        stage = "upload_connection";
-        if (!esp_base_frp_management_upload_connected()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
+        stage = "mqtt_selection_boundary";
+        if (!esp_base_mqtt_ota_transfer_select()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
     }
     if (result == EOTA_UPDATE_OK) {
         stage = "select";
@@ -784,28 +608,14 @@ static void ota_task(void *argument)
 uncertain:
     atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
 done:
-    if (s_ota_request->inbound_stream) {
-        char response[512];
-        /* The control owner persists and reads back a failure after this worker
-         * finishes. Upload preparation cannot establish a durable terminal state. */
-        const bool prepared = result == EOTA_UPDATE_OK &&
-            !atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed);
-        const int length = format_result_json(response, sizeof response,
-            s_guard.entries[s_ota_slot].request_id,
-            prepared ? "running" : "unknown", prepared ? NULL : "storage_uncertain", NULL);
-        upload_finished = esp_base_frp_management_upload_finish(prepared ? 202 : 200,
-            length > 0 ? response : NULL, length > 0 ? (size_t)length : 0, 1000);
-    }
     if (result != EOTA_UPDATE_OK) {
-        ESP_LOGE("base_ota", "ESP_BASE_OTA_FAILURE operation_id=%s stage=%s error=%s consumed_bytes=%u upload_finished=%s uncertain=%s",
+        ESP_LOGE("base_ota", "ESP_BASE_OTA_FAILURE operation_id=%s stage=%s error=%s consumed_bytes=%u uncertain=%s",
             s_ota_request->operation_id, stage, eota_error(result),
             (unsigned)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
-            upload_finished ? "true" : "false",
             atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed) ? "true" : "false");
     }
     /* Host log fakes discard variadic arguments; production logs use both. */
     (void)stage;
-    (void)upload_finished;
     observe_ota_phase(stage, "terminal", result);
     atomic_store_explicit(&s_ota_result, result, memory_order_relaxed);
     atomic_store_explicit(&s_ota_done, true, memory_order_release);
@@ -815,6 +625,8 @@ done:
 static void poll_ota(void)
 {
     if (!s_ota_active || !atomic_load_explicit(&s_ota_done, memory_order_acquire)) return;
+    esp_base_mqtt_owner_ota_unbind();
+    esp_base_mqtt_ota_transfer_close();
     const eota_result_t result =
         (eota_result_t)atomic_load_explicit(&s_ota_result, memory_order_relaxed);
     if (atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed)) {
@@ -870,17 +682,17 @@ static void poll_ota(void)
     clear_ota_request();
 }
 
+static void handle_mqtt_ota(const ebase_mqtt_ota_frame_t *frame, void *context)
+{
+    (void)context;
+    (void)esp_base_mqtt_ota_transfer_offer(frame);
+}
+
 static void handle_command_line(const char *line, size_t length, ebase_command_t *command)
 {
-    const char *error = s_parse_frp ? ebase_parse_frp_command(line, length, command, protocol_work_alloc) :
+    const char *error = s_reply_mqtt ? ebase_parse_mqtt_command(line, length, command, protocol_work_alloc) :
         ebase_parse_command(line, length, command, protocol_work_alloc);
     if (error) { reply(command->request.request_id, "failed", error, NULL); return; }
-    if (s_parse_frp && command->kind != s_frp_expected_kind) {
-        reply(command->request.request_id, "failed", "invalid_request", NULL); return;
-    }
-    if (s_parse_frp && strcmp(command->request.device_id, s_context.device_id)) {
-        reply(command->request.request_id, "failed", "wrong_device", NULL); return;
-    }
     if (command->kind == EBASE_STATUS) {
         status_snapshot_t current = snapshot(); reply(command->request.request_id, "succeeded", NULL, &current); return;
     }
@@ -936,8 +748,8 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         const int32_t value = ebase_business_event(&s_business, &action, 1, uptime_ms());
         save_outcome(slot, value < 0 ? "failed" : "succeeded", value < 0 ? "business_failed" : NULL, false); return;
     }
-    if (s_frp_restart_pending || s_mqtt_restart_pending) { save_outcome(slot, "failed", "operation_busy", false); return; }
-    if ((s_reply_mqtt || s_parse_frp) && command->kind == EBASE_CONFIG_SET) {
+    if (s_mqtt_restart_pending) { save_outcome(slot, "failed", "operation_busy", false); return; }
+    if (s_reply_mqtt && command->kind == EBASE_CONFIG_SET) {
         save_outcome(slot, "failed", "physical_usb_required", false); return;
     }
     if (command->kind == EBASE_CONFIG_SET) {
@@ -951,8 +763,9 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             .image_size_bytes = command->ota->image_size_bytes,
         };
         memcpy(candidate.sha256, command->ota->sha256, sizeof candidate.sha256);
-        const eota_stream_t input = {.read = esp_base_frp_management_upload_read,
-            .image_size_bytes = candidate.image_size_bytes};
+        const eota_stream_t input = {.read = esp_base_mqtt_ota_transfer_read,
+            .image_size_bytes = candidate.image_size_bytes,
+            .written = esp_base_mqtt_ota_transfer_written};
         eota_stream_t stream_request = input;
         memcpy(stream_request.sha256, candidate.sha256, 32);
         const eota_result_t static_valid = command->ota->inbound_stream ?
@@ -967,6 +780,9 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         if (s_ota_boot_uncertain) { save_outcome(slot, "failed", "ota_boot_state_unknown", false); return; }
         if (!esp_base_wifi_ready()) { save_outcome(slot, "failed", "network_unavailable", false); return; }
         if (!esp_base_time_ready()) { save_outcome(slot, "failed", "time_unavailable", false); return; }
+        if (command->ota->inbound_stream && !esp_base_mqtt_owner_ready()) {
+            save_outcome(slot, "failed", "network_unavailable", false); return;
+        }
         if (!esp_base_storage_claim(s_context.storage_owner, &s_ota_storage_claim)) {
             save_outcome(slot, "failed", "operation_busy", false); return;
         }
@@ -1005,14 +821,15 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         atomic_store_explicit(&s_ota_target_subtype, 0xffU, memory_order_relaxed);
         atomic_store_explicit(&s_ota_received, 0, memory_order_relaxed);
         esp_base_control_state_set_ota_download_active(&s_control_state, true);
-        if (xTaskCreate(ota_task, "base_ota", 12288, NULL, 4, NULL) != pdPASS) {
+        if ((s_ota_request->inbound_stream && !esp_base_mqtt_owner_ota_bind(
+                s_ota_request->operation_id, handle_mqtt_ota, NULL)) ||
+            xTaskCreate(ota_task, "base_ota", 12288, NULL, 4, NULL) != pdPASS) {
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
             const bool failed = esp_base_ota_receipt_record_failure(
                 s_context.device_id, s_ota_request->operation_id,
                 EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
                 esp_base_storage_release(&s_ota_storage_claim);
-            if (s_ota_request->inbound_stream) (void)esp_base_frp_management_upload_finish(500, NULL, 0, 1000);
             clear_ota_request();
             if (failed) {
                 save_outcome(slot, "failed", "resource_failure", false);
@@ -1032,11 +849,6 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             save_outcome(slot, "failed", "revision_conflict", false); return;
         }
         if (command->config->revision == UINT32_MAX) { save_outcome(slot, "failed", "revision_exhausted", false); return; }
-        if (command->config->frp.configured && s_context.frp_flash_store == NULL) {
-            save_outcome(slot, "failed", "frp_storage_unavailable", false); return;
-        }
-        /* Transfer the validated config to its trial owner. The command no
-         * longer owns it, and later parsing cannot erase the active trial. */
         s_candidate = command->config;
         command->payload = NULL;
         command->payload_size_bytes = 0U;
@@ -1171,29 +983,14 @@ static void poll_network_owners(uint64_t now)
         if (mqtt_can_poll)
             esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
                                      handle_mqtt_command, handle_mqtt_event, NULL);
-    }
-    if (!pending) {
-        if (!s_frp_revision_set || s_frp_revision != s_context.config.revision) {
-            /* Revoke the old endpoint before waiting for the old FRP worker
-             * to finish; no stale management key remains reachable. */
-            esp_base_frp_management_listener_configure(NULL);
-            const esp_err_t frp_configured = esp_base_frp_owner_configure(
-                &s_context.config.frp, s_context.device_id, s_context.frp_flash_store);
-            if (frp_configured == ESP_OK) {
-                esp_base_frp_management_listener_configure(&s_context.config.frp);
-                s_frp_revision = s_context.config.revision;
-                s_frp_revision_set = true;
-            } else if (frp_configured == ESP_ERR_INVALID_STATE) {
-                /* No recovered scratch exists for this boot. No endpoint or
-                 * FRP client can start; retry only after a new revision. */
-                s_frp_revision = s_context.config.revision;
-                s_frp_revision_set = true;
-            }
+        if (s_ota_active && s_ota_request->inbound_stream &&
+            !atomic_load_explicit(&s_ota_done, memory_order_acquire)) {
+            ebase_mqtt_ota_frame_t request;
+            if (esp_base_mqtt_ota_transfer_request(&request))
+                (void)esp_base_mqtt_owner_ota_request(now, &request);
         }
-        esp_base_frp_management_listener_poll(now, handle_frp_management, NULL);
-        esp_base_frp_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
-                                esp_base_frp_management_listener_ready());
     }
+
 }
 
 static void control_task(void *argument)
@@ -1213,7 +1010,6 @@ static void control_task(void *argument)
         }
         poll_network_owners(now);
         poll_mqtt_restart(uptime_ms());
-        poll_frp_restart(uptime_ms());
         esp_base_capacity_poll(s_boot_id, uptime_ms());
         if (now >= next_report) {
             reported();
@@ -1299,7 +1095,6 @@ esp_err_t esp_base_protocol_start(const esp_base_protocol_context_t *context)
     s_context.reset_reason = context->reset_reason;
     s_context.storage_owner = context->storage_owner;
     s_context.flash_io_owner = context->flash_io_owner;
-    s_context.frp_flash_store = context->frp_flash_store;
     if (psa_crypto_init() != PSA_SUCCESS) return ESP_FAIL;
     error = esp_base_wifi_start(&s_context.config.wifi);
     if (error != ESP_OK) {

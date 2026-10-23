@@ -14,9 +14,6 @@
 
 #include "esp_base_identity.h"
 #include "esp_base_ota_firmware.h"
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-#include "esp_frp_idf_flash_store.h"
-#endif
 #include "eota.h"
 #include "esp_base_ota_policy.h"
 #include "esp_base_ota_receipt.h"
@@ -123,25 +120,6 @@ static esp_err_t reject_pending_with_flash_io(eota_current_t *ota)
     const esp_err_t result = eota_reject_pending(ota);
     return ota_flash_release(&s_flash_io_owner) ? result : ESP_FAIL;
 }
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-/* A scratch read/write must not inherit the OTA transaction's lifetime.
- * The provider retains its own record lease between these short I/O claims. */
-static efrp_idf_flash_store_t s_frp_scratch;
-
-static efrp_result_t frp_scratch_with_owner(
-    void *owner_context, efrp_result_t (*operation)(void *), void *operation_context)
-{
-    if (owner_context == NULL || operation == NULL) return EFRP_INVALID_ARGUMENT;
-    esp_base_storage_claim_t claim = {0};
-    int64_t held_started_us = 0;
-    if (!claim_flash_io(owner_context, &claim, ESP_BASE_FLASH_FRP, &held_started_us)) return EFRP_STORAGE_ERROR;
-    const efrp_result_t result = operation(operation_context);
-    const bool released = esp_base_storage_release(&claim);
-    esp_base_flash_observation_release(ESP_BASE_FLASH_FRP, held_started_us,
-        esp_timer_get_time(), released);
-    return released ? result : EFRP_STORAGE_ERROR;
-}
-#endif
 
 #define ESP_BASE_CONTROL_START_TIMEOUT_MS UINT64_C(5000)
 #define ESP_BASE_OTA_STABLE_WINDOW_MS UINT64_C(30000)
@@ -294,25 +272,6 @@ void app_main(void)
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED Flash I/O gate unavailable");
         return;
     }
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-    /* Recover interrupted ciphertext before any pending OTA slot can be
-     * confirmed. Keep physical I/O distinct from the long upgrade claim. */
-    const efrp_idf_flash_store_config_t scratch = {
-        .partition_label = CONFIG_ESP_BASE_FRP_SCRATCH_LABEL,
-        .partition_type = ESP_PARTITION_TYPE_DATA,
-        .partition_subtype = ESP_PARTITION_SUBTYPE_DATA_UNDEFINED,
-        .partition_offset_bytes = CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET,
-        .partition_size_bytes = UINT32_C(0x10000),
-        .owner_context = &s_flash_io_owner,
-        .with_owner = frp_scratch_with_owner,
-    };
-    if (!efrp_idf_flash_store_bind(&s_frp_scratch, &scratch) ||
-        efrp_aead_flash_store_recover(
-            efrp_idf_flash_store_callbacks(&s_frp_scratch)) != EFRP_OK) {
-        ESP_LOGE(TAG, "ESP_BASE_FRP_SCRATCH_BLOCKED partition or boot recovery failed");
-        return;
-    }
-#endif
     s_boot_storage_claim = (esp_base_storage_claim_t){0};
     if (!esp_base_storage_claim(&s_storage_owner, &s_boot_storage_claim)) {
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED storage owner unavailable");
@@ -395,9 +354,6 @@ void app_main(void)
         .reset_reason = safety.reset_reason,
         .storage_owner = &s_storage_owner,
         .flash_io_owner = &s_flash_io_owner,
-#if CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED
-        .frp_flash_store = efrp_idf_flash_store_callbacks(&s_frp_scratch),
-#endif
     };
     const esp_err_t protocol_status = esp_base_protocol_start(&protocol);
     if (protocol_status != ESP_OK) {
@@ -422,7 +378,7 @@ void app_main(void)
     }
 
     if (pending_boot) {
-        /* Startup checks above are local: no Broker, FRPS or Wi-Fi connection is
+        /* Startup checks above are local: no Broker or Wi-Fi connection is
          * required. The control task must also make progress throughout this boot. */
         const esp_err_t control_status = wait_for_control_start();
         if (control_status != ESP_OK) {

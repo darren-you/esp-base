@@ -5,7 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *const channel_names[] = {"command", "result", "reported", "status", "event"};
+static const char *const channel_names[] = {
+    "command", "result", "reported", "status", "event", "ota/data", "ota/request"
+};
+_Static_assert(sizeof channel_names / sizeof channel_names[0] == EBASE_MQTT_CHANNEL_COUNT,
+               "Every MQTT channel needs an exact topic suffix");
 
 bool ebase_mqtt_topic(char out[EBASE_MQTT_TOPIC_BYTES], const char *device_id,
                       ebase_mqtt_channel_t channel)

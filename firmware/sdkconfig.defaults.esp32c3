@@ -1,14 +1,12 @@
 # 当前 C3 实板基线：ESP32-C3 rev 0.4，4 MiB Flash，USB Serial/JTAG。
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/c3-partition-table.csv"
-CONFIG_ESP_BASE_FRP_SCRATCH_ENABLED=y
-CONFIG_ESP_BASE_FRP_SCRATCH_OFFSET=0x3e5000
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-# C3 产品仅作为 Wi-Fi STA 与 TLS 客户端；FRP status 为本地明文 HTTP。
+# C3 产品仅作为 Wi-Fi STA 与 TLS 客户端。
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 # Match the default RX BA window without retaining four unused static RX buffers.
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
-# C3 has no 8BIT IRAM heap for the FRP session; retain ordinary DRAM for TLS.
+# C3 has no 8BIT IRAM heap for network sessions; retain ordinary DRAM for TLS.
 CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y

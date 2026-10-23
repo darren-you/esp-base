@@ -10,11 +10,14 @@
 /* Exercise the real command branch and its asynchronous completion branch. */
 static void protocol_test_free(void *data);
 static int protocol_test_fcntl(int fd, int command, ...);
+static size_t protocol_test_fwrite(const void *, size_t, size_t, FILE *);
+#define fwrite protocol_test_fwrite
 #define free protocol_test_free
 #define fcntl protocol_test_fcntl
 #include "../components/device_protocol/esp_base_protocol.c"
 #undef free
 #undef fcntl
+#undef fwrite
 
 static int serial_flags, serial_failure, serial_vfs_mode;
 static bool serial_installed;
@@ -102,31 +105,32 @@ static esp_base_ota_operation_state_t query_state;
 static eota_result_t prepare_result, select_result, retire_result, validate_result;
 static eota_result_t second_retire_result;
 static uint64_t retire_delay_ms;
-static bool upload_arm_ok, upload_connected, upload_cancel_after_prepare;
-static unsigned upload_arm_calls, upload_finish_calls, stream_prepare_calls;
-static int upload_finish_status;
-static unsigned failure_record_calls_at_upload_finish;
-static char upload_finish_reply[512];
+static bool stream_begin_ok, stream_bound, stream_started, stream_cancel_after_prepare;
+static unsigned stream_begin_calls, stream_prepare_calls;
 static unsigned register_calls, failure_record_calls, task_calls, prepare_calls, select_calls;
 static unsigned snapshot_calls, load_receipt_calls, retire_calls, validate_calls, query_calls, restart_calls;
 static unsigned reported_calls, wifi_apply_calls, config_commit_calls, config_load_calls;
-static unsigned mqtt_configures, mqtt_polls, mqtt_revokes, frp_configures, frp_polls;
-static unsigned listener_configures, listener_polls, mqtt_restart_result_calls;
-static bool allow_config_load, fake_frp_response_pending, mqtt_restart_enqueue_ok, mqtt_restart_acknowledged;
+static unsigned mqtt_configures, mqtt_polls, mqtt_revokes;
+static unsigned mqtt_restart_result_calls;
+static bool allow_config_load, mqtt_restart_enqueue_ok, mqtt_restart_acknowledged;
 static esp_err_t config_commit_result, config_load_result;
 static esp_base_remote_config_t config_load_output;
 static esp_base_ota_request_t registered_request;
 static uint8_t registered_source_sha256[32];
-static const char *fake_frp_state;
 static uint32_t fake_free_heap;
 static uint64_t fake_now_ms;
 static char latest_reply[5121], latest_reported[768];
+static size_t protocol_test_fwrite(const void *data, size_t size, size_t count, FILE *file)
+{
+    assert(file == stdout && size * count < sizeof latest_reply);
+    memcpy(latest_reply, data, size * count); latest_reply[size * count] = 0;
+    return count;
+}
 #if defined(CONFIG_IDF_TARGET_ESP32)
 static unsigned iram_work_allocations;
 #endif
 
 const char *ebase_parse_command_real(const char *, size_t, ebase_command_t *, ebase_command_alloc_t);
-const char *ebase_parse_frp_status_real(const char *, size_t, ebase_request_t *);
 const char *ebase_parse_command(const char *line, size_t length,
                               ebase_command_t *out, ebase_command_alloc_t allocate)
 {
@@ -134,8 +138,6 @@ const char *ebase_parse_command(const char *line, size_t length,
     if (!error && out->kind == EBASE_OTA_START) last_decoded_ota_request = out->ota;
     return error;
 }
-const char *ebase_parse_frp_status(const char *line, size_t length, ebase_request_t *out)
-{ return ebase_parse_frp_status_real(line, length, out); }
 
 static void reset_case(void)
 {
@@ -149,14 +151,12 @@ static void reset_case(void)
         .storage_owner = &owner, .flash_io_owner = &owner, .config.revision = 7};
     strcpy(s_boot_id, "33333333-3333-4333-8333-333333333333");
     memset(&s_guard, 0, sizeof s_guard); memset(s_outcomes, 0, sizeof s_outcomes);
-    memset(s_frp_status_seen, 0, sizeof s_frp_status_seen);
     s_ota_storage_claim = (esp_base_storage_claim_t){0};
     s_config_uncertain = s_ota_boot_uncertain = s_ota_active = s_trial_active = false;
     s_started = s_config_loaded = false;
-    s_mqtt_revision_set = s_frp_revision_set = false;
-    s_frp_restart_pending = s_mqtt_restart_pending = false;
-    s_reply_mqtt = false; s_parse_frp = false;
-    s_frp_reply = NULL; s_frp_reply_length = s_frp_reply_capacity = 0;
+    s_mqtt_revision_set = false;
+    s_mqtt_restart_pending = false;
+    s_reply_mqtt = false;
     atomic_store(&s_ota_done, false); atomic_store(&s_ota_stage_uncertain, false);
     atomic_store(&s_ota_received, 0);
     esp_base_control_state_set_ota_pending(&s_control_state, false);
@@ -164,26 +164,24 @@ static void reset_case(void)
     ebase_business_reset(&s_business);
     network_ready = trusted_time_ready = mqtt_ready = signed_enabled = true;
     snapshot_ok = worker_created = defer_ota_worker = true;
-    receipt_mismatch = false; upload_arm_ok = upload_connected = true; upload_cancel_after_prepare = false;
-    upload_arm_calls = upload_finish_calls = stream_prepare_calls = 0;
-    upload_finish_status = 0; failure_record_calls_at_upload_finish = 0;
-    upload_finish_reply[0] = '\0';
+    receipt_mismatch = false; stream_begin_ok = true; stream_bound = stream_started = false;
+    stream_cancel_after_prepare = false; stream_begin_calls = stream_prepare_calls = 0;
     register_result = failure_record_result = load_result = ESP_BASE_OTA_RECEIPT_OK;
     query_result = ESP_BASE_OTA_RECEIPT_NOT_FOUND; query_state = ESP_BASE_OTA_OPERATION_SUCCEEDED;
     prepare_result = select_result = retire_result = validate_result = second_retire_result = EOTA_UPDATE_OK;
     register_calls = failure_record_calls = task_calls = prepare_calls = select_calls = 0;
     snapshot_calls = load_receipt_calls = retire_calls = validate_calls = query_calls = restart_calls = 0;
     reported_calls = wifi_apply_calls = config_commit_calls = config_load_calls = 0;
-    mqtt_configures = mqtt_polls = mqtt_revokes = frp_configures = frp_polls = 0;
-    listener_configures = listener_polls = mqtt_restart_result_calls = 0;
-    allow_config_load = false; fake_frp_response_pending = false;
+    mqtt_configures = mqtt_polls = mqtt_revokes = 0;
+    mqtt_restart_result_calls = 0;
+    allow_config_load = false;
     mqtt_restart_enqueue_ok = mqtt_restart_acknowledged = true;
     config_commit_result = config_load_result = ESP_OK;
     config_load_output = (esp_base_remote_config_t){.revision = 7};
     memset(&registered_request, 0, sizeof registered_request);
     memset(registered_source_sha256, 0x41, sizeof registered_source_sha256);
     retire_delay_ms = 0;
-    fake_now_ms = 1000; fake_frp_state = "ready"; fake_free_heap = 16384;
+    fake_now_ms = 1000; fake_free_heap = 16384;
     latest_reply[0] = latest_reported[0] = '\0';
     ota_request_releases = 0; last_decoded_ota_request = NULL;
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -214,7 +212,8 @@ static void start(unsigned number, const char *device, const char *boot, uint64_
         "\"image_url\":\"https://example.test/base.bin\",\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\","
         "\"image_size_bytes\":4096,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}}",
         number, device, boot, expires, number);
-    send_json(json);
+    /* Physical USB uses the real parser; the fwrite fake captures its JSON. */
+    handle_line(json, strlen(json), NULL);
 }
 static void start_valid(unsigned number)
 { start(number, s_context.device_id, s_boot_id, 31000); }
@@ -246,7 +245,6 @@ bool esp_base_time_ready(void) { return trusted_time_ready; }
 const char *esp_base_wifi_state(void) { return "ready"; }
 const char *esp_base_mqtt_owner_state(void) { return "ready"; }
 bool esp_base_mqtt_owner_ready(void) { return mqtt_ready; }
-esp_base_frp_snapshot_t esp_base_frp_owner_snapshot(void) { return (esp_base_frp_snapshot_t){.state = fake_frp_state}; }
 uint32_t esp_get_free_heap_size(void) { return fake_free_heap; }
 size_t heap_caps_get_minimum_free_size(unsigned caps) { (void)caps; return 1000; }
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -279,35 +277,7 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network, bool trusted,
            trusted == trusted_time_ready && commands && events && context == NULL);
     ++mqtt_polls;
 }
-esp_err_t esp_base_frp_owner_configure(const ebase_frp_config_t *config,
-    const char *device_id, const efrp_aead_flash_store_t *store)
-{
-    assert(config == &s_context.config.frp && !strcmp(device_id, s_context.device_id) &&
-           store == s_context.frp_flash_store);
-    ++frp_configures;
-    return ESP_OK;
-}
-void esp_base_frp_owner_poll(uint64_t now_ms, bool network, bool trusted, bool ready)
-{
-    assert(now_ms == fake_now_ms && network == network_ready &&
-           trusted == trusted_time_ready && ready);
-    ++frp_polls;
-}
-#ifndef ESP_BASE_TEST_REAL_FRP_LISTENER
-void esp_base_frp_management_listener_configure(const ebase_frp_config_t *config)
-{
-    assert(config == NULL || config == &s_context.config.frp);
-    ++listener_configures;
-}
-void esp_base_frp_management_listener_poll(uint64_t now_ms,
-    esp_base_frp_management_handler_t handler, void *context)
-{
-    assert(now_ms == fake_now_ms && handler && context == NULL);
-    ++listener_polls;
-}
-bool esp_base_frp_management_listener_ready(void) { return true; }
-bool esp_base_frp_management_listener_response_pending(void) { return fake_frp_response_pending; }
-#endif
+
 uint64_t esp_base_mqtt_owner_event_sequence(void) { return 3; }
 bool esp_base_mqtt_owner_result(const char *json, size_t length)
 {
@@ -347,7 +317,7 @@ bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t 
                                                  void *context)
 {
     assert(config != NULL && consume != NULL && context != NULL);
-    const uint8_t canonical[] = "config-frp-scratch-candidate";
+    const uint8_t canonical[] = "config-mqtt-candidate";
     return consume(canonical, sizeof canonical - 1U, context);
 }
 esp_err_t esp_base_wifi_apply(const ebase_wifi_config_t *config, uint64_t now_ms)
@@ -491,16 +461,15 @@ eota_result_t eota_prepare(const eota_policy_t *policy, const eota_image_t *imag
 }
 static void check_live_progress(const char *state)
 {
-    char request[384], response[1024]; size_t length = 0;
+    char request[384];
     const int count = snprintf(request, sizeof request,
-        "{\"protocol_version\":1,\"device_id\":\"%s\",\"request_id\":\"11111111-1111-4111-8111-000000000099\","
-        "\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"%s\"}}", s_context.device_id, s_ota_request->operation_id);
+        "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-000000000099\","
+        "\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"%s\"}}", s_ota_request->operation_id);
     const unsigned reads = query_calls;
-    assert(handle_frp_management(ESP_BASE_FRP_MANAGEMENT_OTA_RESULT, (const uint8_t *)request,
-        (size_t)count, response, sizeof response, &length, NULL) == 202);
+    handle_mqtt_command((const uint8_t *)request, (size_t)count, NULL);
     assert(query_calls == reads); /* Progress never contends with Flash proof. */
     char expected[40]; snprintf(expected, sizeof expected, "\"state\":\"%s\"", state);
-    assert(strstr(response, expected) && strstr(response, s_ota_request->operation_id));
+    assert(strstr(latest_reply, expected) && strstr(latest_reply, s_ota_request->operation_id));
 }
 
 eota_result_t eota_retire_inactive(const eota_policy_t *policy, uint8_t target,
@@ -510,7 +479,7 @@ eota_result_t eota_retire_inactive(const eota_policy_t *policy, uint8_t target,
         !memcmp(source_sha256, registered_source_sha256, 32));
     assert(esp_base_storage_claim_active(&s_ota_storage_claim));
     if (!retire_calls && s_ota_request->inbound_stream) {
-        assert(upload_arm_calls == 0 && !atomic_load(&s_ota_upload_ready));
+        assert(stream_begin_calls == 0 && !atomic_load(&s_ota_upload_ready));
         check_live_progress("accepted");
         fake_now_ms += retire_delay_ms;
     }
@@ -550,51 +519,48 @@ eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t su
     assert(policy && subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 && size && digest);
     *size = 4096; memset(digest, 0x41, 32); return EOTA_UPDATE_OK;
 }
-#ifndef ESP_BASE_TEST_REAL_FRP_LISTENER
-bool esp_base_frp_management_upload_arm(const char *operation_id, const char *device_id,
-    const char *boot_id, uint32_t size, const uint8_t sha256[32], uint64_t now_ms)
+bool esp_base_mqtt_owner_ota_bind(const char *operation_id,
+    ebase_mqtt_ota_handler_t handler, void *context)
 {
-    assert(register_calls == 1 && task_calls == 1 && retire_calls == 1 && esp_base_storage_claim_active(&s_ota_storage_claim));
-    assert(!strcmp(operation_id, registered_request.operation_id) && !strcmp(device_id, s_context.device_id) && !strcmp(boot_id, s_boot_id));
-    assert(size == 4096 && !memcmp(sha256, registered_request.sha256, 32) && now_ms == fake_now_ms);
-    ++upload_arm_calls; return upload_arm_ok;
+    assert(!stream_bound && !strcmp(operation_id, registered_request.operation_id));
+    assert(handler == handle_mqtt_ota && !context && register_calls == 1);
+    stream_bound = true; return true;
 }
-bool esp_base_frp_management_upload_connected(void) { return upload_connected; }
-int esp_base_frp_management_upload_read(void *context, uint8_t *bytes, size_t capacity, uint32_t timeout_ms)
-{ (void)context; (void)bytes; (void)capacity; (void)timeout_ms; return 0; }
-void esp_base_frp_management_upload_cancel(void) {}
-bool esp_base_frp_management_upload_finish(int status, const char *body, size_t length, uint32_t timeout_ms)
+void esp_base_mqtt_owner_ota_unbind(void) { stream_bound = false; }
+bool esp_base_mqtt_owner_ota_request(uint64_t now, const ebase_mqtt_ota_frame_t *frame)
+{ (void)now; (void)frame; assert(stream_bound); return true; }
+bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t total, uint32_t idle)
 {
-    assert(status == 200 || status == 202 || status == 500);
-    assert(timeout_ms == 1000 && (status == 500 ? body == NULL && length == 0 : body && length));
-    upload_finish_status = status;
-    failure_record_calls_at_upload_finish = failure_record_calls;
-    if (status != 500) {
-        assert(failure_record_calls == 0 && length < sizeof upload_finish_reply);
-        memcpy(upload_finish_reply, body, length); upload_finish_reply[length] = '\0';
-        assert(strstr(upload_finish_reply, "\"result\":null"));
-        assert(strstr(upload_finish_reply, status == 202 ? "\"state\":\"running\"" : "\"state\":\"unknown\""));
-        if (status == 200) assert(strstr(upload_finish_reply, "\"error_code\":\"storage_uncertain\""));
-    }
-    ++upload_finish_calls; return true;
+    assert(stream_bound && size == 4096 && total == 300000 && idle == 30000);
+    assert(register_calls == 1 && task_calls == 1 && retire_calls == 1);
+    ++stream_begin_calls; stream_started = stream_begin_ok; return stream_begin_ok;
 }
-#endif
+bool esp_base_mqtt_ota_transfer_request(ebase_mqtt_ota_frame_t *out)
+{ (void)out; return false; }
+ebase_mqtt_ota_admission_t esp_base_mqtt_ota_transfer_offer(const ebase_mqtt_ota_frame_t *frame)
+{ assert(frame && stream_bound); return EBASE_MQTT_OTA_ACCEPTED; }
+int esp_base_mqtt_ota_transfer_read(void *context, uint8_t *bytes, size_t size, uint32_t timeout)
+{ (void)context; (void)bytes; (void)size; (void)timeout; return 0; }
+bool esp_base_mqtt_ota_transfer_written(void *context, uint32_t written, uint32_t total)
+{ assert(!context && written <= total && stream_started); return true; }
+bool esp_base_mqtt_ota_transfer_select(void)
+{ assert(stream_started && stream_prepare_calls == 1); return !stream_cancel_after_prepare; }
+void esp_base_mqtt_ota_transfer_close(void) { stream_started = false; }
 eota_result_t eota_validate_stream_request(const eota_stream_t *stream)
 { assert(stream && stream->read && stream->image_size_bytes == 4096); ++validate_calls; return validate_result; }
 eota_result_t eota_prepare_stream(const eota_policy_t *policy, const eota_stream_t *stream,
     eota_progress_t progress, void *context, eota_prepared_t *prepared)
 {
-    assert(policy && stream && stream->read == esp_base_frp_management_upload_read && prepared && progress);
-    assert(esp_base_storage_claim_active(&s_ota_storage_claim) && upload_arm_calls == 1 && retire_calls == 1);
+    assert(policy && stream && stream->read == esp_base_mqtt_ota_transfer_read && stream->written == esp_base_mqtt_ota_transfer_written && prepared && progress);
+    assert(esp_base_storage_claim_active(&s_ota_storage_claim) && stream_begin_calls == 1 && retire_calls == 1);
     check_live_progress("running");
     ++stream_prepare_calls; progress(512, stream->image_size_bytes, context);
     *prepared = (eota_prepared_t){.image_size_bytes = stream->image_size_bytes};
     memcpy(prepared->sha256, stream->sha256, 32);
-    if (upload_cancel_after_prepare) upload_connected = false;
     return prepare_result;
 }
 
-static int start_frp(unsigned number)
+static void start_mqtt(unsigned number)
 {
     char json[1500];
     snprintf(json, sizeof json,
@@ -604,95 +570,57 @@ static int start_frp(unsigned number)
         "\"command\":\"ota.start\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-%012u\","
         "\"sha256\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\","
         "\"image_size_bytes\":4096,\"target\":\"" ESP_BASE_OTA_TARGET "\",\"signature\":{\"scheme\":\"" ESP_BASE_OTA_SIGNATURE_SCHEME "\"}}}", number, number);
-    size_t length = 0;
-    return handle_frp_management(ESP_BASE_FRP_MANAGEMENT_OTA_START, (const uint8_t *)json,
-        strlen(json), latest_reply, sizeof latest_reply, &length, NULL);
+    handle_mqtt_command((const uint8_t *)json, strlen(json), NULL);
 }
-static void check_frp_ota(void)
+static void check_mqtt_ota(void)
 {
-    const esp_base_ota_operation_state_t query_states[] = {
-        ESP_BASE_OTA_OPERATION_RUNNING, ESP_BASE_OTA_OPERATION_FAILED, ESP_BASE_OTA_OPERATION_UNKNOWN};
-    const int http_states[] = {202, 409, 200};
-    for (unsigned i = 0; i < 3; ++i) {
-        reset_case(); query_result = ESP_BASE_OTA_RECEIPT_OK; query_state = query_states[i];
-        const char *body = "{\"protocol_version\":1,\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"request_id\":\"11111111-1111-4111-8111-000000000001\","
-            "\"command\":\"ota.result\",\"parameters\":{\"operation_id\":\"44444444-4444-4444-8444-000000000001\"}}";
-        size_t length = 0;
-        int http = handle_frp_management(ESP_BASE_FRP_MANAGEMENT_OTA_RESULT, (const uint8_t *)body,
-            strlen(body), latest_reply, sizeof latest_reply, &length, NULL);
-        if (http != http_states[i]) fprintf(stderr, "query http=%d expected=%d reply=%s\n", http, http_states[i], latest_reply);
-        assert(http == http_states[i]);
-        assert(query_calls == 1 && register_calls == 0 && owner_available());
-    }
-    reset_case(); size_t invalid_length = 0;
-    assert(handle_frp_management(ESP_BASE_FRP_MANAGEMENT_OTA_START, (const uint8_t *)"{}", 2,
-        latest_reply, sizeof latest_reply, &invalid_length, NULL) == 400);
-    expect_reply("failed", "invalid_request");
-
-    reset_case(); assert(start_frp(1) == 202); expect_reply("accepted", NULL);
-    assert(s_ota_request && s_ota_request->inbound_stream && s_ota_request->image_url[0] == '\0');
-    assert(upload_arm_calls == 0 && register_calls == 1 && !owner_available());
+    reset_case(); start_mqtt(1); expect_reply("accepted", NULL);
+    assert(s_ota_request && s_ota_request->inbound_stream && !s_ota_request->image_url[0]);
+    assert(stream_bound && stream_begin_calls == 0 && register_calls == 1 && !owner_available());
     esp_base_ota_request_t *accepted = s_ota_request;
     start_valid(2); expect_reply("failed", "ota_in_progress");
     assert(s_ota_request == accepted && register_calls == 1);
-    assert(start_frp(1) == 202 && upload_arm_calls == 0 && task_calls == 1);
+    start_mqtt(1); expect_reply("accepted", NULL);
+    assert(stream_begin_calls == 0 && task_calls == 1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; ota_task(NULL);
-    assert(upload_finish_status == 200 && failure_record_calls_at_upload_finish == 0 &&
-        failure_record_calls == 0 && !owner_available() && s_ota_active && s_ota_request);
+    assert(failure_record_calls == 0 && !owner_available() && s_ota_active && s_ota_request);
     assert(!strcmp(s_outcomes[s_ota_slot].state, "accepted"));
     poll_ota();
     assert(stream_prepare_calls == 1 && prepare_calls == 0 && retire_calls == 2 &&
-        failure_record_calls == 1 && upload_finish_calls == 1 && owner_available() &&
+        failure_record_calls == 1 && owner_available() && !stream_bound && !stream_started &&
         !s_ota_request && ota_request_releases == 1);
     assert(!strcmp(s_outcomes[s_ota_slot].state, "failed"));
-    reset_case(); assert(start_frp(1) == 202);
+    reset_case(); start_mqtt(1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE;
     failure_record_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     ota_task(NULL);
-    assert(upload_finish_status == 200 && failure_record_calls_at_upload_finish == 0 &&
-        failure_record_calls == 0 && !owner_available() && s_ota_active && s_ota_request);
+    assert(failure_record_calls == 0 && !owner_available() && s_ota_active);
     poll_ota();
     assert(failure_record_calls == 1 && !owner_available() && s_config_uncertain &&
         !s_ota_active && !s_ota_request && !strcmp(s_outcomes[s_ota_slot].state, "unknown"));
-    reset_case(); start_valid(1);
-    assert(start_frp(2) == 409); expect_reply("failed", "ota_in_progress");
-    assert(upload_arm_calls == 0 && register_calls == 1);
+    reset_case(); start_valid(1); start_mqtt(2); expect_reply("failed", "ota_in_progress");
+    assert(stream_begin_calls == 0 && register_calls == 1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; run_worker();
-    reset_case(); assert(start_frp(1) == 202); run_worker();
+    reset_case(); start_mqtt(1); run_worker();
     assert(stream_prepare_calls == 1 && prepare_calls == 0 && select_calls == 1 &&
-        upload_finish_calls == 1 && restart_calls == 1 && !owner_available());
-    reset_case(); upload_cancel_after_prepare = true;
-    assert(start_frp(1) == 202); run_worker();
+        restart_calls == 1 && !owner_available() && !stream_bound && !stream_started);
+    reset_case(); stream_cancel_after_prepare = true;
+    start_mqtt(1); run_worker();
     assert(stream_prepare_calls == 1 && prepare_calls == 0 && select_calls == 0 &&
-        retire_calls == 2 && upload_finish_calls == 1 && failure_record_calls == 1 &&
-        restart_calls == 0 && owner_available() && !s_ota_request && !s_ota_active);
+        retire_calls == 2 && failure_record_calls == 1 && restart_calls == 0 && owner_available() &&
+        !s_ota_request && !s_ota_active && !stream_bound);
     assert(!strcmp(s_outcomes[s_ota_slot].state, "failed"));
-    reset_case(); upload_arm_ok = false;
-    assert(start_frp(1) == 202); run_worker();
+    reset_case(); stream_begin_ok = false; start_mqtt(1); run_worker();
     assert(!strcmp(s_outcomes[s_ota_slot].state, "failed") && !strcmp(s_outcomes[s_ota_slot].error, "resource_failure"));
     assert(task_calls == 1 && retire_calls == 1 && failure_record_calls == 1 && owner_available() && !s_ota_request);
-    reset_case(); worker_created = false;
-    assert(start_frp(1) == 409); expect_reply("failed", "resource_failure");
-    assert(upload_finish_calls == 1 && failure_record_calls == 1 && owner_available());
-    reset_case(); retire_delay_ms = 6304;
-    assert(start_frp(1) == 202);
-    query_result = ESP_BASE_OTA_RECEIPT_OK;
-    esp_base_ota_receipt_view_t waiting;
-    assert(esp_base_ota_receipt_query(s_context.device_id, s_ota_request->operation_id, true, &waiting) == ESP_BASE_OTA_RECEIPT_OK);
-    s_frp_reply = latest_reply; s_frp_reply_capacity = sizeof latest_reply;
-    reply_ota_result("11111111-1111-4111-8111-000000000002", &waiting);
-    latest_reply[s_frp_reply_length] = 0; s_frp_reply = NULL;
-    expect_reply("accepted", NULL);
-    assert(upload_arm_calls == 0);
-    run_worker();
+    reset_case(); worker_created = false; start_mqtt(1); expect_reply("failed", "resource_failure");
+    assert(failure_record_calls == 1 && owner_available() && !stream_bound && !stream_started);
+    reset_case(); retire_delay_ms = 6304; start_mqtt(1); run_worker();
     assert(fake_now_ms == 7304 && stream_prepare_calls == 1 && restart_calls == 1);
-    reset_case(); retire_result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
-    assert(start_frp(1) == 202); run_worker();
-    assert(upload_arm_calls == 0 && stream_prepare_calls == 0 && !owner_available());
-    reset_case(); upload_connected = false;
-    assert(start_frp(1) == 202); run_worker();
-    assert(fake_now_ms == 6000 && retire_calls == 1 && prepare_calls == 0 &&
-        stream_prepare_calls == 0 && upload_finish_calls == 1 && failure_record_calls == 1 && owner_available());
+    reset_case(); retire_result = EOTA_UPDATE_BOOT_STATE_UNKNOWN; start_mqtt(1); run_worker();
+    assert(stream_begin_calls == 0 && stream_prepare_calls == 0 && !owner_available() && !stream_bound);
+    reset_case(); mqtt_ready = false; start_mqtt(1); expect_reply("failed", "network_unavailable");
+    assert(register_calls == 0 && task_calls == 0 && owner_available() && !stream_bound);
 }
 
 static void check_config_flash_observation(void)
@@ -766,7 +694,7 @@ int main(void)
     check_serial_console();
     check_config_flash_observation();
     check_ota_phase_observation();
-    check_frp_ota();
+    check_mqtt_ota();
     reset_case(); start_valid(1); expect_reply("running", NULL);
     assert(s_ota_request && s_ota_request == last_decoded_ota_request && register_calls == 1 && task_calls == 1);
     assert(!owner_available() && !ota_request_releases && snapshot_calls == 0);

@@ -2,6 +2,7 @@
 #include "esp_base_mqtt_owner.h"
 #include "esp_attr.h"
 #include "esp_base_mqtt_command.h"
+#include "esp_base_command_guard.h"
 #include "emqtt.h"
 #include <stdio.h>
 #include <string.h>
@@ -9,7 +10,7 @@
 static emqtt_runtime_t *s_runtime;
 /* Incoming MESSAGE remains live while its handler parses a command. */
 static emqtt_event_t s_event IRAM_BSS_ATTR;
-static char s_topics[5][EBASE_MQTT_TOPIC_BYTES];
+static char s_topics[EBASE_MQTT_CHANNEL_COUNT][EBASE_MQTT_TOPIC_BYTES];
 static char s_device_id[37];
 static char s_boot_id[37];
 static char s_online[192];
@@ -19,6 +20,35 @@ static uint64_t s_retry_after_ms;
 static uint64_t s_event_sequence;
 static int s_restart_result_id;
 static bool s_restart_result_acknowledged;
+static char s_ota_operation_id[37];
+static ebase_mqtt_ota_handler_t s_ota_handler;
+static void *s_ota_context;
+static int s_ota_request_id;
+static ebase_mqtt_ota_frame_t s_ota_last_request;
+static uint64_t s_ota_last_sent_ms;
+static bool s_ota_request_sent;
+
+void esp_base_mqtt_owner_ota_unbind(void)
+{
+    memset(s_ota_operation_id, 0, sizeof s_ota_operation_id);
+    s_ota_handler = NULL;
+    s_ota_context = NULL;
+    s_ota_request_sent = false;
+    /* A queued request keeps its slot until PUBACK or transport destruction.
+     * Rebinding must not accumulate stale requests in a disconnected outbox. */
+}
+
+bool esp_base_mqtt_owner_ota_bind(const char *operation_id,
+    ebase_mqtt_ota_handler_t handler, void *context)
+{
+    if (!esp_base_mqtt_owner_ready() || s_ota_handler || !handler ||
+        !ebase_is_uuid(operation_id)) return false;
+    memcpy(s_ota_operation_id, operation_id, sizeof s_ota_operation_id);
+    s_ota_handler = handler;
+    s_ota_context = context;
+    s_ota_request_sent = false;
+    return true;
+}
 
 static void clear_restart_result(void)
 {
@@ -34,6 +64,7 @@ static void wipe(void *memory, size_t length)
 
 esp_err_t esp_base_mqtt_owner_revoke(void)
 {
+    esp_base_mqtt_owner_ota_unbind();
     clear_restart_result();
     s_ready = false;
     s_network_ready = false;
@@ -49,6 +80,7 @@ esp_err_t esp_base_mqtt_owner_revoke(void)
         s_runtime = NULL;
     }
     s_started = s_failed = s_configured = false;
+    s_ota_request_id = 0;
     s_retry_after_ms = 0;
     wipe(s_management_key, sizeof s_management_key);
     memset(s_device_id, 0, sizeof s_device_id);
@@ -64,7 +96,7 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     const esp_err_t revoked = esp_base_mqtt_owner_revoke();
     if (revoked != ESP_OK) return revoked;
     if (!config->configured) return ESP_OK;
-    for (unsigned channel = 0; channel < 5; ++channel) {
+    for (unsigned channel = 0; channel < EBASE_MQTT_CHANNEL_COUNT; ++channel) {
         if (!ebase_mqtt_topic(s_topics[channel], device_id, (ebase_mqtt_channel_t)channel)) {
             s_failed = true; return ESP_ERR_INVALID_ARG;
         }
@@ -94,13 +126,16 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     scratch->will_length = (size_t)offline_size;
     scratch->will_qos = 1;
     scratch->will_retain = true;
-    scratch->subscription_count = 2;
+    scratch->subscription_count = 3;
     memcpy(scratch->subscriptions[0].topic, s_topics[EBASE_MQTT_COMMAND],
            strlen(s_topics[EBASE_MQTT_COMMAND]) + 1);
     scratch->subscriptions[0].qos = 1;
     memcpy(scratch->subscriptions[1].topic, s_topics[EBASE_MQTT_EVENT],
            strlen(s_topics[EBASE_MQTT_EVENT]) + 1);
     scratch->subscriptions[1].qos = 1;
+    memcpy(scratch->subscriptions[2].topic, s_topics[EBASE_MQTT_OTA_DATA_CHANNEL],
+           strlen(s_topics[EBASE_MQTT_OTA_DATA_CHANNEL]) + 1);
+    scratch->subscriptions[2].qos = 1;
     memcpy(s_management_key, config->management_key, sizeof s_management_key);
     memcpy(s_device_id, device_id, strlen(device_id) + 1);
     if (strcmp(s_boot_id, boot_id) != 0) s_event_sequence = 0;
@@ -127,6 +162,7 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
         s_ready = false;
         if (s_started) {
             if (emqtt_stop(s_runtime) != ESP_OK) { s_failed = true; return; }
+            s_ota_request_id = 0;
             s_started = false;
         }
         return;
@@ -149,7 +185,7 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             s_ready = sent == ESP_OK;
             if (sent != ESP_OK) {
                 if (emqtt_stop(s_runtime) != ESP_OK) s_failed = true;
-                else { s_started = false; s_retry_after_ms = now_ms + 5000; }
+                else { s_ota_request_id = 0; s_started = false; s_retry_after_ms = now_ms + 5000; }
             }
             break;
         }
@@ -158,6 +194,8 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             s_ready = false;
             break;
         case EMQTT_EVENT_PUBACK:
+            if (s_ota_request_id > 0 && s_event.message_id == s_ota_request_id)
+                s_ota_request_id = 0;
             if (s_restart_result_id > 0 && s_event.message_id == s_restart_result_id)
                 s_restart_result_acknowledged = true;
             break;
@@ -168,7 +206,7 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
              * the caller may resend the same request_id after a new SUBACK. */
             s_ready = false;
             if (emqtt_stop(s_runtime) != ESP_OK) s_failed = true;
-            else { s_started = false; s_retry_after_ms = now_ms + 5000; }
+            else { s_ota_request_id = 0; s_started = false; s_retry_after_ms = now_ms + 5000; }
             return;
         case EMQTT_EVENT_ERROR:
             if (emqtt_state(s_runtime) != EMQTT_READY) {
@@ -177,10 +215,18 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             }
             if (emqtt_state(s_runtime) == EMQTT_FAILED) {
                 if (emqtt_stop(s_runtime) != ESP_OK) s_failed = true;
-                else { s_started = false; s_retry_after_ms = now_ms + 5000; }
+                else { s_ota_request_id = 0; s_started = false; s_retry_after_ms = now_ms + 5000; }
             }
             break;
         case EMQTT_EVENT_MESSAGE:
+            if (s_ready && s_ota_handler) {
+                ebase_mqtt_ota_frame_t verified;
+                if (ebase_mqtt_ota_decode(s_management_key, s_device_id, s_boot_id,
+                        s_ota_operation_id, false, s_event.message.topic,
+                        s_event.message.qos, s_event.message.retain,
+                        s_event.message.payload, s_event.message.length, &verified))
+                    s_ota_handler(&verified, s_ota_context);
+            }
             if (s_ready && command_handler) {
                 ebase_mqtt_request_view_t verified;
                 if (ebase_mqtt_verified_request(s_management_key, s_device_id,
@@ -241,6 +287,31 @@ bool esp_base_mqtt_owner_result(const char *json, size_t length)
 bool esp_base_mqtt_owner_reported(const char *json, size_t length)
 {
     return publish(EBASE_MQTT_REPORTED, json, length);
+}
+
+bool esp_base_mqtt_owner_ota_request(uint64_t now, const ebase_mqtt_ota_frame_t *request)
+{
+    if (!esp_base_mqtt_owner_ready() || !s_ota_handler || s_ota_request_id ||
+        !request || request->kind != EBASE_MQTT_OTA_REQUEST ||
+        request->expires_at_uptime_ms <= now) return false;
+    if (s_ota_request_sent && (now < s_ota_last_sent_ms ||
+        (request->offset == s_ota_last_request.offset &&
+         request->written_offset == s_ota_last_request.written_offset &&
+         request->expires_at_uptime_ms == s_ota_last_request.expires_at_uptime_ms &&
+         now - s_ota_last_sent_ms < 1000U))) return false;
+    uint8_t bytes[EBASE_MQTT_OTA_HEADER_BYTES];
+    size_t length = 0;
+    if (!ebase_mqtt_ota_encode(s_management_key, s_device_id, s_boot_id,
+            s_ota_operation_id, request, bytes, sizeof bytes, &length)) return false;
+    int message_id = 0;
+    if (emqtt_enqueue(s_runtime, s_topics[EBASE_MQTT_OTA_REQUEST_CHANNEL], bytes,
+            length, 1, false, &message_id) != ESP_OK || message_id <= 0) return false;
+    s_ota_request_id = message_id;
+    s_ota_last_request = *request;
+    s_ota_last_request.data = NULL;
+    s_ota_last_sent_ms = now;
+    s_ota_request_sent = true;
+    return true;
 }
 
 bool esp_base_mqtt_owner_restart_result(const char *json, size_t length)

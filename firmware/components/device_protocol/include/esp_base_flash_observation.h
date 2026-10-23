@@ -5,7 +5,6 @@
 
 typedef enum {
     ESP_BASE_FLASH_OTA,
-    ESP_BASE_FLASH_FRP,
     ESP_BASE_FLASH_CONFIG,
     ESP_BASE_FLASH_CONSUMER_COUNT
 } esp_base_flash_consumer_t;

@@ -132,7 +132,11 @@ int main(void)
     assert(ebase_mqtt_topic(topic, device_id, EBASE_MQTT_EVENT));
     assert(!strcmp(topic, "esp-base/22222222-2222-4222-8222-222222222222/event"));
     assert(!ebase_mqtt_topic(topic, "invalid-device", EBASE_MQTT_COMMAND));
-    assert(!ebase_mqtt_topic(topic, device_id, (ebase_mqtt_channel_t)5));
+    assert(ebase_mqtt_topic(topic, device_id, EBASE_MQTT_OTA_DATA_CHANNEL));
+    assert(!strcmp(topic, "esp-base/22222222-2222-4222-8222-222222222222/ota/data"));
+    assert(ebase_mqtt_topic(topic, device_id, EBASE_MQTT_OTA_REQUEST_CHANNEL));
+    assert(!strcmp(topic, "esp-base/22222222-2222-4222-8222-222222222222/ota/request"));
+    assert(!ebase_mqtt_topic(topic, device_id, EBASE_MQTT_CHANNEL_COUNT));
 
     assert(ebase_mqtt_topic(topic, device_id, EBASE_MQTT_COMMAND));
     static const char hex[] = "57d8e98b33e69b075cd138712813411c036f615a240e04a54e8c54f2fa3f38ca";

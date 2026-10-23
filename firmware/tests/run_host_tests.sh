@@ -40,35 +40,12 @@ CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}
   "$ROOT/tests/network_auth_test.c" \
   -o "$BUILD_DIR/network_auth_test"
 "$BUILD_DIR/network_auth_test"
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
-  "$ROOT/components/device_protocol/frp_management_listener.c" \
-  "$ROOT/tests/frp_management_listener_test.c" -o "$BUILD_DIR/frp_management_listener_test"
-"$BUILD_DIR/frp_management_listener_test"
-"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
-  -I "$ROOT/components/remote_config/include" \
-  -I "$COMPONENTS_DIR/mqtt/runtime/include" \
-  "$ROOT/components/device_protocol/mqtt_owner.c" \
-  "$ROOT/components/device_protocol/mqtt_command.c" \
-  "$ROOT/components/device_protocol/mqtt_event.c" \
-  "$ROOT/components/device_protocol/command_guard.c" \
-  "$COMPONENTS_DIR/mqtt/runtime/emqtt_contract.c" \
-  "$ROOT/tests/mqtt_owner_test.c" -o "$BUILD_DIR/mqtt_owner_test"
-"$BUILD_DIR/mqtt_owner_test"
+ESP_BASE_TEST_COMPONENTS_DIR="$COMPONENTS_DIR" bash "$ROOT/tests/run_mqtt_owner_tests.sh"
 CJSON_DIR="$COMPONENTS_DIR/espressif__cjson/cJSON"
-EFRP_DIR="$COMPONENTS_DIR/esp_frp"
-if [[ ! -f "$CJSON_DIR/cJSON.c" || ! -f "$EOTA_DIR/include/eota.h" || ! -f "$EFRP_DIR/include/esp_frp.h" ]]; then
+if [[ ! -f "$CJSON_DIR/cJSON.c" || ! -f "$EOTA_DIR/include/eota.h" ]]; then
   printf 'esp-base host tests\n  error  Run idf.py -C firmware reconfigure to resolve the locked cJSON and esp-ota dependencies.\n' >&2
   exit 1
 fi
-"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
-  -I "$ROOT/components/remote_config/include" -I "$ROOT/components/time_runtime/include" \
-  -I "$EFRP_DIR/include" \
-  "$ROOT/components/device_protocol/frp_owner.c" "$ROOT/tests/frp_owner_test.c" \
-  -o "$BUILD_DIR/frp_owner_test"
-"$BUILD_DIR/frp_owner_test"
 # Keep strict diagnostics on our sources; the locked third-party cJSON uses
 # sprintf internally, which the macOS SDK marks deprecated.
 "${CC:-cc}" -std=c11 -fsanitize=address,undefined -Wno-deprecated-declarations \
@@ -95,12 +72,15 @@ printf 'esp-base host tests\n  command_guard  passed\n'
   "$ROOT/tests/command_allocation_test.c" -lm -o "$BUILD_DIR/command_allocation_test"
 "$BUILD_DIR/command_allocation_test"
 printf '  hardware       not used\n'
+read -r -a CONFIG_OPENSSL_CFLAGS <<< "$(pkg-config --cflags openssl)"
+read -r -a CONFIG_OPENSSL_LIBS <<< "$(pkg-config --libs openssl)"
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -Dmalloc=ebase_config_test_malloc -Dfree=ebase_config_test_free \
+  "${CONFIG_OPENSSL_CFLAGS[@]}" -I "$ROOT/tests/fakes/network-auth" \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/remote_config/include" \
   "$ROOT/components/remote_config/config_codec.c" \
   "$ROOT/components/remote_config/esp_base_remote_config.c" \
-  "$ROOT/tests/config_store_test.c" -o "$BUILD_DIR/config_store_test"
+  "$ROOT/tests/config_store_test.c" "${CONFIG_OPENSSL_LIBS[@]}" -o "$BUILD_DIR/config_store_test"
 "$BUILD_DIR/config_store_test"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" -I "$ROOT/components/ota_operation/include" -I "$EOTA_DIR/include" \
@@ -126,21 +106,13 @@ if [[ "$(uname -s)" == Darwin ]]; then
 else
   PROTOCOL_LINK_GC=(-Wl,--gc-sections)
 fi
-"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -DEOTA_TEST_CHIP_ID="$OTA_TEST_CHIP_ID" \
-  -pthread -Wall -Wextra -Werror -Wno-unused-function \
-  -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
-  -I "$EOTA_DIR" -I "$EOTA_DIR/include" -I "$EOTA_DIR/src" \
-  -I "$ROOT/tests/frps-ota-interop/fakes" -I "$ROOT/tests/fakes/ota-update" -I "$ROOT/tests/fakes" \
-  -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/remote_config/include" \
-  "$ROOT/tests/frp_ota_stream_budget_test.c" -o "$BUILD_DIR/frp_ota_stream_budget_test"
-"$BUILD_DIR/frp_ota_stream_budget_test"
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections "${PROTOCOL_LINK_GC[@]}" \
   -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$ROOT/components/remote_config/include" -I "$ROOT/components/safety_runtime/include" \
   -I "$ROOT/components/time_runtime/include" -I "$ROOT/components/ota_operation/include" \
-  -I "$EOTA_DIR/include" -I "$EFRP_DIR/include" \
+  -I "$EOTA_DIR/include" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/components/device_protocol/flash_observation.c" \
   "$ROOT/tests/flash_io_concurrency_test.c" -o "$BUILD_DIR/flash_io_concurrency_test"
@@ -148,7 +120,6 @@ fi
 "${CC:-cc}" -std=c11 -D"$TARGET_DEFINE"=1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -ffunction-sections -fdata-sections \
   -Debase_parse_command=ebase_parse_command_real \
-  -Debase_parse_frp_status=ebase_parse_frp_status_real \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
   -I "$ROOT/components/remote_config/include" -I "$ROOT/components/ota_operation/include" \
   -I "$EOTA_DIR/include" -I "$CJSON_DIR" \
@@ -163,7 +134,7 @@ fi
   -I "$ROOT/components/device_protocol/include" -I "$ROOT/components/device_protocol" \
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/wifi_runtime/include" -I "$ROOT/components/time_runtime/include" \
-  -I "$ROOT/components/ota_operation/include" -I "$ROOT/components/native_business/include" -I "$EOTA_DIR/include" -I "$EFRP_DIR/include" \
+  -I "$ROOT/components/ota_operation/include" -I "$ROOT/components/native_business/include" -I "$EOTA_DIR/include" \
   -I "$COMPONENTS_DIR/mqtt/runtime/include" \
   "$ROOT/components/device_protocol/command_guard.c" \
   "$ROOT/components/device_protocol/control_state.c" \
@@ -183,35 +154,13 @@ fi
   -I "$ROOT/components/device_identity/include" -I "$ROOT/components/device_protocol/include" \
   -I "$EOTA_DIR/include" -I "$ROOT/components/remote_config/include" \
   -I "$ROOT/components/safety_runtime/include" -I "$ROOT/components/time_runtime/include" \
-  -I "$ROOT/components/ota_operation/include" -I "$EFRP_DIR/include" \
+  -I "$ROOT/components/ota_operation/include" \
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/apps/esp_base/main/esp_base_main.c" \
   "$ROOT/components/device_protocol/flash_observation.c" \
   "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_test"
 "$BUILD_DIR/ota_startup_test"
-if [[ "${ESP_BASE_TEST_TARGET:-esp32c3}" == esp32c3 ]]; then
-  SCRATCH_OFFSET=0x3e5000
-else
-  SCRATCH_OFFSET=0x3ea000
-fi
-"${CC:-cc}" -std=c11 -pthread -D_POSIX_C_SOURCE=200809L -D"$TARGET_DEFINE"=1 \
-  -DCONFIG_ESP_BASE_FRP_SCRATCH_ENABLED=1 \
-  -DCONFIG_ESP_BASE_FRP_SCRATCH_LABEL=\"frp_scratch\" \
-  -DCONFIG_ESP_BASE_FRP_SCRATCH_OFFSET="$SCRATCH_OFFSET" \
-  -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/app-main" -I "$ROOT/tests/fakes" \
-  -I "$ROOT/components/device_identity/include" \
-  -I "$ROOT/components/device_protocol/include" -I "$EOTA_DIR/include" \
-  -I "$COMPONENTS_DIR/esp_frp/include" \
-  -I "$ROOT/components/remote_config/include" \
-  -I "$ROOT/components/safety_runtime/include" \
-  -I "$ROOT/components/time_runtime/include" \
-  -I "$ROOT/components/ota_operation/include" \
-  "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
-  "$ROOT/apps/esp_base/main/esp_base_main.c" \
-  "$ROOT/components/device_protocol/flash_observation.c" \
-  "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_scratch_test"
-  "$BUILD_DIR/ota_startup_scratch_test"
+
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/time_runtime/include" \
   "$ROOT/components/time_runtime/esp_base_time.c" "$ROOT/tests/time_runtime_test.c" \

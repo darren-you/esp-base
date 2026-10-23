@@ -70,10 +70,10 @@ int main(void)
     esp_base_flash_observation_release(ESP_BASE_FLASH_OTA, 1, 2, true);
     assert(s_metrics[ESP_BASE_FLASH_OTA].completed_claim_count == UINT32_MAX);
     assert(!s_metrics[ESP_BASE_FLASH_OTA].counters_valid);
-    s_metrics[ESP_BASE_FLASH_FRP].acquire_failed_count = UINT32_MAX;
-    esp_base_flash_observation_acquire(ESP_BASE_FLASH_FRP, 1, 2, false);
-    assert(s_metrics[ESP_BASE_FLASH_FRP].acquire_failed_count == UINT32_MAX);
-    assert(!s_metrics[ESP_BASE_FLASH_FRP].counters_valid);
+    s_metrics[ESP_BASE_FLASH_CONFIG].acquire_failed_count = UINT32_MAX;
+    esp_base_flash_observation_acquire(ESP_BASE_FLASH_CONFIG, 1, 2, false);
+    assert(s_metrics[ESP_BASE_FLASH_CONFIG].acquire_failed_count == UINT32_MAX);
+    assert(!s_metrics[ESP_BASE_FLASH_CONFIG].counters_valid);
 
     reset_fixture();
     esp_base_flash_observation_acquire(ESP_BASE_FLASH_OTA, 0, UINT32_MAX, true);
@@ -82,9 +82,9 @@ int main(void)
     esp_base_flash_observation_acquire(ESP_BASE_FLASH_OTA, 0, (int64_t)UINT32_MAX + 1, true);
     assert(s_metrics[ESP_BASE_FLASH_OTA].max_wait_us == UINT32_MAX);
     assert(!s_metrics[ESP_BASE_FLASH_OTA].counters_valid);
-    esp_base_flash_observation_release(ESP_BASE_FLASH_FRP, 0, INT64_MAX, true);
-    assert(s_metrics[ESP_BASE_FLASH_FRP].max_held_upper_bound_us == UINT32_MAX);
-    assert(!s_metrics[ESP_BASE_FLASH_FRP].counters_valid);
+    esp_base_flash_observation_release(ESP_BASE_FLASH_CONFIG, 0, INT64_MAX, true);
+    assert(s_metrics[ESP_BASE_FLASH_CONFIG].max_held_upper_bound_us == UINT32_MAX);
+    assert(!s_metrics[ESP_BASE_FLASH_CONFIG].counters_valid);
     esp_base_flash_observation_acquire(ESP_BASE_FLASH_CONFIG, INT64_MIN, INT64_MAX, false);
     assert(!s_metrics[ESP_BASE_FLASH_CONFIG].counters_valid);
     reset_fixture();
@@ -110,8 +110,8 @@ int main(void)
     assert(fread(output, 1U, sizeof output - 1U, capture) > 0);
     fclose(capture);
     assert(strstr(output, "ESP_BASE_FLASH_IO boot_id="));
-    assert(strstr(output, "consumer=ota") && strstr(output, "consumer=frp") && strstr(output, "consumer=config"));
-    assert(strstr(output, "ESP_BASE_FLASH_IO_OUTPUT") && strstr(output, "snapshot_copy_bytes=72"));
+    assert(strstr(output, "consumer=ota") && strstr(output, "consumer=config"));
+    assert(strstr(output, "ESP_BASE_FLASH_IO_OUTPUT") && strstr(output, "snapshot_copy_bytes=48"));
     assert(!strstr(output, "ESP_BASE_CAPACITY_"));
     puts("  Flash observation passed (concurrent snapshots, saturating counters/time, invalid clock/release, independent UART)");
 }

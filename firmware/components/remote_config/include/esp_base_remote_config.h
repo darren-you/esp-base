@@ -7,7 +7,9 @@
 #define ESP_BASE_CONFIG_EXHAUSTED 0x7402
 #define ESP_BASE_CONFIG_UNCERTAIN 0x7403
 
-/* Single control owner only. No erase or migration fallback on any error. */
+/* Single control owner only. Strict v3 FRP retirement preserves Wi-Fi/MQTT
+ * and revision, writes once and verifies canonical bytes by SHA-256 readback.
+ * No erase or fallback on any error; failures leave the output unchanged. */
 esp_err_t esp_base_remote_config_load(esp_base_remote_config_t *config);
 /* Consume the canonical config encoding synchronously under the single control
  * owner. The callback must not retain bytes or call remote_config recursively;

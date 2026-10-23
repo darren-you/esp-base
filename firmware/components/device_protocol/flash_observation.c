@@ -10,7 +10,7 @@
 
 static portMUX_TYPE s_metrics_lock = portMUX_INITIALIZER_UNLOCKED;
 static esp_base_flash_observation_t s_metrics[ESP_BASE_FLASH_CONSUMER_COUNT] = {
-    {.counters_valid = 1U}, {.counters_valid = 1U}, {.counters_valid = 1U}
+    {.counters_valid = 1U}, {.counters_valid = 1U}
 };
 _Static_assert(sizeof(esp_base_flash_observation_t) == 6U * sizeof(uint32_t),
     "Flash observations must retain fixed 32-bit fields without hidden padding");
@@ -78,7 +78,7 @@ void esp_base_flash_observation_snapshot(
 
 void esp_base_flash_observation_emit(const char *boot_id)
 {
-    static const char *const names[] = {"ota", "frp", "config"};
+    static const char *const names[] = {"ota", "config"};
     esp_base_flash_observation_t metrics[ESP_BASE_FLASH_CONSUMER_COUNT];
     const int64_t started_us = esp_timer_get_time();
     esp_base_flash_observation_snapshot(metrics);
@@ -94,6 +94,6 @@ void esp_base_flash_observation_emit(const char *boot_id)
     }
     funlockfile(stdout);
     const int64_t output_finished_us = esp_timer_get_time();
-    printf("ESP_BASE_FLASH_IO_OUTPUT boot_id=%s started_us=%" PRId64 " finished_us=%" PRId64 " scope=snapshot_and_three_rows_excluding_this_line\n",
+    printf("ESP_BASE_FLASH_IO_OUTPUT boot_id=%s started_us=%" PRId64 " finished_us=%" PRId64 " scope=snapshot_and_two_rows_excluding_this_line\n",
         boot_id, started_us, output_finished_us);
 }

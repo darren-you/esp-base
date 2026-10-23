@@ -8,6 +8,7 @@
 #include "emqtt_contract.h"
 #include "emqtt.h"
 #include "esp_base_mqtt_event.h"
+#include "esp_base_mqtt_ota.h"
 
 typedef void (*ebase_mqtt_command_handler_t)(const uint8_t *json, size_t length, void *context);
 /* Return true only after the exact authenticated event was consumed by the
@@ -40,3 +41,15 @@ bool esp_base_mqtt_owner_restart_result(const char *json, size_t length);
 bool esp_base_mqtt_owner_restart_result_acknowledged(void);
 /* Control-owner copy only; does not wait on the SDK or sample its outbox. */
 bool esp_base_mqtt_owner_capacity(emqtt_capacity_stats_t *out);
+
+/* Control-task-only binding to an admitted immutable operation. Reconnection
+ * preserves it; configuration revoke clears it. The verified frame is borrowed
+ * only during the callback. Blocks never enter the ordinary command guard. */
+typedef void (*ebase_mqtt_ota_handler_t)(const ebase_mqtt_ota_frame_t *frame, void *context);
+bool esp_base_mqtt_owner_ota_bind(const char *operation_id,
+    ebase_mqtt_ota_handler_t handler, void *context);
+void esp_base_mqtt_owner_ota_unbind(void);
+/* At most one unacknowledged request in the MQTT outbox. Retry an identical
+ * application request at most once per second after PUBACK; a new offset may
+ * be sent immediately. Enqueue/PUBACK never acknowledge Flash or OTA success. */
+bool esp_base_mqtt_owner_ota_request(uint64_t now_ms, const ebase_mqtt_ota_frame_t *request);

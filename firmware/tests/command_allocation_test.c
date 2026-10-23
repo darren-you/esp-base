@@ -80,8 +80,8 @@ static void command_payload_tests(void)
         "\"command\":\"config.set\",\"device_id\":\"22222222-2222-4222-8222-222222222222\","
         "\"target_boot_id\":\"33333333-3333-4333-8333-333333333333\","
         "\"expires_at_uptime_ms\":31000,\"parameters\":{\"expected_revision\":0,"
-        "\"config\":{\"schema_version\":3,\"wifi\":{\"ssid\":\"test\","
-        "\"password\":\"test-password\"},\"mqtt\":null,\"frp\":null,\"business\":null}}}";
+        "\"config\":{\"schema_version\":4,\"wifi\":{\"ssid\":\"test\","
+        "\"password\":\"test-password\"},\"mqtt\":null,\"business\":null}}}";
     const char *const operation_query =
         "{\"protocol_version\":1,\"request_id\":\"11111111-1111-4111-8111-111111111111\","
         "\"command\":\"ota.result\",\"parameters\":{"

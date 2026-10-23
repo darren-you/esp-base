@@ -6,7 +6,6 @@
 #include "esp_err.h"
 #include "esp_base_config.h"
 #include "esp_base_storage_owner.h"
-#include "esp_frp_flash_reader.h"
 
 typedef struct {
     const char *device_id;
@@ -16,7 +15,6 @@ typedef struct {
     const char *reset_reason;
     esp_base_storage_owner_t *storage_owner;
     esp_base_storage_owner_t *flash_io_owner;
-    const efrp_aead_flash_store_t *frp_flash_store;
 } esp_base_protocol_context_t;
 
 /* Load directly into the protocol's long-lived config before the control task starts. */

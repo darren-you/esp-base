@@ -283,9 +283,9 @@ def ota_start(port, current, operation_id, image_file, image_url, target):
 
 
 def validate_configuration(config):
-    if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "frp", "business"}:
+    if not isinstance(config, dict) or set(config) != {"schema_version", "wifi", "mqtt", "business"}:
         raise ValueError("配置字段不完整")
-    if type(config["schema_version"]) is not int or config["schema_version"] != 3 or config["business"] is not None:
+    if type(config["schema_version"]) is not int or config["schema_version"] != 4 or config["business"] is not None:
         raise ValueError("配置版本或能力尚未支持")
     network = config["wifi"]
     if network is not None:
@@ -341,40 +341,6 @@ def validate_configuration(config):
         if (not isinstance(key, str) or len(key) != 64 or any(char not in "0123456789abcdef" for char in key) or
                 not any(char != "0" for char in key)):
             raise ValueError("MQTT 管理密钥无效")
-    frp = config["frp"]
-    if frp is not None:
-        required = {"server_hostname", "server_port", "token", "ca_pem", "proxy_name",
-                    "remote_port", "local_port", "management_key_hex"}
-        if not isinstance(frp, dict) or set(frp) != required:
-            raise ValueError("FRP 配置字段无效")
-        host = frp["server_hostname"]
-        if not isinstance(host, str) or not 1 <= len(host) <= 253 or not host.isascii():
-            raise ValueError("FRP 主机无效")
-        for label in host.split("."):
-            if not 1 <= len(label) <= 63 or not label[0].isalnum() or not label[-1].isalnum() or not all(
-                    ("a" <= char <= "z") or ("A" <= char <= "Z") or ("0" <= char <= "9") or char == "-"
-                    for char in label):
-                raise ValueError("FRP 主机无效")
-        for name in ("server_port", "remote_port", "local_port"):
-            value = frp[name]
-            if type(value) is not int or not 1 <= value <= 65535:
-                raise ValueError("FRP 端口无效")
-        token = frp["token"]
-        if not isinstance(token, str) or not 1 <= len(token) <= 256 or not all(32 < ord(c) < 127 for c in token):
-            raise ValueError("FRP Token 无效")
-        ca = frp["ca_pem"]
-        if (not isinstance(ca, str) or not 1 <= len(ca) <= 2048 or not all(
-                char in "\t\r\n" or 32 <= ord(char) <= 126 for char in ca) or
-                "-----BEGIN CERTIFICATE-----" not in ca or "-----END CERTIFICATE-----" not in ca):
-            raise ValueError("FRP CA PEM 无效")
-        proxy = frp["proxy_name"]
-        if (not isinstance(proxy, str) or not 1 <= len(proxy) <= 128 or
-                any(ord(c) <= 32 or ord(c) >= 127 or c in "/\\*@" for c in proxy)):
-            raise ValueError("FRP 代理名无效")
-        key = frp["management_key_hex"]
-        if (not isinstance(key, str) or len(key) != 64 or any(char not in "0123456789abcdef" for char in key) or
-                not any(char != "0" for char in key)):
-            raise ValueError("FRP 管理密钥无效")
 
 
 def apply_configuration(port, current, config):

@@ -53,10 +53,10 @@ class SerialTransportTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2.5)
 
 
-class ConfigurationV3Tests(unittest.TestCase):
+class ConfigurationV4Tests(unittest.TestCase):
     def setUp(self):
         self.config = {
-            "schema_version": 3,
+            "schema_version": 4,
             "wifi": {"ssid": "test-network", "password": "test-password"},
             "mqtt": {
                 "hostname": "broker.example.test", "port": 8883,
@@ -64,10 +64,10 @@ class ConfigurationV3Tests(unittest.TestCase):
                 "ca_pem": "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n",
                 "management_key_hex": "01" + "00" * 31,
             },
-            "frp": None, "business": None,
+            "business": None,
         }
 
-    def test_complete_v3_and_null_capabilities(self):
+    def test_complete_v4_and_null_capabilities(self):
         control.validate_configuration(self.config)
         candidate = copy.deepcopy(self.config)
         candidate["wifi"] = None
@@ -80,20 +80,14 @@ class ConfigurationV3Tests(unittest.TestCase):
             "proxy_name": "base-device", "remote_port": 10200, "local_port": 8123,
             "management_key_hex": "02" + "00" * 31,
         }
-        control.validate_configuration(candidate)
-        for field, value in (("server_hostname", "-frp.example.test"), ("server_port", 0),
-                             ("token", "bad token"), ("ca_pem", "missing CA"),
-                             ("proxy_name", "bad/name"), ("remote_port", True),
-                             ("local_port", 0), ("management_key_hex", "00" * 32)):
-            rejected = copy.deepcopy(candidate)
-            rejected["frp"][field] = value
-            with self.subTest(field=field), self.assertRaises(ValueError):
-                control.validate_configuration(rejected)
+        with self.assertRaises(ValueError):
+            control.validate_configuration(candidate)
 
     def test_v1_and_malformed_fields_are_rejected(self):
         variants = [
             ("schema_version", 1),
             ("schema_version", 2),
+            ("schema_version", 3),
             ("schema_version", True),
             ("frp", {}),
             ("mqtt.hostname", "-broker.example.test"),

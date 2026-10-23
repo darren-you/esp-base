@@ -156,8 +156,10 @@ static bool restart_parameters(const cJSON *root, ebase_request_t *request)
 }
 
 static const char *parse_command(const char *json, size_t length,
-                                ebase_command_t *out, ebase_command_alloc_t allocate, bool frp)
+                                ebase_command_t *out, ebase_command_alloc_t allocate,
+                                bool mqtt)
 {
+    const bool inbound_stream = mqtt;
     if (!out) return "invalid_request";
     ebase_command_release(out);
     if (!allocate) return "invalid_request";
@@ -169,8 +171,6 @@ static const char *parse_command(const char *json, size_t length,
     const char *error = "invalid_request";
     const char *const status_keys[] = {"protocol_version", "request_id", "command"};
     const char *const query_keys[] = {"protocol_version", "request_id", "command", "parameters"};
-    const char *const frp_read_keys[] = {"protocol_version", "request_id", "command", "device_id"};
-    const char *const frp_query_keys[] = {"protocol_version", "request_id", "command", "parameters", "device_id"};
     const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     if (end != json + length || !cJSON_IsObject(root) || !cJSON_IsNumber(version) || version->valuedouble != 1 || !cJSON_IsString(command)) goto done;
@@ -180,10 +180,8 @@ static const char *parse_command(const char *json, size_t length,
     bool ota_result = !strcmp(command->valuestring, "ota.result");
     const bool query = ota_result;
     const bool read = status || firmware_status || business_status;
-    if (!exact_keys(root, read ? (frp ? frp_read_keys : status_keys) :
-                    query ? (frp ? frp_query_keys : query_keys) : write_keys,
-                    read ? (frp ? 4U : 3U) : query ? (frp ? 5U : 4U) : 7U)) goto done;
-    if (frp && (read || query) && !copy_id(root, "device_id", out->request.device_id)) goto done;
+    if (!exact_keys(root, read ? status_keys : query ? query_keys : write_keys,
+                    read ? 3U : query ? 4U : 7U)) goto done;
     if (!copy_id(root, "request_id", out->request.request_id)) goto done;
     if (status) { out->kind = EBASE_STATUS; error = NULL; goto done; }
     if (firmware_status) { out->kind = EBASE_FIRMWARE_STATUS; error = NULL; goto done; }
@@ -214,7 +212,7 @@ static const char *parse_command(const char *json, size_t length,
         const char *const keys[] = {"operation_id", "image_url", "sha256",
             "image_size_bytes", "target", "signature"};
         const char *const stream_keys[] = {"operation_id", "sha256", "image_size_bytes", "target", "signature"};
-        if (!exact_keys(parameters, frp ? stream_keys : keys, frp ? 5U : 6U) ||
+        if (!exact_keys(parameters, inbound_stream ? stream_keys : keys, inbound_stream ? 5U : 6U) ||
             !copy_id(parameters, "operation_id", out->ota->operation_id)) goto done;
         const cJSON *url = cJSON_GetObjectItemCaseSensitive(parameters, "image_url");
         const cJSON *digest = cJSON_GetObjectItemCaseSensitive(parameters, "sha256");
@@ -223,7 +221,7 @@ static const char *parse_command(const char *json, size_t length,
         const cJSON *signature = cJSON_GetObjectItemCaseSensitive(parameters, "signature");
         const char *const signature_keys[] = {"scheme"};
         const cJSON *scheme = cJSON_GetObjectItemCaseSensitive(signature, "scheme");
-        if ((!frp && (!cJSON_IsString(url) || strlen(url->valuestring) > EOTA_URL_BYTES ||
+        if ((!inbound_stream && (!cJSON_IsString(url) || strlen(url->valuestring) > EOTA_URL_BYTES ||
             strncmp(url->valuestring, "https://", 8) != 0)) ||
             !cJSON_IsString(digest) || strlen(digest->valuestring) != 64 ||
             !cJSON_IsNumber(size) || !isfinite(size->valuedouble) || size->valuedouble < 1 ||
@@ -232,8 +230,8 @@ static const char *parse_command(const char *json, size_t length,
             !exact_keys(signature, signature_keys, 1) || !cJSON_IsString(scheme) ||
             strcmp(scheme->valuestring, ESP_BASE_OTA_SIGNATURE_SCHEME)) goto done;
         if (!digest32(digest, out->ota->sha256)) goto done;
-        if (!frp) memcpy(out->ota->image_url, url->valuestring, strlen(url->valuestring) + 1);
-        out->ota->inbound_stream = frp;
+        if (!inbound_stream) memcpy(out->ota->image_url, url->valuestring, strlen(url->valuestring) + 1);
+        out->ota->inbound_stream = inbound_stream;
         out->ota->image_size_bytes = (uint32_t)size->valuedouble;
         out->kind = EBASE_OTA_START;
         error = NULL;
@@ -250,10 +248,10 @@ static const char *parse_command(const char *json, size_t length,
         if (!cJSON_IsNumber(revision) || revision->valuedouble < 0 || revision->valuedouble > UINT32_MAX ||
             floor(revision->valuedouble) != revision->valuedouble) goto done;
         const cJSON *config = cJSON_GetObjectItemCaseSensitive(parameters, "config");
-        const char *const config_keys[] = {"schema_version", "wifi", "mqtt", "frp", "business"};
-        if (!exact_keys(config, config_keys, 5)) goto done;
+        const char *const config_keys[] = {"schema_version", "wifi", "mqtt", "business"};
+        if (!exact_keys(config, config_keys, 4)) goto done;
         const cJSON *schema = cJSON_GetObjectItemCaseSensitive(config, "schema_version");
-        if (!cJSON_IsNumber(schema) || schema->valuedouble != 3) goto done;
+        if (!cJSON_IsNumber(schema) || schema->valuedouble != 4) goto done;
         if (!cJSON_IsNull(cJSON_GetObjectItemCaseSensitive(config, "business"))) {
             error = "unsupported_configuration"; goto done;
         }
@@ -302,45 +300,6 @@ static const char *parse_command(const char *json, size_t length,
                 out->config->mqtt.management_key[i] = (uint8_t)((hi << 4) | lo);
             }
         }
-        const cJSON *frp = cJSON_GetObjectItemCaseSensitive(config, "frp");
-        if (!cJSON_IsNull(frp)) {
-            const char *const frp_keys[] = {"server_hostname", "server_port", "token", "ca_pem",
-                                            "proxy_name", "remote_port", "local_port", "management_key_hex"};
-            if (!exact_keys(frp, frp_keys, 8)) goto done;
-            const cJSON *host = cJSON_GetObjectItemCaseSensitive(frp, "server_hostname");
-            const cJSON *port = cJSON_GetObjectItemCaseSensitive(frp, "server_port");
-            const cJSON *token = cJSON_GetObjectItemCaseSensitive(frp, "token");
-            const cJSON *ca = cJSON_GetObjectItemCaseSensitive(frp, "ca_pem");
-            const cJSON *proxy = cJSON_GetObjectItemCaseSensitive(frp, "proxy_name");
-            const cJSON *remote = cJSON_GetObjectItemCaseSensitive(frp, "remote_port");
-            const cJSON *local = cJSON_GetObjectItemCaseSensitive(frp, "local_port");
-            const cJSON *key = cJSON_GetObjectItemCaseSensitive(frp, "management_key_hex");
-            if (!cJSON_IsString(host) || strlen(host->valuestring) > 253 ||
-                !cJSON_IsNumber(port) || !isfinite(port->valuedouble) || port->valuedouble < 1 ||
-                port->valuedouble > UINT16_MAX || floor(port->valuedouble) != port->valuedouble ||
-                !cJSON_IsString(token) || strlen(token->valuestring) > EBASE_FRP_TOKEN_MAX_BYTES ||
-                !cJSON_IsString(ca) || strlen(ca->valuestring) > EBASE_FRP_CA_MAX_BYTES ||
-                !cJSON_IsString(proxy) || strlen(proxy->valuestring) > 128 ||
-                !cJSON_IsNumber(remote) || !isfinite(remote->valuedouble) || remote->valuedouble < 1 ||
-                remote->valuedouble > UINT16_MAX || floor(remote->valuedouble) != remote->valuedouble ||
-                !cJSON_IsNumber(local) || !isfinite(local->valuedouble) || local->valuedouble < 1 ||
-                local->valuedouble > UINT16_MAX || floor(local->valuedouble) != local->valuedouble ||
-                !cJSON_IsString(key) || strlen(key->valuestring) != 64) goto done;
-            out->config->frp.configured = true;
-            out->config->frp.server_port = (uint16_t)port->valuedouble;
-            out->config->frp.remote_port = (uint16_t)remote->valuedouble;
-            out->config->frp.local_port = (uint16_t)local->valuedouble;
-            memcpy(out->config->frp.server_hostname, host->valuestring, strlen(host->valuestring));
-            memcpy(out->config->frp.token, token->valuestring, strlen(token->valuestring));
-            memcpy(out->config->frp.ca_pem, ca->valuestring, strlen(ca->valuestring));
-            memcpy(out->config->frp.proxy_name, proxy->valuestring, strlen(proxy->valuestring));
-            for (size_t i = 0; i < EBASE_FRP_KEY_BYTES; ++i) {
-                const int hi = hex_digit(key->valuestring[2 * i]);
-                const int lo = hex_digit(key->valuestring[2 * i + 1]);
-                if (hi < 0 || lo < 0) goto done;
-                out->config->frp.management_key[i] = (uint8_t)((hi << 4) | lo);
-            }
-        }
         if (!ebase_config_valid(out->config)) goto done;
         out->kind = EBASE_CONFIG_SET;
         error = NULL;
@@ -362,58 +321,13 @@ const char *ebase_parse_command(const char *json, size_t length,
     return parse_command(json, length, out, allocate, false);
 }
 
-const char *ebase_parse_frp_command(const char *json, size_t length,
+const char *ebase_parse_mqtt_command(const char *json, size_t length,
                                 ebase_command_t *out, ebase_command_alloc_t allocate)
 {
     return parse_command(json, length, out, allocate, true);
 }
 
-const char *ebase_parse_frp_status(const char *json, size_t length,
-                                  ebase_request_t *out)
-{
-    if (!out) return "invalid_request";
-    memset(out, 0, sizeof *out);
-    if (!json || !length || length > 512 ||
-        !valid_bytes((const unsigned char *)json, length)) return "invalid_request";
-    const char *end = NULL;
-    cJSON *root = cJSON_ParseWithLengthOpts(json, length, &end, false);
-    if (!root) return "invalid_request";
-    while (end < json + length && (*end == ' ' || *end == '\t' ||
-                                   *end == '\r' || *end == '\n')) ++end;
-    const char *error = "invalid_request";
-    const char *const keys[] = {"protocol_version", "device_id", "request_id", "command"};
-    const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "protocol_version");
-    const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
-    if (end == json + length && exact_keys(root, keys, 4) &&
-        cJSON_IsNumber(version) && version->valuedouble == 1 &&
-        cJSON_IsString(command) && !strcmp(command->valuestring, "status") &&
-        copy_id(root, "device_id", out->device_id) &&
-        copy_id(root, "request_id", out->request_id)) {
-        error = NULL;
-    }
-    if (error) memset(out, 0, sizeof *out);
-    cJSON_Delete(root);
-    return error;
-}
 
-const char *ebase_parse_frp_restart(const char *json, size_t length,
-                                   ebase_request_t *out)
-{
-    if (!out) return "invalid_request";
-    memset(out, 0, sizeof *out);
-    if (!json || !length || length > 384 ||
-        !valid_bytes((const unsigned char *)json, length)) return "invalid_request";
-    const char *end = NULL;
-    cJSON *root = cJSON_ParseWithLengthOpts(json, length, &end, false);
-    if (!root) return "invalid_request";
-    while (end < json + length && (*end == ' ' || *end == '\t' ||
-                                   *end == '\r' || *end == '\n')) ++end;
-    const char *error = end == json + length && write_identity(root, out) &&
-        restart_parameters(root, out) ? NULL : "invalid_request";
-    if (error) memset(out, 0, sizeof *out);
-    cJSON_Delete(root);
-    return error;
-}
 
 void ebase_line_release(ebase_line_reader_t *r)
 {

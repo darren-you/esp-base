@@ -37,3 +37,6 @@ psa_status_t psa_mac_compute(psa_key_id_t key_id, uint32_t algorithm,
                             const uint8_t *input, size_t input_length,
                             uint8_t *tag, size_t tag_capacity, size_t *tag_length);
 psa_status_t psa_destroy_key(psa_key_id_t key_id);
+psa_status_t psa_crypto_init(void);
+psa_status_t psa_hash_compute(uint32_t algorithm, const uint8_t *input, size_t length,
+    uint8_t *digest, size_t capacity, size_t *written);

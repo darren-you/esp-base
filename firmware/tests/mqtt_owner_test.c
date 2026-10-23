@@ -5,6 +5,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <openssl/crypto.h>
+#include <openssl/hmac.h>
+#include "psa/crypto.h"
+#include "network_auth_openssl.inc"
 
 static const char device_id[] = "22222222-2222-4222-8222-222222222222";
 static const char boot_id[] = "33333333-3333-4333-8333-333333333333";
@@ -12,17 +16,11 @@ static const char request[] = "{\"protocol_version\":1,\"request_id\":\"11111111
 static const char hex_tag[] = "57d8e98b33e69b075cd138712813411c036f615a240e04a54e8c54f2fa3f38ca";
 static const char event_hex_1[] = "9fb0774308f1438407d8a298468d0c9d067c76897447a2c1d0618fe5429cab8c";
 static const char event_hex_2[] = "1f0b65a5d26e51b20b1e2f0cf3cfed8de744b17586a5d4782d8588dbf07175f7";
-static const uint8_t event_tag_1[32] = {
-    0x9f, 0xb0, 0x77, 0x43, 0x08, 0xf1, 0x43, 0x84, 0x07, 0xd8, 0xa2, 0x98, 0x46, 0x8d, 0x0c, 0x9d, 0x06, 0x7c, 0x76, 0x89, 0x74, 0x47, 0xa2, 0xc1, 0xd0, 0x61, 0x8f, 0xe5, 0x42, 0x9c, 0xab, 0x8c
-};
-static const uint8_t event_tag_2[32] = {
-    0x1f, 0x0b, 0x65, 0xa5, 0xd2, 0x6e, 0x51, 0xb2, 0x0b, 0x1e, 0x2f, 0x0c, 0xf3, 0xcf, 0xed, 0x8d, 0xe7, 0x44, 0xb1, 0x75, 0x86, 0xa5, 0xd4, 0x78, 0x2d, 0x85, 0x88, 0xdb, 0xf0, 0x71, 0x75, 0xf7
-};
 static uint8_t signed_event[110];
 static struct emqtt_runtime { int marker; } runtime;
 static emqtt_config_t captured;
 static emqtt_config_t scratch;
-static emqtt_event_t events[40];
+static emqtt_event_t events[128];
 static unsigned event_head, event_tail, creates, starts, stops, destroys, destroy_attempts, sends, commands, business_events;
 static unsigned business_event_attempts, capacity_copies;
 static bool accept_event = true;
@@ -31,35 +29,13 @@ static bool fail_stop, fail_publish;
 static char last_topic[EMQTT_TOPIC_MAX + 1], last_payload[EMQTT_PUBLISH_PAYLOAD_MAX_BYTES + 1];
 static uint8_t last_qos;
 static bool last_retain;
+static size_t last_length;
 bool emqtt_get_capacity_snapshot(const emqtt_runtime_t *instance, emqtt_capacity_stats_t *out)
 {
     assert(instance == &runtime);
     ++capacity_copies;
     *out = (emqtt_capacity_stats_t){.runtime_instance=1,.counters_valid=true};
     return true;
-}
-
-bool ebase_management_authenticate(const uint8_t key[EBASE_MANAGEMENT_KEY_BYTES],
-    const uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES], const uint8_t *json, size_t length)
-{
-    static const uint8_t expected_tag[] = {
-        0x57, 0xd8, 0xe9, 0x8b, 0x33, 0xe6, 0x9b, 0x07,
-        0x5c, 0xd1, 0x38, 0x71, 0x28, 0x13, 0x41, 0x1c,
-        0x03, 0x6f, 0x61, 0x5a, 0x24, 0x0e, 0x04, 0xa5,
-        0x4e, 0x8c, 0x54, 0xf2, 0xfa, 0x3f, 0x38, 0xca
-    };
-    uint8_t expected_key[32];
-    for (size_t i = 0; i < sizeof expected_key; ++i) expected_key[i] = (uint8_t)i;
-    return !memcmp(key, expected_key, sizeof expected_key) &&
-        ((length == sizeof request - 1 &&
-          !memcmp(tag, expected_tag, sizeof expected_tag) &&
-          !memcmp(json, request, length)) ||
-         (length == sizeof signed_event &&
-          !memcmp(json, signed_event, length) &&
-          ((!memcmp(tag, event_tag_1, sizeof event_tag_1) &&
-            signed_event[sizeof signed_event - 4U] == 1U) ||
-           (!memcmp(tag, event_tag_2, sizeof event_tag_2) &&
-            signed_event[sizeof signed_event - 4U] == 2U))));
 }
 
 esp_err_t emqtt_create(const emqtt_config_t *config, emqtt_runtime_t **out)
@@ -118,6 +94,7 @@ esp_err_t emqtt_enqueue(emqtt_runtime_t *instance, const char *topic,
     strcpy(last_topic, topic);
     memcpy(last_payload, payload, length);
     last_payload[length] = '\0';
+    last_length = length;
     last_qos = qos;
     last_retain = retain;
     *message_id = (int)sends;
@@ -210,6 +187,113 @@ static esp_err_t configure(const ebase_mqtt_config_t *mqtt)
     return result;
 }
 
+static const char operation_id[] = "11111111-1111-4111-8111-111111111111";
+static unsigned ota_frames;
+static void received_ota(const ebase_mqtt_ota_frame_t *frame, void *context)
+{
+    assert(context == &ota_frames && frame->kind == EBASE_MQTT_OTA_DATA &&
+           frame->offset == 0 && frame->length == 3 && !memcmp(frame->data, "OTA", 3));
+    ++ota_frames;
+}
+static emqtt_event_t *push_ota(const char *boot, const char *operation)
+{
+    push(EMQTT_EVENT_MESSAGE);
+    emqtt_event_t *event = &events[event_tail - 1];
+    const ebase_mqtt_config_t mqtt = config();
+    const ebase_mqtt_ota_frame_t frame = {.kind=EBASE_MQTT_OTA_DATA,
+        .expires_at_uptime_ms=40000, .data=(const uint8_t *)"OTA", .length=3};
+    strcpy(event->message.topic, captured.subscriptions[2].topic);
+    event->message.qos = 1;
+    assert(ebase_mqtt_ota_encode(mqtt.management_key, device_id, boot, operation,
+        &frame, event->message.payload, sizeof event->message.payload, &event->message.length));
+    return event;
+}
+static void poll_ota(uint64_t now)
+{
+    /* No command handler: blocks have their own authenticated admission. */
+    esp_base_mqtt_owner_poll(now, true, true, NULL, NULL, NULL);
+}
+static void acknowledge(int id, uint64_t now)
+{
+    push(EMQTT_EVENT_PUBACK);
+    events[event_tail - 1].message_id = id;
+    poll_ota(now);
+}
+static void ota_owner_tests(void)
+{
+    ebase_mqtt_config_t mqtt = config();
+    assert(configure(&mqtt) == ESP_OK);
+    assert(!esp_base_mqtt_owner_ota_bind(operation_id, received_ota, &ota_frames));
+    poll_ota(16000);
+    push(EMQTT_EVENT_READY); poll_ota(16001);
+    assert(!esp_base_mqtt_owner_ota_bind("bad", received_ota, &ota_frames));
+    assert(!esp_base_mqtt_owner_ota_bind(operation_id, NULL, &ota_frames));
+    assert(esp_base_mqtt_owner_ota_bind(operation_id, received_ota, &ota_frames));
+    assert(!esp_base_mqtt_owner_ota_bind(boot_id, received_ota, &ota_frames));
+    push_ota(boot_id, boot_id);
+    push_ota(operation_id, operation_id);
+    push_ota(boot_id, operation_id)->message.retain = true;
+    push_ota(boot_id, operation_id)->message.qos = 0;
+    push_ota(boot_id, operation_id)->message.payload[0] ^= 1;
+    strcpy(push_ota(boot_id, operation_id)->message.topic, captured.subscriptions[0].topic);
+    poll_ota(16002);
+    assert(ota_frames == 0);
+    push_ota(boot_id, operation_id); poll_ota(16003);
+    assert(ota_frames == 1);
+    ebase_mqtt_ota_frame_t request = {.kind=EBASE_MQTT_OTA_REQUEST,
+        .expires_at_uptime_ms=40000};
+    assert(esp_base_mqtt_owner_ota_request(16004, &request));
+    int pending = (int)sends;
+    ebase_mqtt_ota_frame_t decoded;
+    assert(last_qos == 1 && !last_retain && last_length == EBASE_MQTT_OTA_HEADER_BYTES);
+    assert(ebase_mqtt_ota_decode(mqtt.management_key, device_id, boot_id, operation_id,
+        true, last_topic, last_qos, last_retain, (uint8_t *)last_payload, last_length, &decoded));
+    assert(decoded.kind == EBASE_MQTT_OTA_REQUEST && decoded.offset == 0);
+    assert(!esp_base_mqtt_owner_ota_request(18000, &request));
+    acknowledge(pending + 100, 18000);
+    assert(!esp_base_mqtt_owner_ota_request(18000, &request));
+    acknowledge(pending, 18000);
+    assert(!esp_base_mqtt_owner_ota_request(16003, &request)); /* Backwards time. */
+    assert(!esp_base_mqtt_owner_ota_request(17003, &request));
+    assert(esp_base_mqtt_owner_ota_request(18000, &request));
+    pending = (int)sends;
+    acknowledge(pending, 18001);
+    request.offset = request.written_offset = 1024;
+    assert(esp_base_mqtt_owner_ota_request(18001, &request)); /* New real write. */
+    pending = (int)sends;
+    push(EMQTT_EVENT_DISCONNECTED); poll_ota(18002);
+    assert(!esp_base_mqtt_owner_ota_request(19002, &request));
+    push(EMQTT_EVENT_READY); poll_ota(19002);
+    assert(!esp_base_mqtt_owner_ota_request(19002, &request)); /* Old outbox survives. */
+    push_ota(boot_id, operation_id); poll_ota(19003);
+    assert(ota_frames == 2); /* Operation survives a session reconnect. */
+    acknowledge(pending, 19004);
+    assert(esp_base_mqtt_owner_ota_request(19004, &request));
+    pending = (int)sends;
+    esp_base_mqtt_owner_ota_unbind();
+    push_ota(boot_id, operation_id); poll_ota(19005);
+    assert(ota_frames == 2 && !esp_base_mqtt_owner_ota_request(20005, &request));
+    assert(esp_base_mqtt_owner_ota_bind(boot_id, received_ota, &ota_frames));
+    assert(!esp_base_mqtt_owner_ota_request(20005, &request)); /* Rebind cannot grow outbox. */
+    acknowledge(pending, 20005);
+    fail_publish = true;
+    assert(!esp_base_mqtt_owner_ota_request(20005, &request));
+    fail_publish = false;
+    assert(esp_base_mqtt_owner_ota_request(20005, &request));
+    esp_base_mqtt_owner_poll(20006, false, true, NULL, NULL, NULL);
+    poll_ota(20007); push(EMQTT_EVENT_READY); poll_ota(21007);
+    assert(esp_base_mqtt_owner_ota_request(21007, &request)); /* Stop drained the old outbox. */
+    acknowledge((int)sends, 21008);
+    assert(!esp_base_mqtt_owner_ota_request(40000, &request));
+    mqtt.management_key[0] ^= 1;
+    assert(configure(&mqtt) == ESP_OK);
+    poll_ota(40001); push(EMQTT_EVENT_READY); poll_ota(40002);
+    assert(!esp_base_mqtt_owner_ota_request(40002, &request));
+    push_ota(boot_id, operation_id); poll_ota(40003);
+    assert(ota_frames == 2); /* Reconfiguration revoked the operation binding. */
+    assert(esp_base_mqtt_owner_revoke() == ESP_OK);
+}
+
 int main(void)
 {
     ebase_mqtt_config_t absent = {0};
@@ -230,10 +314,11 @@ int main(void)
     assert(captured.tls && captured.port == 8883 && !strcmp(captured.hostname, mqtt.hostname));
     assert(!strcmp(captured.username, mqtt.username) && !strcmp(captured.password, mqtt.password));
     assert(!strcmp(captured.ca_pem, mqtt.ca_pem));
-    assert(captured.subscription_count == 2 && captured.subscriptions[0].qos == 1 &&
-           captured.subscriptions[1].qos == 1);
+    assert(captured.subscription_count == 3 && captured.subscriptions[0].qos == 1 &&
+           captured.subscriptions[1].qos == 1 && captured.subscriptions[2].qos == 1);
     assert(!strcmp(captured.subscriptions[0].topic, "esp-base/22222222-2222-4222-8222-222222222222/command"));
     assert(!strcmp(captured.subscriptions[1].topic, "esp-base/22222222-2222-4222-8222-222222222222/event"));
+    assert(!strcmp(captured.subscriptions[2].topic, "esp-base/22222222-2222-4222-8222-222222222222/ota/data"));
     assert(!strcmp(captured.will_topic, "esp-base/22222222-2222-4222-8222-222222222222/status"));
     assert(captured.will_qos == 1 && captured.will_retain);
     assert(!strcmp((const char *)captured.will_payload,
@@ -417,5 +502,6 @@ int main(void)
     assert(!esp_base_mqtt_owner_restart_result_acknowledged());
     assert(destroys == 2 && !strcmp(esp_base_mqtt_owner_state(), "unconfigured") &&
            !esp_base_mqtt_owner_result("{}", 2));
-    puts("mqtt_owner passed (TLS/UUID, SUBACK gate, auth, retain, reconnect, outbox expiry, fail closed)");
+    ota_owner_tests();
+    puts("mqtt_owner passed (TLS/UUID, SUBACK, real HMAC, OTA binding, bounded outbox, reconnect, revoke)");
 }

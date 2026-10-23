@@ -6,6 +6,7 @@
 #include "esp_attr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "psa/crypto.h"
 
 #define CONFIG_PARTITION "base_store"
 #define CONFIG_NAMESPACE "base_config"
@@ -15,7 +16,7 @@
  * live config occupies RTC; the codec owns one bounded ordinary-RAM buffer.
  * ESP32 keeps its existing RTC workspace and byte-accessible IRAM config. */
 #if !defined(CONFIG_IDF_TARGET_ESP32C3)
-static RTC_DATA_ATTR uint8_t s_config_bytes[EBASE_CONFIG_MAX_BYTES];
+static RTC_DATA_ATTR uint8_t s_config_bytes[EBASE_CONFIG_STORAGE_MAX_BYTES];
 #endif
 
 static void wipe(void *memory, size_t length)
@@ -27,8 +28,8 @@ static void wipe(void *memory, size_t length)
 static uint8_t *acquire_config_bytes(void)
 {
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
-    uint8_t *bytes = malloc(EBASE_CONFIG_MAX_BYTES);
-    if (bytes) memset(bytes, 0, EBASE_CONFIG_MAX_BYTES);
+    uint8_t *bytes = malloc(EBASE_CONFIG_STORAGE_MAX_BYTES);
+    if (bytes) memset(bytes, 0, EBASE_CONFIG_STORAGE_MAX_BYTES);
     return bytes;
 #else
     wipe(s_config_bytes, sizeof s_config_bytes);
@@ -39,7 +40,7 @@ static uint8_t *acquire_config_bytes(void)
 static void release_config_bytes(uint8_t *bytes)
 {
     if (!bytes) return;
-    wipe(bytes, EBASE_CONFIG_MAX_BYTES);
+    wipe(bytes, EBASE_CONFIG_STORAGE_MAX_BYTES);
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
     free(bytes);
 #endif
@@ -63,19 +64,7 @@ static bool same_config(const esp_base_remote_config_t *readback,
         !memcmp(readback->mqtt.password, candidate->mqtt.password, sizeof candidate->mqtt.password) &&
         !memcmp(readback->mqtt.ca_pem, candidate->mqtt.ca_pem, sizeof candidate->mqtt.ca_pem) &&
         !memcmp(readback->mqtt.management_key, candidate->mqtt.management_key,
-                sizeof candidate->mqtt.management_key) &&
-        readback->frp.configured == candidate->frp.configured &&
-        readback->frp.server_port == candidate->frp.server_port &&
-        readback->frp.remote_port == candidate->frp.remote_port &&
-        readback->frp.local_port == candidate->frp.local_port &&
-        !memcmp(readback->frp.server_hostname, candidate->frp.server_hostname,
-                sizeof candidate->frp.server_hostname) &&
-        !memcmp(readback->frp.token, candidate->frp.token, sizeof candidate->frp.token) &&
-        !memcmp(readback->frp.ca_pem, candidate->frp.ca_pem, sizeof candidate->frp.ca_pem) &&
-        !memcmp(readback->frp.proxy_name, candidate->frp.proxy_name,
-                sizeof candidate->frp.proxy_name) &&
-        !memcmp(readback->frp.management_key, candidate->frp.management_key,
-                sizeof candidate->frp.management_key);
+                sizeof candidate->mqtt.management_key);
 }
 
 bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t *config,
@@ -92,28 +81,71 @@ bool esp_base_remote_config_with_canonical_bytes(const esp_base_remote_config_t 
     return consumed;
 }
 
-static esp_err_t load_config_with_bytes(esp_base_remote_config_t *config,
-                                         uint8_t *bytes)
+static esp_err_t read_config_bytes(uint8_t *bytes, size_t *size)
 {
-    wipe(bytes, EBASE_CONFIG_MAX_BYTES);
+    wipe(bytes, EBASE_CONFIG_STORAGE_MAX_BYTES);
     esp_err_t error = nvs_flash_init_partition(CONFIG_PARTITION);
     if (error != ESP_OK) return error;
     nvs_handle_t handle;
     error = nvs_open_from_partition(CONFIG_PARTITION, CONFIG_NAMESPACE, NVS_READONLY, &handle);
-    if (error == ESP_ERR_NVS_NOT_FOUND) { *config = (esp_base_remote_config_t){0}; return ESP_OK; }
     if (error != ESP_OK) return error;
-    size_t size = 0;
-    error = nvs_get_blob(handle, CONFIG_KEY, NULL, &size);
-    if (error == ESP_OK && (size < EBASE_CONFIG_HEADER_BYTES || size > EBASE_CONFIG_MAX_BYTES))
+    *size = 0;
+    error = nvs_get_blob(handle, CONFIG_KEY, NULL, size);
+    if (error == ESP_OK && (*size < EBASE_CONFIG_HEADER_BYTES || *size > EBASE_CONFIG_STORAGE_MAX_BYTES))
         error = ESP_ERR_INVALID_STATE;
     if (error == ESP_OK) {
-        size_t received = size;
+        size_t received = *size;
         error = nvs_get_blob(handle, CONFIG_KEY, bytes, &received);
-        if (error == ESP_OK && received != size) error = ESP_ERR_INVALID_STATE;
+        if (error == ESP_OK && received != *size) error = ESP_ERR_INVALID_STATE;
     }
     nvs_close(handle);
+    return error;
+}
+
+static bool hash_config(const uint8_t *bytes, size_t size, uint8_t digest[32])
+{
+    size_t written = 0;
+    /* Startup migration precedes the control task's crypto initialization. */
+    return psa_crypto_init() == PSA_SUCCESS &&
+        psa_hash_compute(PSA_ALG_SHA_256, bytes, size, digest, 32, &written) == PSA_SUCCESS && written == 32;
+}
+
+static esp_err_t retire_legacy_config(uint8_t *bytes, size_t *size)
+{
+    if (!ebase_config_retire_legacy(bytes, size)) return ESP_ERR_INVALID_STATE;
+    uint8_t expected[32] = {0}, actual[32] = {0};
+    if (!hash_config(bytes, *size, expected)) return ESP_FAIL;
+    const size_t expected_size = *size;
+    nvs_handle_t handle;
+    esp_err_t result = nvs_open_from_partition(CONFIG_PARTITION, CONFIG_NAMESPACE, NVS_READWRITE, &handle);
+    if (result == ESP_OK) {
+        result = nvs_set_blob(handle, CONFIG_KEY, bytes, *size);
+        if (result == ESP_OK) result = nvs_commit(handle);
+        nvs_close(handle);
+        /* Once writing was attempted, failure never means the old blob won. */
+        if (result != ESP_OK || read_config_bytes(bytes, size) != ESP_OK ||
+            *size != expected_size || !hash_config(bytes, *size, actual) ||
+            memcmp(actual, expected, sizeof expected)) result = ESP_BASE_CONFIG_UNCERTAIN;
+    }
+    wipe(expected, sizeof expected);
+    wipe(actual, sizeof actual);
+    return result;
+}
+
+static esp_err_t load_config_with_bytes(esp_base_remote_config_t *config, uint8_t *bytes)
+{
+    size_t size = 0;
+    esp_err_t error = read_config_bytes(bytes, &size);
     if (error == ESP_ERR_NVS_NOT_FOUND) { *config = (esp_base_remote_config_t){0}; return ESP_OK; }
     if (error != ESP_OK) return error;
+    /* Only historical v3 records with configured FRP need one normalization.
+     * The strict legacy decoder checks every field before any write. Keeping
+     * v3, its original revision and Wi-Fi/MQTT bytes permits signed rollback
+     * firmware to read this same record without any compatibility side key. */
+    if (bytes[4] == 3 && (bytes[5] & 4)) {
+        error = retire_legacy_config(bytes, &size);
+        if (error != ESP_OK) return error;
+    }
     return ebase_config_decode(bytes, size, config) ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 

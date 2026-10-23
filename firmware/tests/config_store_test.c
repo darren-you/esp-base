@@ -7,6 +7,18 @@
 #undef malloc
 #undef free
 #include <stdlib.h>
+#include <openssl/sha.h>
+#include "psa/crypto.h"
+
+static bool hash_failure;
+psa_status_t psa_crypto_init(void) { return PSA_SUCCESS; }
+psa_status_t psa_hash_compute(uint32_t algorithm, const uint8_t *bytes, size_t size,
+    uint8_t *digest, size_t capacity, size_t *written)
+{
+    assert(algorithm == PSA_ALG_SHA_256 && capacity == 32);
+    if (hash_failure) return PSA_ERROR_INSUFFICIENT_MEMORY;
+    assert(SHA256(bytes, size, digest)); *written = 32; return PSA_SUCCESS;
+}
 
 static bool config_allocation_fails;
 static unsigned config_allocations, config_releases;
@@ -14,7 +26,7 @@ static void *config_workspace;
 
 void *ebase_config_test_malloc(size_t size)
 {
-    assert(size == EBASE_CONFIG_MAX_BYTES && config_workspace == NULL);
+    assert(size == EBASE_CONFIG_STORAGE_MAX_BYTES && config_workspace == NULL);
     ++config_allocations;
     if (config_allocation_fails) return NULL;
     config_workspace = malloc(size);
@@ -27,22 +39,23 @@ void ebase_config_test_free(void *memory)
 {
     assert(memory == config_workspace && memory != NULL);
     const unsigned char *bytes = memory;
-    for (size_t i = 0; i < EBASE_CONFIG_MAX_BYTES; ++i) assert(bytes[i] == 0);
+    for (size_t i = 0; i < EBASE_CONFIG_STORAGE_MAX_BYTES; ++i) assert(bytes[i] == 0);
     free(memory);
     config_workspace = NULL;
     ++config_releases;
 }
 
 /* Faults exercise our storage caller, not NVS power-loss behavior. */
-static uint8_t stored[EBASE_CONFIG_MAX_BYTES];
+static uint8_t stored[EBASE_CONFIG_STORAGE_MAX_BYTES];
 static esp_base_remote_config_t work;
+static esp_base_remote_config_t maximum_config;
 static size_t stored_size;
 static unsigned writes, commits, handles;
 static int fault;
 static bool after_write;
 enum { INIT_ERROR = 1, READ_ERROR, OPEN_ERROR, WRITE_ERROR_BEFORE,
        WRITE_ERROR_AFTER, COMMIT_ERROR, READBACK_ERROR, READBACK_MISMATCH,
-       READBACK_PAYLOAD_MISMATCH, READBACK_MQTT_MISMATCH, READBACK_FRP_MISMATCH };
+       READBACK_PAYLOAD_MISMATCH, READBACK_MQTT_MISMATCH };
 
 static void corrupt_text(uint8_t *bytes, size_t length, const char *text)
 {
@@ -83,8 +96,6 @@ esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *out, size_t *
         ((uint8_t *)out)[EBASE_CONFIG_HEADER_BYTES] ^= 1;
     if (fault == READBACK_MQTT_MISMATCH && after_write)
         corrupt_text(out, *size, "broker.example.test");
-    if (fault == READBACK_FRP_MISMATCH && after_write)
-        corrupt_text(out, *size, "frp.example.test");
     return ESP_OK;
 }
 esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *data, size_t size)
@@ -118,18 +129,6 @@ static void add_mqtt(esp_base_remote_config_t *c)
     strcpy(c->mqtt.password, "device-password");
     strcpy(c->mqtt.ca_pem, "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n");
     c->mqtt.management_key[0] = 0x01;
-}
-static void add_frp(esp_base_remote_config_t *c)
-{
-    c->frp.configured = true;
-    strcpy(c->frp.server_hostname, "frp.example.test");
-    c->frp.server_port = 7000;
-    strcpy(c->frp.token, "test-frp-token");
-    strcpy(c->frp.ca_pem, "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n");
-    strcpy(c->frp.proxy_name, "base-device");
-    c->frp.remote_port = 10200;
-    c->frp.local_port = 8123;
-    c->frp.management_key[0] = 0x02;
 }
 static void save(const esp_base_remote_config_t *config)
 {
@@ -207,26 +206,7 @@ static void codec_tests(void)
     add_mqtt(&c); c.mqtt.ca_pem[0] = 0; assert(!ebase_config_valid(&c));
     add_mqtt(&c); c.mqtt.configured = false; assert(!ebase_config_valid(&c));
 
-    c = configured(9); add_frp(&c);
-    assert(ebase_config_valid(&c));
-    assert(ebase_config_encode(&c, bytes, &size) && bytes[5] == 5);
-    assert(ebase_config_decode(bytes, size, &read));
-    assert(read.frp.configured && read.frp.server_port == 7000 &&
-           read.frp.remote_port == 10200 && read.frp.local_port == 8123 &&
-           !strcmp(read.frp.proxy_name, c.frp.proxy_name) &&
-           !memcmp(read.frp.management_key, c.frp.management_key, EBASE_FRP_KEY_BYTES));
-    memcpy(changed, bytes, size); memset(changed + size - EBASE_FRP_KEY_BYTES, 0, EBASE_FRP_KEY_BYTES);
-    assert(!ebase_config_decode(changed, size, &read) && read.revision == 9);
-    c.frp.management_key[0] = 0; assert(!ebase_config_valid(&c));
-    add_frp(&c); c.frp.server_hostname[0] = '-'; assert(!ebase_config_valid(&c));
-    add_frp(&c); c.frp.local_port = 0; assert(!ebase_config_valid(&c));
-    add_frp(&c); c.frp.proxy_name[0] = '/'; assert(!ebase_config_valid(&c));
-    add_frp(&c); c.frp.token[0] = ' '; assert(!ebase_config_valid(&c));
-    add_frp(&c); c.frp.ca_pem[0] = 0; assert(!ebase_config_valid(&c));
-    add_frp(&c); c.frp.configured = false; assert(!ebase_config_valid(&c));
-
     c = configured(8); add_mqtt(&c);
-    add_frp(&c);
     for (unsigned i = 0; i < 253; ++i) c.mqtt.hostname[i] = i == 63 || i == 127 || i == 191 ? '.' : 'a';
     c.mqtt.hostname[253] = 0;
     memset(c.mqtt.username, 'u', 128); c.mqtt.username[128] = 0;
@@ -237,16 +217,9 @@ static void codec_tests(void)
     c.mqtt.ca_pem[4096] = 0;
     memset(c.wifi.ssid, 's', 32); c.wifi.ssid[32] = 0;
     memset(c.wifi.password, 'a', 64); c.wifi.password[64] = 0;
-    for (unsigned i = 0; i < 253; ++i) c.frp.server_hostname[i] = i == 63 || i == 127 || i == 191 ? '.' : 'a';
-    c.frp.server_hostname[253] = 0;
-    memset(c.frp.token, 't', EBASE_FRP_TOKEN_MAX_BYTES); c.frp.token[EBASE_FRP_TOKEN_MAX_BYTES] = 0;
-    memset(c.frp.ca_pem, 'A', EBASE_FRP_CA_MAX_BYTES);
-    memcpy(c.frp.ca_pem, "-----BEGIN CERTIFICATE-----", 27);
-    memcpy(c.frp.ca_pem + EBASE_FRP_CA_MAX_BYTES - 25, "-----END CERTIFICATE-----", 25);
-    c.frp.ca_pem[EBASE_FRP_CA_MAX_BYTES] = 0;
-    memset(c.frp.proxy_name, 'p', 128); c.frp.proxy_name[128] = 0;
     assert(ebase_config_valid(&c));
     assert(ebase_config_encode(&c, bytes, &size) && size == EBASE_CONFIG_MAX_BYTES);
+    maximum_config = c;
     assert(ebase_config_decode(bytes, size, &read) && ebase_config_valid(&read));
     bytes_check_t check = {.expected = bytes, .size = size, .accept = true};
     assert(esp_base_remote_config_with_canonical_bytes(&c, check_canonical_bytes, &check));
@@ -259,6 +232,100 @@ static void codec_tests(void)
     c.wifi.password[0] = 0;
     assert(!esp_base_remote_config_with_canonical_bytes(&c, check_canonical_bytes, &check));
     assert(check.calls == 2);
+}
+
+static void put16(uint8_t *out, unsigned value)
+{ out[0] = (uint8_t)value; out[1] = (uint8_t)(value >> 8); }
+
+static void save_legacy(const esp_base_remote_config_t *config)
+{
+    /* Historical v3 wire fixture: append the retired fields to independently
+     * bounded Wi-Fi/MQTT canonical bytes, without a live FRP structure. */
+    save(config);
+    const char *host = "frp.example.test", *token = "test-frp-token";
+    const char *ca = "-----BEGIN CERTIFICATE-----\nQQ==\n-----END CERTIFICATE-----\n";
+    const char *proxy = "base-device";
+    stored[5] |= 4; stored[20] = (uint8_t)strlen(host); stored[21] = (uint8_t)strlen(proxy);
+    put16(stored + 22, (unsigned)strlen(token)); put16(stored + 24, (unsigned)strlen(ca));
+    put16(stored + 26, 7000); put16(stored + 28, 10200); put16(stored + 30, 8123);
+    const char *fields[] = {host, token, ca, proxy};
+    for (unsigned i = 0; i < 4; ++i) {
+        const size_t length = strlen(fields[i]);
+        memcpy(stored + stored_size, fields[i], length); stored_size += length;
+    }
+    memset(stored + stored_size, 0, 32); stored[stored_size] = 2; stored_size += 32;
+}
+
+static void legacy_retirement_tests(void)
+{
+    esp_base_remote_config_t original = configured(71), loaded = configured(99);
+    add_mqtt(&original);
+    uint8_t canonical[EBASE_CONFIG_MAX_BYTES]; size_t canonical_size;
+    assert(ebase_config_encode(&original, canonical, &canonical_size));
+    save_legacy(&original);
+    assert(!ebase_config_decode(stored, stored_size, &loaded) && loaded.revision == 99);
+    unsigned before = writes;
+    assert(esp_base_remote_config_load(&loaded) == ESP_OK);
+    assert(writes == before + 1 && commits > 0 && stored_size == canonical_size);
+    assert(!memcmp(stored, canonical, canonical_size) && !memcmp(&loaded, &original, sizeof loaded));
+    assert(stored[4] == 3); /* Older signed firmware can still decode this blob. */
+    assert(esp_base_remote_config_load(&loaded) == ESP_OK && writes == before + 1);
+    for (fault = INIT_ERROR; fault <= READBACK_MQTT_MISMATCH; ++fault) {
+        save_legacy(&original); loaded = configured(99); before = writes;
+        const esp_err_t result = esp_base_remote_config_load(&loaded);
+        assert(result == (fault <= OPEN_ERROR ? ESP_FAIL : ESP_BASE_CONFIG_UNCERTAIN));
+        assert(writes == before + (fault > OPEN_ERROR) && loaded.revision == 99 && handles == 0);
+        /* Explicit next-boot recovery sees whichever complete record survived. */
+        if (fault > OPEN_ERROR) {
+            int previous = fault; fault = 0; after_write = false;
+            assert(esp_base_remote_config_load(&loaded) == ESP_OK);
+            assert(!memcmp(&loaded, &original, sizeof loaded)); fault = previous;
+        }
+    }
+    fault = 0; hash_failure = true; save_legacy(&original); before = writes;
+    loaded = configured(99);
+    assert(esp_base_remote_config_load(&loaded) == ESP_FAIL && writes == before && loaded.revision == 99);
+    hash_failure = false;
+    /* Corrupt legacy lengths/ports/key: never drop bytes to make a bad blob fit. */
+    const unsigned bad[] = {20, 21, 22, 24, 26, 28, 30, 32};
+    for (unsigned i = 0; i < sizeof bad / sizeof *bad; ++i) {
+        save_legacy(&original);
+        if (bad[i] == 26 || bad[i] == 28 || bad[i] == 30) put16(stored + bad[i], 0);
+        else stored[bad[i]] = 0xff;
+        before = writes; loaded = configured(99);
+        assert(esp_base_remote_config_load(&loaded) == ESP_ERR_INVALID_STATE);
+        assert(writes == before && loaded.revision == 99);
+    }
+    save_legacy(&original); memset(stored + stored_size - 32, 0, 32); before = writes;
+    assert(esp_base_remote_config_load(&loaded) == ESP_ERR_INVALID_STATE && writes == before);
+    save_legacy(&original); const size_t legacy_size = stored_size;
+    for (size_t size = 0; size < legacy_size; ++size) {
+        uint8_t truncated[EBASE_CONFIG_STORAGE_MAX_BYTES]; memcpy(truncated, stored, legacy_size);
+        size_t length = size;
+        assert(!ebase_config_retire_legacy(truncated, &length) && length == size);
+        assert(!memcmp(truncated, stored, legacy_size));
+    }
+    /* The historical maximum is larger than the new canonical bound. */
+    save(&maximum_config);
+    assert(stored_size == EBASE_CONFIG_MAX_BYTES);
+    assert(ebase_config_encode(&maximum_config, canonical, &canonical_size));
+    stored[5] |= 4; stored[20] = 253; stored[21] = 128;
+    put16(stored + 22, 256); put16(stored + 24, 2048);
+    put16(stored + 26, 7000); put16(stored + 28, 10200); put16(stored + 30, 8123);
+    for (unsigned i = 0; i < 253; ++i)
+        stored[stored_size++] = i == 63 || i == 127 || i == 191 ? '.' : 'a';
+    memset(stored + stored_size, 't', 256); stored_size += 256;
+    memset(stored + stored_size, 'A', 2048);
+    memcpy(stored + stored_size, "-----BEGIN CERTIFICATE-----", sizeof "-----BEGIN CERTIFICATE-----" - 1);
+    memcpy(stored + stored_size + 2048 - 25, "-----END CERTIFICATE-----", 25);
+    stored_size += 2048;
+    memset(stored + stored_size, 'p', 128); stored_size += 128;
+    memset(stored + stored_size, 2, 32); stored_size += 32;
+    assert(stored_size == EBASE_CONFIG_STORAGE_MAX_BYTES);
+    before = writes;
+    assert(esp_base_remote_config_load(&loaded) == ESP_OK && writes == before + 1);
+    assert(stored_size == canonical_size && !memcmp(stored, canonical, canonical_size));
+    stored_size = 0; after_write = false; writes = commits = 0;
 }
 
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
@@ -293,6 +360,7 @@ static void workspace_oom_tests(void)
 int main(void)
 {
     codec_tests();
+    legacy_retirement_tests();
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
     workspace_oom_tests();
 #endif
@@ -307,9 +375,9 @@ int main(void)
     save(&baseline);
     candidate = configured(1);
     add_mqtt(&candidate);
-    add_frp(&candidate);
+
     assert(esp_base_remote_config_commit_verified(&candidate, 1, &current, &work) == ESP_OK);
-    assert(current.revision == 2 && current.mqtt.configured && current.frp.configured);
+    assert(current.revision == 2 && current.mqtt.configured);
     assert_work_wiped();
     for (fault = INIT_ERROR; fault <= READBACK_PAYLOAD_MISMATCH; ++fault) {
         baseline = configured(1);
@@ -324,12 +392,12 @@ int main(void)
         if (fault == WRITE_ERROR_BEFORE) assert(stored[8] == 1);
         if (fault >= WRITE_ERROR_AFTER) assert(stored[8] == 2);
     }
-    for (fault = READBACK_MQTT_MISMATCH; fault <= READBACK_FRP_MISMATCH; ++fault) {
+    for (fault = READBACK_MQTT_MISMATCH; fault <= READBACK_MQTT_MISMATCH; ++fault) {
         baseline = configured(1);
         save(&baseline);
         candidate = configured(1);
         add_mqtt(&candidate);
-        add_frp(&candidate);
+
         current = configured(99);
         assert(esp_base_remote_config_commit_verified(&candidate, 1, &current, &work) ==
                ESP_BASE_CONFIG_UNCERTAIN);
@@ -347,7 +415,7 @@ int main(void)
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE && current.revision == 99);
     candidate = configured(0);
     assert(esp_base_remote_config_commit_verified(&candidate, 0, &current, &work) == ESP_ERR_INVALID_STATE && writes == before);
-    stored_size = EBASE_CONFIG_MAX_BYTES + 1; /* Oversized key rejected before reading or writing. */
+    stored_size = EBASE_CONFIG_STORAGE_MAX_BYTES + 1; /* Oversized key rejected before reading or writing. */
     assert(esp_base_remote_config_load(&current) == ESP_ERR_INVALID_STATE);
     assert(writes == before && handles == 0);
     assert(config_workspace == NULL);
@@ -356,5 +424,5 @@ int main(void)
 #else
     assert(config_allocations == 0 && config_releases == 0);
 #endif
-    puts("  config_store     passed (v3-only; fault injection, not a power-cut test)");
+    puts("  config_store     passed (v3 compatible FRP retirement; fault injection, not a power-cut test)");
 }

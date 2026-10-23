@@ -31,19 +31,11 @@ typedef void *(*ebase_command_alloc_t)(size_t size_bytes);
  * its existing memory domain. Release after consuming the borrowed fields. */
 const char *ebase_parse_command(const char *json, size_t length,
                                 ebase_command_t *out, ebase_command_alloc_t allocate);
+/* Same MQTT command identity contract; ota.start takes signed image metadata
+ * only. Image bytes arrive on the separately authenticated block channel. */
+const char *ebase_parse_mqtt_command(const char *json, size_t length,
+                                ebase_command_t *out, ebase_command_alloc_t allocate);
 void ebase_command_release(ebase_command_t *command);
-const char *ebase_parse_frp_command(const char *json, size_t length,
-                                   ebase_command_t *out, ebase_command_alloc_t allocate);
-
-/* Read-only FRP status bootstraps current boot/uptime using device/request UUIDs.
- * It leaves boot/deadline zero. The listener authenticates the exact request
- * bytes before parsing and signs the response; write admission is unchanged. */
-const char *ebase_parse_frp_status(const char *json, size_t length,
-                                  ebase_request_t *out);
-/* Same restart identity/fingerprint as USB/MQTT without the large write union. */
-const char *ebase_parse_frp_restart(const char *json, size_t length,
-                                   ebase_request_t *out);
-
 typedef struct {
     char *data;
     size_t length, capacity;

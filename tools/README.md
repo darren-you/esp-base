@@ -4,6 +4,8 @@
 
 ## 设备控制与升级
 
+新固件已退役 FRP runtime，USB `config.set` 使用 schema 4。下面的 `frp_ota.py` 和百次／72 小时驱动仅保留为旧链路迁移输入，当前不能用于新 MQTT 固件验收；它们与 reported 消费者须随 Server MQTT 调度完成迁移。
+
 `device_control.py` 复用独占串口、严格 JSON、精确设备／boot 和原 ID 查询。命令为 status、firmware.status、business.status／pause／resume、restart、config.set、ota.start／ota.result。旧 product.* 与联合包选项在打开串口前拒绝，没有 wrapper。
 
 ```bash
@@ -27,7 +29,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 `business_event.py` 从私有普通事件文件生成域隔离 HMAC帧；key 文件须0600、非符号链接，不回显key。`business_event_publish.py` 通过严格 TLS／QoS1／非 retained 仅发布一次，先核对本 boot reported 的下一连续序号，随后按 boot、序号、原始事件摘要和实际 business result 对账。输入只绑定原生业务身份。
 
-完整 event frame 最多4096 B，业务原始字节最多3924 B；输入语义与13字段reported见[设备协议](../docs/design/device-protocol.md)。Broker PUBACK不是设备执行成功；丢失结果不自动重发业务或换序号。
+完整 event frame 最多4096 B，业务原始字节最多3924 B；新固件输入语义与12字段 reported 见[设备协议](../docs/design/device-protocol.md)。Broker PUBACK不是设备执行成功；丢失结果不自动重发业务或换序号。
 
 ## 构建与回归
 
@@ -131,11 +133,11 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 
 统计成本全部留在新候选：TLSF 每 region 12 B、新 heap 出生字段的真实 padding、trace 每 TCB 8 B、SDK 全局 36 B、32 个存活 TaskStatus／名称缓冲、诊断代码和栈，以及任务终态 HWM 扫描的时间。必须按目标实际 ELF／map 和操作测量报告；任何费用都不加回空闲或栈余量。
 
-独立 `ESP_BASE_FLASH_IO` 行保留三类短 claim 的 `completed_claim_count`、`acquire_failed_count`、`release_failed_count`、`max_wait_us`、`max_held_upper_bound_us` 和 `counters_valid`。等待计时从本次入口到成功 CAS 后或失败返回前；占有上界从成功那次 CAS 前到真实 release 后，包含该窗口内的观测与调度成本。只对成功 release 的完成 claim 更新占有最大值，失败释放、负／倒退时钟或32位溢出永久令该类历史无效；计数／过长时长饱和，不回绕、不运行中清空。配置提交仍是单次尝试，BUSY 的时长不能代表跨 control pass 的排队时间；配置类也包含启动 NVS／身份／配置读取。OTA 类包含启动核验、收据及 firmware.status 的短 I/O，FRP 类也包含启动 scratch 恢复，非零计数不能独自证明某 OTA 阶段存在大 authenticated record。
+独立 `ESP_BASE_FLASH_IO` 行保留 OTA／配置两类短 claim 的 `completed_claim_count`、`acquire_failed_count`、`release_failed_count`、`max_wait_us`、`max_held_upper_bound_us` 和 `counters_valid`。等待计时从本次入口到成功 CAS 后或失败返回前；占有上界从成功那次 CAS 前到真实 release 后，包含该窗口内的观测与调度成本。只对成功 release 的完成 claim 更新占有最大值，失败释放、负／倒退时钟或32位溢出永久令该类历史无效；计数／过长时长饱和，不回绕、不运行中清空。配置提交仍是单次尝试，BUSY 的时长不能代表跨 control pass 的排队时间；配置类也包含启动 NVS／身份／配置读取。OTA 类包含启动核验、收据及 firmware.status 的短 I/O；闲置 scratch 不再被访问，非零计数不能独自证明 MQTT 块与业务在同一阶段重叠。
 
-`ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；FRP 联合覆盖仍须真实 record／peer 轨迹，不能仅凭异时 maxima 相加或健康控制记录推定 scratch 峰值。`ESP_BASE_FRP_WORK` 的 work_active／work_waiting、attempts／ready_sessions 来自同一次 SDK 快照，五秒未采到双活跃加备用就不授该覆盖。
+`ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；MQTT 联合覆盖仍须真实块请求、实际写入与 Broker 原始轨迹，不能仅凭异时 maxima 相加或健康控制记录推定同存峰值。FRP 专属工作快照已退役。
 
-以上行均位于容量 END 外，容量 schema2 字节与 BEGIN 截止不变；每个主动重启前及 OTA 失败持久化后、清理原请求前也保留最终 Flash 快照。观测仅使用72 B固定聚合数据、一个平台短临界锁、8 B OTA 交接时刻以及调用栈临时快照；`aggregate_storage_bytes` 仅为聚合数组与锁的 sizeof，不是全部固件开销。`ESP_BASE_FLASH_IO_OUTPUT` 记录本次快照和三行打印的实测窗口，明确不含它自身末行。所有新增代码、格式化、UART锁／线路、栈及调度成本均留在新候选的实际 ELF／资源／时延测量中，不加回门限，也不称聚合 max 覆盖了全部时间区间或未完成 holder。
+以上行均位于容量 END 外，容量 schema2 字节与 BEGIN 截止不变；每个主动重启前及 OTA 失败持久化后、清理原请求前也保留最终 Flash 快照。观测仅使用48 B固定聚合数据、一个平台短临界锁、8 B OTA 交接时刻以及调用栈临时快照；`aggregate_storage_bytes` 仅为聚合数组与锁的 sizeof，不是全部固件开销。`ESP_BASE_FLASH_IO_OUTPUT` 记录本次快照和两行打印的实测窗口，明确不含它自身末行。所有新增代码、格式化、UART锁／线路、栈及调度成本均留在新候选的实际 ELF／资源／时延测量中，不加回门限，也不称聚合 max 覆盖了全部时间区间或未完成 holder。
 
 ```bash
 IDF_PATH=/absolute/managed-sdk python3 tools/test_managed_sdk.py
@@ -218,9 +220,7 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 ## 官方 FRPS 宿主互操作
 
-[frps_ota_scenario.py](frps_ota_scenario.py) 是 macOS／Linux 主机消费者，与 `frp_ota.py` 同目录导入；[frps-ota-interop](../firmware/tests/frps-ota-interop/) 是 C／Go 主机联调夹具的职责目录，保留各语言文件名；构建器只读取该最终路径。构建器收据分别记录夹具清单和该主机场景的精确路径、摘要。
-
-[run_frps_ota_interop_test.sh](../firmware/tests/run_frps_ota_interop_test.sh) 在本机回环启动 catalog 精确版本的官方 FRPS，链接冻结 efrp／eota 与 Base 实际 listener、handler、owner 和 V4 收据。双目标完整 signed 输入、成功／写入失败／NVS不确定六场景、真实流预算及替身范围见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md#官方-frps-与原生-ota-宿主联调检查点)。它不安装生产 FRPS，不访问设备；POSIX／RAM Flash／SDK替身不能授予公网、实板或bootloader资格。
+FRPS 主机联调的 Shell／Python 构建器和 C／Go 夹具已随固件 FRP runtime 退役。历史双目标 signed 输入、成功／写入失败／NVS 不确定六场景及替身范围仍见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md#官方-frps-与原生-ota-宿主联调检查点)，不授予 MQTT OTA 新链路资格。
 
 ## 百次与连续72小时有限驱动
 
