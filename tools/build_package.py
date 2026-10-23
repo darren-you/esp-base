@@ -244,8 +244,9 @@ def run_inputs(value):
         raise ValueError("独立打包原始请求与同次 Core 收据不同")
     validate_run_inputs(snapshot, manifest_raw, portable_input(value), context)
     command = snapshot["commands"][0]
+    # venv 保留入口路径，摘要核对解析后的普通可执行文件，与 Core 采集一致。
     interpreter = Path(sys.executable).absolute()
-    if command["executable"] != str(interpreter) or command["executable_sha256"] != fact(interpreter)["sha256"]:
+    if command["executable"] != str(interpreter) or command["executable_sha256"] != fact(interpreter.resolve(strict=True))["sha256"]:
         raise ValueError("打包解释器已经偏离 Core 采集的工具")
     return {"package-inputs.json": regular(directory / "package-inputs.json"),
             "package-manifest.json": manifest_raw}

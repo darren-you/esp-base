@@ -3,8 +3,10 @@
 from pathlib import Path
 import copy
 import json
+import os
 import tempfile
 import unittest
+from unittest import mock
 import subprocess
 import sys
 import zipfile
@@ -13,7 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from build_package import (config_values, decode_json, digest, portable_input, public_key, verify_package,
-                           verify_signed, write_once, core_encoded, encoded, validate_run_inputs)
+                           verify_signed, write_once, core_encoded, encoded, validate_run_inputs, run_inputs)
 
 
 class BuildPackageTest(unittest.TestCase):
@@ -143,6 +145,34 @@ class BuildPackageTest(unittest.TestCase):
         context["profile_snapshot_id"] = digest(core_encoded(snapshot))
         with self.assertRaisesRegex(ValueError, "工具输出"):
             validate_run_inputs(snapshot, manifest, inputs, context)
+
+    def test_run_inputs_keeps_venv_entry_and_checks_resolved_executable_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "python-real"
+            binary.write_bytes(b"original executable")
+            entry = root / "python3"
+            entry.symlink_to(binary)
+            snapshot, manifest, inputs, context = self.run_fixture()
+            snapshot["commands"][0].update(executable=str(entry),
+                                            executable_sha256=digest(binary.read_bytes()))
+            context["profile_snapshot_id"] = digest(core_encoded(snapshot))
+            request = {"schema_version": 1, "kind": "standalone-package-run",
+                       "context": context, "manifest": json.loads(manifest)}
+            for name, value in (("package-run.json", request),
+                                ("client-version-result.json", {"context": context}),
+                                ("package-inputs.json", snapshot)):
+                (root / name).write_bytes(core_encoded(value))
+            environment = {"FAST_DEPLOY_CLIENT_VERSION_SNAPSHOT_FILE": str(root / "version.json"),
+                           "FAST_DEPLOY_PROFILE_SNAPSHOT_ID": context["profile_snapshot_id"]}
+            with mock.patch.dict(os.environ, environment), mock.patch("sys.executable", str(entry)):
+                self.assertEqual(run_inputs(inputs)["package-inputs.json"], core_encoded(snapshot))
+                # 同一二进制的其他入口不能冒充原 venv。
+                with mock.patch("sys.executable", str(binary)), self.assertRaisesRegex(ValueError, "解释器"):
+                    run_inputs(inputs)
+                binary.write_bytes(b"changed executable")
+                with self.assertRaisesRegex(ValueError, "解释器"):
+                    run_inputs(inputs)
 
     def test_manifest_must_bind_real_product_entry_and_architecture(self):
         snapshot, original, inputs, context = self.run_fixture()
