@@ -1,6 +1,6 @@
 # ESP Base 固件
 
-生产主应用为 `apps/esp_base/main`，原生消息计数直接由控制 owner 执行，复用现有认证 MQTT 消息输入。固件 OTA 独立于业务包，使用 V4 收据、精确签名固件身份、唯一升级 claim、短 Flash I/O 仲裁和本地 30 秒启动确认。设备源码使用 MQTT 认证分块输入与本机 USB 命令触发的 HTTPS URL OTA，共用校验、备用槽写入和恢复链；FRP runtime、listener、scratch 启动访问已经退役。新依赖已完成双目标解析和测试键签名构建；Server/Web、生产签名构建与实板资格仍分别验收。
+生产主应用为 `apps/esp_base/main`，原生消息计数直接由控制 owner 执行，复用现有认证 MQTT 消息输入。固件 OTA 独立于业务包，使用 V4 收据、精确签名固件身份、唯一升级 claim、短 Flash I/O 仲裁和本地 30 秒启动确认。设备源码使用 MQTT 认证分块输入与本机 USB 命令触发的 HTTPS URL OTA，共用校验、备用槽写入和恢复链。新依赖已完成双目标解析和测试键签名构建；Server/Web、生产签名构建与实板资格仍分别验收。
 
 ## 源码与目标
 
@@ -15,7 +15,7 @@ ESP32 UART0 使用锁定 SDK 的 RX 驱动与 IRAM 中断，接收环请求 9,21
 
 TLS 使用 SDK 原生固定 RX／TX，内容上限保持 16,384／4,096 B。动态 adapter 按首 record 分配，而同一次握手步骤可以在 core 内重组后继 record；其分配长度与 core 的固定写入上界不能等同。固定分配让完整输入区贯穿握手及后续读取，CA／主机名、可信时间、加密套件、超时及镜像验签合同保持。每连接 RX／TX 的真实普通申请分别为 16,717／4,429 B，不能把内容上限当申请字节数。C3 使用 `INTERNAL|8BIT`；ESP32 使用锁定 SDK 的 `MBEDTLS_IRAM_8BIT_MEM_ALLOC`：达到 RX 或 TX 内容阈值的大块申请优先 `INTERNAL|IRAM_8BIT`，失败时回落 `INTERNAL|8BIT`，较小申请仍使用 DRAM。该规则也可能覆盖达到阈值的其他 mbedTLS 对象，不能把它缩写为仅搬移 TLS buffer。SDK 的非对齐访问异常处理有时间成本，必须按实际握手期限与两个内存能力域重新验收。MQTT 与 URL OTA 两条 TLS 的缓冲请求合计 42,292 B；MQTT 分块 OTA 复用现有 MQTT 连接，连接、握手、证书和 crypto 对象另计。该成本随新配置重新构建、签名及实板容量验证，不能继承动态缓冲候选的资源结果，也不加回观测成本。 ESP32 idle 栈设为 2,048 B；此前 1,536 B 配置的实板最低余量 972 B 未通过 1,024 B 门。增加配置值不证明新候选栈门已通过，仍读取真实任务实例 HWM。
 
-Base 固定 Flash 观测保留每 boot 的 OTA／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界。FRP 专属工作快照和 Flash 消费者已移除，其余观测继续沿用既有报告与主动重启点，不新增任务或动态分配。
+Base 固定 Flash 观测保留每 boot 的 OTA／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界。观测继续沿用既有报告与主动重启点，不新增任务或动态分配。
 
 [C3 分区](partitions/c3-partition-table.csv)和 [ESP32 分区](partitions/esp32-partition-table.csv)均为双 `0x1e0000` app，移除业务包区。scratch、Base NVS 与 ESP32 旧 AT 区保持各自真实定位；新布局必须通过一次性有线装配迁入。旧 V3／损坏收据不能当作空状态，普通 app OTA 不能迁分区表。
 
@@ -49,7 +49,7 @@ ESP32 自动签名构建必须使用仓外绝对路径 P-256 键，启用 signed
 
 外部签名准备使用官方 `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n`，保留 ESP32 的 ECDSA 签名启动与更新、C3 的 RSA 签名更新以及双目标 rollback；两目标硬件 Secure Boot 均关闭。ESP32同时要求仓外绝对路径、非链接普通64B的 `CONFIG_SECURE_BOOT_VERIFICATION_KEY`，直接消费本轮已核对的公开P-256验证字节；不能启用offline probe代替该装配。此路径不读取私有签名键，只产unsigned app／partition输入，须再由受控签名事实源独立签名、验签和核对完整signed身份后才能交付或发送OTA。自动签名 `y` 的原私有键合同保持，未签输入不具有消费资格。
 
-精确公开依赖来自 [唯一组件清单](components/device_protocol/idf_component.yml)与 [C3](dependencies.lock)／[ESP32](dependencies.lock.esp32)锁。host 使用这些已解析组件，不从相邻源仓运行时 import。构建图只装配 MQTT／OTA 与 cJSON；移除 FRP 后仍须由官方 Component Manager 重新生成两目标锁，不能以手工删除锁条目代替解析。
+精确公开依赖来自 [唯一组件清单](components/device_protocol/idf_component.yml)与 [C3](dependencies.lock)／[ESP32](dependencies.lock.esp32)锁。host 使用这些已解析组件，不从相邻源仓运行时 import。构建图只装配 MQTT／OTA 与 cJSON；依赖变化须由官方 Component Manager 重新生成两目标锁，不能以手工删除锁条目代替解析。
 
 普通 `esp_base` 产品在本目录唯一 CMake 入口按 SDK `http_parser.h` 公开的编译合同设置 `HTTP_MAX_HEADER_SIZE=8192`，限制 HTTPS URL OTA 的响应头计数（包括状态行），不修改 SDK 源码或派生 recipe。parser 可能因接收分片的计数提前拒绝，所以 8KiB 是上界，不保证任意 8KiB wire 头都可接受。当前正式配置关闭响应头保存与 Content-Range 解析；双目标冻结须核对这两项及实际 `compile_commands.json` 中 parser 的唯一宏。URL 语法解析不使用该头计数；MQTT 分块固件正文不走此 HTTP client。
 

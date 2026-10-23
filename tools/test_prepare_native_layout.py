@@ -161,6 +161,21 @@ class NativeMigrationTests(unittest.TestCase):
         return bytes(header) + b"".join(fields) + bytes((1,)) + bytes(31) + \
                b"".join(frp_fields) + bytes((2,)) + bytes(31)
 
+    def test_historical_config_validation_is_readonly_and_rejects_corrupt_extension(self):
+        original = self.config()
+        self.assertEqual(migration.validate_v3_config(original), 42)
+        self.assertEqual(original, self.config())
+        cases = [original[:-32] + bytes(32), original + b"\0", original[:-1],
+                 original.replace(b"frp.example.test", b"bad/host.example")]
+        for offset in (26, 28, 30):
+            bad = bytearray(original)
+            bad[offset:offset + 2] = bytes(2)
+            cases.append(bytes(bad))
+        for bad in cases:
+            with self.subTest(offset=next((i for i, pair in enumerate(zip(original, bad)) if pair[0] != pair[1]), len(bad))):
+                with self.assertRaises(migration.MigrationError):
+                    migration.validate_v3_config(bad)
+
     def product_flash(self, source_layout, *, receipt_state=3, ecs_phase=0, ledger_pending=False):
         layout = migration.LAYOUTS[source_layout]
         target = layout["target"]

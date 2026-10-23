@@ -4,8 +4,6 @@
 
 ## 设备控制与升级
 
-新固件已退役 FRP runtime，USB `config.set` 使用 schema 4。下面的 `frp_ota.py` 和百次／72 小时驱动仅保留为旧链路迁移输入，当前不能用于新 MQTT 固件验收；它们与 reported 消费者须随 Server MQTT 调度完成迁移。
-
 `device_control.py` 复用独占串口、严格 JSON、精确设备／boot 和原 ID 查询。命令为 status、firmware.status、business.status／pause／resume、restart、config.set、ota.start／ota.result。旧 product.* 与联合包选项在打开串口前拒绝，没有 wrapper。
 
 ```bash
@@ -17,13 +15,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <本�
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <固定原UUID> ota.result
 ```
 
-有线 OTA 是下发 URL 后由设备 HTTPS 拉取完整 signed bin；软件扫描本地文件得到摘要／长度，提交前核对同设备、当前 boot 与 OTA 可用状态。当前 USB CLI 提交后返回 running／unknown；持久结果须另按原 operation_id 查询，当前镜像身份须独立 `firmware.status` 核对，不能把这些分开的调用当成已自动完成新 boot 成功对账。写只提交一次，超时／unknown不重发、不另建操作。ESP Tool Mac App 的当前职责是本机有线管理，使用这些设备命令；其内置 FRP／frpc 与远程 Bridge 正按最新计划硬切删除，新本机调用链另行验收，不再作为正式使用路线。官方有线刷写／恢复由对应宿主能力执行，不能与 app OTA 混同。
-
-`frp_ota.py` 经明确设备 FRP 地址执行认证控制、固件 PUT 和原 ID 查询；accepted start 后在原 10 秒意图窗口内核对同 boot 的原收据，running 才允许一次 PUT，准备中的查询不重新提交写入。固件正文不走设备直连 HTTPS。持久成功还须来自不同于提交时的新 boot，随后独立 `firmware.status` 必须在同一新 boot 精确匹配完整摘要、尺寸、target 与真实 OTA 槽；原 ID 查询和身份核对共用原终态绝对期限。迟到、错身份或未知结果保留原 ID，不重发。HTTP／HMAC／期限和命令示例见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md)。独立 FRP 不要求 Mac／USB 在线；宿主 loopback 测试不证明已经经过正式 FRPS或实板。
-
-宿主控制命令的 DNS、TCP／TLS 建连、发送和完整认证响应共用原始 5 秒绝对期限；调用方给出的更早期限继续生效，不在 TLS 后重新计时或压缩为 2 秒。设备 loopback 控制连接的 2 秒期限及正文上界保持原合同；该设备端期限不等于公网往返预算。`ota.start` 响应丢失或超过宿主原期限时保留原 operation_id 为 unknown，不发送 PUT、不重发 start，后续只查原 ID。
-
-`--endpoint` 可以包含已登记的规范设备路径前缀，例如 `https://example.invalid/devices/esp-base-esp32c3`；客户端在同一前缀下追加 `/api/v1/commands/*` 和 `/api/v1/ota-images/<operation_id>`，上传后的原 ID 查询与独立镜像身份核对仍使用这个前缀。前缀各段只接受小写字母、数字和连字符，不接受尾斜杠、空段、点段、编码路径、query、fragment 或空白字符，也不会发现其他设备路线。根路径仍用于明确的独立入口及隔离宿主互操作；HTTPS 保持系统 CA 和原主机名验证。`native_lifecycle_run.py` 复用同一客户端，因此百次／72 小时驱动消费相同显式入口。
+有线 OTA 是下发 URL 后由设备 HTTPS 拉取完整 signed bin；软件扫描本地文件得到摘要／长度，提交前核对同设备、当前 boot 与 OTA 可用状态。当前 USB CLI 提交后返回 running／unknown；持久结果须另按原 operation_id 查询，当前镜像身份须独立 `firmware.status` 核对，不能把这些分开的调用当成已自动完成新 boot 成功对账。写只提交一次，超时／unknown不重发、不另建操作。ESP Tool Mac App 的当前职责是本机有线管理，使用这些设备命令，本机调用链独立验收。官方有线刷写／恢复由对应宿主能力执行，不能与 app OTA 混同。
 
 ## 原生 MQTT 业务事件
 
@@ -88,7 +80,6 @@ python3 -m unittest discover -s tools -p 'test_build_identity.py' -v
 python3 -m unittest discover -s tools -p 'test_build_package.py' -v
 python3 -m unittest discover -s tools -p 'test_business_event*.py' -v
 python3 -m unittest discover -s tools -p 'test_device_control.py' -v
-python3 -m unittest discover -s tools -p 'test_frp_ota.py' -v
 python3 -m unittest discover -s tools -p 'test_*partition_table.py' -v
 ```
 
@@ -135,7 +126,7 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 
 独立 `ESP_BASE_FLASH_IO` 行保留 OTA／配置两类短 claim 的 `completed_claim_count`、`acquire_failed_count`、`release_failed_count`、`max_wait_us`、`max_held_upper_bound_us` 和 `counters_valid`。等待计时从本次入口到成功 CAS 后或失败返回前；占有上界从成功那次 CAS 前到真实 release 后，包含该窗口内的观测与调度成本。只对成功 release 的完成 claim 更新占有最大值，失败释放、负／倒退时钟或32位溢出永久令该类历史无效；计数／过长时长饱和，不回绕、不运行中清空。配置提交仍是单次尝试，BUSY 的时长不能代表跨 control pass 的排队时间；配置类也包含启动 NVS／身份／配置读取。OTA 类包含启动核验、收据及 firmware.status 的短 I/O；闲置 scratch 不再被访问，非零计数不能独自证明 MQTT 块与业务在同一阶段重叠。
 
-`ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；MQTT 联合覆盖仍须真实块请求、实际写入与 Broker 原始轨迹，不能仅凭异时 maxima 相加或健康控制记录推定同存峰值。FRP 专属工作快照已退役。
+`ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；MQTT 联合覆盖仍须真实块请求、实际写入与 Broker 原始轨迹，不能仅凭异时 maxima 相加或健康控制记录推定同存峰值。
 
 以上行均位于容量 END 外，容量 schema2 字节与 BEGIN 截止不变；每个主动重启前及 OTA 失败持久化后、清理原请求前也保留最终 Flash 快照。观测仅使用48 B固定聚合数据、一个平台短临界锁、8 B OTA 交接时刻以及调用栈临时快照；`aggregate_storage_bytes` 仅为聚合数组与锁的 sizeof，不是全部固件开销。`ESP_BASE_FLASH_IO_OUTPUT` 记录本次快照和两行打印的实测窗口，明确不含它自身末行。所有新增代码、格式化、UART锁／线路、栈及调度成本均留在新候选的实际 ELF／资源／时延测量中，不加回门限，也不称聚合 max 覆盖了全部时间区间或未完成 holder。
 
@@ -192,7 +183,7 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 结果保存在 `provided_request_fit`，全局 `next_maximum_legal_request_verified`、`r5_qualified`、`r6_qualified` 始终为 false；`next_request_unclosed_reasons` 明示全合法消费者集合、动态真实输入、并发／realloc 生命周期和固件配置源码消费绑定仍未封闭。CLI 退出码仍只反映输入有效性与三个数值门；调用方须读取各请求 status，不得将退出码 0、`all_provided_requests_fit` 或一份 sidecar 当作全局资格。
 
-本产品 HTTPS OTA 头申请按 `firmware/CMakeLists.txt` 的 `HTTP_MAX_HEADER_SIZE=8192`、受管 OTA 的 RX=1024B／SDK 默认 TX=512B，以及本次正式 `SAVE_RESPONSE_HEADERS=n`／`ENABLE_GET_CONTENT_RANGE=n` 核算。单个合法响应的 key/value 或累计 Location／认证头申请保守上界为8193B（含 NUL）；拒绝路径的 CR 回调可能先于本接收片的最终计数检查，且完成首个头后仍消费本片剩余数据，故具体请求证据采用更保守的9217B，普通4B对齐 search-size为9220B。HTTP 头的 libc `calloc/realloc` 经 `heap_caps_*_default`，本轮双目标关闭 SPIRAM 后的完整掩码为 `DEFAULT|INTERNAL=6144`；MQTT official RX／TX 与 outbox wire 则直接使用 `heap_caps_*` 和 `MQTT_BUFFER_MEMORY/MQTT_OUTBOX_MEMORY=DEFAULT=4096`，须按真实调用区分。ESP32 的协议、emqtt 与 FRP 自有工作对象明确使用 `INTERNAL|IRAM_8BIT=10240`，也不能套用 libc caps。不能将旧80KiB头申请或新上界移给未采用此产品编译宏的旧固件。
+本产品 HTTPS OTA 头申请按 `firmware/CMakeLists.txt` 的 `HTTP_MAX_HEADER_SIZE=8192`、受管 OTA 的 RX=1024B／SDK 默认 TX=512B，以及本次正式 `SAVE_RESPONSE_HEADERS=n`／`ENABLE_GET_CONTENT_RANGE=n` 核算。单个合法响应的 key/value 或累计 Location／认证头申请保守上界为8193B（含 NUL）；拒绝路径的 CR 回调可能先于本接收片的最终计数检查，且完成首个头后仍消费本片剩余数据，故具体请求证据采用更保守的9217B，普通4B对齐 search-size为9220B。HTTP 头的 libc `calloc/realloc` 经 `heap_caps_*_default`，本轮双目标关闭 SPIRAM 后的完整掩码为 `DEFAULT|INTERNAL=6144`；MQTT official RX／TX 与 outbox wire 则直接使用 `heap_caps_*` 和 `MQTT_BUFFER_MEMORY/MQTT_OUTBOX_MEMORY=DEFAULT=4096`，须按真实调用区分。ESP32 的协议与 emqtt 自有工作对象明确使用 `INTERNAL|IRAM_8BIT=10240`，也不能套用 libc caps。不能将旧80KiB头申请或新上界移给未采用此产品编译宏的旧固件。
 
 令 `B=8192+1024=9216`：当前 key/value 与累计 Location／认证头合计请求最多 `2B+4=18436B`；强制移动 realloc 时保留旧块，字符串合计保守上界 `3B+5=27653B`。含 RX、TX、首个完成头所在接收片的缓存正文及缓存移动过程，整条头/缓存链的请求字节保守上界分别为20996B（稳定同存）与30213B（移动峰值）。这些是申请字节上界，不包含 client/transport/URL、TLS、各块分配器开销或其他任务；完整 R5 仍需实际并存峰值、所有消费者与配置绑定，单次 fit 不代替它。
 
@@ -204,7 +195,7 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 旧 AT 空 Wi-Fi 判断先核对 blob 类型与旧 SDK 的 36／65 B 字段长度，再只核对声明 payload 是否全 FF；NVS 槽尾 padding 不属于凭据，但仍随五页归档原样保留。有效 payload 的非 FF 字节、类型／长度不符或 CRC 损坏均阻断。
 
-原生候选／公钥／分区输入、旧C3双备份和现役AT双备份的读取先以非阻塞方式打开，再核对普通文件及原权限／尺寸规则；无写入方的FIFO会明确拒绝，不会停在打开阶段。完整受影响回归35项及原失败见[输入拒绝补审](../docs/operations/native_software_checkpoint.md#一次性迁入输入拒绝补审)；本工具仍只准备离线输入，不能代替本轮实体身份、正式信任、恢复基线和唯一租约。
+原生候选／公钥／分区输入、旧C3双备份和现役AT双备份的读取先以非阻塞方式打开，再核对普通文件及原权限／尺寸规则；无写入方的FIFO会明确拒绝，不会停在打开阶段。软件入口和原始证据追溯见[验证说明](../docs/operations/native_software_checkpoint.md#固定输入与证据)；本工具仍只准备离线输入，不能代替本轮实体身份、正式信任、恢复基线和唯一租约。
 
 `prepare_native_layout.py --source-layout c3_mqtt_factory` 用于独立 MQTT 实验固件首次迁入原生 Base：仅接受 C3 的 `nvs@0x9000/0x6000`、`phy_init@0xf000/0x1000`、`factory@0x10000/0x100000` 三分区，核对完整未签名 `esp_mqtt_broker_client` 镜像、checksum／摘要和擦除态槽尾。NVS 与 `0x3e0000` 后的旧 Base 持久范围必须全为空；有数据则阻断，不能据此清空旧身份或配置。来源没有 Base UUID，只记录本轮独立读取的规范 `--source-efuse-mac`，实际物理绑定须另核对双份恢复基线和写前 ROM 身份。原 factory app 占用的新 otadata／PHY／coredump 区在候选中重新装配，原始完整字节先归档并读回。新 UUID 由首次启动的设备生成，Wi-Fi 经当前 USB 配置链设置；该离线工具不连接或写入设备，也不授予正式交付资格。
 
@@ -216,29 +207,4 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 旧 `prepare_capacity_observer.py` 及 `LAB_ONLY` 5 秒观察仅解释已冻结历史副本；当前正式源码拒绝 `ESP_BASE_CAPACITY_OBSERVER_LAB`，不要从活动 canonical 再生成该副本。`capacity_observation.py` 可离线解析旧日志，始终不授完整峰值或生产资格。旧 pre-deletion／存活采样、64 条退出缓存、日志丢失及异常重启的边界仍保留，不能把旧数值移给正式统计新候选。原件不改写，也不跨日志或 boot 拼接。
 
-`mqtt_lab_check.py`／`mqtt_resource_report.py` 继续用于独立MQTT实验的严格TLS、往返、计数／栈和回收。实验输入必须位于仓外，不混入普通Base，独立实验不替代本轮FRP／MQTT／原生业务／OTA同存验收。
-
-## 官方 FRPS 宿主互操作
-
-FRPS 主机联调的 Shell／Python 构建器和 C／Go 夹具已随固件 FRP runtime 退役。历史双目标 signed 输入、成功／写入失败／NVS 不确定六场景及替身范围仍见[FRP 软件检查点](../docs/operations/frp_ota_software_checkpoint.md#官方-frps-与原生-ota-宿主联调检查点)，不授予 MQTT OTA 新链路资格。
-
-## 百次与连续72小时有限驱动
-
-`native_lifecycle_run.py --help` 列出完整参数。`--mode cycles-100` 固定100次完整周期，`--mode soak-72h` 固定本轮连续259200秒，默认每小时OTA、每5秒业务。运行前由既有流程完成实体UUID／芯片／4MiB／安全状态、本轮恢复基线、唯一租约、正式信任和R5验收；本工具不管理备份／租约，也不读取一份摘要就授予R5通过。
-
-宿主MQTT依赖复用[mqtt-lab-requirements.txt](mqtt-lab-requirements.txt)的固定Paho 2.1.0，安装到仓外私有环境；实际运行和验证须使用这个环境的Python：
-
-```bash
-python3 -m venv /absolute/private/native-run-venv
-chmod 700 /absolute/private/native-run-venv
-/absolute/private/native-run-venv/bin/python -m pip install -r tools/mqtt-lab-requirements.txt
-/absolute/private/native-run-venv/bin/python tools/native_lifecycle_run.py --help
-```
-
-两份 `--image-a`／`--image-c` 必须是同一已评审原生实现、同目标、不同完整signed摘要且均被外部R5覆盖的冻结镜像，分别显式提供 `--image-*-sha256`、`--image-*-size-bytes`、`--image-*-target`。同镜像OTA由实际收据拒绝，所以不能以一份bin运行百次，也不能把FRPS测试的旧架构A当成本轮已验pair。启动的 `--device-id`、`--initial-boot-id` 和 `--endpoint` 精确绑定本轮设备；当前运行身份不在pair、提交前boot改变或本地文件变化都会停止写入。
-
-`--r5-evidence-file` 为0600原件，必须给出预先核对的 `--r5-evidence-sha256`；`--capacity-log-file` 为0600活动原始日志，绑定本轮起始前缀、inode及结束追加范围，不跨轮拼接。MQTT使用既有 `--credentials-file`／`--business-management-key-file`／`--ca-file` 与严格TLS、QoS1、非retained；FRP key只从 `--frp-management-key-env` 指定的现有环境变量读取，不打印凭据。输出 `--output-directory` 必须是新目录，0700／0600 journal逐条fsync，保存单次run、原operation、精确身份、时刻与中断原因。
-
-每次周期包含最大3924 B认证原生事件、后台上传期间业务、一次FRP固件PUT、新boot原ID成功与完整镜像对账、再次业务及暂停／恢复。PUBACK不是业务成功；必须收到本boot／序号／摘要对应的实际reported结果。上传回调只唤醒有限业务线程，记录业务待决窗口与host上传progress区间的相交，不能据此证明业务执行时刻或设备满合法峰值。丢失结果、unknown、错误身份或非预期重启均保留原ID并停止，不重发写、不换ID。区分保留ID、命令已尝试与设备实际确认准入；尝试边界不证明字节已发出。已尝试操作异常后尽力一次有限原ID只读查询，保留实际响应和独立身份裁决，不覆盖主异常或改判成功。
-
-72小时普通步骤超过10秒宿主进展空档即中断，OTA有界等待单独计时；每秒检查等待并对照墙钟／单调钟增量，任一回退或差值超过固定1秒容限中断，系统睡眠不能绕过Mac单调钟不推进的事实。并发观察在同一现有锁内采样和更新进展／OTA窗口，避免线程调度把正常递增时钟误判为回退；日志与异常处理在锁外。最终R5／容量原件摘要与已绑定前缀核对后，再执行同一宿主观察；正常摘要终点直接使用该次已核验采样，异常保留最近实际记录的原始采样，`observation_end_scope=last_recorded_host_clock_sample`。采样前失败不会伪称取得新时刻，真实回退的负时长保持，已有主中断原因不被收尾异常覆盖。后续摘要／Journal写入不计入观察时段，也不宣称检测了这段时间。OTA窗口仍只是有界等待，允许的等待时间不证明设备瞬时连续状态。两种模式始终输出 `qualified=false`／`r6_passed=false`，只记录是否完成本轮有限观察；全任务回收、连续块峰值、公网脱离Mac、断电和Flash寿命须由外部实板原件共同裁决，短轮次不能相加成为72小时。依赖／凭据／CA等Journal创建前的预检错误只返回CLI失败；Journal建立后的中断才保存run摘要。
+`mqtt_lab_check.py`／`mqtt_resource_report.py` 继续用于独立MQTT实验的严格TLS、往返、计数／栈和回收。实验输入必须位于仓外，不混入普通Base，独立实验不替代本轮MQTT／原生业务／OTA同存验收。

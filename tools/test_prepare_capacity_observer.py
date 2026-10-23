@@ -299,7 +299,7 @@ static void *producer(void *argument) {
     const unsigned index = *(const unsigned *)argument;
     for (unsigned round = 0; round < 80; ++round) {
         barrier();
-        capture_deleted(index == 0 ? "frp_short" : "mqtt_short", 10000 + index * 1000 + round, 1400);
+        capture_deleted(index == 0 ? "ota_short" : "mqtt_short", 10000 + index * 1000 + round, 1400);
         barrier(); barrier();
     }
     return NULL;
@@ -336,7 +336,7 @@ int main(int argc, char **argv) {
     }
     capture_deleted("startup_short", 11, 1400); puts("BEFORE_CONTROL");
     esp_base_capacity_observer_poll(1000);
-    capture_deleted("frp_short", 12, 1500);
+    capture_deleted("ota_short", 12, 1500);
     esp_base_capacity_observer_poll(3000); assert(enumeration_calls == 1);
     esp_base_capacity_observer_poll(6000); assert(enumeration_calls == 2);
     expected = 33; esp_base_capacity_observer_poll(11000); assert(enumeration_calls == 2);
@@ -364,7 +364,7 @@ int main(int argc, char **argv) {
                 self.assertLess(stdout.index("BEFORE_CONTROL"), stdout.index("phase=task_predelete"))
                 self.assertEqual(stdout.count("phase=task_predelete"), 2)
                 self.assertIn("task=startup_short task_number=11", stdout)
-                self.assertIn("task=frp_short task_number=12", stdout)
+                self.assertIn("task=ota_short task_number=12", stdout)
                 log = self.directory / (target + "_host_fixture.log")
                 log.write_text(stdout)
                 report = capacity_observation.observe([log], target)

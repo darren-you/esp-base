@@ -2,9 +2,9 @@
 
 Base 自有的固件 OTA 约束、持久操作收据及只读签名固件集合观察。两个 target 都固定项目 `esp_base`，双 `0x1e0000` app 槽分别位于 `0x20000`、`0x200000`。C3 使用 `esp32c3/esp_base` 与 RSA v2；ESP32 使用 `esp32/esp_base` 与 ECDSA v1。请求不能修改芯片、签名方案、分区几何或期限。业务是原生固件代码，OTA 不再登记或下载动态业务包。
 
-`device_protocol` 的 USB/MQTT `ota.start` 提供 HTTPS URL；设备 FRP 公网入口登记同一固件意图，再通过已认证的上传连接流式收取完整 signed bin。`inbound_stream` 只是内存来源标志，不属于 wire 字段。两条入口共用唯一升级事务 owner，写前完成静态请求校验、已确认固件集合复核及持久收据 commit/逐字节读回。收到相同操作 ID 不重新下载或重新创建任务；来源等待、下载、选槽和启动确认期间，另一入口不能获得升级事务。
+`device_protocol` 的 USB `ota.start` 提供 HTTPS URL；MQTT `ota.start` 只登记固件身份，再由设备按需请求已认证的数据块，流式收取完整 signed bin。`inbound_stream` 只是内存来源标志，不属于 wire 字段。两条入口共用唯一升级事务 owner，写前完成静态请求校验、已确认固件集合复核及持久收据 commit/逐字节读回。收到相同操作 ID 不重新下载或重新创建任务；来源等待、下载、选槽和启动确认期间，另一入口不能获得升级事务。
 
-HTTPS 拉取使用产品固定的 8KiB parser 响应头计数预算和 1024B RX；计数包括状态行，分片可能提前触发 `HPE_HEADER_OVERFLOW`。SDK fetch 不直接传播 parser errno，普通单响应超限或追加失败会沿既有读取失败／原下载期限进入清理；不能把 parser errno 当作已经持久提交的 OTA 失败。关闭 HTTP client 会释放未完成的 key/value、Location、认证头和缓存正文，再销毁自有 transport。200、完整 signed 长度、非 chunked、严格 TLS 与签名校验仍逐项执行；此预算不限制 FRP 上传正文，也不改变 ACK、下载或启动确认期限。具体申请及回归入口见[容量工具说明](../../../tools/README.md#正式容量统计)。
+HTTPS 拉取使用产品固定的 8KiB parser 响应头计数预算和 1024B RX；计数包括状态行，分片可能提前触发 `HPE_HEADER_OVERFLOW`。SDK fetch 不直接传播 parser errno，普通单响应超限或追加失败会沿既有读取失败／原下载期限进入清理；不能把 parser errno 当作已经持久提交的 OTA 失败。关闭 HTTP client 会释放未完成的 key/value、Location、认证头和缓存正文，再销毁自有 transport。200、完整 signed 长度、非 chunked、严格 TLS 与签名校验仍逐项执行；此预算不限制 MQTT 固件块，也不改变 ACK、下载或启动确认期限。具体申请及回归入口见[容量工具说明](../../../tools/README.md#正式容量统计)。
 
 ## V4 收据与恢复
 
@@ -14,19 +14,19 @@ HTTPS 拉取使用产品固定的 8KiB parser 响应头计数预算和 1024B RX�
 
 新操作登记遇到前次 `FAILED` 收据时，在同一仍有效的事务 claim 内复用本次完整固件集合观察的来源验签摘要，并核对前次来源物理槽与当前 selector，避免在 ACK 前对相同来源重复完整验签。此结果不跨请求缓存；独立 `ota.result` 查询仍重新验证来源。来源不符、观察失败、槽变化或 claim 失效均不得覆盖前次收据。
 
-应用写入前先按原收据退役确切 inactive 槽。失败后只有未改 app，或完成原意图限定的 inactive 物理清理、来源 A 验签/摘要和选槽核对，才能持久写 `FAILED`；读回不确定仍为 unknown。FRP 先完成来源验证与 inactive 退役，再开放上传；因此等待连接时已完成原意图授权的退役，未连接不等于未改 inactive。完整 prepare 后取消也在 select 前被复核，清理候选 C 后保留原 ID 失败终态。已选择 pending C 的进度不能被当作失败清理目标。
+应用写入前先按原收据退役确切 inactive 槽。失败后只有未改 app，或完成原意图限定的 inactive 物理清理、来源 A 验签/摘要和选槽核对，才能持久写 `FAILED`；读回不确定仍为 unknown。流式来源先完成来源验证与 inactive 退役，再接受镜像字节；等待数据时可能已完成原意图授权的退役，没有收到镜像不等于未改 inactive。完整 prepare 后取消也在 select 前被复核，清理候选 C 后保留原 ID 失败终态。已选择 pending C 的进度不能被当作失败清理目标。
 
-上传 worker 完成时只返回准备进度 `running/202` 或尚未形成持久结果的 `unknown/200`，`result` 为 null。失败提交和精确读回由控制 owner 随后执行，提交证实后才形成 `failed`；上传响应不能提前声称终态。宿主收到上传 unknown、断链或任何未经原 ID 收据证实的上传状态时，继续查询同一 `operation_id`，不重发上传或另起操作。
+MQTT 请求中的 written_offset 只表示实际 Flash 写进度。END 和完整验签也不直接形成持久成功；失败提交与精确读回由控制 owner 执行，成功另需新 boot 确认。宿主遇到 unknown、断链或未证实终态时只查询原 operation_id，不重发 start 或另起操作。
 
-C 的启动确认独立于 Broker、FRPS 和业务消息：本地 NVS、身份、安全状态、配置和控制任务自检健康满 30 秒，并经过窗口边界后的下一次本地检查，再调用 IDF 确认和读回同槽 `VALID`。需复核 C 完整签名身份与原收据、A 回滚身份及集合稳定性；成功收据 commit/读回完成前保持升级门禁。A 侧中断恢复先核对来源、原 ID 与精确 inactive 槽，完成清理后写失败终态。缺收据只允许首次有线装配产生的已确认 `VALID` 签名基座；无原收据的 pending 固件被拒绝。
+C 的启动确认独立于 Broker 和业务消息：本地 NVS、身份、安全状态、配置和控制任务自检健康满 30 秒，并经过窗口边界后的下一次本地检查，再调用 IDF 确认和读回同槽 `VALID`。需复核 C 完整签名身份与原收据、A 回滚身份及集合稳定性；成功收据 commit/读回完成前保持升级门禁。A 侧中断恢复先核对来源、原 ID 与精确 inactive 槽，完成清理后写失败终态。缺收据只允许首次有线装配产生的已确认 `VALID` 签名基座；无原收据的 pending 固件被拒绝。
 
-`ota.result` 查询原 ID，返回固件 SHA-256、完整长度、target 和目标槽。FRP worker 开放上传前为 accepted，开放后及其他活跃 worker 或原收据限定的 pending C 为 running；C 已 `VALID`、签名与摘要匹配且 `SUCCEEDED` 持久终态存在才 succeeded。失败须有真实已确认 A 与来源摘要匹配的 `FAILED` 终态。VALID、INVALID、ABORTED 等 otadata 状态单独不能证明升级结果，其他不确定状态返回 unknown，查询不改收据或选槽。
+`ota.result` 查询原 ID，返回固件 SHA-256、完整长度、target 和目标槽。已登记任务为 accepted，实际活跃 worker 或原收据限定的 pending C 为 running；C 已 `VALID`、签名与摘要匹配且 `SUCCEEDED` 持久终态存在才 succeeded。失败须有真实已确认 A 与来源摘要匹配的 `FAILED` 终态。VALID、INVALID、ABORTED 等 otadata 状态单独不能证明升级结果，其他不确定状态返回 unknown，查询不改收据或选槽。
 
 ## 签名集合与 Flash 所有权
 
 `esp_base_ota_observe_firmware_set` 只读观察 `CONFIRMED`、`PENDING_TRIAL` 或显式 `PREPARED_CANDIDATE`。运行槽和 boot selector 必须相同；每个涉及镜像都经 `eota_sha256_verified_image` 验签，再核对 Base 项目、芯片、完整长度和分区几何。同一 signed bin 摘要合并为同一固件身份。没有另一受管固件时，IDF 必须明确拒绝该镜像且 inactive 首字节为 `0xff`，才能报告单固件集合。prepared 只允许本次 `eota_prepare` 的精确收据，选槽前再次证明 A/C 完整身份和稳定状态。
 
-通用 HTTPS/stream 收取、镜像头/完整摘要、IDF 验签、槽观察、退役、确认和 rollback 由锁定 `esp-ota` 组件提供。唯一 `esp_base_storage_owner` 升级事务跨任务转交，网络等待期间保留事务 owner；app/otadata、配置/身份 NVS、操作收据与 FRP scratch 的实际物理访问共用独立短时 Flash I/O owner，网络等待不持有此短 claim。该串行化不替代实体 Flash 最坏时延、堆栈容量和寿命验证。
+通用 HTTPS/stream 收取、镜像头/完整摘要、IDF 验签、槽观察、退役、确认和 rollback 由锁定 `esp-ota` 组件提供。唯一 `esp_base_storage_owner` 升级事务跨任务转交，网络等待期间保留事务 owner；app/otadata、配置/身份 NVS与操作收据 的实际物理访问共用独立短时 Flash I/O owner，网络等待不持有此短 claim。该串行化不替代实体 Flash 最坏时延、堆栈容量和寿命验证。
 
 ## 首次有线布局迁入
 

@@ -12,11 +12,11 @@
 | firmware/apps/esp_base/main | 同路径 | 移除 GPL POC 装配和 NVS 自动全擦 |
 | firmware/partitions、sdkconfig.defaults | 同路径 | 保留 C3 4 MiB 与 A/B 分区，新增 ESP32 独立 4 MiB 分区与目标配置 |
 
-未复制 `xfrpc`、`frpc_runtime`、POC connectivity、json shim、专用测试、旧 Git 历史、凭据、固件二进制与实板身份。设备 SDK 的精确源码为公开 [darren-you/esp-idf](https://github.com/darren-you/esp-idf/tree/codex/fix-http-init-transport-oom) `578cf89c343e388db43ba1f4ddcd602fedcb763c`，基于官方 [Espressif ESP-IDF v6.1](https://github.com/espressif/esp-idf/tree/v6.1) `fff9895c82d744c7237be8847347bdd1b07c6643`，修正 `app_update` 擦除失败后 OTA handle 遗留，以及 `esp_http_client_init` 在 transport 加入列表前低内存失败时的句柄遗留；lwIP 子模块固定公开 [darren-you/esp-lwip](https://github.com/darren-you/esp-lwip) `2758df4cd3666b3b2a5b53830148379326425c0d`，修正零窗口 ACK 循环。这两个提交由仓根 `sdk-lock.json` 声明并由构建检查；SDK 仍为外部 Apache-2.0 等原许可的源码依赖，不复制为本仓自研。普通 Base 消费公开 [darren-you/esp-frp](https://github.com/darren-you/esp-frp)，精确提交以[唯一组件清单](../../firmware/components/device_protocol/idf_component.yml)和双目标锁为准；Base 保留配置、owner、Flash scratch 接线与设备端点门，不复制协议栈或旧 GPL POC。
+未复制 POC connectivity、json shim、专用测试、旧 Git 历史、凭据、固件二进制与实板身份。设备 SDK 的精确源码为公开 [darren-you/esp-idf](https://github.com/darren-you/esp-idf/tree/codex/fix-http-init-transport-oom) `578cf89c343e388db43ba1f4ddcd602fedcb763c`，基于官方 [Espressif ESP-IDF v6.1](https://github.com/espressif/esp-idf/tree/v6.1) `fff9895c82d744c7237be8847347bdd1b07c6643`，修正 `app_update` 擦除失败后 OTA handle 遗留，以及 `esp_http_client_init` 在 transport 加入列表前低内存失败时的句柄遗留；lwIP 子模块固定公开 [darren-you/esp-lwip](https://github.com/darren-you/esp-lwip) `2758df4cd3666b3b2a5b53830148379326425c0d`，修正零窗口 ACK 循环。这两个提交由仓根 `sdk-lock.json` 声明并由构建检查；SDK 仍为外部 Apache-2.0 等原许可的源码依赖，不复制为本仓自研。
 
 JSON 解析通过 Component Manager 依赖 [espressif/cjson 1.7.19~2](https://components.espressif.com/components/espressif/cjson/versions/1.7.19~2/readme)，组件摘要与 IDF 版本分别固定在 C3 的 `firmware/dependencies.lock` 和 ESP32 的 `firmware/dependencies.lock.esp32`。来源为 Dave Gamble 与 cJSON contributors，MIT 许可保留在官方依赖中；没有复制为本仓自研源码。命令边界校验、行读取与裁决由本仓实现。
 
-Wi-Fi 生命周期、候选控制与配置 codec 为本仓新增实现，调用 ESP-IDF v6.1 的 esp_wifi、esp_netif、esp_event、NVS 和 PSA SHA-256；未复制旧 FRP 调试连接器或重写 SDK 驱动/密码原语。
+Wi-Fi 生命周期、候选控制与配置 codec 为本仓新增实现，调用 ESP-IDF v6.1 的 esp_wifi、esp_netif、esp_event、NVS 和 PSA SHA-256；不重写 SDK 驱动/密码原语。
 
 MQTT 从公开 [darren-you/esp-mqtt](https://github.com/darren-you/esp-mqtt) 获取，组件名仍为 `mqtt`，精确完整提交由唯一组件清单及两目标依赖锁固定。该仓以官方 [ESP-MQTT v1.1.0](https://github.com/espressif/esp-mqtt/tree/1a1e5788a5cf57a0f44a3c6c061407f6c9be1026) 为基线并保留 Apache-2.0 许可；维护源码修正 clean session 断线后旧 SUB/UNSUB outbox 重放、运行层复用消息槽遗留旧 Topic／payload 尾部，让入站消息体按实际存活期分配，并在经典 ESP32 单核／8BIT IRAM 条件下放置运行实例与消息体。通用 `emqtt_` 运行层归该仓；Base 只保留持久 UUID、设备 Topic/LWT 与设备命令归属，不持有 `mqtt_runtime` 或官方 Registry 的第二份 MQTT 依赖。真实 Broker 的源仓回归与 Base 宿主回归分别留证，当前精确组合的设备 Broker/TLS 尚未实板验收。
 

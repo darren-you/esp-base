@@ -12,6 +12,6 @@
 
 现有 16 KiB 旧区归档器对 `nvs` 和 `at_customize` 的非空原始页做仓外 0600 归档，已在两份完整备份上验证**各完整旧分区**可逐字节及 SHA-256 重建。原始旧分区可归档恢复，与旧字段迁入 Base v3 活动配置是两件事；完整 Flash 恢复仍依赖两份原始完整备份。旧 Wi-Fi 凭据为空，本轮不生成 v3 配置候选或身份映射。
 
-Base 源码在 `base_store/base_config/committed` 缺失时加载空配置，随后仅能通过获授权的物理 `config.set` 提供新 Wi-Fi、MQTT、FRP 配置。这个结论只覆盖源码与离线备份：尚未证明 ESP32 新布局首次启动、空配置实板行为、双签名槽、旧启动链切换或恢复。它们仍须在独立实板维护窗口按设备事实和完整恢复基线验收。
+Base 源码在 `base_store/base_config/committed` 缺失时加载空配置，随后仅能通过获授权的物理 `config.set` 提供新 Wi-Fi、MQTT 配置。这个结论只覆盖源码与离线备份：尚未证明 ESP32 新布局首次启动、空配置实板行为、双签名槽、旧启动链切换或恢复。它们仍须在独立实板维护窗口按设备事实和完整恢复基线验收。
 
 公开对照：[固定 ESP-IDF NVS parser](https://github.com/espressif/esp-idf/blob/578cf89c343e388db43ba1f4ddcd602fedcb763c/components/nvs_flash/nvs_partition_tool/nvs_parser.py)、[ESP-AT 二级分区表](https://github.com/espressif/esp-at/blob/v1.1.0.0/at_customize.csv)。

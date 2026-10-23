@@ -30,7 +30,7 @@ def reported(sequence, completed=None, outcome="none"):
     return json.dumps({
         "protocol_version": 1, "device_id": DEVICE, "boot_id": BOOT,
         "uptime_ms": 1000, "revision": 1, "wifi_state": "connected",
-        "time_ready": True, "frp_state": "unconfigured",
+        "time_ready": True,
         "last_accepted_event_sequence": sequence,
         "last_completed_event_sequence": completed,
         "last_completed_event_sha256": hashlib.sha256(b"\x01\x02\x03").hexdigest() if completed else None,
@@ -182,6 +182,16 @@ class BusinessEventPublishTest(unittest.TestCase):
         bad["boot_id"] = DEVICE
         with self.assertRaises(ValueError):
             business_event_publish.reported_message(json.dumps(bad).encode(), DEVICE, BOOT)
+
+    def test_reported_requires_exact_twelve_current_fields(self):
+        value = json.loads(reported(0))
+        self.assertEqual(len(value), 12)
+        self.assertEqual(business_event_publish.reported_message(reported(0), DEVICE, BOOT), value)
+        for mutate in (lambda x: x.update(retired_state="ready"), lambda x: x.pop("time_ready")):
+            bad = dict(value)
+            mutate(bad)
+            with self.assertRaises(ValueError):
+                business_event_publish.reported_message(json.dumps(bad).encode(), DEVICE, BOOT)
 
 
 if __name__ == "__main__":

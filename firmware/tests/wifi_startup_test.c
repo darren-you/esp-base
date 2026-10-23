@@ -173,7 +173,7 @@ static void lifecycle(const ebase_wifi_config_t *original)
 {
     const unsigned initial_config = config_calls, initial_start = start_calls;
     const unsigned initial_stop = stop_calls;
-    /* Three full device selections model Wi-Fi-only, FRP addition and removal. */
+    /* Three full device selections model Wi-Fi-only, MQTT addition and removal. */
     ebase_wifi_config_t same = *original;
     for (unsigned i = 0; i < 3; ++i) {
         assert(esp_base_wifi_apply(&same, 1100 + i) == ESP_OK);

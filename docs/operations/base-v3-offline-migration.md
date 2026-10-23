@@ -13,7 +13,7 @@ python3 tools/preflight_v3_migration.py \
 IDF_PATH=<固定SDK路径> python3 tools/test_preflight_v3_migration.py
 ```
 
-可加`--output-base-store <仓外未存在的目标文件>`生成`0xb000`字节私有候选，以固定SDK官方生成器构造并逐键读回。候选只证明白名单活动记录和目标值，不证明旧页历史或全部Flash字节不变；脚本不打开串口、不刷写、不选槽、不改eFuse。输入拒绝及非阻塞普通文件检查的最新软件结果见[原生软件检查点](native_software_checkpoint.md#一次性迁入输入拒绝补审)。
+可加`--output-base-store <仓外未存在的目标文件>`生成`0xb000`字节私有候选，以固定SDK官方生成器构造并逐键读回。候选只证明白名单活动记录和目标值，不证明旧页历史或全部Flash字节不变；脚本不打开串口、不刷写、不选槽、不改eFuse。输入拒绝及非阻塞普通文件检查的最新软件结果见[原生软件检查点](native_software_checkpoint.md#固定输入与证据)。
 
 ## 旧恢复基线的限定结果
 

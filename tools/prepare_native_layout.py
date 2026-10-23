@@ -224,8 +224,8 @@ def validate_v3_config(blob):
     flags = blob[5]
     lengths = [blob[6], blob[7], blob[12], blob[13], int.from_bytes(blob[14:16], "little"),
                int.from_bytes(blob[16:18], "little")]
-    frp_lengths = [blob[20], int.from_bytes(blob[22:24], "little"),
-                   int.from_bytes(blob[24:26], "little"), blob[21]]
+    retired_lengths = [blob[20], int.from_bytes(blob[22:24], "little"),
+                       int.from_bytes(blob[24:26], "little"), blob[21]]
     at = 40
     def take(size, encoding):
         nonlocal at
@@ -237,21 +237,36 @@ def validate_v3_config(blob):
         ssid, wifi_password, host, user, password, ca = [take(n, encoding) for n, encoding in
             zip(lengths, ["utf-8", "ascii", "ascii", "utf-8", "utf-8", "ascii"])]
         mqtt_key = take(32, "latin1").encode("latin1").hex() if flags & 2 else ""
-        frp_host, token, frp_ca, proxy = [take(n, "ascii") for n in frp_lengths]
-        frp_key = take(32, "latin1").encode("latin1").hex() if flags & 4 else ""
+        retired_host, token, retired_ca, proxy = [take(n, "ascii") for n in retired_lengths]
+        retired_key = take(32, "latin1").encode("latin1") if flags & 4 else b""
         mqtt_port = int.from_bytes(blob[18:20], "little")
-        frp_ports = [int.from_bytes(blob[n:n + 2], "little") for n in (26, 28, 30)]
+        retired_ports = [int.from_bytes(blob[n:n + 2], "little") for n in (26, 28, 30)]
         require(at == len(blob), "配置长度或尾部无效")
         require(bool(flags & 1) or not (ssid or wifi_password), "未配置Wi-Fi含活动字段")
         require(bool(flags & 2) or not (host or user or password or ca or mqtt_port), "未配置MQTT含活动字段")
-        require(bool(flags & 4) or not (frp_host or token or frp_ca or proxy or any(frp_ports)), "未配置FRP含活动字段")
-        device_control.validate_configuration({"schema_version": 3,
+        # 只校验历史扩展原字节，不能投影为新配置或恢复网络消费者。
+        if flags & 4:
+            require(1 <= len(retired_host) <= 253 and all(
+                1 <= len(label) <= 63 and label[0].isalnum() and label[-1].isalnum() and
+                all(char.isalnum() or char == "-" for char in label)
+                for label in retired_host.split(".")), "历史扩展地址无效")
+            require(all(1 <= port <= 65535 for port in retired_ports), "历史扩展端口无效")
+            require(1 <= len(token) <= 256 and all(32 < ord(char) < 127 for char in token),
+                    "历史扩展凭据无效")
+            require(1 <= len(retired_ca) <= 2048 and all(
+                char in "\t\r\n" or 32 <= ord(char) <= 126 for char in retired_ca) and
+                "-----BEGIN CERTIFICATE-----" in retired_ca and
+                "-----END CERTIFICATE-----" in retired_ca, "历史扩展证书无效")
+            require(1 <= len(proxy) <= 128 and all(
+                32 < ord(char) < 127 and char not in "/\\*@" for char in proxy), "历史扩展名称无效")
+            require(any(retired_key), "历史扩展密钥无效")
+        else:
+            require(not (retired_host or token or retired_ca or proxy or any(retired_ports)),
+                    "未配置历史扩展却含活动字段")
+        device_control.validate_configuration({"schema_version": 4,
             "wifi": {"ssid": ssid, "password": wifi_password} if flags & 1 else None,
             "mqtt": {"hostname": host, "port": mqtt_port, "username": user, "password": password,
                      "ca_pem": ca, "management_key_hex": mqtt_key} if flags & 2 else None,
-            "frp": {"server_hostname": frp_host, "server_port": frp_ports[0], "token": token,
-                    "ca_pem": frp_ca, "proxy_name": proxy, "remote_port": frp_ports[1],
-                    "local_port": frp_ports[2], "management_key_hex": frp_key} if flags & 4 else None,
             "business": None})
     except (UnicodeError, ValueError) as error:
         raise MigrationError("活动配置V3字段无效") from error

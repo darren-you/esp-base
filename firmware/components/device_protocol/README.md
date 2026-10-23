@@ -1,6 +1,6 @@
 # 设备协议组件
 
-本组件在唯一控制 owner 上复用 USB／MQTT 的严格请求解码、持久设备 UUID、本 boot 身份、期限、32 槽写请求守卫和统一结果序列化。完整 wire 合同见[设备控制协议](../../../docs/design/device-protocol.md)。设备 FRP 任务、监听器、端点和专属观测已从源码移除。
+本组件在唯一控制 owner 上复用 USB／MQTT 的严格请求解码、持久设备 UUID、本 boot 身份、期限、32 槽写请求守卫和统一结果序列化。完整 wire 合同见[设备控制协议](../../../docs/design/device-protocol.md)。
 
 USB 保留 status、restart、config.set、firmware.status、ota.start／ota.result 和 business.status／pause／resume。MQTT 复用控制命令，并使用独立原生事件和 OTA 块 HMAC 通道。配置写入要求物理 USB 的 schema 4；管理／OTA／重启／配置试运行按现有 owner 互斥。
 

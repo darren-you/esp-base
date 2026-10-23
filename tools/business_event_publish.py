@@ -71,7 +71,7 @@ def reported_message(payload: bytes, device_id: str, boot_id: str) -> dict:
         raise ValueError("设备 reported 超出上限")
     value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique_object)
     required = {"protocol_version", "device_id", "boot_id", "uptime_ms", "revision",
-                "wifi_state", "time_ready", "frp_state",
+                "wifi_state", "time_ready",
                 "last_accepted_event_sequence", "last_completed_event_sequence",
                 "last_completed_event_sha256",
                 "last_event_outcome", "last_business_result"}

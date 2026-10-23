@@ -319,14 +319,14 @@ def validate_v2_config(blob: bytes) -> int:
     require(at == len(blob), "EBCF v2 长度不完整")
     try:
         config = {
-            "schema_version": 3,
+            "schema_version": 4,
             "wifi": {"ssid": ssid.decode("utf-8"), "password": wifi_password.decode("ascii")}
                     if flags & 1 else None,
             "mqtt": {"hostname": host.decode("ascii"), "port": port,
                      "username": user.decode("utf-8"), "password": mqtt_password.decode("utf-8"),
                      "ca_pem": ca.decode("ascii"), "management_key_hex": key.hex()}
                     if flags & 2 else None,
-            "frp": None, "business": None,
+            "business": None,
         }
         if not flags & 1:
             require(not ssid_len and not wifi_password_len, "EBCF v2 未配置 Wi-Fi 却含数据")
@@ -458,7 +458,7 @@ def convert_v1_wifi_only(blob: bytes) -> bytes:
     header = bytearray(40)
     header[:4] = b"EBCF"
     header[4] = 3
-    header[5] = blob[5]  # 仅 Wi-Fi bit；MQTT/FRP 保持 absent
+    header[5] = blob[5]  # 仅 Wi-Fi bit；其他能力保持 absent
     header[6:8] = blob[6:8]
     header[8:12] = blob[8:12]  # 纯格式转换：revision 原样保留
     return bytes(header) + blob[16:16 + blob[6]] + blob[48:48 + blob[7]]

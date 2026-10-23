@@ -16,7 +16,7 @@ USB／MQTT 的只读 status、firmware.status、business.status 精确包含 `pr
 
 firmware.status 的 result 精确包含 firmware_sha256、image_size_bytes、target、ota_slot。摘要来自实际运行镜像的完整 signed bin（含签名尾部），在独占 claim 下验签并前后核对 running／boot／槽状态；忙或无法证明时报告 unknown，不使用旧产品状态摘要。C3 target 为 `esp32c3/esp_base`，方案 `esp_secure_boot_v2_rsa3072`；ESP32 为 `esp32/esp_base`，方案 `esp_secure_boot_v1_ecdsa_p256`。
 
-USB ota.start parameters 精确六项：operation_id、image_url、sha256、image_size_bytes、target、signature。image_url 是最多 512 B 的 HTTPS URL；sha256 为非零小写 64 位十六进制；长度必须容纳完整签名镜像并适合目标槽；signature 只含精确 scheme。MQTT ota.start 精确五项，删除 image_url，固件字节通过下述认证块通道提供；带 URL 的 MQTT start 被拒绝。两入口复用唯一升级 owner、V4 意图、验签、备用槽和恢复机制。FRP start 与所有旧设备端点已从源码移除。
+USB ota.start parameters 精确六项：operation_id、image_url、sha256、image_size_bytes、target、signature。image_url 是最多 512 B 的 HTTPS URL；sha256 为非零小写 64 位十六进制；长度必须容纳完整签名镜像并适合目标槽；signature 只含精确 scheme。MQTT ota.start 精确五项，删除 image_url，固件字节通过下述认证块通道提供；带 URL 的 MQTT start 被拒绝。两入口复用唯一升级 owner、V4 意图、验签、备用槽和恢复机制。
 
 受理要求签名策略可用、已确认运行 A／boot 一致、准确 inactive 槽、无 pending 或未决收据、无配置试运行／重启。来源 URL／流元数据在任何 app 擦写前静态验证；写前意图持久提交并逐字节读回后才创建 worker。worker 重读原意图，先使旧 inactive 镜像物理不可启动，再分块准备 C；精确长度、完整摘要、芯片／项目及官方签名均通过后才选择新 boot。部分失败只有清理 C 且证明 A 仍 VALID／selected 后才能记录 failed，否则 unknown 并保留占用。
 
@@ -48,7 +48,7 @@ event 采用 `esp-base-business-event-v1\n` 域隔离。认证原文依次为该
 
 `mqtt_ota.c` 与 Server 的 `mqttcontrol/ota_frame.go` 使用以下 v1 数据帧。设备源码已把 MQTT owner、单块状态机和 OTA worker 接通；正式 Server 调度、组件精确版本更新、完整固件构建及实板验收尚未完成，不能据此宣称线上 MQTT OTA 已可用。交付资格统一由 #35 验收。
 
-全部帧使用 QoS 1、非 retained，完整帧仍小于既有 4096 B 入站上限。设备仅在现有已认证、已持久登记的 OTA operation 内发送 `esp-base/<device UUID>/ota/request`；Server 在 `esp-base/<device UUID>/ota/data` 回复。两个方向均复用 MQTT management key，不使用旧 FRP key；topic ACL 和 HMAC 分别核验。
+全部帧使用 QoS 1、非 retained，完整帧仍小于既有 4096 B 入站上限。设备仅在现有已认证、已持久登记的 OTA operation 内发送 `esp-base/<device UUID>/ota/request`；Server 在 `esp-base/<device UUID>/ota/data` 回复。两个方向均复用 MQTT management key；topic ACL 和 HMAC 分别核验。
 
 | 顺序 | 字段 | 编码 |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ event 采用 `esp-base-business-event-v1\n` 域隔离。认证原文依次为该
 | 8 | length | 大端 uint16，后续 data 的精确字节数 |
 | 9 | data | 仅 kind=2 时非空，最多 1024 B；其他 kind 必须为零长度 |
 
-Server 精确回显当前 request 的 offset、written_offset 和 expiry，再附上对应数据。首版软件使用 1024 B 单块窗口，与 OTA 的顺序写缓冲对齐；完整最大帧为 1199 B。块大小和会话总期限仍需实际 RTT、吞吐、双板资源量测后冻结，不能从旧 FRP 期限继承资格。
+Server 精确回显当前 request 的 offset、written_offset 和 expiry，再附上对应数据。首版软件使用 1024 B 单块窗口，与 OTA 的顺序写缓冲对齐；完整最大帧为 1199 B。块大小和会话总期限仍需实际 RTT、吞吐、双板资源量测后冻结。
 
 块通道不调用普通 32 槽写请求守卫，也不写 NVS。接收方只保有一个 1024 B 块和当前／上一帧身份；在 MQTT 借用内存失效前完成复制。认证相同的重复帧幂等，同一请求的冲突数据使该活动传输失败；错 offset、错期限、超长、迟到和过期帧拒绝。合法重复或重连重发不能推进偏移或刷新期限。只有实际写入确认可推进 written_offset，并刷新不超过固定总期限的无进展期限。
 
@@ -84,4 +84,4 @@ restart 先回 running，延迟并让已认证回执排出；客户端必须读�
 
 ## 旧配置与退役边界
 
-设备 FRP runtime、listener、解析入口及 scratch 启动访问已移除。分区表与闲置 scratch 原字节保持；旧 v3 配置只经严格校验移除退役字段，保留 revision、Wi-Fi/MQTT 和旧签名固件可读格式，提交后独立 SHA-256 读回。具体合同见 [remote_config](../../firmware/components/remote_config/README.md)。原 FRP 时序和失败记录作为[历史证据](../issues/frp-upload-before-retirement.md)保留，不再作为可调用接口。
+分区表与闲置 scratch 原字节保持；旧 v3 配置只经严格校验移除退役字段，保留 revision、Wi-Fi/MQTT 和旧签名固件可读格式，提交后独立 SHA-256 读回。具体合同见 [remote_config](../../firmware/components/remote_config/README.md)。历史运行证据由 Git 与 Issue #35 保留。
