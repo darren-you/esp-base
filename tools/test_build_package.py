@@ -154,6 +154,8 @@ class BuildPackageTest(unittest.TestCase):
             entry = root / "python3"
             entry.symlink_to(binary)
             snapshot, manifest, inputs, context = self.run_fixture()
+            inputs.update(verification_key={"sha256": "e" * 64}, tools={})
+            snapshot["commands"][0]["stdout"] = encoded(inputs).decode()
             snapshot["commands"][0].update(executable=str(entry),
                                             executable_sha256=digest(binary.read_bytes()))
             context["profile_snapshot_id"] = digest(core_encoded(snapshot))
