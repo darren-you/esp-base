@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repo_name": "esp-base",
+  "config_path": "release.json",
+  "platform": "firmware",
+  "application_id": "esp-base",
+  "variant": "esp32",
+  "architectures": ["xtensa"],
+  "entry": "tools/package_entry.py",
+  "artifact": "esp-base-esp32.zip",
+  "identity_entry": "build.json",
+  "input_commands": [["python3", "tools/package_entry.py", "inputs", "esp32"]]
+}

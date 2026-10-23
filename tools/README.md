@@ -25,50 +25,52 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 ## 构建与回归
 
-`build_package.py` 在锁定 SDK 环境中消费同次 Core 快照，构建、签署清单并归档
-双目标原生固件。它不分配编号，不连接设备。先保存源码，再冻结完整的已解析
-sdkconfig、公开验证键、SDK 派生、依赖锁与工具链；路径保留在仓外输入文件，
-包内只保留摘要和工具身份。私钥不进入包或清单。
+`package_entry.py` 由 canonical Core 的 `shared/package_run.py` 调用，复用
+`build_package.py` 构建、签署清单并归档双目标原生固件。产品入口不分配编号，
+不连接设备。先保存源码并同步实际数字版本分支，再冻结完整的已解析 sdkconfig、
+公开验证键、SDK 派生、依赖锁与工具链。私钥及其摘要不进入包或清单；配置与键
+路径只留在仓外本地输入，Core 的原始工具输入快照保留实际解释器路径及摘要。
 
 ```bash
-python3 tools/build_package.py freeze --target esp32c3 \
-  --sdkconfig /absolute/private/sdkconfig \
-  --public-key /absolute/private/verification-key.bin \
-  --signing-trust software-test --input /absolute/private/firmware-input.json
+export ESP_BASE_SDKCONFIG=/absolute/private/sdkconfig
+export ESP_BASE_VERIFICATION_KEY=/absolute/private/verification-key.bin
+export ESP_BASE_SIGNING_TRUST=release
+python3 /absolute/canonical/fast-deploy/core/shared/package_run.py \
+  --repo-root "$PWD" --repo-url git@github.com:darren-you/esp-base.git \
+  --core-root /absolute/canonical/fast-deploy/core \
+  --manifest tools/package-esp32c3.json --source-ref refs/heads/1.0.0 \
+  --artifact-root /absolute/existing/ci-artifacts \
+  --receipt-root /absolute/private/package-receipts --run-id <固定run>
 ```
 
-将返回的 `input_manifest_sha256` 作为本 run 的
-`FAST_DEPLOY_PROFILE_SNAPSHOT_ID`，再由显式冻结的 Core 按既有持久状态分配
-`firmware / esp-base / riscv32 / esp32c3` 或
-`firmware / esp-base / xtensa / esp32` 快照。版本必须等于数字分支和
-`release.json`；传入完整 `FAST_DEPLOY_*` context、
-`FAST_DEPLOY_PACKAGE_CORE_ROOT` 与 `FAST_DEPLOY_CLIENT_VERSION_SNAPSHOT_FILE`。
-原始 `client-version-result.json` 须与快照在同一目录。不要为此另建计数器，
-也不要以本地号 0 封装正式包。
+必须先导出锁定 IDF 环境，使 `python3` 和 runner 使用同一个解释器。
+ESP32 使用 `tools/package-esp32.json` 及其实际配置、公钥和独立 run。
+`artifact-root` 必须为主执行宿主的既有持久状态，不能换临时目录、初始化或
+重置历史编号。Core 核对真实远端数字分支、已发布 Core、已跟踪声明和实际
+工具输出后占号；产品再核对同次原始收据，拒绝手工填写产品摘要冒充 Profile。
+源码版本必须等于数字分支及 `release.json`。`freeze` 仍可准备本地输入，但
+不能单独提供正式构建身份，也不能以本地号 0 封装正式包。
 
 ```bash
-python3 tools/build_package.py build --input /absolute/private/firmware-input.json \
-  --build-dir /absolute/private/firmware-build
-python3 tools/build_package.py package --input /absolute/private/firmware-input.json \
-  --build-dir /absolute/private/firmware-build --artifact /absolute/private/esp-base.zip
 python3 tools/build_package.py verify --artifact /absolute/private/esp-base.zip
 ```
 
-每个目标使用独立仓外构建目录。入口核对真实 ELF、app 描述、镜像校验和、
+每个 run 在原收据目录内使用独立仓外构建目录。入口核对真实 ELF、app 描述、镜像校验和、
 公开组件、bootloader、双槽几何、初始 OTA 数据，以及 ESP32 app／bootloader
 内嵌公钥。已完成构建和已签清单只回读复用；同 run 重试不重新生成随机 RSA-PSS
 签名。ZIP 与收据沿用 Core 的不可覆盖目录归档。
 
-外部签名路径使用 `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n`，先 `build`，
-将实际 unsigned app 交给签名事实源。ESP32 还须签署实际 unsigned 分区表。
-使用 `manifest --signed-image /absolute/signed-app.bin` 生成冻结清单；
-ESP32 同时传入 `--signed-partition /absolute/signed-partition.bin`。
-清单由相同键、相同官方 espsecure v1／v2 方案签署后，`package` 传入上述
-参数及 `--signed-manifest /absolute/signed-manifest.bin`。所有签名必须覆盖
+外部签名路径使用 `CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n`。首次 run
+完成实际构建后等待签名；将其 `firmware-build` 内实际 unsigned app 交给
+签名事实源，ESP32 还须签署实际 unsigned 分区表。设置绝对路径
+`ESP_BASE_SIGNED_IMAGE`，ESP32 同时设置 `ESP_BASE_SIGNED_PARTITION`，重试同 run
+生成冻结清单。清单由相同键、相同官方 espsecure v1／v2 方案签署后，设置
+`ESP_BASE_SIGNED_MANIFEST` 并重试同 run。所有签名必须覆盖
 本次原字节，不能用旧签名或重新构建的近似输入替代。
 
 最终 ZIP 包含完整 signed app、bootstrap 文件、ELF、SDK／组件锁、公开验证键、
-Core 原始记录与已签清单。它不包含设备配置、NVS 或恢复资料，也不授予刷写
+Core 原始记录、独立打包声明、完整工具输入快照与已签清单。新包 schema 2
+绑定这些输入；历史 schema 1 只按原合同回读。包不包含设备配置、NVS 或恢复资料，也不授予刷写
 这些 bootstrap 文件的权限。普通 `verify` 证明包内自洽；发布检查必须额外传入
 `--require-release --public-key /absolute/authorized-public-key.bin`。
 软件测试键必须标为 `software-test`，此模式会被发布检查拒绝。正式键来源、

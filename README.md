@@ -40,6 +40,6 @@ Mac App 继续只管理本机实际 USB。当前有线 OTA 保留 USB 发 URL �
 - [现有设备协议](docs/design/device-protocol.md)
 - [宿主回归](firmware/tests/README.md)
 - [固件独立 OTA 与恢复](firmware/components/ota_operation/README.md)
-- [设备控制及历史公网 OTA 工具](tools/README.md)
+- [设备控制与签名固件打包](tools/README.md)
 
 源码说明与唯一协议正文描述当前设备实现；生命周期验证必须使用正式 Server 的 MQTT 调度，不能用历史宿主工具代替。资源门保持内部历史堆至少 16,384 B、最大连续块至少 24,576 B、每个实际任务栈余量至少 1,024 B；须在双板 Wi-Fi／TLS MQTT／原生业务／分块 OTA 同存峰值下实测，软件构建不授予资源、功耗或运行资格。

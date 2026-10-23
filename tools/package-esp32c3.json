@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repo_name": "esp-base",
+  "config_path": "release.json",
+  "platform": "firmware",
+  "application_id": "esp-base",
+  "variant": "esp32c3",
+  "architectures": ["riscv32"],
+  "entry": "tools/package_entry.py",
+  "artifact": "esp-base-esp32c3.zip",
+  "identity_entry": "build.json",
+  "input_commands": [["python3", "tools/package_entry.py", "inputs", "esp32c3"]]
+}

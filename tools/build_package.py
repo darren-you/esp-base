@@ -28,6 +28,7 @@ BUILD_FILES = ("esp_base.elf", "bootloader/bootloader.bin",
 PACKAGE_FILES = {"firmware.bin", "verification-key.bin", "sdk-lock.json", "LICENSE", "inputs.json",
                  "context.json", "version-snapshot.json", "build.json", "dependencies.lock",
                  *(Path(name).name for name in BUILD_FILES)}
+RUN_FILES = {"package-inputs.json", "package-manifest.json"}
 
 
 def digest(data):
@@ -190,6 +191,66 @@ def portable_input(value):
     return result
 
 
+def validate_run_inputs(snapshot, manifest_raw, inputs, context):
+    """验证 Core 实际采集的完整输入；不把产品摘要冒充整个 Profile 快照。"""
+    target = inputs["target"]
+    manifest = decode_json(manifest_raw)
+    argv = ["python3", "tools/package_entry.py", "inputs", target]
+    expected = {"schema_version": 1, "repo_name": "esp-base", "config_path": "release.json",
+                "platform": "firmware", "application_id": "esp-base", "variant": target,
+                "architectures": [TARGETS[target][0]], "entry": "tools/package_entry.py",
+                "artifact": "esp-base-" + target + ".zip", "identity_entry": "build.json",
+                "input_commands": [argv]}
+    if (type(manifest) is not dict or type(manifest.get("schema_version")) is not int or
+            manifest != expected or digest(manifest_raw) != context["job_manifest_sha256"]):
+        raise ValueError("独立打包声明未绑定当前目标及 Core context")
+    if (type(snapshot) is not dict or set(snapshot) != {"schema_version", "kind", "commands"} or
+            type(snapshot["schema_version"]) is not int or snapshot["schema_version"] != 1 or
+            snapshot["kind"] != "standalone-package-inputs" or
+            type(snapshot["commands"]) is not list or len(snapshot["commands"]) != 1 or
+            digest(core_encoded(snapshot)) != context["profile_snapshot_id"]):
+        raise ValueError("固件输入未绑定 Core 采集的完整输入快照")
+    command = snapshot["commands"][0]
+    if (type(command) is not dict or
+            set(command) != {"argv", "executable", "executable_sha256", "stdout"} or
+            command["argv"] != argv or type(command["executable"]) is not str or
+            not Path(command["executable"]).is_absolute() or
+            type(command["executable_sha256"]) is not str or
+            not re.fullmatch(r"[0-9a-f]{64}", command["executable_sha256"]) or
+            command["stdout"] != encoded(inputs).decode()):
+        raise ValueError("Core 冻结的工具输出与实际固件输入不同")
+
+
+def core_encoded(value):
+    # 与 Core 原始记录相同的 UTF-8 编码；不能改变非 ASCII 工具路径的摘要。
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def run_inputs(value):
+    snapshot_path = Path(os.environ.get("FAST_DEPLOY_CLIENT_VERSION_SNAPSHOT_FILE", ""))
+    if not snapshot_path.is_absolute():
+        raise ValueError("正式构建必须由 Core package_run.py 提供原始收据")
+    directory = snapshot_path.parent
+    request = read_json(directory / "package-run.json")
+    original = read_json(directory / "client-version-result.json")
+    context = original["context"]
+    manifest_raw = regular(ROOT / "tools" / ("package-" + value["target"] + ".json"))
+    snapshot = read_json(directory / "package-inputs.json")
+    if (set(request) != {"schema_version", "kind", "context", "manifest"} or
+            type(request["schema_version"]) is not int or request["schema_version"] != 1 or
+            request["kind"] != "standalone-package-run" or request["context"] != context or
+            request["manifest"] != decode_json(manifest_raw) or
+            context["profile_snapshot_id"] != os.environ.get("FAST_DEPLOY_PROFILE_SNAPSHOT_ID")):
+        raise ValueError("独立打包原始请求与同次 Core 收据不同")
+    validate_run_inputs(snapshot, manifest_raw, portable_input(value), context)
+    command = snapshot["commands"][0]
+    interpreter = Path(sys.executable).resolve()
+    if command["executable"] != str(interpreter) or command["executable_sha256"] != fact(interpreter)["sha256"]:
+        raise ValueError("打包解释器已经偏离 Core 采集的工具")
+    return {"package-inputs.json": regular(directory / "package-inputs.json"),
+            "package-manifest.json": manifest_raw}
+
+
 def validate_input(path):
     value = read_json(path)
     if value.get("signing_trust") not in ("software-test", "release"):
@@ -198,8 +259,7 @@ def validate_input(path):
                              Path(value["verification_key"]["path"]), value["signing_trust"])
     if encoded(current) != regular(path) or value != current:
         raise ValueError("SDK、配置、签名、工具链或源码已经偏离冻结输入")
-    if os.environ.get("FAST_DEPLOY_PROFILE_SNAPSHOT_ID") != digest(encoded(portable_input(value))):
-        raise ValueError("固件输入摘要必须绑定同次 Core 的 profile snapshot")
+    run_inputs(value)
     identity = resolve(value["target"])
     if identity["local_validation"] or identity["source_commit_sha"] != value["source_commit_sha"]:
         raise ValueError("正式固件构建必须使用同一冻结源码及 Core 编号")
@@ -410,6 +470,7 @@ def package(input_path, directory, artifact, signed_image, signed_manifest=None,
                      "sdk-lock.json": regular(ROOT / "sdk-lock.json"), "LICENSE": regular(ROOT / "LICENSE"),
                      "inputs.json": encoded(portable_input(value)), "context.json": encoded(context),
                      "version-snapshot.json": encoded(snapshot), "build.json": encoded(identity)}
+            files.update(run_inputs(value))
             selected = "dependencies.lock.esp32" if value["target"] == "esp32" else "dependencies.lock"
             files["dependencies.lock"] = regular(ROOT / "firmware" / selected)
             for name in BUILD_FILES:
@@ -421,7 +482,7 @@ def package(input_path, directory, artifact, signed_image, signed_manifest=None,
                 files["partition-table.bin"] = regular(signed_partition)
             elif signed_partition is not None:
                 raise ValueError("只有 ESP32 外部签名路径接受独立签名分区表")
-            manifest = {"schema_version": 1, "kind": "esp-base-firmware", "build": identity,
+            manifest = {"schema_version": 2, "kind": "esp-base-firmware", "build": identity,
                         "target": value["target"], "slot_capacity_bytes": SLOT_BYTES,
                         "signing_trust": value["signing_trust"],
                         "signature_scheme": "rsa-3072-v2" if value["target"] == "esp32c3" else "ecdsa-p256-v1",
@@ -479,14 +540,16 @@ def verify_package(artifact, require_release=False, trusted_key=None):
             raise ValueError("固件包条目重复或越界")
         manifest = decode_json(archive.read("manifest.json"))
         identity = decode_json(archive.read("build.json"))
-        if (manifest["schema_version"] != 1 or manifest["kind"] != "esp-base-firmware" or
+        members = PACKAGE_FILES | (RUN_FILES if manifest["schema_version"] == 2 else set())
+        if (type(manifest["schema_version"]) is not int or manifest["schema_version"] not in (1, 2) or
+                manifest["kind"] != "esp-base-firmware" or
                 manifest["target"] not in TARGETS or
                 manifest["signature_scheme"] != ("rsa-3072-v2" if manifest["target"] == "esp32c3" else "ecdsa-p256-v1") or
                 manifest["build"] != identity or identity["local_validation"] is not False or
                 manifest["slot_capacity_bytes"] != SLOT_BYTES or
                 manifest["signing_trust"] not in ("software-test", "release") or
-                set(manifest["files"]) != PACKAGE_FILES or
-                set(names) != PACKAGE_FILES | {"manifest.json", "manifest.signed.bin"}):
+                set(manifest["files"]) != members or
+                set(names) != members | {"manifest.json", "manifest.signed.bin"}):
             raise ValueError("固件包身份或文件集合非法")
         if require_release and (manifest["signing_trust"] != "release" or trusted_key is None):
             raise ValueError("正式发布拒绝软件测试签名链，且必须显式提供授权验证公钥")
@@ -509,11 +572,15 @@ def verify_package(artifact, require_release=False, trusted_key=None):
             inputs = decode_json(archive.read("inputs.json"))
             context = decode_json(archive.read("context.json"))
             snapshot = decode_json(archive.read("version-snapshot.json"))
+            if manifest["schema_version"] == 2:
+                validate_run_inputs(decode_json(archive.read("package-inputs.json")),
+                                    archive.read("package-manifest.json"), inputs, context)
+            elif digest(encoded(inputs)) != context["profile_snapshot_id"]:
+                raise ValueError("历史固件包输入不同于原 Core 快照")
             if (inputs["target"] != manifest["target"] or inputs["signing_trust"] != manifest["signing_trust"] or
                     inputs["source_commit_sha"] != identity["source_commit_sha"] or
                     inputs["components"] != manifest["components"] or
                     inputs["sdkconfig"]["values_sha256"] != manifest["sdkconfig_values_sha256"] or
-                    digest(encoded(inputs)) != context["profile_snapshot_id"] or
                     digest(encoded(inputs)) != manifest["input_manifest_sha256"] or
                     inputs["verification_key"] != manifest["files"]["verification-key.bin"] or
                     inputs["sdk_lock"] != manifest["files"]["sdk-lock.json"] or
