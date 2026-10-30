@@ -48,21 +48,22 @@ int esp_base_mqtt_ota_transfer_read(void *context, uint8_t *out, size_t capacity
     const int64_t start = esp_timer_get_time();
     if (start < 0 || start > INT64_MAX - (int64_t)timeout_ms * 1000) return -1;
     const int64_t deadline = start + (int64_t)timeout_ms * 1000;
-    for (;;) {
-        const int64_t now = esp_timer_get_time();
-        if (now < start) return -1;
-        if (now >= deadline) return -2;
-        portENTER_CRITICAL(&s_lock);
-        const int result = ebase_mqtt_ota_stream_read(&s_stream, now_ms(), out, capacity);
-        portEXIT_CRITICAL(&s_lock);
-        if (result != -2) return result;
-        /* Yield to the control/MQTT owner outside both the mailbox and Flash
-         * gates. Return a retry before scheduling a tick beyond this budget. */
-        const int64_t before_delay = esp_timer_get_time();
-        if (before_delay < now) return -1;
-        if (deadline - before_delay <= (int64_t)portTICK_PERIOD_MS * 1000) return -2;
-        vTaskDelay(1);
-    }
+    const int64_t now = esp_timer_get_time();
+    if (now < start) return -1;
+    if (now >= deadline) return -2;
+    portENTER_CRITICAL(&s_lock);
+    const int result = ebase_mqtt_ota_stream_read(&s_stream, now_ms(), out, capacity);
+    portEXIT_CRITICAL(&s_lock);
+    if (result != -2) return result;
+    /* Yield once outside the mailbox and Flash gates, then let the OTA core
+     * retry under its unchanged read/idle/total deadlines. Waiting here until
+     * the read budget is nearly spent makes ordinary wakeup delay fatal. */
+    const int64_t before_delay = esp_timer_get_time();
+    if (before_delay < now) return -1;
+    if (deadline - before_delay <= (int64_t)portTICK_PERIOD_MS * 1000) return -2;
+    vTaskDelay(1);
+    if (esp_timer_get_time() < before_delay) return -1;
+    return -2;
 }
 
 bool esp_base_mqtt_ota_transfer_written(void *context, uint32_t written, uint32_t total)

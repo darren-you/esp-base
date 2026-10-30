@@ -72,7 +72,7 @@ Server 精确回显当前 request 的 offset、written_offset 和 expiry，再�
 
 MQTT owner 增加第三个精确订阅 `ota/data`，继续由 SDK 完成全部 SUBACK 后开放管理。它在唯一已登记 operation 上绑定处理器；重连保留绑定，配置撤销解除绑定。数据块经设备／boot／operation、topic、方向和 HMAC 校验后直达固定 mailbox，不进入普通写请求守卫。出站最多保留一个未 PUBACK 的块请求；相同请求收到 PUBACK 后至少间隔 1 秒才能重发，新写偏移可立即请求。普通断线不清除尚在 SDK outbox 的消息 ID，停止／销毁 transport 后才清除，避免重连或 operation 更替造成请求积压。
 
-worker 先重读 V4 意图并退役备用槽，再开放块请求；`written` 回调只在实际写入和短 Flash claim 释放成功后推进确认。准备完成后以同一 mailbox 临界区检查 END、全部写入、取消／冲突和期限，并关闭网络取消入口，再调用已有 `eota_select`。该边界之前的有效取消禁止选槽；边界之后的迟到取消无效，客户端继续查询原 operation 的持久结果。当前 1 秒单次读取、30 秒无进展和 300 秒总期限仅为软件候选参数，必须经新链路量测后冻结。
+worker 先重读 V4 意图并退役备用槽，再开放块请求；`written` 回调只在实际写入和短 Flash claim 释放成功后推进确认。准备完成后以同一 mailbox 临界区检查 END、全部写入、取消／冲突和期限，并关闭网络取消入口，再调用已有 `eota_select`。该边界之前的有效取消禁止选槽；边界之后的迟到取消无效，客户端继续查询原 operation 的持久结果。入站 read 在暂无数据时于锁外至多让出一个既有 tick 后返回可重试 timeout，由 OTA 核心再次读取并检查原期限；不在单次回调内耗尽读取预算。当前 1 秒单次读取、30 秒无进展和 300 秒总期限仅为软件候选参数，必须经新链路量测后冻结。
 
 独立固定向量位于 `firmware/tests/testdata/mqtt-ota-v1.txt`，测试 key 为公开的字节 0..31。C 与 Go 各持有相同内容，SHA-256 为 `8b60d5dc13154989f32c3130cafdc49ae02fadc8ef7cd17131927519d8d6cdb6`；它们是测试数据，不是设备身份或生产凭据。
 

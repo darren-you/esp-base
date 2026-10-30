@@ -2,6 +2,8 @@
 
 MQTT OTA 二进制编解码和单块状态机的独立入口为 `bash firmware/tests/run_mqtt_ota_tests.sh`，需要 OpenSSL 与 pkg-config；它直接编译正式 C 源码及 PSA→OpenSSL 测试适配，开启 ASan／UBSan。独立 Python HMAC 固定向量与 Server Go 测试逐字节一致，覆盖全帧逐字节篡改／每个截断长度、错误身份／方向／topic／QoS／retained，以及有效 MAC 下的坏域和字段。状态机覆盖借用数据复制、实际写确认前背压、重复／冲突、尾块 END、取消、无进展期限和时钟倒退。两个真实宿主线程同时运行控制端和 worker，使用 pthread 临界区与 SDK／Flash 假件交付 40 个完整块及尾块，再核对 EOF、延迟写确认和关闭重用；`ESP_BASE_TEST_THREAD_SANITIZER=1` 另执行这段并发的 TSan 构建。这些测试不访问 Broker、NVS 或实体设备。状态机另覆盖验签期间取消／超时／冲突、尾块未写不能选槽，以及选槽开始后的迟到取消。
 
+同一 MQTT OTA 入口还以 10 ms 可控 tick 编译真实 transfer 和 mailbox，检查空读每次至多让出一个 tick、跨回调等待不刷新期限、让出期间到达的数据只在后续读取消费一次、短预算与倒退时钟，以及数据／EOF／错误即时返回。宿主调度假件不代表 MCU 时延保证。
+
 公开入口 `bash firmware/tests/run_host_tests.sh` 使用官方Component Manager解析的同target组件，开启ASan／UBSan和严格编译诊断。ESP_BASE_TEST_TARGET选择esp32c3或esp32；ESP_BASE_TEST_COMPONENTS_DIR可指向本轮独立源码副本的已解析managed_components，不从相邻源仓import。
 
 运行前先按[固件构建说明](../README.md)准备锁定SDK，并对所选target执行官方Component Manager重新解析。`managed_components`是生成目录，新检出或清理生成物后须先恢复该输入；host入口本身不下载依赖。使用已冻结的独立构建输入时，分别指定各target对应的组件目录，不能把空目录、另一轮缓存或相邻源仓当成本轮组件。也可提取该入口实际读取的源码／头文件子集，但必须逐文件核对长度与摘要、绑定原target锁和解析来源；子集通过只证明host消费，不等于完整SDK解析或固件构建：
@@ -42,4 +44,4 @@ MQTT owner 的独立入口为 `bash firmware/tests/run_mqtt_owner_tests.sh`，�
 
 宿主 Python 控制、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。历史输入／实际结果见[原生软件检查点](../../docs/operations/native_software_checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
 
-SDK 假件职责目录统一为 `fakes/app-main`、`fakes/network-auth`、`fakes/mqtt-ota`、`fakes/ota-firmware`、`fakes/ota-update` 和 `fakes/wifi-runtime`。读取入口是本目录的 `run_host_tests.sh`、`run_mqtt_owner_tests.sh` 与 `run_mqtt_ota_tests.sh`；它们不属于 ESP-IDF 组件，内部 SDK 头文件及 `psa/crypto.h` 等入口保持原合同。
+SDK 假件职责目录统一为 `fakes/app-main`、`fakes/network-auth`、`fakes/mqtt-ota`、`fakes/mqtt-ota-clock`、`fakes/ota-firmware`、`fakes/ota-update` 和 `fakes/wifi-runtime`。读取入口是本目录的 `run_host_tests.sh`、`run_mqtt_owner_tests.sh` 与 `run_mqtt_ota_tests.sh`；它们不属于 ESP-IDF 组件，内部 SDK 头文件及 `psa/crypto.h` 等入口保持原合同。
