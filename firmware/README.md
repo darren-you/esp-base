@@ -15,6 +15,8 @@ ESP32 UART0 使用锁定 SDK 的 RX 驱动与 IRAM 中断，接收环请求 9,21
 
 TLS 使用 SDK 原生固定 RX／TX，内容上限保持 16,384／4,096 B。动态 adapter 按首 record 分配，而同一次握手步骤可以在 core 内重组后继 record；其分配长度与 core 的固定写入上界不能等同。固定分配让完整输入区贯穿握手及后续读取，CA／主机名、可信时间、加密套件、超时及镜像验签合同保持。每连接 RX／TX 的真实普通申请分别为 16,717／4,429 B，不能把内容上限当申请字节数。C3 使用 `INTERNAL|8BIT`；ESP32 使用锁定 SDK 的 `MBEDTLS_IRAM_8BIT_MEM_ALLOC`：达到 RX 或 TX 内容阈值的大块申请优先 `INTERNAL|IRAM_8BIT`，失败时回落 `INTERNAL|8BIT`，较小申请仍使用 DRAM。该规则也可能覆盖达到阈值的其他 mbedTLS 对象，不能把它缩写为仅搬移 TLS buffer。SDK 的非对齐访问异常处理有时间成本，必须按实际握手期限与两个内存能力域重新验收。MQTT 与 URL OTA 两条 TLS 的缓冲请求合计 42,292 B；MQTT 分块 OTA 复用现有 MQTT 连接，连接、握手、证书和 crypto 对象另计。该成本随新配置重新构建、签名及实板容量验证，不能继承动态缓冲候选的资源结果，也不加回观测成本。 ESP32 idle 栈设为 2,048 B；此前 1,536 B 配置的实板最低余量 972 B 未通过 1,024 B 门。增加配置值不证明新候选栈门已通过，仍读取真实任务实例 HWM。
 
+MQTT 使用官方自定义配置将 transport 读取轮询设为 50 ms。异步入队不会唤醒该轮询，默认 1 秒会让逐块 OTA 请求等待；正式 CMake 拒绝仍使用旧值的冻结 sdkconfig。队列仍为 1、API 锁保持启用，其余 MQTT 默认值与原隐式默认值一致；不新增唤醒任务或队列，也不延长 OTA 的 1／30／300 秒期限。轮询频率增加后的双板 CPU、功耗、资源与端到端吞吐须由对应正式候选实测。
+
 Base 固定 Flash 观测保留每 boot 的 OTA／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界。观测继续沿用既有报告与主动重启点，不新增任务或动态分配。
 
 [C3 分区](partitions/c3-partition-table.csv)和 [ESP32 分区](partitions/esp32-partition-table.csv)均为双 `0x1e0000` app，移除业务包区。scratch、Base NVS 与 ESP32 旧 AT 区保持各自真实定位；新布局必须通过一次性有线装配迁入。旧 V3／损坏收据不能当作空状态，普通 app OTA 不能迁分区表。

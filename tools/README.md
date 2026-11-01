@@ -11,7 +11,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE status
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE firmware.status
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE business.status
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <本轮UUID> business.pause
-python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <本轮UUID> --operation-id <固定原UUID> --image-file /absolute/private/signed.bin --image-url https://example.invalid/signed.bin --target esp32c3/esp_base ota.start
+python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <本轮UUID> --operation-id <固定原UUID> --image-file /absolute/private/signed.bin --image-url https://example.invalid/signed.bin --ota-target esp32c3/esp_base ota.start
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <固定原UUID> ota.result
 ```
 
@@ -22,6 +22,24 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 `business_event.py` 从私有普通事件文件生成域隔离 HMAC帧；key 文件须0600、非符号链接，不回显key。`business_event_publish.py` 通过严格 TLS／QoS1／非 retained 仅发布一次，先核对本 boot reported 的下一连续序号，随后按 boot、序号、原始事件摘要和实际 business result 对账。输入只绑定原生业务身份。
 
 完整 event frame 最多4096 B，业务原始字节最多3924 B；新固件输入语义与12字段 reported 见[设备协议](../docs/design/device-protocol.md)。Broker PUBACK不是设备执行成功；丢失结果不自动重发业务或换序号。
+
+`business_event_load.py` 在一个持久严格 TLS 会话中发送有界负载，复用 `mqtt-lab-requirements.txt` 固定的 `paho-mqtt==2.1.0`。仅发布本设备的 event，不提交 OTA、不打开串口；正式 Server 的单次 OTA 与 UART 观察由唯一操作方另行协调。每帧固定4096 B，opcode 1后有3923 B按 run／序号确定的数据。最多4096帧、20帧/秒、360秒网络窗口；MQTT在途4、发送队列8、未设备对账128、观察队列256、归档32 MiB。最后15秒只收尾；连接和启动 gate各最多等待30秒。不同限额先到先停止，不自动升压或补发积压。
+
+开始前由唯一操作方取得同 boot 的原生 `business.status` 成功响应和 reported 原件，组成0600普通 JSON文件，精确两个键为 `business_status`、`reported`，值为对应原生对象。基线须非 paused、计数可容纳全部请求；非零事件高水位须有成功且与独立业务计数相符的末结果。工具另等本次订阅收到的非 retained reported核对高水位、revision与末结果，再写 `ready.json`。此时操作方创建0600启动 gate，精确内容为 `{"schema_version":1,"run_id":"<本轮UUID>","operation_id":"<本次正式OTA原UUID>","device_id":"<设备UUID>","boot_id":"<本轮boot>","action":"start"}`；停止 gate同结构但 action为 `stop`。gate只协调宿主流程，不是设备写入或OTA提交。路径、UUID和以下示例均须替换为本轮实际输入：
+
+```bash
+python3 tools/business_event_load.py --host broker.example.test --port 8883 \
+  --ca-file /absolute/private/ca.pem --credentials-file /absolute/private/controller.json \
+  --management-key-file /absolute/private/key --baseline-file /absolute/private/baseline.json \
+  --device-id <设备UUID> --boot-id <本轮boot> --run-id <本轮UUID> --operation-id <正式OTA原UUID> \
+  --start-gate /absolute/private/start.json --stop-gate /absolute/private/stop.json \
+  --output /absolute/private/new-load-evidence --events 100 --rate 5 --duration-seconds 120
+python3 -B -m unittest discover -s tools -p 'test_business_event*.py' -v
+```
+
+所有输入为当前用户独占的0600非链接普通文件；controller文件沿用单帧工具的 username/password两字段。输出目录必须不存在，保留原始发送帧、写前意图、发布器自身 MID/PUBACK、设备 reported和最终摘要。停止发送后最多等原15秒回执期限；工具在实际消费回执时检查期限，排队回执若已过期也保守记录为 unknown，不以回调排队或迟到结果恢复确认。阻塞连接、阶段推进与写前归档都不能延长原期限；每次实际 publish前再次检查。断链、boot／revision变化、计数／摘要不符、超限或观察缺失立即关闭传输，unknown后不新增 publish、不重连、不重用序号。输入、gate和输出都不因重试覆盖；未决运行须先独立查证，不能另开目录当作自动重发入口。
+
+设备的 accepted/completed单位是事件序号，计数单位是 opcode以外的数据字节；业务失败也推进事件序号。只有末摘要及累计 `基线字节数 + 3923 × 已完成事件数` 同时相符才确认前缀。reported每5秒仅保留最新结果，连续升级到重启可能留下无法核对的尾部；摘要明确保留 `confirmed_through_sequence`、`unknown_tail`及仅 Broker确认项，不冒充逐条回执。操作方须独占所有业务写入；本机同UUID文件锁只排除本工具的并发进程，不能独立证明全局唯一写者。退出0只表示本次已尝试事件对账闭合，是否发满请求数另见 `requested_count_completed`；该工具与旁路订阅都不能证明实机连接PUBACK、满队列/outbox、各phase持续重叠或R5资格。原始UART、phase/Flash owner及正式OTA原ID仍须另行关联。
 
 ## 构建与回归
 
@@ -131,6 +149,17 @@ SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后
 `ESP_BASE_OTA_PHASE` 的 retire_inactive／prepare／select 和必要失败清理边界使用原 boot／operation／request ID、真实微秒时刻、结果与累计完成计数；候选身份仍从同 boot 的独立 firmware.status 原件绑定。边界时刻包住外层操作，含 begin 行打印开销，不能分拆冒称内部 erase／hash／verify 的精确耗时或逐阶段持续最大 MQTT 状态。聚合计数在 release 后发布，边界差值只代表已发布的完成观测；MQTT 联合覆盖仍须真实块请求、实际写入与 Broker 原始轨迹，不能仅凭异时 maxima 相加或健康控制记录推定同存峰值。
 
 以上行均位于容量 END 外，容量 schema2 字节与 BEGIN 截止不变；每个主动重启前及 OTA 失败持久化后、清理原请求前也保留最终 Flash 快照。观测仅使用48 B固定聚合数据、一个平台短临界锁、8 B OTA 交接时刻以及调用栈临时快照；`aggregate_storage_bytes` 仅为聚合数组与锁的 sizeof，不是全部固件开销。`ESP_BASE_FLASH_IO_OUTPUT` 记录本次快照和两行打印的实测窗口，明确不含它自身末行。所有新增代码、格式化、UART锁／线路、栈及调度成本均留在新候选的实际 ELF／资源／时延测量中，不加回门限，也不称聚合 max 覆盖了全部时间区间或未完成 holder。
+
+[`analyze_flash_phases.py`](analyze_flash_phases.py) 只读关联已封存原始 UART 中这三类行，绑定唯一 boot／operation／request，保存输入摘要、原行号、外层阶段边界和已发布完成 claim 差值。跨任务打印可能交错；工具按快照时间区间检查可确定先后的累计值，不用打印顺序制造因果。结果区分 `observed`、`missing`、`uncertain`；缺失阶段不等于未执行，`prepare` 不细分成内部擦写／验签，聚合最大值也可能来自本操作之前。它不代替容量解析、Broker 轨迹、完整候选身份或断电证据，未完成 holder、全区间最坏界及 R5／R6 始终未获资格。
+
+```bash
+python3 tools/analyze_flash_phases.py --boot-id <本轮bootUUID> \
+  --operation-id <原OTA操作UUID> --request-id <原设备请求UUID> \
+  --uart-log /absolute/private/sealed-raw-uart.log --json
+python3 -B -m unittest discover -s tools/tests -p test_analyze_flash_phases.py -v
+```
+
+可重复提供 `--uart-log`，最多16个文件、合计256 MiB、十万条观察行，每行最多16 KiB。输入必须是读取前后保持不变的非链接普通文件；字段损坏、截断行、重复输入、跨 boot／operation／request 或可确定的时间／计数回退均拒绝，不自动裁剪日志或拼接残行后冒称完整观察。exit 0 仅表示解析成功，阶段仍可能缺失或不确定；exit 2 表示输入被拒绝。
 
 ```bash
 IDF_PATH=/absolute/managed-sdk python3 tools/test_managed_sdk.py

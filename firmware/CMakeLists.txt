@@ -88,6 +88,10 @@ if(CONFIG_FREERTOS_SMP OR NOT CONFIG_FREERTOS_UNICORE OR NOT CONFIG_FREERTOS_USE
     ESP_BASE_CAPACITY_OBSERVER_LAB)
     message(FATAL_ERROR "ESP Base capacity facts require managed non-ROM TLSF, non-SMP unicore, trace instances, no poisoning/task-owner overhead and no LAB observer")
 endif()
+if(ESP_BASE_APP STREQUAL "esp_base" AND (NOT CONFIG_MQTT_USE_CUSTOM_CONFIG OR
+    NOT CONFIG_MQTT_POLL_READ_TIMEOUT_MS EQUAL 50))
+    message(FATAL_ERROR "ESP Base MQTT block OTA requires a 50 ms transport read poll; re-resolve the frozen sdkconfig")
+endif()
 if(ESP_BASE_APP STREQUAL "esp_base" AND NOT CONFIG_MBEDTLS_HAVE_TIME_DATE)
     message(FATAL_ERROR "ESP Base requires trusted TLS time validation")
 endif()
