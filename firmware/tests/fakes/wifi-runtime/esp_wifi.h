@@ -12,6 +12,7 @@
 #define WIFI_IF_STA 0
 #define WIFI_STORAGE_RAM 0
 #define WIFI_MODE_STA 1
+typedef enum { WIFI_PS_NONE, WIFI_PS_MIN_MODEM, WIFI_PS_MAX_MODEM } wifi_ps_type_t;
 
 typedef struct { bool nvs_enable; } wifi_init_config_t;
 #define WIFI_INIT_CONFIG_DEFAULT() ((wifi_init_config_t){0})
@@ -28,6 +29,7 @@ esp_err_t esp_wifi_init(const wifi_init_config_t *config);
 esp_err_t esp_wifi_deinit(void);
 esp_err_t esp_wifi_set_storage(int storage);
 esp_err_t esp_wifi_set_mode(int mode);
+esp_err_t esp_wifi_set_ps(wifi_ps_type_t type);
 esp_err_t esp_wifi_set_config(int interface, const wifi_config_t *config);
 esp_err_t esp_wifi_start(void);
 esp_err_t esp_wifi_stop(void);

@@ -17,6 +17,8 @@ TLS 使用 SDK 原生固定 RX／TX，内容上限保持 16,384／4,096 B。动�
 
 MQTT 使用官方自定义配置将 transport 读取轮询设为 50 ms。异步入队不会唤醒该轮询，默认 1 秒会让逐块 OTA 请求等待；正式 CMake 拒绝仍使用旧值的冻结 sdkconfig。队列仍为 1、API 锁保持启用，其余 MQTT 默认值与原隐式默认值一致；不新增唤醒任务或队列，也不延长 OTA 的 1／30／300 秒期限。轮询频率增加后的双板 CPU、功耗、资源与端到端吞吐须由对应正式候选实测。
 
+Wi-Fi 初始化显式使用 `WIFI_PS_NONE`，让持续在线的控制与逐块 OTA 接收不等待 AP 的 DTIM 唤醒；设置失败按原初始化路径释放驱动和网络资源。此模式增加无线功耗，未增加 Wi-Fi 缓冲或改变 MQTT 块大小；实际时延、吞吐和资源资格仍由对应签名候选的双板实测判断，配置值本身不证明故障已解决。
+
 Base 固定 Flash 观测保留每 boot 的 OTA／配置短 claim 计数与实测时间；OTA 的 retire／prepare／select 使用原 operation_id、request_id 和 boot_id 标记边界。观测继续沿用既有报告与主动重启点，不新增任务或动态分配。
 
 [C3 分区](partitions/c3-partition-table.csv)和 [ESP32 分区](partitions/esp32-partition-table.csv)均为双 `0x1e0000` app，移除业务包区。scratch、Base NVS 与 ESP32 旧 AT 区保持各自真实定位；新布局必须通过一次性有线装配迁入。旧 V3／损坏收据不能当作空状态，普通 app OTA 不能迁分区表。

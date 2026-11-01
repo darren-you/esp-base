@@ -14,6 +14,8 @@ const char *IP_EVENT = "ip";
 static int failed_stage;
 static int live_loop, live_queue, live_netif, live_wifi, live_handlers;
 static unsigned connect_calls, config_calls, start_calls, stop_calls;
+static unsigned power_save_calls;
+static wifi_ps_type_t power_save = WIFI_PS_MIN_MODEM;
 static esp_err_t stop_result = ESP_OK;
 static wifi_config_t selected_driver_config;
 static esp_netif_t netif;
@@ -30,6 +32,7 @@ enum {
     WIFI_INIT_FAILURE,
     WIFI_STORAGE_FAILURE,
     WIFI_MODE_FAILURE,
+    WIFI_POWER_SAVE_FAILURE,
     WIFI_HANDLER_FAILURE,
     IP_HANDLER_FAILURE,
     WIFI_CONFIG_FAILURE,
@@ -118,6 +121,14 @@ esp_err_t esp_wifi_set_storage(int storage)
 { assert(storage == WIFI_STORAGE_RAM && live_wifi == 1); return result_for(WIFI_STORAGE_FAILURE); }
 esp_err_t esp_wifi_set_mode(int mode)
 { assert(mode == WIFI_MODE_STA && live_wifi == 1); return result_for(WIFI_MODE_FAILURE); }
+esp_err_t esp_wifi_set_ps(wifi_ps_type_t type)
+{
+    assert(live_wifi == 1 && type == WIFI_PS_NONE && !live_handlers && !start_calls);
+    ++power_save_calls;
+    if (failed_stage == WIFI_POWER_SAVE_FAILURE) return ESP_FAIL;
+    power_save = type;
+    return ESP_OK;
+}
 esp_err_t esp_wifi_set_config(int interface, const wifi_config_t *config)
 {
     assert(interface == WIFI_IF_STA && live_wifi == 1 && config);
@@ -127,7 +138,11 @@ esp_err_t esp_wifi_set_config(int interface, const wifi_config_t *config)
     return result_for(WIFI_CONFIG_FAILURE);
 }
 esp_err_t esp_wifi_start(void)
-{ assert(live_wifi == 1); ++start_calls; return result_for(WIFI_START_FAILURE); }
+{
+    assert(live_wifi == 1 && power_save_calls == 1 && power_save == WIFI_PS_NONE);
+    ++start_calls;
+    return result_for(WIFI_START_FAILURE);
+}
 esp_err_t esp_wifi_stop(void) { assert(live_wifi == 1); ++stop_calls; return stop_result; }
 esp_err_t esp_wifi_connect(void) { assert(live_wifi == 1); ++connect_calls; return ESP_OK; }
 esp_err_t esp_wifi_disconnect(void) { assert(live_wifi == 1); return ESP_OK; }
@@ -350,6 +365,7 @@ int main(int argc, char **argv)
         esp_base_wifi_poll(1002);
         assert(esp_base_wifi_ready() && !strcmp(esp_base_wifi_state(), "connected"));
         lifecycle(&config);
+        assert(power_save_calls == 1 && power_save == WIFI_PS_NONE);
     } else if (failed_stage == WIFI_CONFIG_FAILURE || failed_stage == WIFI_START_FAILURE) {
         /* Initialized but never active: an equal selection retries start. */
         unsigned before_config = config_calls;

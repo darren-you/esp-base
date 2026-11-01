@@ -172,6 +172,9 @@ esp_err_t esp_base_wifi_start(const ebase_wifi_config_t *config)
     if (error != ESP_OK) goto release_netif;
     error = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (error == ESP_OK) error = esp_wifi_set_mode(WIFI_MODE_STA);
+    /* This continuously connected controller exchanges one acknowledged OTA
+     * block at a time. Do not defer downlink delivery until the AP's DTIM. */
+    if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
     if (error != ESP_OK) goto release_driver;
     error = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, event_received, NULL, &s_wifi_handler);
     if (error != ESP_OK) goto release_driver;
