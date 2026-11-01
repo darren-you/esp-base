@@ -11,6 +11,8 @@
 static void protocol_test_free(void *data);
 static int protocol_test_fcntl(int fd, int command, ...);
 static size_t protocol_test_fwrite(const void *, size_t, size_t, FILE *);
+static void protocol_test_log(const char *, const char *, ...);
+#define ESP_LOGI(tag, ...) protocol_test_log(tag, __VA_ARGS__)
 #define fwrite protocol_test_fwrite
 #define free protocol_test_free
 #define fcntl protocol_test_fcntl
@@ -18,6 +20,16 @@ static size_t protocol_test_fwrite(const void *, size_t, size_t, FILE *);
 #undef free
 #undef fcntl
 #undef fwrite
+
+static char reported_log[2048];
+static void protocol_test_log(const char *tag, const char *format, ...)
+{
+    if (strcmp(tag, "base_reported") != 0) return;
+    va_list args; va_start(args, format);
+    int count = vsnprintf(reported_log, sizeof reported_log, format, args);
+    va_end(args);
+    assert(count >= 0 && (size_t)count < sizeof reported_log);
+}
 
 static int serial_flags, serial_failure, serial_vfs_mode;
 static bool serial_installed;
@@ -691,6 +703,16 @@ static void check_ota_phase_observation(void)
 
 int main(void)
 {
+    reset_case();
+    esp_base_control_state_set_ota_pending(&s_control_state, true);
+    reported();
+    assert(strstr(reported_log, " boot_ready=false"));
+    assert(strstr(reported_log, s_boot_id) && strstr(reported_log, s_context.device_id));
+    assert(!strstr(latest_reported, "boot_ready")); /* MQTT JSON stays unchanged. */
+    esp_base_control_state_set_ota_pending(&s_control_state, false);
+    reported();
+    assert(strstr(reported_log, " boot_ready=true"));
+    assert(!strstr(latest_reported, "boot_ready"));
     check_serial_console();
     check_config_flash_observation();
     check_ota_phase_observation();

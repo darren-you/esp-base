@@ -26,6 +26,10 @@ ota.result 的 result 精确五项：operation_id、sha256、image_size_bytes、
 
 V4 为 182 B 固件独立记录。旧 V3、旧长度、损坏、未知或读取失败一律存储不确定；不能自动清空或改成新操作。首次有线迁入审计旧终态、受限归档原收据与物理证据后才在离线候选中退役旧运行键，保留 UUID／配置／revision／凭据。布局／镜像身份替换后旧原 ID 在设备返回 unknown，其历史通过迁入收据核对；新 OTA 的原 ID 持久查询合同保持。未决或损坏迁入阻断，不通过清 NVS 解决。
 
+## 本机启动观察
+
+本机串口每 5 秒的 `ESP_BASE_REPORTED` 日志在同一行绑定 device_id、boot_id 和 `boot_ready`。`boot_ready=true` 来自控制状态中的启动验证门已解除；main 只在本地初始化、必要的 pending 验证／持久收据恢复和启动 storage claim 释放成功后解除该门。它只授予消费者发起独立固件查询的准备依据，不代替完整 signed 镜像身份或升级成功收据。此字段不改变 MQTT reported 的精确 JSON 合同。单次 `ESP_BASE_READY` 日志可能在主机重开串口前丢失，不能要求主机一定捕获它。
+
 ## 原生业务
 
 business.status result 精确三项：byte_count、state（idle／active／paused）、window_deadline_uptime_ms。business.pause／resume 使用七字段写身份与空 parameters；复用请求守卫。暂停保留计数并清定时窗口，恢复只允许 paused→idle。新启动计数、状态和最近事件重置，不持久化暂停。

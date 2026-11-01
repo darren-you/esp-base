@@ -168,11 +168,12 @@ static void reported(void)
 {
     const uint64_t now = uptime_ms();
     const bool time_ready = esp_base_time_ready();
+    const bool boot_ready = !esp_base_control_state_ota_pending(&s_control_state);
     ESP_LOGI("base_reported",
         "ESP_BASE_REPORTED schema=1 boot_id=%s uptime_ms=%" PRIu64
         " free_heap=%" PRIu32 " min_free_heap=%" PRIu32
         " device_id=%s firmware=%s chip=%s flash=%" PRIu32 " config_generation=%" PRIu32
-        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s ota_received=%" PRIu32 " ota_total=%" PRIu32,
+        " reset=%s provisioned=%s wifi_state=%s time_ready=%s mqtt_state=%s ota_received=%" PRIu32 " ota_total=%" PRIu32 " boot_ready=%s",
         s_boot_id, now, esp_get_free_heap_size(),
         (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT), s_context.device_id,
         s_context.firmware_version, s_context.chip_model, s_context.flash_size_bytes,
@@ -180,7 +181,7 @@ static void reported(void)
         s_context.config.wifi.configured ? "true" : "false", esp_base_wifi_state(),
         time_ready ? "true" : "false", esp_base_mqtt_owner_state(),
         (uint32_t)atomic_load_explicit(&s_ota_received, memory_order_relaxed),
-        s_ota_active ? s_ota_request->image_size_bytes : 0);
+        s_ota_active ? s_ota_request->image_size_bytes : 0, boot_ready ? "true" : "false");
     char digest[67] = "null", completed[24] = "null", business_result[16] = "null";
     if (s_business.last_event_sequence) {
         (void)snprintf(completed, sizeof completed, "%" PRIu64, s_business.last_event_sequence);
