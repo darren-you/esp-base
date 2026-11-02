@@ -911,8 +911,17 @@ static bool handle_mqtt_event(const ebase_mqtt_event_view_t *event, void *contex
     (void)context;
     if (!event) return false;
     uint8_t digest[32]; size_t written = 0;
-    if (psa_hash_compute(PSA_ALG_SHA_256, event->event, event->event_size_bytes,
-                         digest, 32, &written) != PSA_SUCCESS || written != 32) return false;
+    const psa_status_t hashed = psa_hash_compute(PSA_ALG_SHA_256, event->event,
+                                               event->event_size_bytes, digest, 32, &written);
+    if (hashed != PSA_SUCCESS || written != 32) {
+        static bool hash_failure_logged;
+        if (!hash_failure_logged) {
+            hash_failure_logged = true;
+            ESP_LOGE("base_mqtt_event", "payload hash failed status=%ld bytes=%u",
+                     (long)hashed, (unsigned)written);
+        }
+        return false;
+    }
     s_business.last_result = ebase_business_event(&s_business, event->event,
                                                   event->event_size_bytes, uptime_ms());
     s_business.last_event_sequence = event->event_sequence;

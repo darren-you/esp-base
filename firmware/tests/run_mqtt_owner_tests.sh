@@ -13,6 +13,7 @@ trap 'rm -rf -- "$build_dir"' EXIT
 read -r -a openssl_cflags <<< "$(pkg-config --cflags openssl)"
 read -r -a openssl_libs <<< "$(pkg-config --libs openssl)"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -DESP_BASE_TEST_CAPTURE_LOG=1 \
   "${openssl_cflags[@]}" -I "$test_root/tests/fakes/network-auth" \
   -I "$test_root/tests/fakes" -I "$test_root/components/device_protocol/include" \
   -I "$test_root/components/remote_config/include" \

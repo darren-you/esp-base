@@ -4,6 +4,7 @@
 #include "emqtt.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <openssl/crypto.h>
 #include <openssl/hmac.h>
@@ -30,6 +31,25 @@ static char last_topic[EMQTT_TOPIC_MAX + 1], last_payload[EMQTT_PUBLISH_PAYLOAD_
 static uint8_t last_qos;
 static bool last_retain;
 static size_t last_length;
+static unsigned frame_rejections, sequence_gaps, handler_rejections, auth_failures;
+void esp_base_test_log(const char *tag, const char *format, ...)
+{
+    char message[192];
+    va_list args;
+    va_start(args, format);
+    const int length = vsnprintf(message, sizeof message, format, args);
+    va_end(args);
+    assert(length >= 0 && (size_t)length < sizeof message);
+    if (!strcmp(tag, "base_mqtt_event")) {
+        if (!strncmp(message, "frame rejected ", 15)) ++frame_rejections;
+        else if (!strcmp(message, "sequence gap expected=1 received=2")) ++sequence_gaps;
+        else if (!strcmp(message, "handler rejected sequence=1")) ++handler_rejections;
+        else assert(false);
+    } else if (!strcmp(tag, "base_auth")) {
+        assert(strstr(message, "inbound authentication failed stage=verify status="));
+        ++auth_failures;
+    }
+}
 bool emqtt_get_capacity_snapshot(const emqtt_runtime_t *instance, emqtt_capacity_stats_t *out)
 {
     assert(instance == &runtime);
@@ -347,10 +367,12 @@ int main(void)
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
     assert(business_events == 0U && business_event_attempts == 1U &&
            esp_base_mqtt_owner_event_sequence() == 0U);
+    assert(handler_rejections == 1U && sequence_gaps == 0U);
     push_business_event(2U, false, false);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
     assert(business_events == 0U && business_event_attempts == 1U &&
            esp_base_mqtt_owner_event_sequence() == 0U);
+    assert(sequence_gaps == 1U);
     push_business_event(1U, false, false);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
     assert(business_events == 0U && business_event_attempts == 2U &&
@@ -364,6 +386,7 @@ int main(void)
     push_business_event(1U, true, false);
     push_business_event(1U, false, true);
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
+    assert(frame_rejections == 1U && auth_failures == 1U);
     assert(business_events == 1U && business_event_attempts == 3U &&
            esp_base_mqtt_owner_event_sequence() == 1U);
     accept_event = false;
@@ -380,6 +403,7 @@ int main(void)
     esp_base_mqtt_owner_poll(1, true, true, received, received_event, &runtime);
     assert(business_events == 2U && business_event_attempts == 6U &&
            esp_base_mqtt_owner_event_sequence() == 2U);
+    assert(handler_rejections == 1U && sequence_gaps == 1U);
 
     push_command(captured.subscriptions[0].topic, false, false);
     push_command(captured.subscriptions[0].topic, true, false);
@@ -503,5 +527,7 @@ int main(void)
     assert(destroys == 2 && !strcmp(esp_base_mqtt_owner_state(), "unconfigured") &&
            !esp_base_mqtt_owner_result("{}", 2));
     ota_owner_tests();
+    assert(frame_rejections == 1U && auth_failures == 1U &&
+           handler_rejections == 1U && sequence_gaps == 1U);
     puts("mqtt_owner passed (TLS/UUID, SUBACK, real HMAC, OTA binding, bounded outbox, reconnect, revoke)");
 }

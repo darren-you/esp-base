@@ -2,6 +2,19 @@
 #include "esp_base_network_auth.h"
 
 #include "psa/crypto.h"
+#include "esp_log.h"
+
+/* Only the control owner authenticates inbound frames. Preserve the first
+ * cryptographic failure for this boot without printing keys, tags or data. */
+static bool s_auth_failure_logged;
+
+static void note_auth_failure(const char *stage, psa_status_t status)
+{
+    if (s_auth_failure_logged) return;
+    s_auth_failure_logged = true;
+    ESP_LOGE("base_auth", "inbound authentication failed stage=%s status=%ld",
+             stage, (long)status);
+}
 
 static void wipe_tag(uint8_t tag[EBASE_MANAGEMENT_TAG_BYTES])
 {
@@ -58,11 +71,16 @@ bool ebase_management_authenticate(
     psa_key_id_t key_id = 0;
     const psa_status_t imported = psa_import_key(&attributes, key, EBASE_MANAGEMENT_KEY_BYTES, &key_id);
     psa_reset_key_attributes(&attributes);
-    if (imported != PSA_SUCCESS) return false;
+    if (imported != PSA_SUCCESS) {
+        note_auth_failure("import", imported);
+        return false;
+    }
 
     const psa_status_t verified = psa_mac_verify(
         key_id, PSA_ALG_HMAC(PSA_ALG_SHA_256), request, request_length,
         tag, EBASE_MANAGEMENT_TAG_BYTES);
     const psa_status_t destroyed = psa_destroy_key(key_id);
+    if (verified != PSA_SUCCESS) note_auth_failure("verify", verified);
+    else if (destroyed != PSA_SUCCESS) note_auth_failure("destroy", destroyed);
     return verified == PSA_SUCCESS && destroyed == PSA_SUCCESS;
 }

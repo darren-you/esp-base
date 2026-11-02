@@ -32,7 +32,7 @@ CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}
   -o "$BUILD_DIR/native_business_test"
 "$BUILD_DIR/native_business_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
-  -I "$ROOT/tests/fakes/network-auth" -I "$ROOT/components/device_protocol/include" \
+  -I "$ROOT/tests/fakes/network-auth" -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
   "$ROOT/components/device_protocol/network_auth.c" \
   "$ROOT/components/device_protocol/mqtt_command.c" \
   "$ROOT/components/device_protocol/mqtt_event.c" \

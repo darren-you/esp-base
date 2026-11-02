@@ -19,6 +19,7 @@ static uint8_t s_management_key[EBASE_MQTT_KEY_BYTES];
 static bool s_configured, s_started, s_ready, s_failed, s_network_ready;
 static uint64_t s_retry_after_ms;
 static uint64_t s_event_sequence;
+static uint8_t s_event_diagnostics;
 static int s_restart_result_id;
 static bool s_restart_result_acknowledged;
 static char s_ota_operation_id[37];
@@ -139,7 +140,10 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
     scratch->subscriptions[2].qos = 1;
     memcpy(s_management_key, config->management_key, sizeof s_management_key);
     memcpy(s_device_id, device_id, strlen(device_id) + 1);
-    if (strcmp(s_boot_id, boot_id) != 0) s_event_sequence = 0;
+    if (strcmp(s_boot_id, boot_id) != 0) {
+        s_event_sequence = 0;
+        s_event_diagnostics = 0;
+    }
     memcpy(s_boot_id, boot_id, strlen(boot_id) + 1);
     const esp_err_t result = emqtt_create(scratch, &s_runtime);
     wipe(scratch, sizeof *scratch);
@@ -240,15 +244,34 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
                         s_event.message.payload, s_event.message.length, &verified))
                     command_handler(verified.request, verified.request_length, context);
             }
-            if (s_ready && event_handler && s_event_sequence != UINT64_MAX) {
+            if (s_ready && event_handler && s_event_sequence != UINT64_MAX &&
+                !strcmp(s_event.message.topic, s_topics[EBASE_MQTT_EVENT])) {
                 ebase_mqtt_event_view_t verified;
-                if (ebase_mqtt_verified_event(s_management_key, s_device_id,
+                if (!ebase_mqtt_verified_event(s_management_key, s_device_id,
                         s_boot_id, s_event.message.topic, s_event.message.qos,
                         s_event.message.retain, s_event.message.payload,
-                        s_event.message.length, &verified) &&
-                    verified.event_sequence == s_event_sequence + 1U &&
-                    event_handler(&verified, context)) {
+                        s_event.message.length, &verified)) {
+                    if (!(s_event_diagnostics & 1U)) {
+                        s_event_diagnostics |= 1U;
+                        ESP_LOGE("base_mqtt_event", "frame rejected bytes=%u qos=%u retained=%u",
+                            (unsigned)s_event.message.length, (unsigned)s_event.message.qos,
+                            (unsigned)s_event.message.retain);
+                    }
+                } else if (verified.event_sequence > s_event_sequence + 1U) {
+                    if (!(s_event_diagnostics & 2U)) {
+                        s_event_diagnostics |= 2U;
+                        ESP_LOGE("base_mqtt_event", "sequence gap expected=%llu received=%llu",
+                            (unsigned long long)(s_event_sequence + 1U),
+                            (unsigned long long)verified.event_sequence);
+                    }
+                } else if (verified.event_sequence == s_event_sequence + 1U &&
+                           event_handler(&verified, context)) {
                     s_event_sequence = verified.event_sequence;
+                } else if (verified.event_sequence == s_event_sequence + 1U &&
+                           !(s_event_diagnostics & 4U)) {
+                    s_event_diagnostics |= 4U;
+                    ESP_LOGE("base_mqtt_event", "handler rejected sequence=%llu",
+                        (unsigned long long)verified.event_sequence);
                 }
             }
             break;
