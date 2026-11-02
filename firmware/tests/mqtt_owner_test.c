@@ -531,3 +531,14 @@ int main(void)
            handler_rejections == 1U && sequence_gaps == 1U);
     puts("mqtt_owner passed (TLS/UUID, SUBACK, real HMAC, OTA binding, bounded outbox, reconnect, revoke)");
 }
+
+/* This fixture checks installation/lifecycle; the real observer is exercised
+ * by flash_phase_observation_test, and the real SDK sampling by esp-mqtt. */
+void esp_base_flash_phase_read(void *context, emqtt_capacity_context_t *out)
+{ (void)context; *out=(emqtt_capacity_context_t){0}; }
+void esp_base_flash_phase_sample(void *context, const emqtt_capacity_context_t *identity,
+    const emqtt_capacity_sample_t *sample)
+{ (void)context; (void)identity; (void)sample; }
+esp_err_t emqtt_set_capacity_observer(emqtt_runtime_t *instance,
+    emqtt_capacity_read_context_t read_context, emqtt_capacity_observe_t observe, void *context)
+{ assert(instance && read_context && observe && context==NULL); return ESP_OK; }

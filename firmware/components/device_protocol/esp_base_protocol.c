@@ -372,6 +372,7 @@ static void poll_mqtt_restart(uint64_t now)
     s_mqtt_restart_pending = false;
     esp_base_capacity_before_reset(s_boot_id, uptime_ms());
     esp_base_flash_observation_emit(s_boot_id);
+    esp_base_flash_phase_emit(s_boot_id);
     esp_restart();
 }
 
@@ -506,6 +507,8 @@ static void clear_ota_request(void)
     if (s_ota_request == NULL) return;
     /* Preserve the completed history before the original operation is freed. */
     esp_base_flash_observation_emit(s_boot_id);
+    esp_base_flash_phase_emit(s_boot_id);
+    esp_base_flash_phase_unbind();
     volatile unsigned char *bytes = (volatile unsigned char *)s_ota_request;
     for (size_t index = 0; index < sizeof *s_ota_request; ++index) bytes[index] = 0U;
     free(s_ota_request);
@@ -522,6 +525,9 @@ static void ota_progress(uint32_t received, uint32_t total, void *context)
 static void observe_ota_phase(const char *phase, const char *boundary,
                               eota_result_t result)
 {
+    esp_base_flash_phase_scope(!strcmp(boundary, "begin") && !strcmp(phase, "prepare") ?
+        ESP_BASE_FLASH_SCOPE_PREPARE : !strcmp(boundary, "begin") && !strcmp(phase, "select") ?
+        ESP_BASE_FLASH_SCOPE_SELECT : ESP_BASE_FLASH_SCOPE_OTHER);
     esp_base_flash_observation_t metrics[ESP_BASE_FLASH_CONSUMER_COUNT];
     const int64_t started_us = esp_timer_get_time();
     esp_base_flash_observation_snapshot(metrics);
@@ -544,6 +550,8 @@ static void ota_task(void *argument)
     /* Full signed-set observation can take seconds. Keep it off the control
      * owner, under the already acquired transaction claim. No retirement,
      * stream request or app write may precede the durable intent readback. */
+    esp_base_flash_phase_bind(s_boot_id, s_ota_request->operation_id,
+        s_guard.entries[s_ota_slot].request_id, false);
     const uint64_t registration_started_ms = uptime_ms();
     const esp_base_ota_receipt_result_t registration = esp_base_ota_receipt_register(
         s_context.device_id, s_ota_request, &s_ota_storage_claim);
@@ -689,6 +697,7 @@ static void poll_ota(void)
         (void)fsync(STDOUT_FILENO);
         esp_base_capacity_before_reset(s_boot_id, uptime_ms());
         esp_base_flash_observation_emit(s_boot_id);
+        esp_base_flash_phase_emit(s_boot_id);
         esp_restart();
         return;
     }
@@ -905,6 +914,7 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_base_capacity_before_reset(s_boot_id, uptime_ms());
     esp_base_flash_observation_emit(s_boot_id);
+    esp_base_flash_phase_emit(s_boot_id);
     esp_restart();
 }
 
@@ -1046,9 +1056,11 @@ static void control_task(void *argument)
         poll_network_owners(now);
         poll_mqtt_restart(uptime_ms());
         esp_base_capacity_poll(s_boot_id, uptime_ms());
+        esp_base_flash_phase_poll(s_boot_id);
         if (now >= next_report) {
             reported();
             esp_base_flash_observation_emit(s_boot_id);
+            esp_base_flash_phase_report_request();
             next_report = now + 5000;
         }
         expire_serial_input(now, last_input);

@@ -475,3 +475,11 @@ int main(void)
     assert(!rebooted() && receipt_load_calls == 0 && mark_calls == 0 && ready_logs == 1);
     puts("  ota_startup passed (firmware-only recovery, 30-second local progress, rollback, short Flash I/O)");
 }
+
+bool esp_base_ota_policy_bind_observer(eota_observer_t observer)
+{ assert(observer.observe); return true; }
+esp_err_t eota_confirm_pending_observed(eota_current_t *current, const eota_observer_t *observer)
+{ assert(observer); return eota_confirm_pending(current); }
+
+const char *esp_base_protocol_boot_id(void)
+{ return "11111111-1111-4111-8111-111111111111"; }

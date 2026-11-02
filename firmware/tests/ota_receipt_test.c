@@ -32,8 +32,10 @@ static unsigned slot_observations, change_geometry_at_observation;
 static bool change_slots_after_observation, release_claim_after_observation, release_claim_during_commit;
 enum { NO_FAULT, INIT_FAULT, READ_FAULT, OPEN_WRITE_FAULT, SET_BEFORE_FAULT, SET_AFTER_FAULT, COMMIT_FAULT, READBACK_FAULT, READBACK_MISMATCH };
 
+static void assert_observer_idle(void);
 static void reset(void)
 {
+    assert_observer_idle();
     assert(!flash_io_active);
     if (esp_base_storage_claim_active(&transaction_claim))
         assert(esp_base_storage_release(&transaction_claim));
@@ -208,10 +210,23 @@ esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *output, size_
     *size = stored_size;
     return ESP_OK;
 }
+static uint32_t observer_stage;
+static unsigned observer_begins, observer_ends;
+static void assert_observer_idle(void)
+{ assert(!observer_stage && observer_begins == observer_ends); }
+static void receipt_observer(void *context, uint32_t stage, bool active)
+{
+    assert(context == &observer_stage && flash_io_active && stage >= 9 && stage <= 14);
+    if (active) { assert(!observer_stage); observer_stage=stage; ++observer_begins; }
+    else { assert(observer_stage==stage); observer_stage=0; ++observer_ends; }
+}
+
 esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *data, size_t size)
 {
     assert(flash_io_active);
     assert(handle == 1 && handles == 1 && !strcmp(key, "operation") && size == RECEIPT_BYTES);
+    const uint32_t status = ((const uint8_t *)data)[5];
+    assert(observer_stage == (status == 1 ? 9U : status == 2 ? 11U : 13U));
     ++writes;
     if (fault == SET_BEFORE_FAULT) return ESP_FAIL;
     memcpy(staged, data, size);
@@ -224,6 +239,7 @@ esp_err_t nvs_commit(nvs_handle_t handle)
 {
     assert(flash_io_active);
     assert(handle == 1 && handles == 1);
+    assert(observer_stage == (staged[5] == 1 ? 10U : staged[5] == 2 ? 12U : 14U));
     ++commits;
     if (fault == COMMIT_FAULT) return ESP_FAIL;
     memcpy(stored, staged, sizeof stored);
@@ -248,6 +264,8 @@ static void check_balanced(void)
 
 int main(void)
 {
+    assert(esp_base_ota_policy_bind_observer((eota_observer_t){receipt_observer,&observer_stage}));
+    assert(!esp_base_ota_policy_bind_observer((eota_observer_t){receipt_observer,&observer_stage}));
     assert(esp_base_ota_policy_bind_flash_io((eota_flash_io_t){
         .acquire = acquire_flash_io,
         .release = release_flash_io,

@@ -93,3 +93,18 @@ restart 先回 running，延迟并让已认证回执排出；客户端必须读�
 ## 旧配置与退役边界
 
 分区表与闲置 scratch 原字节保持；旧 v3 配置只经严格校验移除退役字段，保留 revision、Wi-Fi/MQTT 和旧签名固件可读格式，提交后独立 SHA-256 读回。具体合同见 [remote_config](../../firmware/components/remote_config/README.md)。历史运行证据由 Git 与 Issue #35 保留。
+
+
+## Flash 调用与 MQTT 共同观察
+
+生产诊断用 `ESP_BASE_FLASH_CONTEXT` 将本 boot 内不复用的整数 context 绑定原 `operation_id`。请求 boot 同时绑定原 `request_id`；重启恢复只从 V4 原收据取得 operation，输出 `request_id=none`，不改 182 B 格式或伪造前 boot 请求。映射在 Flash/MQTT 锁外输出。独立调用序号在同一 boot 内不复用；嵌套、计数耗尽或倒退时钟使观察永久失效，不能改变业务结果。
+
+通用 OTA 的可选只读回调包围实际 SDK 的退役擦除、begin、app write、完整镜像验签、end、选槽、确认与失效调用；Base 另分别标识登记、失败和成功收据的 `nvs_set_blob` 与 `nvs_commit`。`set_blob` 本身可能写 Flash，commit 包围区间不能冒充全部 NVS 写入。回调只维护固定整数，不打印、不分配、不调用 MQTT，不修改调度或期限策略。固定静态存储、回调栈、短临界区和输出调度成本仍实际存在并计入。调用包围区间含 begin 返回与实际调用前等调度间隙；不等同于 Flash 电脉冲、纯验签耗时或整个阶段持续满载。
+
+MQTT 只在实际未完成 DATA 回调中，于共同 owner／outbox 扫描前后读取活动 context。两个完整整数身份相同且有效时，才将这次实际 tuple 交给 Base；历史全局峰不参与。Base 使用 16 个固定阶段槽；来源／恢复的 image verify 与 prepare 候选验签、select 候选复验分别记录，登记早期峰不能授予后继候选验签资格。selector API 可能选择目标或恢复旧槽，单凭该样本不区分两者，须另核最终槽读回。Base 每阶段保留一份完整共同样本，先比较 owner 字节，再比较该样本的 outbox；相等时取更新样本，不能拼接两个独立最大值。回调晚到但仍属最后一次调用时可保留，已切到另一调用或 context 时保守丢弃，不误绑定。没有观测到样本表示缺证，不推断阶段没执行。
+
+`ESP_BASE_FLASH_JOINT` 给出阶段、调用身份及包围边界、实际样本时段、runtime 实例、完整与未完成 owner、outbox、metadata 和固定观察成本。原五秒控制报告只安排 dirty 行；既有 control pass 每轮至多输出一行，操作结束或重启前才同步 flush。未绑定时不重复旧样本。全部打印发生在物理 Flash claim／MQTT API 锁之外；观察成本计入真实候选的 RAM、栈与运行时，不从门限加回。
+
+严格入口为 `python3 tools/analyze_flash_joint.py --boot-id <UUID> --operation-id <UUID> --request-id <UUID> --uart-log <原件>`；恢复 boot 省略 request 参数。它拒绝跨身份、重用 ID、截断原件、错误字节几何、样本越过调用边界、历史回退与失效后恢复，不自动授完整 R5。`analyze_flash_phases.py` 继续只分析旧聚合／外层阶段，新的共同记录由专用解析器核对。堆 region 和栈仍用正式完整容量帧及连续历史下界覆盖样本时刻；分次读取不宣称原子“同一时刻全部资源快照”。业务 HMAC／序号／确认、完整候选与 outbox 最大合法窗口仍需独立对账。
+
+实际可达性决定联合范围：旧 boot 的网络 OTA 可与写入、验签、选槽及登记／失败收据共同观察；同一物理 Flash claim 保护的不同 SDK 调用本来互斥，不能要求它们同时执行。新 boot 在本地 pending 自检、确认和成功收据期间，`poll_network_owners` 跳过整个 MQTT owner；成功落账后才清除 pending，因此这些阶段与 MQTT runtime 结构上不能同存。保留这个启动顺序，不为采峰提前开放网络；新 boot 的正确确认／持久成功继续独立验收，不能用旧 boot 的四帧代替。

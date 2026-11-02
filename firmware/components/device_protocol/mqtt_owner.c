@@ -5,6 +5,7 @@
 #include "esp_base_mqtt_command.h"
 #include "esp_base_command_guard.h"
 #include "emqtt.h"
+#include "esp_base_flash_phase.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -151,6 +152,13 @@ esp_err_t esp_base_mqtt_owner_configure(const ebase_mqtt_config_t *config,
         wipe(s_management_key, sizeof s_management_key);
         s_failed = true;
         return result;
+    }
+    const esp_err_t observer = emqtt_set_capacity_observer(s_runtime,
+        esp_base_flash_phase_read, esp_base_flash_phase_sample, NULL);
+    if (observer != ESP_OK) {
+        (void)esp_base_mqtt_owner_revoke();
+        s_failed = true;
+        return observer;
     }
     s_configured = true;
     return ESP_OK;

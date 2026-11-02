@@ -14,6 +14,16 @@ static eota_flash_io_t s_flash_io = {
     .release = unbound_flash_io,
 };
 static bool s_flash_io_bound;
+static eota_observer_t s_observer;
+static bool s_observer_bound;
+
+bool esp_base_ota_policy_bind_observer(eota_observer_t observer)
+{
+    if (s_observer_bound || !observer.observe) return false;
+    s_observer = observer;
+    s_observer_bound = true;
+    return true;
+}
 
 bool esp_base_ota_policy_bind_flash_io(eota_flash_io_t flash_io)
 {
@@ -38,5 +48,6 @@ eota_policy_t esp_base_ota_policy(bool trusted_time)
         .total_timeout_ms = 300000,
         .trusted_time = trusted_time,
         .flash_io = s_flash_io,
+        .observer = s_observer,
     };
 }

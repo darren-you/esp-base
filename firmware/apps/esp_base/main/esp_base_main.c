@@ -109,7 +109,8 @@ static esp_err_t inspect_with_flash_io(eota_current_t *ota)
 static esp_err_t confirm_pending_with_flash_io(eota_current_t *ota)
 {
     if (!ota_flash_acquire(&s_flash_io_owner)) return ESP_ERR_TIMEOUT;
-    const esp_err_t result = eota_confirm_pending(ota);
+    const eota_observer_t observer = esp_base_ota_policy(false).observer;
+    const esp_err_t result = eota_confirm_pending_observed(ota, &observer);
     return ota_flash_release(&s_flash_io_owner) ? result : ESP_FAIL;
 }
 
@@ -205,6 +206,7 @@ static bool reconcile_interrupted_ota(const char *device_id,
             ESP_BASE_OTA_FIRMWARE_OK;
     }
     if (loaded != ESP_BASE_OTA_RECEIPT_OK) return false;
+    esp_base_flash_phase_bind(esp_base_protocol_boot_id(), receipt->operation_id, NULL, true);
     const eota_policy_t policy = esp_base_ota_policy(false);
     eota_slots_t slots = {0};
     if (eota_observe_slots(&policy, &slots) != EOTA_UPDATE_OK ||
@@ -272,6 +274,9 @@ void app_main(void)
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED Flash I/O gate unavailable");
         return;
     }
+    (void)esp_base_ota_policy_bind_observer((eota_observer_t){
+        .observe = esp_base_flash_phase_observe,
+    });
     s_boot_storage_claim = (esp_base_storage_claim_t){0};
     if (!esp_base_storage_claim(&s_storage_owner, &s_boot_storage_claim)) {
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED storage owner unavailable");
@@ -447,6 +452,9 @@ void app_main(void)
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED success receipt not durable");
         return;
     }
+    esp_base_flash_observation_emit(esp_base_protocol_boot_id());
+    esp_base_flash_phase_emit(esp_base_protocol_boot_id());
+    esp_base_flash_phase_unbind();
     if (!esp_base_storage_release(&s_boot_storage_claim)) {
         ESP_LOGE(TAG, "ESP_BASE_OTA_RECOVERY_REQUIRED storage owner release failed");
         return;

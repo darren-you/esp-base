@@ -44,6 +44,10 @@ def require(condition, message):
 
 
 def parse(raw):
+    # These separate producer rows are validated by analyze_flash_joint.py;
+    # this tool retains only its original aggregate/outer-phase scope.
+    if raw.startswith((b"ESP_BASE_FLASH_CONTEXT ", b"ESP_BASE_FLASH_JOINT ")):
+        return None
     if b"ESP_BASE_FLASH_" not in raw and b"ESP_BASE_OTA_PHASE" not in raw:
         return None
     require(raw.endswith(b"\n") and len(raw) <= MAX_LINE, "观察行截断或过长")

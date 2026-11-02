@@ -33,4 +33,12 @@ typedef struct {
 /* Fixed, trusted Base firmware/partition policy; never derive it from ota.start. */
 /* Bind once at boot, before any OTA action. Unbound writes fail closed. */
 bool esp_base_ota_policy_bind_flash_io(eota_flash_io_t flash_io);
+/* Install once before starting any task. Observation never gates the action. */
+bool esp_base_ota_policy_bind_observer(eota_observer_t observer);
+#define ESP_BASE_STAGE_INTENT_SET 9U
+#define ESP_BASE_STAGE_INTENT_COMMIT 10U
+#define ESP_BASE_STAGE_FAILURE_SET 11U
+#define ESP_BASE_STAGE_FAILURE_COMMIT 12U
+#define ESP_BASE_STAGE_SUCCESS_SET 13U
+#define ESP_BASE_STAGE_SUCCESS_COMMIT 14U
 eota_policy_t esp_base_ota_policy(bool trusted_time);

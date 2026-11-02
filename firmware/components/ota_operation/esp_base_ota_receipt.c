@@ -164,8 +164,17 @@ static esp_base_ota_receipt_result_t write_unlocked(const uint8_t bytes[OTA_BYTE
     nvs_handle_t handle;
     esp_err_t error = nvs_open_from_partition(OTA_PARTITION, OTA_NAMESPACE, NVS_READWRITE, &handle);
     if (error != ESP_OK) return ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE;
+    const eota_observer_t observer = esp_base_ota_policy(false).observer;
+    const uint32_t stage = bytes[5] == OTA_STATUS_PREPARED ? ESP_BASE_STAGE_INTENT_SET :
+        bytes[5] == OTA_STATUS_FAILED ? ESP_BASE_STAGE_FAILURE_SET : ESP_BASE_STAGE_SUCCESS_SET;
+    if (observer.observe) observer.observe(observer.context, stage, true);
     error = nvs_set_blob(handle, OTA_KEY, bytes, OTA_BYTES);
-    if (error == ESP_OK) error = nvs_commit(handle);
+    if (observer.observe) observer.observe(observer.context, stage, false);
+    if (error == ESP_OK) {
+        if (observer.observe) observer.observe(observer.context, stage + 1U, true);
+        error = nvs_commit(handle);
+        if (observer.observe) observer.observe(observer.context, stage + 1U, false);
+    }
     nvs_close(handle);
     return error == ESP_OK ? ESP_BASE_OTA_RECEIPT_OK :
            ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;

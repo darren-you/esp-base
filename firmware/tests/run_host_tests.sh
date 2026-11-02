@@ -19,6 +19,11 @@ CAPACITY_LOCK_SHA256="$(shasum -a 256 "$ROOT/../sdk-lock.json" | awk '{print $1}
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
   "$ROOT/tests/flash_observation_test.c" -o "$BUILD_DIR/flash_observation_test"
+"${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -pthread -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$ROOT/tests/fakes" -I "$ROOT/components/device_protocol/include" \
+  -I "$COMPONENTS_DIR/mqtt/runtime/include" \
+  "$ROOT/tests/flash_phase_observation_test.c" -o "$BUILD_DIR/flash_phase_observation_test"
+"$BUILD_DIR/flash_phase_observation_test"
 "$BUILD_DIR/flash_observation_test"
 "$BUILD_DIR/producer_capacity_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -142,6 +147,7 @@ fi
   "$ROOT/components/native_business/esp_base_business.c" \
   "$BUILD_DIR/line_feed.o" "$BUILD_DIR/config_codec_real.o" "$BUILD_DIR/cJSON.o" \
   "$ROOT/components/device_protocol/flash_observation.c" \
+  "$ROOT/components/device_protocol/flash_phase_observation.c" \
   "$ROOT/tests/protocol_ota_owner_test.c" -o "$BUILD_DIR/protocol_ota_owner_test"
 "$BUILD_DIR/protocol_ota_owner_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -158,6 +164,8 @@ fi
   "$ROOT/components/ota_operation/esp_base_storage_owner.c" \
   "$ROOT/apps/esp_base/main/esp_base_main.c" \
   "$ROOT/components/device_protocol/flash_observation.c" \
+  -I "$COMPONENTS_DIR/mqtt/runtime/include" \
+  "$ROOT/components/device_protocol/flash_phase_observation.c" \
   "$ROOT/tests/ota_startup_test.c" -o "$BUILD_DIR/ota_startup_test"
 "$BUILD_DIR/ota_startup_test"
 

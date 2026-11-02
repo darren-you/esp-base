@@ -47,3 +47,5 @@ MQTT owner 的独立入口为 `bash firmware/tests/run_mqtt_owner_tests.sh`，�
 宿主 Python 控制、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。历史输入／实际结果见[原生软件检查点](../../docs/operations/native-software-checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
 
 SDK 假件职责目录统一为 `fakes/app-main`、`fakes/network-auth`、`fakes/mqtt-ota`、`fakes/mqtt-ota-clock`、`fakes/ota-firmware`、`fakes/ota-update` 和 `fakes/wifi-runtime`。读取入口是本目录的 `run_host_tests.sh`、`run_mqtt_owner_tests.sh` 与 `run_mqtt_ota_tests.sh`；它们不属于 ESP-IDF 组件，内部 SDK 头文件及 `psa/crypto.h` 等入口保持原合同。
+
+`flash_phase_observation_test.c` 使用真实 Base 只读阶段状态，核对共同 tuple、同值新调用替换、晚到样本、context 分离、计数／时钟失效、并发固定复制及周期每个 control pass 至多一行。receipt 故障矩阵在实际 NVS 假件入口断言登记／失败／成功 set 与 commit 的不同 stage，失败返回仍配对。`tools/tests/test_analyze_flash_joint.py` 拒绝跨 boot／原 ID、拼峰、越界、截断、重用和资格恢复。这些是自有源码／假件软件证据；实际调用同存、实体资源门与完整 R5 仍须最终签名候选验收，具体可达边界见[设备协议](../../docs/design/device-protocol.md#flash-调用与-mqtt-共同观察)。

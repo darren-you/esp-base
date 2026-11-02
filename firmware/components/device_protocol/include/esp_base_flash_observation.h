@@ -32,3 +32,23 @@ void esp_base_flash_observation_snapshot(
 /* Called after capacity END in the existing control report; creates no task,
  * timer, allocation or independent reporting period. */
 void esp_base_flash_observation_emit(const char *boot_id);
+
+/* Stage observer uses only bounded integer copies under a dedicated short lock.
+ * Bind/unbind and emit are called without a Flash or MQTT API lock. */
+void esp_base_flash_phase_bind(const char *boot_id, const char *operation_id,
+    const char *request_id, bool recovery);
+void esp_base_flash_phase_unbind(void);
+void esp_base_flash_phase_observe(void *context, uint32_t stage, bool active);
+void esp_base_flash_phase_emit(const char *boot_id);
+/* Existing 5-second report schedules changed rows; each control pass emits
+ * at most one. Synchronous emit above is reserved for terminal/reboot flush. */
+void esp_base_flash_phase_report_request(void);
+void esp_base_flash_phase_poll(const char *boot_id);
+/* Only the existing outer OTA worker changes this scope between SDK calls.
+ * Source/registration verification cannot qualify prepare/select verification. */
+typedef enum {
+    ESP_BASE_FLASH_SCOPE_OTHER,
+    ESP_BASE_FLASH_SCOPE_PREPARE,
+    ESP_BASE_FLASH_SCOPE_SELECT,
+} esp_base_flash_scope_t;
+void esp_base_flash_phase_scope(esp_base_flash_scope_t scope);
