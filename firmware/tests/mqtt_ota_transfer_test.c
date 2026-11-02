@@ -7,7 +7,7 @@
 #include <string.h>
 #include <time.h>
 
-enum { IMAGE_SIZE = 40 * 1024 + 19 };
+enum { IMAGE_SIZE = 40 * 2048 + 1024 + 19 };
 static atomic_bool finished;
 static uint32_t written_count;
 
@@ -57,7 +57,7 @@ int main(void)
     assert(esp_base_mqtt_ota_transfer_begin(IMAGE_SIZE, 10000, 2000));
     pthread_t thread;
     assert(pthread_create(&thread, NULL, worker, NULL) == 0);
-    uint8_t block[1024];
+    uint8_t block[2048];
     unsigned delivered = 0;
     const int64_t deadline = esp_timer_get_time() + 10000000;
     while (!atomic_load_explicit(&finished, memory_order_acquire)) {
@@ -66,13 +66,13 @@ int main(void)
         if (!esp_base_mqtt_ota_transfer_request(&request)) { vTaskDelay(1); continue; }
         assert(request.offset <= IMAGE_SIZE && request.written_offset <= request.offset);
         if (request.offset < IMAGE_SIZE) assert(request.written_offset == request.offset);
-        else assert(request.written_offset == 40 * 1024);
+        else assert(request.written_offset == 40 * 2048 + 1024);
         for (size_t i = 0; i < sizeof block; ++i) block[i] = (uint8_t)(request.offset + i);
         request.kind = request.offset == IMAGE_SIZE ? EBASE_MQTT_OTA_END : EBASE_MQTT_OTA_DATA;
         request.data = request.kind == EBASE_MQTT_OTA_DATA ? block : NULL;
         request.length = IMAGE_SIZE - request.offset;
         if (request.length > sizeof block) request.length = sizeof block;
-        request.tag[0] = (uint8_t)(request.offset / 1024 + 1);
+        request.tag[0] = (uint8_t)(request.offset / 2048 + 1);
         assert(esp_base_mqtt_ota_transfer_offer(&request) == EBASE_MQTT_OTA_ACCEPTED);
         ++delivered;
         assert(esp_base_mqtt_ota_transfer_offer(&request) == EBASE_MQTT_OTA_DUPLICATE);

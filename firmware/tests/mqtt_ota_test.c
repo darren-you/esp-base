@@ -71,9 +71,16 @@ static void codec_vectors(const char *path)
             memcpy(rebuilt, frame, length); rebuilt[bad_positions[i]] = 0xff;
             resign(rebuilt, length); assert(!decode(rebuilt, length, from_device));
         }
+        if (length == EBASE_MQTT_OTA_FRAME_BYTES) {
+            /* A valid MAC and matching length cannot admit a 2049-byte block. */
+            frame[EBASE_MQTT_OTA_HEADER_BYTES - 2] = (EBASE_MQTT_OTA_BLOCK_BYTES + 1) >> 8;
+            frame[EBASE_MQTT_OTA_HEADER_BYTES - 1] = (EBASE_MQTT_OTA_BLOCK_BYTES + 1) & 0xff;
+            resign(frame, length + 1);
+            assert(!decode(frame, length + 1, false));
+        }
         ++vectors;
     }
-    assert(fclose(file) == 0 && vectors == 5);
+    assert(fclose(file) == 0 && vectors == 6);
 }
 
 static ebase_mqtt_ota_frame_t response(ebase_mqtt_ota_frame_t request,
@@ -87,20 +94,20 @@ static ebase_mqtt_ota_frame_t response(ebase_mqtt_ota_frame_t request,
 static void stream_tests(void)
 {
     ebase_mqtt_ota_stream_t s = {0};
-    uint8_t bytes[1024], output[1024];
+    uint8_t bytes[2048], output[2048];
     memset(bytes, 0x5a, sizeof bytes);
     ebase_mqtt_ota_frame_t request, retry;
     assert(!ebase_mqtt_ota_stream_begin(&s, 1, UINT64_MAX - 10, 100, 30));
     assert(!ebase_mqtt_ota_stream_begin(&s, 1, 100, 0, 30));
-    assert(ebase_mqtt_ota_stream_begin(&s, 1027, 100, 1000, 200));
-    assert(!ebase_mqtt_ota_stream_begin(&s, 1027, 100, 1000, 200));
+    assert(ebase_mqtt_ota_stream_begin(&s, 2051, 100, 1000, 200));
+    assert(!ebase_mqtt_ota_stream_begin(&s, 2051, 100, 1000, 200));
     assert(ebase_mqtt_ota_stream_read(&s, 101, output, sizeof output) == -2);
     assert(ebase_mqtt_ota_stream_request(&s, 102, &request));
     assert(request.offset == 0 && request.written_offset == 0 && request.expires_at_uptime_ms == 300);
     assert(ebase_mqtt_ota_stream_request(&s, 103, &retry));
     assert(retry.expires_at_uptime_ms == request.expires_at_uptime_ms);
     ebase_mqtt_ota_frame_t block = response(request, EBASE_MQTT_OTA_DATA, bytes, sizeof bytes);
-    block.offset = 1024;
+    block.offset = 2048;
     assert(ebase_mqtt_ota_stream_offer(&s, 104, &block) == EBASE_MQTT_OTA_IGNORED);
     block.offset = 0; block.length--;
     assert(ebase_mqtt_ota_stream_offer(&s, 105, &block) == EBASE_MQTT_OTA_IGNORED);
@@ -112,29 +119,29 @@ static void stream_tests(void)
     assert(!ebase_mqtt_ota_stream_request(&s, 108, &retry));
     assert(ebase_mqtt_ota_stream_read(&s, 109, output, 64) == 64);
     assert(output[0] == 0x5a && output[63] == 0x5a && s.written_offset == 0);
-    assert(ebase_mqtt_ota_stream_read(&s, 110, output, sizeof output) == 960);
+    assert(ebase_mqtt_ota_stream_read(&s, 110, output, sizeof output) == 1984);
     assert(!ebase_mqtt_ota_stream_request(&s, 111, &retry));
-    assert(ebase_mqtt_ota_stream_written(&s, 112, 1024));
+    assert(ebase_mqtt_ota_stream_written(&s, 112, 2048));
     assert(ebase_mqtt_ota_stream_request(&s, 113, &request));
-    assert(request.offset == 1024 && request.written_offset == 1024);
+    assert(request.offset == 2048 && request.written_offset == 2048);
     assert(ebase_mqtt_ota_stream_offer(&s, 114, &block) == EBASE_MQTT_OTA_DUPLICATE);
     block = response(request, EBASE_MQTT_OTA_DATA, bytes, 3);
     assert(ebase_mqtt_ota_stream_offer(&s, 115, &block) == EBASE_MQTT_OTA_ACCEPTED);
     assert(ebase_mqtt_ota_stream_read(&s, 116, output, sizeof output) == 3);
     assert(ebase_mqtt_ota_stream_request(&s, 117, &request));
-    assert(request.offset == 1027 && request.written_offset == 1024);
+    assert(request.offset == 2051 && request.written_offset == 2048);
     assert(ebase_mqtt_ota_stream_read(&s, 118, output, 1) == -2); /* Length is not EOF. */
     block = response(request, EBASE_MQTT_OTA_END, NULL, 0);
     assert(ebase_mqtt_ota_stream_offer(&s, 119, &block) == EBASE_MQTT_OTA_ACCEPTED);
     assert(ebase_mqtt_ota_stream_read(&s, 120, output, 1) == 0);
     assert(ebase_mqtt_ota_stream_offer(&s, 121, &block) == EBASE_MQTT_OTA_DUPLICATE);
-    assert(ebase_mqtt_ota_stream_written(&s, 122, 1027));
+    assert(ebase_mqtt_ota_stream_written(&s, 122, 2051));
     assert(!ebase_mqtt_ota_stream_request(&s, 123, &request));
     ebase_mqtt_ota_stream_close(&s);
     assert(!s.active && !s.previous_valid && s.block[0] == 0);
 
     /* Conflicting duplicate, even after consuming bytes, latches a failure. */
-    assert(ebase_mqtt_ota_stream_begin(&s, 1024, 100, 1000, 200));
+    assert(ebase_mqtt_ota_stream_begin(&s, 2048, 100, 1000, 200));
     assert(ebase_mqtt_ota_stream_request(&s, 100, &request));
     block = response(request, EBASE_MQTT_OTA_DATA, bytes, sizeof bytes);
     assert(ebase_mqtt_ota_stream_offer(&s, 101, &block) == EBASE_MQTT_OTA_ACCEPTED);
@@ -146,7 +153,7 @@ static void stream_tests(void)
 
     /* Cancel both before data and while a copied block is in the worker. */
     for (unsigned after_data = 0; after_data < 2; ++after_data) {
-        assert(ebase_mqtt_ota_stream_begin(&s, 1024, 100, 1000, 200));
+        assert(ebase_mqtt_ota_stream_begin(&s, 2048, 100, 1000, 200));
         assert(ebase_mqtt_ota_stream_request(&s, 100, &request));
         block = response(request, EBASE_MQTT_OTA_DATA, bytes, sizeof bytes);
         if (after_data) assert(ebase_mqtt_ota_stream_offer(&s, 101, &block) == EBASE_MQTT_OTA_ACCEPTED);
@@ -157,17 +164,17 @@ static void stream_tests(void)
     }
     /* Retries, duplicate writes, backwards time and late packets cannot
      * extend the finite idle/total budget or fabricate a written byte. */
-    assert(ebase_mqtt_ota_stream_begin(&s, 1024, 100, 1000, 200));
+    assert(ebase_mqtt_ota_stream_begin(&s, 2048, 100, 1000, 200));
     assert(ebase_mqtt_ota_stream_request(&s, 100, &request));
     assert(ebase_mqtt_ota_stream_written(&s, 299, 0));
     assert(!ebase_mqtt_ota_stream_request(&s, 300, &retry));
     assert(s.error == EBASE_MQTT_OTA_STREAM_TIMEOUT);
     ebase_mqtt_ota_stream_close(&s);
-    assert(ebase_mqtt_ota_stream_begin(&s, 1024, 100, 1000, 200));
+    assert(ebase_mqtt_ota_stream_begin(&s, 2048, 100, 1000, 200));
     assert(!ebase_mqtt_ota_stream_written(&s, 101, 1));
     assert(s.error == EBASE_MQTT_OTA_STREAM_BAD_WRITE);
     ebase_mqtt_ota_stream_close(&s);
-    assert(ebase_mqtt_ota_stream_begin(&s, 1024, 100, 1000, 200));
+    assert(ebase_mqtt_ota_stream_begin(&s, 2048, 100, 1000, 200));
     assert(!ebase_mqtt_ota_stream_request(&s, 99, &request));
     assert(s.error == EBASE_MQTT_OTA_STREAM_TIMEOUT);
     ebase_mqtt_ota_stream_close(&s);
@@ -176,7 +183,7 @@ static void stream_tests(void)
 static void stream_many_blocks(void)
 {
     ebase_mqtt_ota_stream_t s = {0};
-    uint8_t data[1024] = {0}, copied[64];
+    uint8_t data[2048] = {0}, copied[64];
     ebase_mqtt_ota_frame_t request, block;
     assert(ebase_mqtt_ota_stream_begin(&s, 40 * sizeof data, 0, 4100, 200));
     for (uint32_t i = 0; i < 40; ++i) {
@@ -185,7 +192,7 @@ static void stream_many_blocks(void)
         assert(request.offset == i * sizeof data && request.written_offset == request.offset);
         block = response(request, EBASE_MQTT_OTA_DATA, data, sizeof data);
         assert(ebase_mqtt_ota_stream_offer(&s, now + 1, &block) == EBASE_MQTT_OTA_ACCEPTED);
-        for (unsigned part = 0; part < 16; ++part)
+        for (unsigned part = 0; part < 32; ++part)
             assert(ebase_mqtt_ota_stream_read(&s, now + 2, copied, sizeof copied) == 64);
         assert(ebase_mqtt_ota_stream_written(&s, now + 3, (i + 1) * sizeof data));
     }
@@ -194,8 +201,47 @@ static void stream_many_blocks(void)
      * nor grant a new block/EOF after its final idle deadline. */
     block = response(request, EBASE_MQTT_OTA_END, NULL, 0);
     assert(ebase_mqtt_ota_stream_offer(&s, 4100, &block) == EBASE_MQTT_OTA_REJECTED);
-    assert(s.error == EBASE_MQTT_OTA_STREAM_TIMEOUT && s.written_offset == 40960);
+    assert(s.error == EBASE_MQTT_OTA_STREAM_TIMEOUT && s.written_offset == 81920);
     ebase_mqtt_ota_stream_close(&s);
+}
+
+static void final_complete_flash_write_precedes_end_request(void)
+{
+    const uint32_t sizes[] = {1023, 1024, 1025, 2047, 2048, 2049, 3072, 3073};
+    uint8_t data[2048] = {0}, copied[64];
+    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; ++i) {
+        ebase_mqtt_ota_stream_t s = {0};
+        ebase_mqtt_ota_frame_t request;
+        assert(ebase_mqtt_ota_stream_begin(&s, sizes[i], 0, 1000, 200));
+        uint32_t read = 0;
+        while (read < sizes[i]) {
+            assert(ebase_mqtt_ota_stream_request(&s, 1, &request));
+            size_t length = sizes[i] - read;
+            if (length > sizeof data) length = sizeof data;
+            ebase_mqtt_ota_frame_t block = response(request, EBASE_MQTT_OTA_DATA, data, length);
+            assert(ebase_mqtt_ota_stream_offer(&s, 1, &block) == EBASE_MQTT_OTA_ACCEPTED);
+            const uint32_t end = read + (uint32_t)length;
+            while (read < end) {
+                const int count = ebase_mqtt_ota_stream_read(&s, 1, copied, sizeof copied);
+                assert(count > 0);
+                read += (uint32_t)count;
+                if (read % 1024 == 0) {
+                    /* Control may run after read, before worker commits Flash.
+                     * Even at EOF, it must not freeze a stale write ACK. */
+                    assert(!ebase_mqtt_ota_stream_request(&s, 1, &request));
+                    assert(ebase_mqtt_ota_stream_written(&s, 1, read));
+                }
+            }
+        }
+        assert(ebase_mqtt_ota_stream_request(&s, 1, &request));
+        assert(request.offset == sizes[i] && request.written_offset == sizes[i] / 1024 * 1024);
+        ebase_mqtt_ota_frame_t end = response(request, EBASE_MQTT_OTA_END, NULL, 0);
+        assert(ebase_mqtt_ota_stream_offer(&s, 1, &end) == EBASE_MQTT_OTA_ACCEPTED);
+        assert(ebase_mqtt_ota_stream_read(&s, 1, copied, 1) == 0);
+        assert(ebase_mqtt_ota_stream_written(&s, 1, sizes[i]));
+        assert(ebase_mqtt_ota_stream_select(&s, 1));
+        ebase_mqtt_ota_stream_close(&s);
+    }
 }
 
 static void selection_boundary(void)
@@ -246,6 +292,7 @@ int main(int argc, char **argv)
     codec_vectors(argv[1]);
     stream_tests();
     stream_many_blocks();
+    final_complete_flash_write_precedes_end_request();
     selection_boundary();
     puts("MQTT OTA: binary authentication vectors and bounded stream passed (no hardware)");
     return 0;

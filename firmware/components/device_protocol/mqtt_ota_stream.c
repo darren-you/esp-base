@@ -3,6 +3,10 @@
 #include <limits.h>
 #include <string.h>
 
+/* The locked OTA core commits each full 1 KiB write_buffer before reading
+ * again. Its final sub-1-KiB tail is committed only after authenticated END. */
+#define FLASH_WRITE_BYTES 1024u
+
 static bool live(ebase_mqtt_ota_stream_t *s, uint64_t now)
 {
     if (!s || !s->active || s->selecting || s->error != EBASE_MQTT_OTA_STREAM_OK) return false;
@@ -31,10 +35,11 @@ bool ebase_mqtt_ota_stream_request(ebase_mqtt_ota_stream_t *s,
     if (!out) return false;
     *out = (ebase_mqtt_ota_frame_t){0};
     if (!live(s, now) || s->ended) return false;
-    /* The final partial block needs END before the OTA core flushes its tail.
-     * All earlier blocks wait for real Flash acknowledgement. */
+    /* Wait for every complete Flash write, including one at the end of the
+     * image. Control can run between the worker's final read and write ACK;
+     * freezing that earlier ACK would make the END request inconsistent. */
     if (s->used != s->length ||
-        (s->read_offset < s->size && s->written_offset != s->read_offset)) return false;
+        s->written_offset != s->read_offset / FLASH_WRITE_BYTES * FLASH_WRITE_BYTES) return false;
     if (!s->request_valid) {
         s->request = (ebase_mqtt_ota_frame_t){.kind = EBASE_MQTT_OTA_REQUEST,
             .offset = s->read_offset, .written_offset = s->written_offset,

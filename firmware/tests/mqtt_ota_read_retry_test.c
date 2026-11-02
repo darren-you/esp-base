@@ -10,7 +10,7 @@ static int64_t now_us, wakeup_delay_us, clock_values[4];
 static size_t clock_count, clock_index;
 static unsigned critical_depth, delays;
 static bool offer_during_delay;
-static uint8_t block[1024];
+static uint8_t block[2048];
 
 int64_t esp_timer_get_time(void)
 {
@@ -66,7 +66,7 @@ static int read_once(uint8_t *out, size_t capacity, uint32_t timeout)
 static void test_cross_call_wait(void)
 {
     uint8_t bytes[64];
-    begin(2048, 300000, 30000);
+    begin(4096, 300000, 30000);
     for (unsigned i = 0; i < 120; ++i) {
         assert(read_once(bytes, sizeof bytes, 1000) == -2 && delays == 1);
         assert(now_us == (int64_t)(i + 1) * 10000);
@@ -85,15 +85,15 @@ static void test_cross_call_wait(void)
         assert(read_once(bytes, sizeof bytes, 1000) == (int)sizeof bytes && delays == 0);
         assert(memcmp(bytes, block + offset, sizeof bytes) == 0);
     }
-    assert(esp_base_mqtt_ota_transfer_written(NULL, 1024, 2048));
+    assert(esp_base_mqtt_ota_transfer_written(NULL, 2048, 4096));
     frame = request();
-    assert(frame.offset == 1024 && frame.written_offset == 1024);
+    assert(frame.offset == 2048 && frame.written_offset == 2048);
     assert(read_once(bytes, sizeof bytes, 1000) == -2 && delays == 1);
 
     /* Even a wakeup beyond the callback budget must not consume a newly
      * arrived block before returning retry. The OTA core rejects that late
      * callback; this direct adapter check inspects the still-owned bytes. */
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     memset(bytes, 0xa5, sizeof bytes);
     offer_during_delay = true;
     wakeup_delay_us = 1000001;
@@ -108,7 +108,7 @@ static void test_cross_call_wait(void)
 static void test_read_boundaries(void)
 {
     uint8_t byte = 0xa5;
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     assert(read_once(NULL, 1, 1000) == -1 && delays == 0);
     assert(read_once(&byte, 0, 1000) == -1 && delays == 0);
     assert(read_once(&byte, 1, 0) == -1 && delays == 0);
@@ -119,40 +119,40 @@ static void test_read_boundaries(void)
     assert(read_once(&byte, 1, 1000) == -1 && delays == 0);
     now_us = INT64_MAX;
     assert(read_once(&byte, 1, 1000) == -1 && delays == 0);
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     clock_values[0] = 100; clock_values[1] = 99; clock_count = 2;
     assert(read_once(&byte, 1, 1000) == -1 && delays == 0);
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     clock_values[0] = 100; clock_values[1] = 101;
     clock_values[2] = 102; clock_values[3] = 100; clock_count = 4;
     assert(read_once(&byte, 1, 1000) == -1 && delays == 0);
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     clock_values[0] = 0; clock_values[1] = 1000000; clock_count = 2;
     assert(read_once(&byte, 1, 1000) == -2 && delays == 0);
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     wakeup_delay_us = -10001;
     assert(read_once(&byte, 1, 1000) == -1 && delays == 1);
-    begin(1024, 100, 30);
+    begin(2048, 100, 30);
     for (unsigned i = 0; i < 3; ++i)
         assert(read_once(&byte, 1, 1000) == -2 && delays == 1);
     assert(now_us == 30000 && read_once(&byte, 1, 1000) == -1 && delays == 0);
-    begin(1024, 30, 30);
+    begin(2048, 30, 30);
     now_us = 30000;
     assert(read_once(&byte, 1, 1000) == -1 && delays == 0);
 }
 static void test_immediate_terminal(void)
 {
-    uint8_t bytes[1024];
-    begin(1024, 300000, 30000);
+    uint8_t bytes[2048];
+    begin(2048, 300000, 30000);
     ebase_mqtt_ota_frame_t frame = request();
     frame.kind = EBASE_MQTT_OTA_DATA; frame.data = block; frame.length = sizeof block;
     assert(esp_base_mqtt_ota_transfer_offer(&frame) == EBASE_MQTT_OTA_ACCEPTED);
-    assert(read_once(bytes, sizeof bytes, 1000) == 1024 && delays == 0);
-    assert(esp_base_mqtt_ota_transfer_written(NULL, 1024, 1024));
+    assert(read_once(bytes, sizeof bytes, 1000) == 2048 && delays == 0);
+    assert(esp_base_mqtt_ota_transfer_written(NULL, 2048, 2048));
     frame = request(); frame.kind = EBASE_MQTT_OTA_END;
     assert(esp_base_mqtt_ota_transfer_offer(&frame) == EBASE_MQTT_OTA_ACCEPTED);
     assert(read_once(bytes, sizeof bytes, 1000) == 0 && delays == 0);
-    begin(1024, 300000, 30000);
+    begin(2048, 300000, 30000);
     frame = request(); frame.kind = EBASE_MQTT_OTA_CANCEL;
     assert(esp_base_mqtt_ota_transfer_offer(&frame) == EBASE_MQTT_OTA_ACCEPTED);
     assert(read_once(bytes, sizeof bytes, 1000) == -1 && delays == 0);

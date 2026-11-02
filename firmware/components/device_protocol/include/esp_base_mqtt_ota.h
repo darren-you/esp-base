@@ -6,7 +6,7 @@
 
 #include "esp_base_network_auth.h"
 
-#define EBASE_MQTT_OTA_BLOCK_BYTES 1024u
+#define EBASE_MQTT_OTA_BLOCK_BYTES 2048u
 #define EBASE_MQTT_OTA_DOMAIN "esp-base-ota-v1\n"
 #define EBASE_MQTT_OTA_HEADER_BYTES (32u + sizeof(EBASE_MQTT_OTA_DOMAIN) - 1u + 1u + 108u + 8u + 8u + 2u)
 #define EBASE_MQTT_OTA_FRAME_BYTES (EBASE_MQTT_OTA_HEADER_BYTES + EBASE_MQTT_OTA_BLOCK_BYTES)
