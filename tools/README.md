@@ -23,7 +23,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <�
 
 完整 event frame 最多4096 B，业务原始字节最多3924 B；新固件输入语义与12字段 reported 见[设备协议](../docs/design/device-protocol.md)。Broker PUBACK不是设备执行成功；丢失结果不自动重发业务或换序号。
 
-`business_event_load.py` 在一个持久严格 TLS 会话中发送有界负载，复用 `mqtt-lab-requirements.txt` 固定的 `paho-mqtt==2.1.0`。仅发布本设备的 event，不提交 OTA、不打开串口；正式 Server 的单次 OTA 与 UART 观察由唯一操作方另行协调。每帧固定4096 B，opcode 1后有3923 B按 run／序号确定的数据。最多4096帧、20帧/秒、360秒网络窗口；MQTT在途4、发送队列8、未设备对账128、观察队列256、归档32 MiB。最后15秒只收尾；连接和启动 gate各最多等待30秒。不同限额先到先停止，不自动升压或补发积压。
+`business_event_load.py` 在一个持久严格 TLS 会话中发送有界负载，复用 `mqtt-lab-requirements.txt` 固定的 `paho-mqtt==2.1.0`。仅发布本设备的 event，不提交 OTA、不打开串口；正式 Server 的单次 OTA 与 UART 观察由唯一操作方另行协调。每帧固定4096 B，opcode 1后有3923 B按 run／序号确定的数据。最多4096帧、20帧/秒、360秒网络窗口；MQTT在途4、发送队列8、观察队列256、归档32 MiB。`--max-unconfirmed` 限制尚未得到设备执行确认的事件数，范围1—128、默认1；PUBACK不释放这个窗口，只有通过序号、摘要和业务计数核验的reported才释放。扩大窗口用于明确的压力或过载场景，不表示设备有同等数量的接收槽；设备仍只有三条完整入站消息槽，控制和OTA共用它们。最后15秒只收尾；连接和启动 gate各最多等待30秒。不同限额先到先停止，不自动升压或补发积压。
 
 开始前由唯一操作方取得同 boot 的原生 `business.status` 成功响应和 reported 原件，组成0600普通 JSON文件，精确两个键为 `business_status`、`reported`，值为对应原生对象。基线须非 paused、计数可容纳全部请求；非零事件高水位须有成功且与独立业务计数相符的末结果。工具另等本次订阅收到的非 retained reported核对高水位、revision与末结果，再写 `ready.json`。此时操作方创建0600启动 gate，精确内容为 `{"schema_version":1,"run_id":"<本轮UUID>","operation_id":"<本次正式OTA原UUID>","device_id":"<设备UUID>","boot_id":"<本轮boot>","action":"start"}`；停止 gate同结构但 action为 `stop`。gate只协调宿主流程，不是设备写入或OTA提交。路径、UUID和以下示例均须替换为本轮实际输入：
 
@@ -33,7 +33,7 @@ python3 tools/business_event_load.py --host broker.example.test --port 8883 \
   --management-key-file /absolute/private/key --baseline-file /absolute/private/baseline.json \
   --device-id <设备UUID> --boot-id <本轮boot> --run-id <本轮UUID> --operation-id <正式OTA原UUID> \
   --start-gate /absolute/private/start.json --stop-gate /absolute/private/stop.json \
-  --output /absolute/private/new-load-evidence --events 100 --rate 5 --duration-seconds 120
+  --output /absolute/private/new-load-evidence --events 10 --rate 5 --max-unconfirmed 1 --duration-seconds 120
 python3 -B -m unittest discover -s tools -p 'test_business_event*.py' -v
 ```
 

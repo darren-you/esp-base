@@ -138,7 +138,7 @@ class FakeClient:
 class LedgerTests(unittest.TestCase):
     def ledger(self, sequence=0, count=0, limit=20):
         before, count = load.baseline(raw(initial(sequence, count)), DEVICE, BOOT, limit)
-        state = load.Ledger(RUN, DEVICE, BOOT, before, count, limit)
+        state = load.Ledger(RUN, DEVICE, BOOT, before, count, limit, load.MAX_UNCONFIRMED)
         state.reported(raw(before))
         return state
 
@@ -190,6 +190,31 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(state.summary()["unknown_tail"], [1, 1])
         self.assertEqual(state.summary()["broker_acked_only"], [1])
 
+    def test_device_confirmation_releases_configured_window_not_puback(self):
+        before, count = load.baseline(raw(initial()), DEVICE, BOOT, 10)
+        for window in (1, 2, 3):
+            with self.subTest(window=window):
+                state = load.Ledger(RUN, DEVICE, BOOT, before, count, 10, window)
+                state.reported(raw(before))
+                for seq in range(1, window + 1):
+                    state.attempt(0)
+                    state.submitted(seq, seq)
+                    state.ack(seq)
+                self.assertFalse(state.can_send())
+                state.reported(raw(report(uptime=2000)))
+                self.assertFalse(state.can_send())
+                state.reported(raw(report(window, uptime=3000)))
+                self.assertTrue(state.can_send())
+                self.assertEqual(state.attempt(4), window + 1)
+
+    def test_default_window_and_invalid_window(self):
+        before, count = load.baseline(raw(initial()), DEVICE, BOOT, 10)
+        state = load.Ledger(RUN, DEVICE, BOOT, before, count, 10)
+        self.assertEqual(state.max_unconfirmed, 1)
+        for value in (0, -1, 129, True, 1.0):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                load.Ledger(RUN, DEVICE, BOOT, before, count, 10, value)
+
     def test_independent_bounded_inflight_and_unconfirmed_windows(self):
         state = self.ledger(limit=200)
         for seq in range(1, 5):
@@ -220,7 +245,7 @@ class RunnerTests(unittest.TestCase):
         self.args = types.SimpleNamespace(host="broker.example.test", port=8883, device_id=DEVICE, boot_id=BOOT,
             run_id=RUN, operation_id=OPERATION, ca_file=root / "ca.pem", credentials_file=root / "credentials.json",
             management_key_file=root / "key", baseline_file=root / "baseline.json", start_gate=root / "start.json",
-            stop_gate=root / "stop.json", output=root / "evidence", events=3, rate=20, duration_seconds=30)
+            stop_gate=root / "stop.json", output=root / "evidence", events=3, rate=20, duration_seconds=30, max_unconfirmed=1)
         private(self.args.ca_file, b"test-only CA")
         private(self.args.credentials_file, raw({"username": "esp_base_control_" + DEVICE, "password": "private-test-password"}))
         private(self.args.management_key_file, bytes(range(32)).hex().encode())
@@ -411,6 +436,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["unknown_tail"], [1, 1])
 
     def test_expiry_during_second_intent_persistence_does_not_expand_unknown_tail(self):
+        self.args.max_unconfirmed = 3
         self.args.duration_seconds = 120
         self.mode = "no_progress"
         original = load.Evidence.record
@@ -448,7 +474,15 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(value["all_attempts_reconciled"])
         self.assertEqual(value["broker_unacked"], [1, 2, 3])
 
+    def test_default_window_stops_after_one_unconfirmed_event(self):
+        self.mode = "no_progress"
+        value = self.run_fake()
+        self.assertEqual(value["unknown_tail"], [1, 1])
+        self.assertEqual(value["attempted_count"], 1)
+        self.assertEqual(json.loads((self.args.output / "inputs.json").read_bytes())["max_unconfirmed"], 1)
+
     def test_repeated_no_progress_does_not_extend_attempt_lifetime(self):
+        self.args.max_unconfirmed = 3
         self.mode = "no_progress"
         value = self.run_fake()
         self.assertFalse(value["all_attempts_reconciled"])

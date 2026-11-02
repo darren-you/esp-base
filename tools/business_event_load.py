@@ -102,9 +102,11 @@ def baseline(raw, device, boot, count):
 class Ledger:
     """Accepted/completed count events; byte_count counts data excluding opcode."""
 
-    def __init__(self, run_id, device, boot, before, count, limit):
+    def __init__(self, run_id, device, boot, before, count, limit, max_unconfirmed=1):
         self.run_id, self.device, self.boot = run_id, device, boot
+        require(integer(max_unconfirmed, 1, MAX_UNCONFIRMED), "unconfirmed_window_rejected")
         self.before, self.count, self.limit = before, count, limit
+        self.max_unconfirmed = max_unconfirmed
         self.start = self.confirmed = before["last_accepted_event_sequence"]
         self.uptime = before["uptime_ms"]
         self.entries, self.mids = {}, {}
@@ -123,7 +125,7 @@ class Ledger:
 
     def can_send(self):
         return (self.fresh and self.stopped is None and len(self.entries) < self.limit
-                and self.last - self.confirmed < MAX_UNCONFIRMED
+                and self.last - self.confirmed < self.max_unconfirmed
                 and sum(not e["broker_acked"] for e in self.entries.values()) < MAX_INFLIGHT)
 
     def attempt(self, now):
@@ -286,7 +288,7 @@ def run(args, mqtt, *, clock=time.monotonic):
     account = single.credentials(args.credentials_file)
     require(account["username"] == "esp_base_control_" + args.device_id, "controller_identity")
     ca = single.private_file(args.ca_file, 4096)
-    ledger = Ledger(args.run_id, args.device_id, args.boot_id, before, count, args.events)
+    ledger = Ledger(args.run_id, args.device_id, args.boot_id, before, count, args.events, args.max_unconfirmed)
     with local_lease(args.device_id):
         evidence = Evidence(args.output)
         client = None
@@ -307,7 +309,7 @@ def run(args, mqtt, *, clock=time.monotonic):
                 "baseline_sha256": sha(before_raw), "ca_sha256": sha(ca), "source_sha256": source,
                 "broker_host": args.host, "broker_port": args.port,
                 "events": args.events, "rate": args.rate, "duration_seconds": args.duration_seconds,
-                "frame_bytes": 4096, "data_bytes": DATA_BYTES, "max_unconfirmed": MAX_UNCONFIRMED,
+                "frame_bytes": 4096, "data_bytes": DATA_BYTES, "max_unconfirmed": ledger.max_unconfirmed,
                 "mqtt_inflight": MAX_INFLIGHT, "mqtt_queue": 8, "observer_queue": 256,
                 "output_limit_bytes": MAX_OUTPUT, "receipt_timeout_seconds": RECEIPT_TIMEOUT,
                 "paho_version": "2.1.0", "exclusive_business_writer_required": True}) + "\n").encode())
@@ -508,6 +510,8 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--events", type=int, default=100)
     parser.add_argument("--rate", type=int, default=5)
+    parser.add_argument("--max-unconfirmed", type=int, default=1,
+                        help="等待设备执行确认的最大事件数（1—128，默认 1）")
     parser.add_argument("--duration-seconds", type=int, default=120)
     args = parser.parse_args()
     try:
@@ -515,7 +519,8 @@ def main():
             wire.canonical_uuid(getattr(args, key))
         require(args.host and len(args.host) <= 253 and all(ord(c) >= 33 for c in args.host)
                 and 1 <= args.port <= 65535 and 1 <= args.events <= MAX_EVENTS
-                and 1 <= args.rate <= 20 and 30 <= args.duration_seconds <= 360, "limits")
+                and 1 <= args.rate <= 20 and 30 <= args.duration_seconds <= 360
+                and integer(args.max_unconfirmed, 1, MAX_UNCONFIRMED), "limits")
         for name in ("ca_file", "credentials_file", "management_key_file", "baseline_file", "start_gate", "stop_gate", "output"):
             require(getattr(args, name).is_absolute(), "absolute_path_required")
         require(args.start_gate != args.stop_gate, "gates_must_differ")
