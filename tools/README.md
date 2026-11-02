@@ -15,7 +15,7 @@ python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --device-id <本�
 python3 tools/device_control.py --port /dev/cu.usbmodemEXAMPLE --operation-id <固定原UUID> ota.result
 ```
 
-有线 OTA 是下发 URL 后由设备 HTTPS 拉取完整 signed bin；软件扫描本地文件得到摘要／长度，提交前核对同设备、当前 boot 与 OTA 可用状态。当前 USB CLI 提交后返回 running／unknown；持久结果须另按原 operation_id 查询，当前镜像身份须独立 `firmware.status` 核对，不能把这些分开的调用当成已自动完成新 boot 成功对账。写只提交一次，超时／unknown不重发、不另建操作。ESP Tool Mac App 的当前职责是本机有线管理，使用这些设备命令，本机调用链独立验收。官方有线刷写／恢复由对应宿主能力执行，不能与 app OTA 混同。
+本节 USB CLI 的 OTA 是下发 URL 后由设备 HTTPS 拉取完整 signed bin；软件扫描本地文件得到摘要／长度，提交前核对同设备、当前 boot 与 OTA 可用状态。提交后返回 running／unknown；持久结果须另按原 operation_id 查询，当前镜像身份须独立 `firmware.status` 核对，不能把这些分开的调用当成已自动完成新 boot 成功对账。写只提交一次，超时／unknown 不重发、不另建操作。通用 ESP Tool App 不调用这些专用设备命令；它使用 Rust 共享核心提供 ROM 信息、本地文件刷写／恢复和被动日志，macOS 为 Swift、Windows／Linux 为 egui 薄界面。ROM 刷写与固件应用 OTA 分别验收。
 
 ## 原生 MQTT 业务事件
 

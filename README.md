@@ -2,7 +2,7 @@
 
 基于锁定 ESP-IDF 的 ESP32-C3／ESP32 原生业务固件。目标是低资源设备的公网管理与 OTA：**复用严格 TLS MQTT 连接进行控制与分块传输，沿用签名 A/B OTA、rollback 和原操作 ID 持久结果**。原生消息计数业务直接编译进 app，动态运行引擎、独立业务包与联合包 OTA 已退出。
 
-设备通过 MQTT 承载认证控制和完整签名固件数据。设备源码已接通 MQTT 认证二进制块、单块交接与实际 Flash 写入确认，并严格迁移旧配置。双目标依赖由 Component Manager 精确锁定，Server/Web/App 消费同一设备协议。**生产候选、线上部署和实板资格按下方 Issue 的完整制品身份与现场证据判断**；软件检查不授予实板资格，测试键制品不用于刷板。
+设备通过 MQTT 承载认证控制和完整签名固件数据。设备源码已接通 MQTT 认证二进制块、单块交接与实际 Flash 写入确认，并严格迁移旧配置。双目标依赖由 Component Manager 精确锁定，Server／Web 与维护 CLI 消费设备协议；通用 ESP Tool App 独立提供 ROM 信息、本地刷写和串口日志。**生产候选、线上部署和实板资格按下方 Issue 的完整制品身份与现场证据判断**；软件检查不授予实板资格，测试键制品不用于刷板。
 
 动态计划与全部限定证据统一见 [ESP 统一交付 #35](https://github.com/darren-you/darren-space/issues/35)，稳定方法见[原生业务与 MQTT OTA 验收合同](docs/operations/ota-allocation-diagnostic-checkpoint.md)。[原生软件检查点](docs/operations/native-software-checkpoint.md)保留旧组合结果；真实 App／USB、公网、双板容量／断电／百次／连续 72 小时资格须对应最终候选重新判断。实板接线见[受控实板接入说明](https://github.com/darren-you/esp-tool/blob/master/docs/operations/hardware-lab.md)。
 
@@ -13,7 +13,7 @@ flowchart LR
     public["Server / Web / 设备授权与原 ID"] <--> broker["严格 TLS MQTT / 现有 Broker"]
     broker <--> mqtt["设备 MQTT / 有界控制与固件块"]
     mqtt --> protocol["device_protocol / 唯一控制 owner"]
-    usb["实际 USB / Mac App 本机操作"] --> protocol
+    usb["实际 USB / 固件维护 CLI"] --> protocol
     protocol --> native["native_business / 同步消息计数"]
     protocol --> intent["ota_operation / V4 写前收据与恢复"]
     mqtt --> stream["有界块交接 / 顺序写备用槽"]
@@ -26,7 +26,7 @@ flowchart LR
 
 上图是完整目标链路，设备侧已完成软件接线。块接收不在 RAM 拼接完整镜像，也不新增 Flash 中转副本；设备写入后才推进应用层确认，Broker PUBACK 不作为写入或升级成功证明。完整签名镜像核验通过后才切换启动槽，最终成功还须新 boot 的持久收据及独立固件身份查询。
 
-Mac App 继续只管理本机实际 USB。当前有线 OTA 保留 USB 发 URL 命令、设备 HTTPS 拉取；官方有线刷写／恢复另用于首次布局装配，不能将 URL 命令称为全 USB 固件传输。新公网 OTA 的完整固件字节须走 MQTT，并在 Mac 数据连接移除后验证。
+ESP Tool App 是通用 ESP 本机工具，Rust 承载跨端逻辑，macOS 使用 Swift、Windows／Linux 使用 egui 薄界面，不含本固件的配置、业务或 URL／OTA 入口。固件维护 CLI 保留 USB 下发 URL、设备 HTTPS 拉取的能力；本地 ROM 刷写／恢复使用明确文件和地址，独立于该应用协议。新公网 OTA 的完整固件字节须走 MQTT，并在 Mac 数据连接移除后验证。
 
 ## 分区与存量边界
 
