@@ -13,7 +13,7 @@ static char output[131072];
 static size_t output_length;
 static unsigned suspend_depth, walks, snapshots;
 static bool begin_seen;
-static heap_capacity_region_stats_t regions[8];
+static heap_capacity_region_stats_t regions[9];
 static size_t region_count;
 static UBaseType_t live_count;
 static freertos_task_capacity_stats_t task_facts;
@@ -22,6 +22,8 @@ static UBaseType_t live_hwm[32];
 static bool mqtt_available;
 static emqtt_capacity_stats_t mqtt_stats;
 static int64_t now_us = 1234000;
+static bool model_uart;
+static unsigned pending_inputs, maximum_pending_inputs, printed_rows;
 int64_t esp_timer_get_time(void) { return now_us; }
 bool esp_base_mqtt_owner_capacity(emqtt_capacity_stats_t *out)
 {
@@ -38,6 +40,15 @@ int printf(const char *format, ...)
     va_end(ap);
     assert(count >= 0 && (size_t)count < sizeof(output) - output_length);
     output_length += (size_t)count;
+    ++printed_rows;
+    if (model_uart) {
+        /* A deterministic 115200/8N1 sink with an input every 100 ms.
+         * The caller services its input owner between ordinary polls. */
+        const int64_t before = now_us / 100000;
+        now_us += ((int64_t)count * 10000000 + 115199) / 115200;
+        pending_inputs += (unsigned)(now_us / 100000 - before);
+        if (pending_inputs > maximum_pending_inputs) maximum_pending_inputs = pending_inputs;
+    }
     if (strstr(format, "ESP_BASE_CAPACITY_BEGIN ") == format) begin_seen = true;
     return count;
 }
@@ -45,7 +56,8 @@ void heap_caps_walk_capacity(heap_capacity_region_cb_t callback, void *user)
 {
     assert(begin_seen);
     ++walks;
-    for (size_t i = 0; i < region_count; ++i) assert(callback(&regions[i], user));
+    for (size_t i = 0; i < region_count; ++i)
+        if (!callback(&regions[i], user)) break;
 }
 void vTaskSuspendAll(void) { ++suspend_depth; }
 BaseType_t xTaskResumeAll(void)
@@ -84,6 +96,8 @@ static void reset_case(void)
     memset(regions, 0, sizeof regions);
     memset(output, 0, sizeof output);
     output_length = 0;
+    printed_rows = pending_inputs = maximum_pending_inputs = 0;
+    model_uart = false;
     begin_seen = false;
     mqtt_available = false;
     memset(&mqtt_stats, 0, sizeof mqtt_stats);
@@ -233,6 +247,50 @@ int main(void)
     reset_case(); alive(1); task_facts.created_instances=1; task_facts.finalized_instances=2; task_facts.completed_minimum=1200; run();
     assert(value(line("ESP_BASE_CAPACITY_END "),"task_snapshot_complete") == 0);
     puts("PASS real-emitter: finalized greater than created rejects without unsigned underflow");
+
+    reset_case();
+    for (unsigned i=0; i<6; ++i) add_region(byte_caps,0,0,true,22000,26000);
+    alive(8); task_facts.created_instances=8;
+    model_uart = true;
+    emit("software-test-boot", "periodic", 1234);
+    assert(maximum_pending_inputs > 3);
+    reset_case(); now_us=1234000; s_next_ms=0;
+    for (unsigned i=0; i<6; ++i) add_region(byte_caps,0,0,true,22000,26000);
+    alive(8); task_facts.created_instances=8; model_uart=true;
+    unsigned passes=0;
+    do {
+        pending_inputs=0; /* Existing control owner consumes queued inputs. */
+        const unsigned before=printed_rows;
+        esp_base_capacity_poll("software-test-boot", (uint64_t)now_us/1000U);
+        assert(printed_rows==before+1);
+        assert(++passes<64);
+    } while (s_output.active);
+    assert(walks==1 && snapshots==1 && maximum_pending_inputs<=1);
+    assert(strstr(output,"name_hex=776f726b657200000000000000000000"));
+    assert(value(line("ESP_BASE_CAPACITY_END "),"facts_valid")==1);
+    const unsigned rows_before_idle=printed_rows;
+    esp_base_capacity_poll("software-test-boot", (uint64_t)now_us/1000U);
+    assert(printed_rows==rows_before_idle);
+    puts("PASS real-emitter: one row per control pass services input between UART writes; period and copied task names preserved");
+
+    reset_case(); now_us=1234000; s_next_ms=0;
+    add_region(byte_caps,0,0,true,22000,26000);
+    esp_base_capacity_poll("software-test-boot",1234);
+    assert(s_output.active && !strstr(output,"ESP_BASE_CAPACITY_END "));
+    esp_base_capacity_before_reset("software-test-boot",1235);
+    assert(!s_output.active && walks==2 && snapshots==2);
+    const char *first_end=line("ESP_BASE_CAPACITY_END ");
+    const char *second_begin=strstr(first_end,"ESP_BASE_CAPACITY_BEGIN ");
+    assert(second_begin && strstr(second_begin,"phase=before_reset "));
+    assert(strstr(second_begin,"ESP_BASE_CAPACITY_END "));
+    puts("PASS real-emitter: reset completes the pending frame before emitting its own full final frame");
+
+    reset_case(); now_us=1234000;
+    for (unsigned i=0; i<9; ++i) add_region(byte_caps,0,0,true,22000,26000);
+    emit("software-test-boot","periodic",1234);
+    assert(value(line("ESP_BASE_CAPACITY_END "),"regions")==CAPACITY_REGION_LIMIT);
+    assert(value(line("ESP_BASE_CAPACITY_END "),"facts_valid")==0);
+    puts("PASS real-emitter: region workspace exhaustion explicitly invalidates the frame");
 
     s_frame=UINT32_MAX-1; s_frame_overflow=false;
     reset_case(); run(); assert(value(line("ESP_BASE_CAPACITY_END "),"facts_valid") == 1);

@@ -28,7 +28,7 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 
 原生业务确定性测试覆盖既有十二项语义、二进制零字节、最大输入、暂停计数保持、100ms非延期窗口、恢复和重新初始化；不模拟MCU执行时延。命令解码测试覆盖固件／业务字段、已退役命令拒绝、USB URL 与 MQTT 元数据来源隔离、schema 4 配置、重复／未知字段、UTF-8、数值、分片与10000次畸形输入。分配测试核对失败不写、秘密清零、所有权与释放。
 
-`producer_capacity_test.c` 直接编译正式诊断 producer，覆盖晚出生 region 的双下界为零、caps／alias 不重复、独立 IRAM 域、BEGIN 先于 getter、任务名在 scheduler resume 后仍安全、创建／最终化／存活计数闭合、低于 1024 B 的真实输出和帧编号溢出。SDK 假件只检验输出与门，不授 MCU 成本或 R5／R6。实际 SDK 分配器／最终任务栈及派生拒绝用例另通过 tools 的 `test_sdk_capacity.py`／`test_managed_sdk.py` 验证。
+`producer_capacity_test.c` 直接编译正式诊断 producer，覆盖晚出生 region 的双下界为零、caps／alias 不重复、独立 IRAM 域、BEGIN 先于 getter、任务名在 scheduler resume 后仍安全、创建／最终化／存活计数闭合、低于 1024 B 的真实输出和帧编号溢出。周期输出用确定性 115200／8N1 模型比较整帧阻塞与逐行期间消费输入，并检查完整帧、周期、重启前排空和 region 工作区不足时的无效标记；该模型不证明 MCU 调度或真实 MQTT 容量。SDK 假件只检验输出与门，不授 MCU 成本或 R5／R6。实际 SDK 分配器／最终任务栈及派生拒绝用例另通过 tools 的 `test_sdk_capacity.py`／`test_managed_sdk.py` 验证。
 
 真实 protocol owner 测试编译生产 decoder／guard／control／业务／协议源码，用显式 SDK、NVS 与 OTA 假件覆盖写前意图、原请求移交、USB／MQTT 双入口互斥、任务失败、成功 prepare 后取消不选槽、部分清 C、unknown 锁保留、原 ID 回放和独立 firmware.status。receipt／firmware 测试核对登记只消费一次真实观察入口、现有事务 claim、槽状态／几何变化与 claim 失效停止、坏签名及未决前次阻断、前次失败来源证明在同一登记事务内复用且不增加完整验签、来源摘要／物理槽不符仍保留旧收据，182 B V4、V3／损坏阻断、A/C 完整签名身份、pending／VALID／失败与存储调用故障。观察测试分别编译真实 firmware observer 与 receipt register，SDK 验签／NVS 假件验证控制边界；不冒充实体密码学或公网 ACK 时延。startup 两目标验证本地 30 秒控制进展、跨窗、rollback、确认读回不确定与短 Flash 仲裁，不初始化闲置 scratch。均不冒充真实 NVS 掉电原子性或 bootloader。
 

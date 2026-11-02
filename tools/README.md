@@ -138,7 +138,7 @@ python3 tools/check_sdk.py --path "$IDF_PATH"
 
 SDK 在每个已停止任务的 `prvDeleteTCB` 中、最终上下文保存之后且清理／释放栈之前采官方 HWM，静态、自删和他删都覆盖。所有创建／最终采集实例计数、最差真实实例及全局最低值保留；名称只作展示，不去重。存活与待清理实例由官方完整列表核对，必须满足 `created = finalized + allocated`。正常清理间隙和列表容量不足不授该帧截止资格，保留原始帧，等待后续计数闭合与累计最终 HWM 补齐前缀；末尾不完整帧或不完整 `before_reset` 不延长可证截止。编号／计数溢出和无效计数仍拒绝。当前双目标 `StackType_t` 为 1 B，输出仍显式按其大小转换。
 
-每五秒既有 control pass 及四个既有主动重启点前输出完整帧，不增业务命令、任务、队列或动态内存。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
+每五秒在既有 control pass 中开始一帧，每轮最多输出一行，让 MQTT owner 在行间继续消费。最多八个 heap region 的值先复制到与任务快照共用的固定工作区，输出后再采集任务；超出 region 容量时明确输出 `facts_valid=0`。任务名在 scheduler resume 前复制，后续打印不持有分配器锁或调度锁。四个既有主动重启点会先完成未结束的周期帧，再同步输出完整 `before_reset` 帧，不交错两帧。不增业务命令、任务、队列或动态内存；新增固定输出状态计入 `workspace_bytes`，实际 ELF、栈与调度开销不加回门限。各 heap getter 异时读取，因此共同可证区间截至 `BEGIN uptime_ms`，不延伸到 END、打印后的尾段、硬复位、panic 或丢失的 UART 帧；新 boot 不补旧 boot 资格。正式解析使用 `analyze_capacity.py`，旧 LAB 解析入口仍不授正式资格。运行收据还须绑定实际 boot 和当前完整 signed candidate，数值门通过不自动授 R5／R6。
 
 当前 schema 2 要求 BEGIN 后唯一 MQTT 观测行，再读取 REGION／TASK／DOMAIN／END；schema 1 仅解析既有冻结原件，同 boot 不允许切换版本。parser 严格核对实例编号、真实所有权上限、请求字节等式、采样 `start <= until <= BEGIN`、固定成本与累计历史；计数失效保留原 flag，禁止授满输入局部观测，独立 SDK 数值门不因此冒充全部 R5。输出的 `maximum_inbound_owner_tuple_observed` 只表示同一次 partial 回调确有三个4096 B完整 owner 加一个4096 B未完成 owner，不证明业务认证、outbox最大合法状态或OTA重叠。`outbox_wire_bytes_at_rx_peak` 是同 SDK API锁期间的协议字节，不含 outbox节点／分配器元数据；原 FULL 只证明该条请求被现有 admission 拒绝。实体重叠必须以同 boot／同 operation 的真实 OTA消费锚点包住整个采样区间，并以严格 TLS peer原 MID／DUP／PUBACK账本独立核对 outbox。解析始终保留全局下一申请、R5和R6为false。
 
