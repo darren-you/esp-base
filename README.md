@@ -4,7 +4,7 @@
 
 设备通过 MQTT 承载认证控制和完整签名固件数据。设备源码已接通 MQTT 认证二进制块、单块交接与实际 Flash 写入确认，并严格迁移旧配置。双目标依赖由 Component Manager 精确锁定，Server/Web/App 消费同一设备协议。**生产候选、线上部署和实板资格按下方 Issue 的完整制品身份与现场证据判断**；软件检查不授予实板资格，测试键制品不用于刷板。
 
-动态计划与全部限定证据统一见 [ESP 统一交付 #35](https://github.com/darren-you/darren-space/issues/35)，稳定方法见[原生业务与 MQTT OTA 验收合同](docs/operations/ota-allocation-diagnostic-checkpoint.md)。[原生软件检查点](docs/operations/native_software_checkpoint.md)保留旧组合结果；真实 App／USB、公网、双板容量／断电／百次／连续 72 小时资格须对应最终候选重新判断。实板接线见[受控实板接入说明](https://github.com/darren-you/esp-tool/blob/master/docs/operations/hardware-lab.md)。
+动态计划与全部限定证据统一见 [ESP 统一交付 #35](https://github.com/darren-you/darren-space/issues/35)，稳定方法见[原生业务与 MQTT OTA 验收合同](docs/operations/ota-allocation-diagnostic-checkpoint.md)。[原生软件检查点](docs/operations/native-software-checkpoint.md)保留旧组合结果；真实 App／USB、公网、双板容量／断电／百次／连续 72 小时资格须对应最终候选重新判断。实板接线见[受控实板接入说明](https://github.com/darren-you/esp-tool/blob/master/docs/operations/hardware-lab.md)。
 
 ## 目标运行链路
 

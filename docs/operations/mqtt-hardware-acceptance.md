@@ -1,6 +1,6 @@
 # MQTT 实板验收记录
 
-本页只记录2026-09-22旧Base MQTT适配层和当时独立实验镜像的真实结果，不覆盖当前公开MQTT组件与原生固件组合；当前软件及双板资格分别见[原生软件检查点](native_software_checkpoint.md)和[唯一执行计划](ota-allocation-diagnostic-checkpoint.md)。
+本页只记录2026-09-22旧Base MQTT适配层和当时独立实验镜像的真实结果，不覆盖当前公开MQTT组件与原生固件组合；当前软件及双板资格分别见[原生软件检查点](native-software-checkpoint.md)和[唯一执行计划](ota-allocation-diagnostic-checkpoint.md)。
 
 2026-09-22，在迁移基线对应的同一块 ESP32-C3、4 MiB 板卡上，完成官方 MQTT 集成实验应用的一组真实网络与故障测试。P3 仍在实施；普通 ESP Base 尚未接入 MQTT 持久配置、设备命令与 reported。
 

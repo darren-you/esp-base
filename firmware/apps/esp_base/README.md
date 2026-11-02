@@ -10,4 +10,4 @@
 
 配置使用既有EBCF v3单blob，凭据由本轮真实配置消费，不生成或更换有效密钥。SNTP沿`CONFIG_ESP_BASE_TIME_SERVER`启动；当前boot可信时间和Wi-Fi IP是URL型OTA来源的前置，普通未签名构建拒绝升级。首次分区改变由受控有线迁入完成，应用OTA不改布局或eFuse。
 
-软件输入、宿主假件与实际结果见[原生软件检查点](../../../docs/operations/native_software_checkpoint.md)。本轮双板实体、容量、断电、百次／连续72小时以及正式交付仍按[唯一执行计划](../../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得资格；旧实验记录不构成当前通过。
+软件输入、宿主假件与实际结果见[原生软件检查点](../../../docs/operations/native-software-checkpoint.md)。本轮双板实体、容量、断电、百次／连续72小时以及正式交付仍按[唯一执行计划](../../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得资格；旧实验记录不构成当前通过。

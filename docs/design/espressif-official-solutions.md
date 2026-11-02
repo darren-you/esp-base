@@ -2,7 +2,7 @@
 
 2026-10-23按当前源码、双目标分区、唯一组件清单和依赖锁修订。[乐鑫仓库清单](espressif-repository-catalog.md)保留2026-09-22的公开资料快照，目录存在不代表当前生产依赖。
 
-Base采用锁定ESP-IDF v6.1／lwIP和独立MQTT、OTA组件；C3／ESP32均为4MiB、双`0x1e0000`app。消息计数直接编译入固件，由唯一控制owner处理认证事件。当前实现与实际验收分别见[固件说明](../../firmware/README.md)、[原生软件检查点](../operations/native_software_checkpoint.md)和[唯一执行计划](../operations/ota-allocation-diagnostic-checkpoint.md)。
+Base采用锁定ESP-IDF v6.1／lwIP和独立MQTT、OTA组件；C3／ESP32均为4MiB、双`0x1e0000`app。消息计数直接编译入固件，由唯一控制owner处理认证事件。当前实现与实际验收分别见[固件说明](../../firmware/README.md)、[原生软件检查点](../operations/native-software-checkpoint.md)和[唯一执行计划](../operations/ota-allocation-diagnostic-checkpoint.md)。
 
 | 能力 | 当前消费者与边界 |
 | --- | --- |

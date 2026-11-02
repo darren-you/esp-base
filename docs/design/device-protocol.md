@@ -1,6 +1,6 @@
 # 设备控制协议 v1
 
-生产命令为 status、restart、config.set、firmware.status、ota.start／ota.result、business.status／pause／resume。原生业务直接编译进固件；动态 product.*、包模式和包摘要字段已删除，旧字段或命令按未知输入拒绝，没有兼容分支。软件与实板资格见[执行计划](../operations/ota-allocation-diagnostic-checkpoint.md)及[软件检查点](../operations/native_software_checkpoint.md)。
+生产命令为 status、restart、config.set、firmware.status、ota.start／ota.result、business.status／pause／resume。原生业务直接编译进固件；动态 product.*、包模式和包摘要字段已删除，旧字段或命令按未知输入拒绝，没有兼容分支。软件与实板资格见[执行计划](../operations/ota-allocation-diagnostic-checkpoint.md)及[软件检查点](../operations/native-software-checkpoint.md)。
 
 ## 帧、身份与结果
 

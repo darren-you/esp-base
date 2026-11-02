@@ -42,6 +42,6 @@ MQTT owner 的独立入口为 `bash firmware/tests/run_mqtt_owner_tests.sh`，�
 
 通用HTTPS／有界输入流、完整镜像／签名／Flash／slot机制回归归属于精确esp-ota组件，不保留第二份实现。当前测试图只覆盖保留的原生固件、网络、OTA与恢复；退役动态运行测试及专属探针已删除。
 
-宿主 Python 控制、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。历史输入／实际结果见[原生软件检查点](../../docs/operations/native_software_checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
+宿主 Python 控制、事件发布、官方分区和离线迁入见[tools](../../tools/README.md)。历史输入／实际结果见[原生软件检查点](../../docs/operations/native-software-checkpoint.md)，双板真实负载、断电、百次与72小时仍待[执行计划](../../docs/operations/ota-allocation-diagnostic-checkpoint.md)取得独立证据。
 
 SDK 假件职责目录统一为 `fakes/app-main`、`fakes/network-auth`、`fakes/mqtt-ota`、`fakes/mqtt-ota-clock`、`fakes/ota-firmware`、`fakes/ota-update` 和 `fakes/wifi-runtime`。读取入口是本目录的 `run_host_tests.sh`、`run_mqtt_owner_tests.sh` 与 `run_mqtt_ota_tests.sh`；它们不属于 ESP-IDF 组件，内部 SDK 头文件及 `psa/crypto.h` 等入口保持原合同。

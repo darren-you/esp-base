@@ -222,11 +222,11 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 ## 一次性有线迁入与历史输入
 
-`preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，按 NVS 前三页和 `at_customize` 前两页生成 20 KiB 原字节归档；两分区余尾必须全 FF，并逐字节重建完整原分区，不解码或打印凭据。ESP32 候选将其放入只读 `at_old_raw@0x3e5000/0x5000`。旧 `esp32_product` 的四页输入仅在一次性离线准备时补入第三 NVS 的 FF 页，运行时只消费当前五页布局。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native_software_checkpoint.md)。
+`preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，按 NVS 前三页和 `at_customize` 前两页生成 20 KiB 原字节归档；两分区余尾必须全 FF，并逐字节重建完整原分区，不解码或打印凭据。ESP32 候选将其放入只读 `at_old_raw@0x3e5000/0x5000`。旧 `esp32_product` 的四页输入仅在一次性离线准备时补入第三 NVS 的 FF 页，运行时只消费当前五页布局。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native-software-checkpoint.md)。
 
 旧 AT 空 Wi-Fi 判断先核对 blob 类型与旧 SDK 的 36／65 B 字段长度，再只核对声明 payload 是否全 FF；NVS 槽尾 padding 不属于凭据，但仍随五页归档原样保留。有效 payload 的非 FF 字节、类型／长度不符或 CRC 损坏均阻断。
 
-原生候选／公钥／分区输入、旧C3双备份和现役AT双备份的读取先以非阻塞方式打开，再核对普通文件及原权限／尺寸规则；无写入方的FIFO会明确拒绝，不会停在打开阶段。软件入口和原始证据追溯见[验证说明](../docs/operations/native_software_checkpoint.md#固定输入与证据)；本工具仍只准备离线输入，不能代替本轮实体身份、正式信任、恢复基线和唯一租约。
+原生候选／公钥／分区输入、旧C3双备份和现役AT双备份的读取先以非阻塞方式打开，再核对普通文件及原权限／尺寸规则；无写入方的FIFO会明确拒绝，不会停在打开阶段。软件入口和原始证据追溯见[验证说明](../docs/operations/native-software-checkpoint.md#固定输入与证据)；本工具仍只准备离线输入，不能代替本轮实体身份、正式信任、恢复基线和唯一租约。
 
 `prepare_native_layout.py --source-layout c3_mqtt_factory` 用于独立 MQTT 实验固件首次迁入原生 Base：仅接受 C3 的 `nvs@0x9000/0x6000`、`phy_init@0xf000/0x1000`、`factory@0x10000/0x100000` 三分区，核对完整未签名 `esp_mqtt_broker_client` 镜像、checksum／摘要和擦除态槽尾。NVS 与 `0x3e0000` 后的旧 Base 持久范围必须全为空；有数据则阻断，不能据此清空旧身份或配置。来源没有 Base UUID，只记录本轮独立读取的规范 `--source-efuse-mac`，实际物理绑定须另核对双份恢复基线和写前 ROM 身份。原 factory app 占用的新 otadata／PHY／coredump 区在候选中重新装配，原始完整字节先归档并读回。新 UUID 由首次启动的设备生成，Wi-Fi 经当前 USB 配置链设置；该离线工具不连接或写入设备，也不授予正式交付资格。
 
