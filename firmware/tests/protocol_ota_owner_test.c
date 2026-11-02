@@ -112,6 +112,8 @@ static void protocol_test_free(void *data)
 static esp_base_storage_owner_t owner;
 static bool network_ready, trusted_time_ready, mqtt_ready, signed_enabled;
 static bool snapshot_ok, worker_created, defer_ota_worker, receipt_mismatch;
+static bool probe_registration;
+static unsigned registration_control_probes;
 static esp_base_ota_receipt_result_t register_result, failure_record_result, load_result, query_result;
 static esp_base_ota_operation_state_t query_state;
 static eota_result_t prepare_result, select_result, retire_result, validate_result;
@@ -176,6 +178,7 @@ static void reset_case(void)
     ebase_business_reset(&s_business);
     network_ready = trusted_time_ready = mqtt_ready = signed_enabled = true;
     snapshot_ok = worker_created = defer_ota_worker = true;
+    probe_registration = false; registration_control_probes = 0;
     receipt_mismatch = false; stream_begin_ok = true; stream_bound = stream_started = false;
     stream_cancel_after_prepare = false; stream_begin_calls = stream_prepare_calls = 0;
     register_result = failure_record_result = load_result = ESP_BASE_OTA_RECEIPT_OK;
@@ -244,6 +247,7 @@ static bool owner_available(void)
     return available;
 }
 static void run_worker(void) { ota_task(NULL); poll_ota(); }
+static void start_mqtt(unsigned number);
 
 bool eota_available(void) { return signed_enabled; }
 eota_result_t eota_validate_image_request(const eota_image_t *image)
@@ -403,9 +407,29 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
     const esp_base_storage_claim_t *claim)
 {
     assert(!strcmp(device_id, s_context.device_id) && request && claim == &s_ota_storage_claim);
-    assert(esp_base_storage_claim_active(&s_ota_storage_claim) && task_calls == 0);
+    assert(esp_base_storage_claim_active(&s_ota_storage_claim) && task_calls == 1);
     assert(snapshot_calls == 0);
     ++register_calls; registered_request = *request;
+    if (probe_registration) {
+        esp_base_ota_request_t *const accepted = s_ota_request;
+        for (unsigned i = 0; i < 12; ++i) {
+            /* Deterministic control interleaving during a six-second worker
+             * observation; no physical timing or scheduler qualification. */
+            fake_now_ms += 500;
+            send_json("{\"protocol_version\":1,\"request_id\":\"55555555-5555-4555-8555-000000000090\",\"command\":\"status\"}");
+            expect_reply("succeeded", NULL);
+            query(1); expect_reply("unknown", "operation_busy");
+            query(99); expect_reply("unknown", "operation_busy");
+            assert(query_calls == 0 && snapshot_calls == 0);
+            if (request->inbound_stream) start_mqtt(1); else start_valid(1);
+            expect_reply(request->inbound_stream ? "accepted" : "running", NULL);
+            start_valid(2); expect_reply("failed", "ota_in_progress");
+            assert(s_ota_request == accepted && !memcmp(request, &registered_request, sizeof *request));
+            assert(!ota_request_releases && register_calls == 1 && task_calls == 1);
+            assert(!load_receipt_calls && !retire_calls && !prepare_calls && !stream_begin_calls);
+            ++registration_control_probes;
+        }
+    }
     return snapshot_ok ? register_result : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
 }
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
@@ -448,7 +472,7 @@ BaseType_t xTaskCreate(void (*task)(void *), const char *name, uint32_t stack_de
 {
     (void)handle;
     assert(task == ota_task && !strcmp(name, "base_ota") && stack_depth == 12288 && priority == 4 && argument == NULL);
-    assert(register_calls == 1 && register_result == ESP_BASE_OTA_RECEIPT_OK && s_ota_active);
+    assert(register_calls == 0 && s_ota_active);
     assert((s_ota_request->inbound_stream || s_ota_request == last_decoded_ota_request) && esp_base_storage_claim_active(&s_ota_storage_claim));
     ++task_calls;
     if (worker_created && !defer_ota_worker) task(argument);
@@ -535,8 +559,8 @@ eota_result_t eota_sha256_verified_image(const eota_policy_t *policy, uint8_t su
 bool esp_base_mqtt_owner_ota_bind(const char *operation_id,
     ebase_mqtt_ota_handler_t handler, void *context)
 {
-    assert(!stream_bound && !strcmp(operation_id, registered_request.operation_id));
-    assert(handler == handle_mqtt_ota && !context && register_calls == 1);
+    assert(!stream_bound && !strcmp(operation_id, s_ota_request->operation_id));
+    assert(handler == handle_mqtt_ota && !context && register_calls == 0);
     stream_bound = true; return true;
 }
 void esp_base_mqtt_owner_ota_unbind(void) { stream_bound = false; }
@@ -590,10 +614,10 @@ static void check_mqtt_ota(void)
 {
     reset_case(); start_mqtt(1); expect_reply("accepted", NULL);
     assert(s_ota_request && s_ota_request->inbound_stream && !s_ota_request->image_url[0]);
-    assert(stream_bound && stream_begin_calls == 0 && register_calls == 1 && !owner_available());
+    assert(stream_bound && stream_begin_calls == 0 && register_calls == 0 && !owner_available());
     esp_base_ota_request_t *accepted = s_ota_request;
     start_valid(2); expect_reply("failed", "ota_in_progress");
-    assert(s_ota_request == accepted && register_calls == 1);
+    assert(s_ota_request == accepted && register_calls == 0);
     start_mqtt(1); expect_reply("accepted", NULL);
     assert(stream_begin_calls == 0 && task_calls == 1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; ota_task(NULL);
@@ -613,7 +637,7 @@ static void check_mqtt_ota(void)
     assert(failure_record_calls == 1 && !owner_available() && s_config_uncertain &&
         !s_ota_active && !s_ota_request && !strcmp(s_outcomes[s_ota_slot].state, "unknown"));
     reset_case(); start_valid(1); start_mqtt(2); expect_reply("failed", "ota_in_progress");
-    assert(stream_begin_calls == 0 && register_calls == 1);
+    assert(stream_begin_calls == 0 && register_calls == 0);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; run_worker();
     reset_case(); start_mqtt(1); run_worker();
     assert(stream_prepare_calls == 1 && prepare_calls == 0 && select_calls == 1 &&
@@ -628,7 +652,7 @@ static void check_mqtt_ota(void)
     assert(!strcmp(s_outcomes[s_ota_slot].state, "failed") && !strcmp(s_outcomes[s_ota_slot].error, "resource_failure"));
     assert(task_calls == 1 && retire_calls == 1 && failure_record_calls == 1 && owner_available() && !s_ota_request);
     reset_case(); worker_created = false; start_mqtt(1); expect_reply("failed", "resource_failure");
-    assert(failure_record_calls == 1 && owner_available() && !stream_bound && !stream_started);
+    assert(register_calls == 0 && failure_record_calls == 0 && owner_available() && !stream_bound && !stream_started);
     reset_case(); retire_delay_ms = 6304; start_mqtt(1); run_worker();
     assert(fake_now_ms == 7304 && stream_prepare_calls == 1 && restart_calls == 1);
     reset_case(); retire_result = EOTA_UPDATE_BOOT_STATE_UNKNOWN; start_mqtt(1); run_worker();
@@ -719,15 +743,25 @@ int main(void)
     check_config_flash_observation();
     check_ota_phase_observation();
     check_mqtt_ota();
+    for (unsigned stream = 0; stream < 2; ++stream) {
+        reset_case(); probe_registration = true;
+        if (stream) start_mqtt(1); else start_valid(1);
+        assert(register_calls == 0 && fake_now_ms == 1000 && task_calls == 1);
+        prepare_result = EOTA_UPDATE_RESOURCE_FAILURE;
+        run_worker(); expect_reply("failed", "resource_failure");
+        assert(registration_control_probes == 12 && fake_now_ms == 7000);
+        assert(register_calls == 1 && load_receipt_calls == 1 && retire_calls == 2);
+        assert(failure_record_calls == 1 && ota_request_releases == 1 && owner_available());
+    }
     reset_case(); start_valid(1); expect_reply("running", NULL);
-    assert(s_ota_request && s_ota_request == last_decoded_ota_request && register_calls == 1 && task_calls == 1);
+    assert(s_ota_request && s_ota_request == last_decoded_ota_request && register_calls == 0 && task_calls == 1);
     assert(!owner_available() && !ota_request_releases && snapshot_calls == 0);
     esp_base_ota_request_t *accepted = s_ota_request;
-    query(1); expect_reply("unknown", "ota_operation_not_found");
+    query(1); expect_reply("unknown", "operation_busy"); assert(query_calls == 0);
     start_valid(2); expect_reply("failed", "ota_in_progress");
-    assert(s_ota_request == accepted && register_calls == 1 && task_calls == 1 && !ota_request_releases);
+    assert(s_ota_request == accepted && register_calls == 0 && task_calls == 1 && !ota_request_releases);
     start_valid(1); expect_reply("running", NULL);
-    assert(register_calls == 1 && task_calls == 1);
+    assert(register_calls == 0 && task_calls == 1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; run_worker(); expect_reply("failed", "resource_failure");
     assert(load_receipt_calls == 1 && retire_calls == 2 && prepare_calls == 1 && select_calls == 0);
     assert(failure_record_calls == 1 && !s_ota_request && !s_ota_active && ota_request_releases == 1 && owner_available());
@@ -753,10 +787,7 @@ int main(void)
         assert(register_calls == 1 && restart_calls == 0);
     }
     reset_case(); worker_created = false; start_valid(1); expect_reply("failed", "resource_failure");
-    assert(failure_record_calls == 1 && !s_ota_request && ota_request_releases == 1 && owner_available());
-    reset_case(); worker_created = false; failure_record_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
-    start_valid(1); expect_reply("unknown", "storage_uncertain");
-    assert(!s_ota_request && ota_request_releases == 1 && !owner_available() && s_config_uncertain);
+    assert(register_calls == 0 && failure_record_calls == 0 && !s_ota_request && ota_request_releases == 1 && owner_available());
     reset_case(); prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; failure_record_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
     start_valid(1); run_worker(); expect_reply("unknown", "storage_uncertain");
     assert(failure_record_calls == 1 && !s_ota_active && !owner_available());
@@ -767,11 +798,14 @@ int main(void)
         ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN};
     for (unsigned i = 0; i < sizeof refuses / sizeof *refuses; ++i) {
         reset_case(); register_result = refuses[i]; start_valid(1);
-        assert(register_calls == 1 && task_calls == 0 && prepare_calls == 0 && !s_ota_request);
+        assert(register_calls == 0 && task_calls == 1 && s_ota_request);
+        run_worker();
+        assert(register_calls == 1 && task_calls == 1 && prepare_calls == 0 && !s_ota_request);
+        assert(load_receipt_calls == 0 && retire_calls == 0 && failure_record_calls == 0);
         assert(owner_available() == (refuses[i] != ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN));
     }
-    reset_case(); snapshot_ok = false; start_valid(1); expect_reply("unknown", "storage_uncertain");
-    assert(register_calls == 1 && task_calls == 0 && !owner_available() && s_config_uncertain);
+    reset_case(); snapshot_ok = false; start_valid(1); run_worker(); expect_reply("unknown", "storage_uncertain");
+    assert(register_calls == 1 && task_calls == 1 && !owner_available() && s_config_uncertain && !failure_record_calls);
     reset_case(); esp_base_storage_claim_t other_entry = {0};
     assert(esp_base_storage_claim(&owner, &other_entry));
     start_valid(1); expect_reply("failed", "operation_busy");

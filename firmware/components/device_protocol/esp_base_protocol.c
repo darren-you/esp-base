@@ -84,6 +84,7 @@ static atomic_bool s_ota_upload_ready;
  * It serves read-only progress; it never authorizes a write or a terminal. */
 static atomic_uint s_ota_target_subtype;
 static atomic_int s_ota_result;
+static atomic_int s_ota_registration_result;
 static atomic_uint_fast32_t s_ota_received;
 static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
@@ -540,6 +541,21 @@ static void observe_ota_phase(const char *phase, const char *boundary,
 static void ota_task(void *argument)
 {
     (void)argument;
+    /* Full signed-set observation can take seconds. Keep it off the control
+     * owner, under the already acquired transaction claim. No retirement,
+     * stream request or app write may precede the durable intent readback. */
+    const uint64_t registration_started_ms = uptime_ms();
+    const esp_base_ota_receipt_result_t registration = esp_base_ota_receipt_register(
+        s_context.device_id, s_ota_request, &s_ota_storage_claim);
+    ESP_LOGI("base_ota", "ESP_BASE_OTA_REGISTRATION operation_id=%s elapsed_ms=%" PRIu64 " receipt=%u",
+        s_ota_request->operation_id, uptime_ms() - registration_started_ms, (unsigned)registration);
+    (void)registration_started_ms;
+    atomic_store_explicit(&s_ota_registration_result, registration, memory_order_relaxed);
+    if (registration != ESP_BASE_OTA_RECEIPT_OK) {
+        atomic_store_explicit(&s_ota_done, true, memory_order_release);
+        vTaskDelete(NULL);
+        return;
+    }
     const eota_policy_t policy = esp_base_ota_policy(true);
     esp_base_ota_receipt_recovery_t receipt = {0};
     eota_result_t result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
@@ -629,6 +645,31 @@ static void poll_ota(void)
     if (!s_ota_active || !atomic_load_explicit(&s_ota_done, memory_order_acquire)) return;
     esp_base_mqtt_owner_ota_unbind();
     esp_base_mqtt_ota_transfer_close();
+    const esp_base_ota_receipt_result_t registration =
+        (esp_base_ota_receipt_result_t)atomic_load_explicit(&s_ota_registration_result, memory_order_relaxed);
+    if (registration != ESP_BASE_OTA_RECEIPT_OK) {
+        const char *error = registration == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
+            registration == ESP_BASE_OTA_RECEIPT_CONFLICT ? "ota_operation_conflict" :
+            registration == ESP_BASE_OTA_RECEIPT_BUSY ? "ota_previous_unresolved" :
+            registration == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE ? "ota_slot_unavailable" :
+            registration == ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH ? "ota_selector_mismatch" :
+            registration == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID ? "ota_source_not_valid" :
+            registration == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE ? "ota_target_not_safe" :
+            registration == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
+            registration == ESP_BASE_OTA_RECEIPT_SAME_IMAGE ? "ota_same_image" :
+            registration == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
+        bool uncertain = registration == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
+        if (!uncertain && !esp_base_storage_release(&s_ota_storage_claim)) uncertain = true;
+        if (uncertain) s_config_uncertain = true;
+        esp_base_control_state_set_ota_download_active(&s_control_state, false);
+        s_ota_active = false;
+        /* A refused/unproven registration never overwrites an older receipt
+         * with failure for this request. No app mutation has been started. */
+        save_outcome(s_ota_slot, uncertain ? "unknown" : "failed",
+                     uncertain ? "storage_uncertain" : error, false);
+        clear_ota_request();
+        return;
+    }
     const eota_result_t result =
         (eota_result_t)atomic_load_explicit(&s_ota_result, memory_order_relaxed);
     if (atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed)) {
@@ -704,6 +745,13 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         esp_base_ota_receipt_view_t view;
         const bool active = s_ota_active && !strcmp(s_ota_request->operation_id, command->operation_id);
         const unsigned target = atomic_load_explicit(&s_ota_target_subtype, memory_order_acquire);
+        if (s_ota_active && target != ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+            target != ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+            /* Registration/reload owns the persistent observation. A query
+             * must not race it, block control, or invent a proven target. */
+            reply(command->request.request_id, "unknown", "operation_busy", NULL);
+            return;
+        }
         if (active && (target == ESP_PARTITION_SUBTYPE_APP_OTA_0 ||
                        target == ESP_PARTITION_SUBTYPE_APP_OTA_1)) {
             /* Avoid competing for Flash while retirement verifies the source.
@@ -788,36 +836,13 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         if (!esp_base_storage_claim(s_context.storage_owner, &s_ota_storage_claim)) {
             save_outcome(slot, "failed", "operation_busy", false); return;
         }
-        const uint64_t registration_started_ms = uptime_ms();
-        const esp_base_ota_receipt_result_t receipt = esp_base_ota_receipt_register(
-            s_context.device_id, command->ota, &s_ota_storage_claim);
-        ESP_LOGI("base_ota", "ESP_BASE_OTA_REGISTRATION operation_id=%s elapsed_ms=%" PRIu64 " receipt=%u",
-            command->ota->operation_id, uptime_ms() - registration_started_ms, (unsigned)receipt);
-        (void)registration_started_ms;
-        if (receipt != ESP_BASE_OTA_RECEIPT_OK) {
-            const char *receipt_error = receipt == ESP_BASE_OTA_RECEIPT_EXISTS ? "ota_operation_exists" :
-                receipt == ESP_BASE_OTA_RECEIPT_CONFLICT ? "ota_operation_conflict" :
-                receipt == ESP_BASE_OTA_RECEIPT_BUSY ? "ota_previous_unresolved" :
-                receipt == ESP_BASE_OTA_RECEIPT_SLOT_UNAVAILABLE ? "ota_slot_unavailable" :
-                receipt == ESP_BASE_OTA_RECEIPT_SELECTOR_MISMATCH ? "ota_selector_mismatch" :
-                receipt == ESP_BASE_OTA_RECEIPT_SOURCE_NOT_VALID ? "ota_source_not_valid" :
-                receipt == ESP_BASE_OTA_RECEIPT_TARGET_NOT_SAFE ? "ota_target_not_safe" :
-                receipt == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
-                receipt == ESP_BASE_OTA_RECEIPT_SAME_IMAGE ? "ota_same_image" :
-                receipt == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
-            bool uncertain = receipt == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
-            if (!uncertain && !esp_base_storage_release(&s_ota_storage_claim)) uncertain = true;
-            if (uncertain) s_config_uncertain = true;
-            save_outcome(slot, uncertain ? "unknown" : "failed",
-                         uncertain ? "storage_uncertain" : receipt_error, false);
-            return;
-        }
         s_ota_request = command->ota;
         command->payload = NULL;
         command->payload_size_bytes = 0U;
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_registration_result, ESP_BASE_OTA_RECEIPT_OK, memory_order_relaxed);
         atomic_store_explicit(&s_ota_stage_uncertain, false, memory_order_relaxed);
         atomic_store_explicit(&s_ota_upload_ready, false, memory_order_relaxed);
         atomic_store_explicit(&s_ota_target_subtype, 0xffU, memory_order_relaxed);
@@ -828,10 +853,9 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
             xTaskCreate(ota_task, "base_ota", 12288, NULL, 4, NULL) != pdPASS) {
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
-            const bool failed = esp_base_ota_receipt_record_failure(
-                s_context.device_id, s_ota_request->operation_id,
-                EOTA_UPDATE_RESOURCE_FAILURE) == ESP_BASE_OTA_RECEIPT_OK &&
-                esp_base_storage_release(&s_ota_storage_claim);
+            /* No worker means no attempted registration or app mutation.
+             * Preserve the previous durable receipt exactly. */
+            const bool failed = esp_base_storage_release(&s_ota_storage_claim);
             clear_ota_request();
             if (failed) {
                 save_outcome(slot, "failed", "resource_failure", false);

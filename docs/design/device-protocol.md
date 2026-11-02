@@ -10,7 +10,7 @@ USB／MQTT 的只读 status、firmware.status、business.status 精确包含 `pr
 
 写命令精确包含 protocol_version、device_id、target_boot_id、request_id、command、expires_at_uptime_ms、parameters 七字段。boot 必须为当前启动，期限为设备 uptime 的安全整数、晚于执行时刻且不超过 30,000 ms。32 槽本 boot 守卫保存首次指纹与 outcome，不驱逐已用记录；同 ID 相同请求只回放，冲突拒绝。表满拒绝新写，旧结果仍可查询。request_id、operation_id 和查询请求 ID 各自保持真实语义。
 
-响应精确为 protocol_version、device_id、boot_id、request_id、state、error_code、result 七字段；状态包含 running、succeeded、failed、expired、unknown。超时、发送完成和 running 都不等于成功。存储不确定保留原 ID；客户端只能读回，不自动换 ID 或重发写入。
+响应精确为 protocol_version、device_id、boot_id、request_id、state、error_code、result 七字段；状态包含 accepted、running、succeeded、failed、expired、unknown。超时、发送完成和非终态都不等于成功。存储不确定保留原 ID；客户端只能读回，不自动换 ID 或重发写入。
 
 ## 固件状态与升级
 
@@ -18,9 +18,11 @@ firmware.status 的 result 精确包含 firmware_sha256、image_size_bytes、tar
 
 USB ota.start parameters 精确六项：operation_id、image_url、sha256、image_size_bytes、target、signature。image_url 是最多 512 B 的 HTTPS URL；sha256 为非零小写 64 位十六进制；长度必须容纳完整签名镜像并适合目标槽；signature 只含精确 scheme。MQTT ota.start 精确五项，删除 image_url，固件字节通过下述认证块通道提供；带 URL 的 MQTT start 被拒绝。两入口复用唯一升级 owner、V4 意图、验签、备用槽和恢复机制。
 
-受理要求签名策略可用、已确认运行 A／boot 一致、准确 inactive 槽、无 pending 或未决收据、无配置试运行／重启。来源 URL／流元数据在任何 app 擦写前静态验证；写前意图持久提交并逐字节读回后才创建 worker。worker 重读原意图，先使旧 inactive 镜像物理不可启动，再分块准备 C；精确长度、完整摘要、芯片／项目及官方签名均通过后才选择新 boot。部分失败只有清理 C 且证明 A 仍 VALID／selected 后才能记录 failed，否则 unknown 并保留占用。
+受理要求签名策略可用、无本地 pending 或配置试运行／重启，并通过来源 URL／流元数据的静态验证。控制 owner 先取得唯一事务 claim、保留原请求并创建已有 OTA worker；初始 accepted（MQTT）／running（USB）仅表示本 boot 接管，不证明持久登记、完整固件观察或 app 写入。worker 核对已确认运行 A／boot、准确 inactive 槽和前次收据，再持久提交并逐字节读回写前意图；重读并绑定原意图后才使旧 inactive 镜像物理不可启动、开放块请求或分块准备 C。任务创建失败时未尝试登记；登记拒绝不替旧收据写入本次失败，登记／claim 释放不确定时保留门禁和 unknown。精确长度、完整摘要、芯片／项目及官方签名均通过后才选择新 boot。部分失败只有清理 C 且证明 A 仍 VALID／selected 后才能记录 failed，否则 unknown 并保留占用。
 
 ota.result 的 result 精确五项：operation_id、sha256、image_size_bytes、target、target_slot。原收据与实际槽一致时，MQTT worker 完成原意图重读但尚未开放块请求时为 accepted，开放后及其他活动 worker／pending C 为 running；C 为 VALID、完整身份吻合且成功收据提交读回才 succeeded；A 为 VALID／selected 且原失败收据已完成才 failed。只看 INVALID／ABORTED 或看见 VALID 而缺成功收据都不能推断终态；未登记／被后续操作替换的 ID 为 unknown。普通未签名构建拒绝固件写入与持久结果资格。活动 worker 重读并绑定原收据后，仅将精确目标槽发布给控制 owner；进度查询复用当前请求的原身份，不再与长 Flash 验证争抢读取。该内存观察只输出非终态，worker 结束后的查询继续核对持久收据与实际槽。
+
+worker 登记或重读期间，精确目标槽尚未发布时，ota.result 返回 unknown／operation_busy、result 为 null；不争抢持久观察或把尚未证明的槽填入结果，也不允许另一操作取代当前 owner。此状态不表示可以重发 start。登记完成前断电，不承诺该新 ID 已持久；恢复仍只依据实际原收据。
 
 新 boot 不依赖 Broker 在线确认：本地初始化与控制进展通过完整 30 秒窗口，确认 VALID 并复核后提交成功收据。控制进展跨窗或失活重新累计窗口；确认／读回不确定保持原事实。普通 app OTA 不改变分区表。
 
