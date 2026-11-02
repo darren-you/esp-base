@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_mqtt_owner.h"
 #include "esp_attr.h"
+#include "esp_log.h"
 #include "esp_base_mqtt_command.h"
 #include "esp_base_command_guard.h"
 #include "emqtt.h"
@@ -190,6 +191,8 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             break;
         }
         case EMQTT_EVENT_DISCONNECTED:
+            ESP_LOGE("base_mqtt", "disconnected uptime_ms=%llu",
+                     (unsigned long long)now_ms);
             clear_restart_result();
             s_ready = false;
             break;
@@ -209,6 +212,9 @@ void esp_base_mqtt_owner_poll(uint64_t now_ms, bool network_ready, bool trusted_
             else { s_ota_request_id = 0; s_started = false; s_retry_after_ms = now_ms + 5000; }
             return;
         case EMQTT_EVENT_ERROR:
+            ESP_LOGE("base_mqtt", "runtime error=%d state=%d uptime_ms=%llu",
+                     (int)s_event.error, (int)emqtt_state(s_runtime),
+                     (unsigned long long)now_ms);
             if (emqtt_state(s_runtime) != EMQTT_READY) {
                 clear_restart_result();
                 s_ready = false;

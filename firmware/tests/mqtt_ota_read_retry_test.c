@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include <assert.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -11,6 +12,19 @@ static size_t clock_count, clock_index;
 static unsigned critical_depth, delays;
 static bool offer_during_delay;
 static uint8_t block[2048];
+static char last_log[192];
+static unsigned log_count;
+
+void esp_base_test_log(const char *tag, const char *format, ...)
+{
+    assert(critical_depth == 0 && strcmp(tag, "base_mqtt_ota") == 0);
+    va_list args;
+    va_start(args, format);
+    const int length = vsnprintf(last_log, sizeof last_log, format, args);
+    va_end(args);
+    assert(length >= 0 && (size_t)length < sizeof last_log);
+    ++log_count;
+}
 
 int64_t esp_timer_get_time(void)
 {
@@ -54,6 +68,8 @@ static void begin(uint32_t size, uint32_t idle)
     clock_count = clock_index = 0;
     delays = 0;
     offer_during_delay = false;
+    log_count = 0;
+    last_log[0] = '\0';
     assert(esp_base_mqtt_ota_transfer_begin(size, idle));
 }
 static int read_once(uint8_t *out, size_t capacity, uint32_t timeout)
@@ -79,6 +95,7 @@ static void test_cross_call_wait(void)
     wakeup_delay_us = 10001;
     const int64_t started = now_us;
     assert(read_once(bytes, sizeof bytes, 1000) == -2 && delays == 1);
+    assert(log_count == 0);
     assert(now_us - started == 20001);
     for (size_t i = 0; i < sizeof bytes; ++i) assert(bytes[i] == 0xa5);
     for (unsigned offset = 0; offset < sizeof block; offset += sizeof bytes) {
@@ -99,6 +116,8 @@ static void test_cross_call_wait(void)
     wakeup_delay_us = 1000001;
     assert(read_once(bytes, sizeof bytes, 1000) == -2 && delays == 1);
     assert(now_us == 1010001);
+    assert(log_count == 1 && strcmp(last_log,
+        "empty read returned late elapsed_us=1010001 budget_ms=1000") == 0);
     for (size_t i = 0; i < sizeof bytes; ++i) assert(bytes[i] == 0xa5);
     for (unsigned offset = 0; offset < sizeof block; offset += sizeof bytes) {
         assert(read_once(bytes, sizeof bytes, 1000) == (int)sizeof bytes && delays == 0);
@@ -136,6 +155,7 @@ static void test_read_boundaries(void)
     for (unsigned i = 0; i < 3; ++i)
         assert(read_once(&byte, 1, 1000) == -2 && delays == 1);
     assert(now_us == 30000 && read_once(&byte, 1, 1000) == -1 && delays == 0);
+    assert(log_count == 1 && strcmp(last_log, "read rejected stream_error=1") == 0);
     begin(2048, 30);
     now_us = 30000;
     assert(read_once(&byte, 1, 1000) == -1 && delays == 0);
@@ -156,6 +176,7 @@ static void test_immediate_terminal(void)
     frame = request(); frame.kind = EBASE_MQTT_OTA_CANCEL;
     assert(esp_base_mqtt_ota_transfer_offer(&frame) == EBASE_MQTT_OTA_ACCEPTED);
     assert(read_once(bytes, sizeof bytes, 1000) == -1 && delays == 0);
+    assert(log_count == 1 && strcmp(last_log, "read rejected stream_error=2") == 0);
     esp_base_mqtt_ota_transfer_close();
 }
 int main(void)

@@ -25,6 +25,7 @@ read -r -a openssl_libs <<< "$(pkg-config --libs openssl)"
   "$test_root/tests/mqtt_ota_transfer_test.c" -o "$build_dir/mqtt_ota_transfer_test"
 "$build_dir/mqtt_ota_transfer_test"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -DESP_BASE_TEST_CAPTURE_LOG=1 \
   -I "$test_root/tests/fakes/mqtt-ota-clock" -I "$test_root/tests/fakes" \
   -I "$test_root/components/device_protocol/include" \
   "$test_root/components/device_protocol/mqtt_ota_stream.c" \

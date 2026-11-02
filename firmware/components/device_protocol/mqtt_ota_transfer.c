@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "esp_base_mqtt_ota_transfer.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -53,7 +54,10 @@ int esp_base_mqtt_ota_transfer_read(void *context, uint8_t *out, size_t capacity
     if (now >= deadline) return -2;
     portENTER_CRITICAL(&s_lock);
     const int result = ebase_mqtt_ota_stream_read(&s_stream, now_ms(), out, capacity);
+    const ebase_mqtt_ota_stream_error_t stream_error = s_stream.error;
     portEXIT_CRITICAL(&s_lock);
+    if (result == -1)
+        ESP_LOGE("base_mqtt_ota", "read rejected stream_error=%d", (int)stream_error);
     if (result != -2) return result;
     /* Yield once outside the mailbox and Flash gates, then let the OTA core
      * retry under its unchanged read/idle/total deadlines. Waiting here until
@@ -62,7 +66,14 @@ int esp_base_mqtt_ota_transfer_read(void *context, uint8_t *out, size_t capacity
     if (before_delay < now) return -1;
     if (deadline - before_delay <= (int64_t)portTICK_PERIOD_MS * 1000) return -2;
     vTaskDelay(1);
-    if (esp_timer_get_time() < before_delay) return -1;
+    const int64_t finished = esp_timer_get_time();
+    if (finished < before_delay) return -1;
+    /* Report a delayed empty retry before the OTA core checks its own callback
+     * budget. This is diagnostic only: no bytes or progress are manufactured,
+     * and no log is emitted from the mailbox critical section. */
+    if (finished - start >= (int64_t)timeout_ms * 1000)
+        ESP_LOGE("base_mqtt_ota", "empty read returned late elapsed_us=%lld budget_ms=%lu",
+                 (long long)(finished - start), (unsigned long)timeout_ms);
     return -2;
 }
 

@@ -4,6 +4,8 @@ MQTT OTA 二进制编解码和单块状态机的独立入口为 `bash firmware/t
 
 同一 MQTT OTA 入口还以 10 ms 可控 tick 编译真实 transfer 和 mailbox，检查空读每次至多让出一个 tick、跨回调等待不刷新期限、让出期间到达的数据只在后续读取消费一次、短预算与倒退时钟，以及数据／EOF／错误即时返回。宿主调度假件不代表 MCU 时延保证。
 
+该时钟回归同时捕获异常日志，区分迟到空读、无进展到期和取消，核对日志在 mailbox 临界区外输出；正常等待不输出失败日志，迟到回调仍保留原字节供后续消费。它不推断任何实板失败的原因，也不改变上层 OTA core 对迟到回调的处理。
+
 公开入口 `bash firmware/tests/run_host_tests.sh` 使用官方Component Manager解析的同target组件，开启ASan／UBSan和严格编译诊断。ESP_BASE_TEST_TARGET选择esp32c3或esp32；ESP_BASE_TEST_COMPONENTS_DIR可指向本轮独立源码副本的已解析managed_components，不从相邻源仓import。
 
 运行前先按[固件构建说明](../README.md)准备锁定SDK，并对所选target执行官方Component Manager重新解析。`managed_components`是生成目录，新检出或清理生成物后须先恢复该输入；host入口本身不下载依赖。使用已冻结的独立构建输入时，分别指定各target对应的组件目录，不能把空目录、另一轮缓存或相邻源仓当成本轮组件。也可提取该入口实际读取的源码／头文件子集，但必须逐文件核对长度与摘要、绑定原target锁和解析来源；子集通过只证明host消费，不等于完整SDK解析或固件构建：
