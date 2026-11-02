@@ -25,7 +25,7 @@ typedef struct {
     uint8_t block[EBASE_MQTT_OTA_BLOCK_BYTES];
     size_t used, length;
     uint32_t size, read_offset, written_offset;
-    uint64_t last_now, total_deadline, idle_deadline;
+    uint64_t last_now, idle_deadline;
     uint32_t idle_timeout_ms;
     ebase_mqtt_ota_frame_t request;
     ebase_mqtt_ota_frame_t previous;
@@ -34,10 +34,11 @@ typedef struct {
 } ebase_mqtt_ota_stream_t;
 
 bool ebase_mqtt_ota_stream_begin(ebase_mqtt_ota_stream_t *stream,
-    uint32_t image_size, uint64_t now_ms, uint32_t total_timeout_ms,
+    uint32_t image_size, uint64_t now_ms,
     uint32_t idle_timeout_ms);
 /* Returns the same immutable request until that block is written. The caller
- * rate-limits publication. Reconnect/republication never refreshes deadlines. */
+ * rate-limits publication. Reconnect/republication never refreshes deadlines;
+ * only a strictly increased written offset refreshes idle; there is no total transfer limit. */
 bool ebase_mqtt_ota_stream_request(ebase_mqtt_ota_stream_t *stream,
     uint64_t now_ms, ebase_mqtt_ota_frame_t *out);
 ebase_mqtt_ota_admission_t ebase_mqtt_ota_stream_offer(ebase_mqtt_ota_stream_t *stream,

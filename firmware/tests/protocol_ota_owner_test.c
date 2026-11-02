@@ -464,6 +464,7 @@ eota_result_t eota_prepare(const eota_policy_t *policy, const eota_image_t *imag
     eota_progress_t progress, void *context, eota_prepared_t *prepared)
 {
     assert(policy->trusted_time && image && prepared && progress);
+    assert(policy->total_timeout_ms == 300000); /* URL keeps its absolute budget. */
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && register_calls == 1 && retire_calls == 1);
     ++prepare_calls;
     progress(512, image->image_size_bytes, context);
@@ -541,9 +542,9 @@ bool esp_base_mqtt_owner_ota_bind(const char *operation_id,
 void esp_base_mqtt_owner_ota_unbind(void) { stream_bound = false; }
 bool esp_base_mqtt_owner_ota_request(uint64_t now, const ebase_mqtt_ota_frame_t *frame)
 { (void)now; (void)frame; assert(stream_bound); return true; }
-bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t total, uint32_t idle)
+bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t idle)
 {
-    assert(stream_bound && size == 4096 && total == 300000 && idle == 30000);
+    assert(stream_bound && size == 4096 && idle == 30000);
     assert(register_calls == 1 && task_calls == 1 && retire_calls == 1);
     ++stream_begin_calls; stream_started = stream_begin_ok; return stream_begin_ok;
 }
@@ -564,6 +565,7 @@ eota_result_t eota_prepare_stream(const eota_policy_t *policy, const eota_stream
     eota_progress_t progress, void *context, eota_prepared_t *prepared)
 {
     assert(policy && stream && stream->read == esp_base_mqtt_ota_transfer_read && stream->written == esp_base_mqtt_ota_transfer_written && prepared && progress);
+    assert(policy->idle_timeout_ms == 30000 && stream->no_total_timeout);
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && stream_begin_calls == 1 && retire_calls == 1);
     check_live_progress("running");
     ++stream_prepare_calls; progress(512, stream->image_size_bytes, context);

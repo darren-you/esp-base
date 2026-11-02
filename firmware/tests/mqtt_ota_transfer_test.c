@@ -54,7 +54,7 @@ static void *worker(void *unused)
 
 int main(void)
 {
-    assert(esp_base_mqtt_ota_transfer_begin(IMAGE_SIZE, 10000, 2000));
+    assert(esp_base_mqtt_ota_transfer_begin(IMAGE_SIZE, 2000));
     pthread_t thread;
     assert(pthread_create(&thread, NULL, worker, NULL) == 0);
     uint8_t block[2048];
@@ -82,7 +82,7 @@ int main(void)
     assert(esp_base_mqtt_ota_transfer_select());
     assert(!esp_base_mqtt_ota_transfer_select());
     esp_base_mqtt_ota_transfer_close();
-    assert(esp_base_mqtt_ota_transfer_begin(1024, 1000, 100));
+    assert(esp_base_mqtt_ota_transfer_begin(1024, 100));
     uint8_t byte;
     assert(esp_base_mqtt_ota_transfer_read(NULL, &byte, 1, 10) == -2);
     ebase_mqtt_ota_frame_t request;

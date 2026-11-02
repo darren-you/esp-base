@@ -16,10 +16,10 @@ static uint64_t now_ms(void)
     return now < 0 ? UINT64_MAX : (uint64_t)now / 1000u;
 }
 
-bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t total, uint32_t idle)
+bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t idle)
 {
     portENTER_CRITICAL(&s_lock);
-    const bool started = ebase_mqtt_ota_stream_begin(&s_stream, size, now_ms(), total, idle);
+    const bool started = ebase_mqtt_ota_stream_begin(&s_stream, size, now_ms(), idle);
     portEXIT_CRITICAL(&s_lock);
     return started;
 }

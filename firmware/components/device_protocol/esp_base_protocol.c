@@ -564,7 +564,7 @@ static void ota_task(void *argument)
          * authenticated block request. The transfer owns one fixed mailbox. */
         stage = "begin_mqtt_stream";
         if (!esp_base_mqtt_ota_transfer_begin(s_ota_request->image_size_bytes,
-                policy.total_timeout_ms, policy.idle_timeout_ms)) {
+                policy.idle_timeout_ms)) {
             result = EOTA_UPDATE_RESOURCE_FAILURE; goto done;
         }
         atomic_store_explicit(&s_ota_upload_ready, true, memory_order_release);
@@ -578,7 +578,8 @@ static void ota_task(void *argument)
     if (s_ota_request->inbound_stream) {
         eota_stream_t stream = {.read = esp_base_mqtt_ota_transfer_read,
             .image_size_bytes = image.image_size_bytes,
-            .written = esp_base_mqtt_ota_transfer_written};
+            .written = esp_base_mqtt_ota_transfer_written,
+            .no_total_timeout = true};
         memcpy(stream.sha256, image.sha256, 32);
         result = eota_prepare_stream(&policy, &stream, ota_progress, NULL, &prepared);
     } else result = eota_prepare(&policy, &image, ota_progress, NULL, &prepared);

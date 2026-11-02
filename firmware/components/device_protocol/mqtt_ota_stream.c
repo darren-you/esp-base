@@ -10,7 +10,7 @@
 static bool live(ebase_mqtt_ota_stream_t *s, uint64_t now)
 {
     if (!s || !s->active || s->selecting || s->error != EBASE_MQTT_OTA_STREAM_OK) return false;
-    if (now < s->last_now || now >= s->total_deadline || now >= s->idle_deadline) {
+    if (now < s->last_now || now >= s->idle_deadline) {
         s->error = EBASE_MQTT_OTA_STREAM_TIMEOUT;
         return false;
     }
@@ -19,12 +19,12 @@ static bool live(ebase_mqtt_ota_stream_t *s, uint64_t now)
 }
 
 bool ebase_mqtt_ota_stream_begin(ebase_mqtt_ota_stream_t *s,
-    uint32_t size, uint64_t now, uint32_t total, uint32_t idle)
+    uint32_t size, uint64_t now, uint32_t idle)
 {
-    if (!s || s->active || !size || !total || !idle || idle > total ||
-        now > UINT64_MAX - total) return false;
+    if (!s || s->active || !size || !idle ||
+        now > UINT64_MAX - idle) return false;
     *s = (ebase_mqtt_ota_stream_t){.size = size, .last_now = now,
-        .total_deadline = now + total, .idle_deadline = now + idle,
+        .idle_deadline = now + idle,
         .idle_timeout_ms = idle, .active = true};
     return true;
 }
@@ -43,8 +43,7 @@ bool ebase_mqtt_ota_stream_request(ebase_mqtt_ota_stream_t *s,
     if (!s->request_valid) {
         s->request = (ebase_mqtt_ota_frame_t){.kind = EBASE_MQTT_OTA_REQUEST,
             .offset = s->read_offset, .written_offset = s->written_offset,
-            .expires_at_uptime_ms = s->idle_deadline < s->total_deadline ?
-                s->idle_deadline : s->total_deadline};
+            .expires_at_uptime_ms = s->idle_deadline};
         s->request_valid = true;
     }
     *out = s->request;
@@ -119,10 +118,14 @@ bool ebase_mqtt_ota_stream_written(ebase_mqtt_ota_stream_t *s,
         return false;
     }
     if (offset > s->written_offset) {
+        if (now > UINT64_MAX - s->idle_timeout_ms) {
+            s->error = EBASE_MQTT_OTA_STREAM_TIMEOUT;
+            return false;
+        }
         s->written_offset = offset;
-        /* Saturation at the immutable total deadline avoids clock overflow. */
-        const uint64_t left = s->total_deadline - now;
-        s->idle_deadline = now + (left < s->idle_timeout_ms ? left : s->idle_timeout_ms);
+        /* Only actual new Flash writes refresh idle. Duplicates,
+         * reconnects and a live connection never count as progress. */
+        s->idle_deadline = now + s->idle_timeout_ms;
     }
     return true;
 }

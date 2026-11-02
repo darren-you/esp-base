@@ -7,4 +7,4 @@ dependencies:
   esp_ota:
     git: "https://github.com/darren-you/esp-ota.git"
     path: "components/esp_ota"
-    version: "7ce7c5c098cfe9e4b37c2624a7cfb1f98a224607"
+    version: "91b9f93ab8388559729dc71bb163a017b04a52c2"
