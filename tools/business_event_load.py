@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+from collections import deque
 import fcntl
 import hashlib
 import importlib.metadata
@@ -28,6 +29,7 @@ DATA_BYTES = 3923
 MAX_EVENTS = 4096
 MAX_UNCONFIRMED = 128
 MAX_INFLIGHT = 4
+MAX_REPORT_HISTORY = 128
 MAX_OUTPUT = 32 * 1024 * 1024
 RECEIPT_TIMEOUT = 15.0
 INT32_MAX = (1 << 31) - 1
@@ -110,6 +112,8 @@ class Ledger:
         self.start = self.confirmed = before["last_accepted_event_sequence"]
         self.uptime = before["uptime_ms"]
         self.entries, self.mids = {}, {}
+        self.report_history = deque(maxlen=MAX_REPORT_HISTORY)
+        self.duplicate_reports = 0
         self.fresh = False
         self.stopped = self.error = None
 
@@ -146,6 +150,13 @@ class Ledger:
     def reported(self, payload):
         require(self.error is None, "ledger_already_unknown")
         row = validate_report(payload, self.device, self.boot)
+        digest = hashlib.sha256(payload).digest()
+        if digest in self.report_history:
+            # QoS1 may redeliver an older report after a newer one. Only an
+            # exact payload already accepted in this session is harmless;
+            # it cannot refresh freshness, progress or any receipt deadline.
+            self.duplicate_reports += 1
+            return None
         require(row["revision"] == self.before["revision"] and row["uptime_ms"] >= self.uptime,
                 "reported_revision_or_clock_changed")
         sequence = row["last_accepted_event_sequence"]
@@ -161,6 +172,7 @@ class Ledger:
                     "reported_count_or_digest_mismatch")
         self.fresh = True
         self.uptime, self.confirmed = row["uptime_ms"], sequence
+        self.report_history.append(digest)
         return row
 
     def expired(self, now):
@@ -179,6 +191,7 @@ class Ledger:
                 "stop_reason": self.stopped, "error": self.error,
                 "all_attempts_reconciled": self.settled() and self.error is None,
                 "requested_count_completed": len(self.entries) == self.limit and self.settled() and self.error is None,
+                "duplicate_reports_ignored": self.duplicate_reports,
                 "per_event_receipts": False, "exclusive_writer_independently_proven": False,
                 "device_connection_puback_proven": False, "r5_qualified": False}
 
@@ -417,7 +430,10 @@ def run(args, mqtt, *, clock=time.monotonic):
                                         payload_base64=base64.b64encode(item[1]).decode("ascii"))
                         check_deadlines()
                         row = ledger.reported(item[1])
-                        evidence.record("device_reported", value=row)
+                        if row is None:
+                            evidence.record("reported_duplicate_ignored", payload_sha256=sha(item[1]))
+                        else:
+                            evidence.record("device_reported", value=row)
                 if callback_error:
                     ledger.stop(callback_error, unknown=True)
                 if code != 0:

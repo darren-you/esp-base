@@ -131,6 +131,7 @@ class FakeClient:
             if mode != "puback_missing":
                 self.on_publish(self, None, mid, types.SimpleNamespace(is_failure=False), None)
             if mode != "reported_before_puback": self.message(value)
+            if mode == "duplicate_old_report": self.message(report())
             if mode == "queued_receipts_consumed_late": self.owner.clock.now = 16
         return 0
 
@@ -160,6 +161,44 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(state.summary()["confirmed_through_sequence"], 12)
         self.assertFalse(state.summary()["per_event_receipts"])
         self.assertFalse(state.summary()["exclusive_writer_independently_proven"])
+
+    def test_known_old_report_does_not_regress_or_confirm_new_work(self):
+        state = self.ledger()
+        old = raw(report(uptime=1500))
+        state.reported(old)
+        state.attempt(0)
+        state.submitted(1, 1)
+        state.ack(1)
+        state.reported(raw(report(1, uptime=2000)))
+        state.attempt(1)
+        state.submitted(2, 2)
+        state.ack(2)
+        self.assertIsNone(state.reported(old))
+        self.assertEqual((state.uptime, state.confirmed), (2000, 1))
+        self.assertTrue(state.expired(16))
+        self.assertEqual(state.summary()["unknown_tail"], [2, 2])
+        self.assertEqual(state.summary()["duplicate_reports_ignored"], 1)
+
+    def test_unseen_stale_or_changed_report_still_rejected(self):
+        state = self.ledger()
+        state.reported(raw(report(uptime=2000)))
+        for value in (report(uptime=1500), {**report(), "revision": 8}):
+            with self.subTest(value=value), self.assertRaisesRegex(load.Rejected, "reported_revision_or_clock_changed"):
+                state.reported(raw(value))
+        self.assertEqual(state.duplicate_reports, 0)
+
+    def test_duplicate_history_is_bounded_and_does_not_extend_on_replay(self):
+        state = self.ledger()
+        oldest = raw(report())
+        for uptime in range(1001, 1001 + load.MAX_REPORT_HISTORY):
+            state.reported(raw(report(uptime=uptime)))
+        self.assertEqual(len(state.report_history), load.MAX_REPORT_HISTORY)
+        with self.assertRaisesRegex(load.Rejected, "reported_revision_or_clock_changed"):
+            state.reported(oldest)
+        known = raw(report(uptime=1001))
+        history = list(state.report_history)
+        self.assertIsNone(state.reported(known))
+        self.assertEqual(list(state.report_history), history)
 
     def test_sequence_alone_does_not_accept_business_failure(self):
         state = self.ledger()
@@ -278,6 +317,14 @@ class RunnerTests(unittest.TestCase):
     def test_reported_before_publisher_puback_is_safe(self):
         self.mode = "reported_before_puback"
         self.assertTrue(self.run_fake()["requested_count_completed"])
+
+    def test_qos1_old_duplicate_is_logged_without_interrupting_run(self):
+        self.mode = "duplicate_old_report"
+        value = self.run_fake()
+        self.assertTrue(value["requested_count_completed"])
+        self.assertEqual(value["duplicate_reports_ignored"], 3)
+        records = [json.loads(line) for line in (self.args.output / "events.jsonl").read_bytes().splitlines()]
+        self.assertEqual(sum(r["kind"] == "reported_duplicate_ignored" for r in records), 3)
 
     def test_stop_gate_drains_without_filling_remaining_count(self):
         self.mode = "stop_after_publish"

@@ -39,7 +39,7 @@ python3 -B -m unittest discover -s tools -p 'test_business_event*.py' -v
 
 所有输入为当前用户独占的0600非链接普通文件；controller文件沿用单帧工具的 username/password两字段。输出目录必须不存在，保留原始发送帧、写前意图、发布器自身 MID/PUBACK、设备 reported和最终摘要。停止发送后最多等原15秒回执期限；工具在实际消费回执时检查期限，排队回执若已过期也保守记录为 unknown，不以回调排队或迟到结果恢复确认。阻塞连接、阶段推进与写前归档都不能延长原期限；每次实际 publish前再次检查。断链、boot／revision变化、计数／摘要不符、超限或观察缺失立即关闭传输，unknown后不新增 publish、不重连、不重用序号。输入、gate和输出都不因重试覆盖；未决运行须先独立查证，不能另开目录当作自动重发入口。
 
-设备的 accepted/completed单位是事件序号，计数单位是 opcode以外的数据字节；业务失败也推进事件序号。只有末摘要及累计 `基线字节数 + 3923 × 已完成事件数` 同时相符才确认前缀。reported每5秒仅保留最新结果，连续升级到重启可能留下无法核对的尾部；摘要明确保留 `confirmed_through_sequence`、`unknown_tail`及仅 Broker确认项，不冒充逐条回执。操作方须独占所有业务写入；本机同UUID文件锁只排除本工具的并发进程，不能独立证明全局唯一写者。退出0只表示本次已尝试事件对账闭合，是否发满请求数另见 `requested_count_completed`；该工具与旁路订阅都不能证明实机连接PUBACK、满队列/outbox、各phase持续重叠或R5资格。原始UART、phase/Flash owner及正式OTA原ID仍须另行关联。
+设备的 accepted/completed单位是事件序号，计数单位是 opcode以外的数据字节；业务失败也推进事件序号。只有末摘要及累计 `基线字节数 + 3923 × 已完成事件数` 同时相符才确认前缀。reported每5秒仅保留最新结果，连续升级到重启可能留下无法核对的尾部；摘要明确保留 `confirmed_through_sequence`、`unknown_tail`及仅 Broker确认项，不冒充逐条回执。QoS1 可能在新报告之后重投旧报告：工具仅忽略本会话已完整核验的最近128份原始载荷摘要所匹配的精确重复，保留原载荷与忽略记录；不推进计数、回退 uptime、延长回执期限或刷新历史位置。未见过、已淘汰或内容不同的倒退报告仍拒绝，unknown 之后不能借重复报告恢复资格。操作方须独占所有业务写入；本机同UUID文件锁只排除本工具的并发进程，不能独立证明全局唯一写者。退出0只表示本次已尝试事件对账闭合，是否发满请求数另见 `requested_count_completed`；该工具与旁路订阅都不能证明实机连接PUBACK、满队列/outbox、各phase持续重叠或R5资格。原始UART、phase/Flash owner及正式OTA原ID仍须另行关联。
 
 ## 构建与回归
 
