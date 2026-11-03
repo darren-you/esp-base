@@ -24,7 +24,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: ca0c007f87e7c95e0aa4fd1c9284271e23e304298cdf5cfa411d5c83d1f7af1d
+    component_hash: 4c5695a58fb07460200f71f2203ded444c77980ab2fb0a58ca6f416860db84d4
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -32,11 +32,11 @@ dependencies:
       git: https://github.com/darren-you/esp-mqtt.git
       path: .
       type: git
-    version: 10799c750245d4a27e36bf3756e6bf7e1d6cc46e
+    version: 4f76210d207b471da1813c6c686118a1d1f62e6f
 direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: c3e796a0f44e08da6c720348721440ab8b4ba2734af510aa46a9c1ea4cd9e1da
+manifest_hash: a09a36a6d1d34dd7bd6b1e50110f28c0f07fac995369319a5cfbb0f1a111ed91
 target: esp32
 version: 3.0.0
