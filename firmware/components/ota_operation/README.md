@@ -30,6 +30,8 @@ C 的启动确认独立于 Broker 和业务消息：本地 NVS、身份、安全
 
 ## 首次有线布局迁入
 
+当前原生布局、已证 FAILED 的有线维护可使用[离线有线 OTA 准备工具](../../../tools/README.md#原生布局的离线有线-ota-准备)生成新 ID 的 PREPARED、备用槽及 NEW 选择三个阶段；它不改变本文的运行收据语义。NVS 重建及 otadata 写入的部分完成依赖完整 ROM 恢复件，不能声称具有应用协调器的原子提交；软件产物不授硬件写入资格，也不是下述旧布局迁入。
+
 应用 OTA 不修改分区表。一次性离线工具 [prepare_native_layout.py](../../../tools/prepare_native_layout.py) 从两份独立、相同的私有 4 MiB 新鲜恢复件生成仓外完整候选，使用固定 SDK 的官方分区/NVS 工具和 `espsecure` 验签。输入还需本轮独立核对的 Base UUID，或旧 ESP-AT 的 eFuse MAC；旧/新固件均绑定明确目标与验签公钥。工具不打开串口、不操作 eFuse、不写设备。
 
 支持精确 `c3_product`、`esp32_product` 旧包布局、保留的 `c3_v1` 配置布局，以及已核对空 Wi-Fi 的 `esp32_at`。其他布局、未知 NVS 键、重复记录/CRC 失效、加密分区、otadata NEW/PENDING、EOTA PREPARED、ECS2 写入/试运行/中断和未决产品账本均阻断。旧 v1/v2 配置只在保留的 C3 一次性路径转换为 V3，UUID、revision 和已配置字段保留；现役 V3 配置原 blob 字节保留。

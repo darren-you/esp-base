@@ -222,6 +222,32 @@ parser 固定并核对当前 sdk-lock、正式 producer 和两份受管 patch �
 
 运行 `python3 tools/test_http_header_budget.py --idf-path /absolute/managed-sdk`：先核对 SDK，直接抽取实际 append、header/body callback、fetch 和 cleanup，并编译真实 parser，以 sanitizer 核对分片、相邻接受/拒绝边界、长 field/value、重复/折行辅助头、1xx 后同片消费、缓存正文、移动 realloc 与低内存失败清理。transport、事件与平台对象使用宿主替身；测试验证当前正式关闭上述两项功能的头/缓存分配链，不验证 TLS、实体时延或整个 SDK 初始化。它不访问网络或设备，不授实板 R5/R6；双目标 reconfigure 与 signed 构建输入仍须分别核对。
 
+## 原生布局的离线有线 OTA 准备
+
+`prepare_wired_ota.py` 为已证实失败的原生 Base 生成三个分开的有线维护阶段，不连接设备、复位或写 Flash，也不改输入签名固件的字节。它不接收旧布局、未决收据、两个 VALID 槽或未清理的备用槽。两份独立的完整 4 MiB 恢复件必须相同；设备 UUID、原失败 ID、来源 A 摘要、候选 C 摘要和同一授权公钥摘要由执行方从本轮独立证据提供，不能用候选自带公钥代替生产信任。
+
+在本仓使用固定 SDK 的 Python 环境运行，以下路径与 UUID 均为占位：
+
+```bash
+python3 tools/prepare_wired_ota.py --source-layout c3_native \
+  --backup-a /absolute/private/fresh-a.bin --backup-b /absolute/private/fresh-b.bin \
+  --idf-path /absolute/managed-sdk --device-id <设备UUID> \
+  --previous-operation-id <已证失败UUID> --operation-id <全新UUID> \
+  --source-app-sha256 <原A摘要> --image /absolute/release/firmware.bin \
+  --image-sha256 <正式C摘要> --verification-key /absolute/trusted/public-key.bin \
+  --verification-key-sha256 <独立授权公钥摘要> \
+  --output-directory /absolute/private/new-stages
+IDF_PATH=/absolute/managed-sdk python3 -B -m unittest discover -s tools -p 'test_prepare_wired_ota.py' -v
+```
+
+ESP32 选择 `esp32_native`。工具先私存并精确读回原全片及旧 V4 原字节，再产生 `plan.json` 和三个阶段文件：先重建 `base_store`，只替换操作键为全新 ID 的 V4 `PREPARED`；完整读回后写完整 inactive 槽并读回；最后只写另一物理 otadata 扇区为 `NEW` 并读回，保留 A 的 VALID 扇区。每阶段绑定前后全片和本范围摘要；没有可一次刷入的完整候选，不写 `PENDING_VERIFY` 或 `SUCCEEDED`。现有固件在新 boot 完成两镜像核验、30 秒本地确认和持久成功收据。
+
+**NVS 整体重建不具有应用内 `nvs_set_blob` 的原子性。** 其活动记录类型和值保持，页历史会改变。阶段一的部分写可能破坏配置；阶段三的 otadata CRC 只保护序号，撕裂状态也可能阻断正常恢复。完整读回前均为 unknown，依赖本轮原全片的显式 ROM 恢复，禁止自动启动、续写或重试。阶段间必须保持同一 ROM 独占会话；若 A 启动，它可能把新 PREPARED 收口为 FAILED，不能继续旧计划。只有完整读回边界才允许判断对应稳定状态。
+
+所有产物均标记 `software_only`、`hardware_write_authorized=false`。离线工具不能证明备份新鲜度、同一实体、实际 eFuse/Flash 安全状态或独占会话。C3 还核对签名块的完整 RSA key digest，避免外部 PEM 验签掩盖内嵌信任错误；ESP32 的公钥字节包含检查不能代替运行符号证明，执行方必须将源 A、C 和保留 bootloader 的实际 SHA 与正式构建 ELF 中的验签公钥符号证据绑定，缺证据不得写设备。
+
+这属于 Base 维护协调，不给通用 ESP Tool App 增加 OTA/产品入口。App 的普通多文件刷写没有这些阶段门，**不能把三个阶段作为一批普通文件提交**。旧 ID 被新意图替换后不再是设备当前操作，原失败从私有归档核对；新 ID 仍须独立查询持久终态、当前固件和新 boot，Flash 回读不是升级成功。
+
 ## 一次性有线迁入与历史输入
 
 `preflight_v3_migration.py` 仍只做旧C3 v1/v2配置的只读预检，不是当前原生布局迁入。`archive_esp32_at.py` 核对两份完整备份，按 NVS 前三页和 `at_customize` 前两页生成 20 KiB 原字节归档；两分区余尾必须全 FF，并逐字节重建完整原分区，不解码或打印凭据。ESP32 候选将其放入只读 `at_old_raw@0x3e5000/0x5000`。旧 `esp32_product` 的四页输入仅在一次性离线准备时补入第三 NVS 的 FF 页，运行时只消费当前五页布局。新布局的一次性离线准备工具只在审计原终态、归档回读与完整输入验证后生成候选，不触达设备；未决／损坏保持阻断，不能清空NVS。最终精确命令与软件边界见[原生软件检查点](../docs/operations/native-software-checkpoint.md)。
