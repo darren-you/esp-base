@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 /* Exercise the real command branch and its asynchronous completion branch. */
 static void protocol_test_free(void *data);
@@ -113,14 +114,22 @@ static esp_base_storage_owner_t owner;
 static bool network_ready, trusted_time_ready, mqtt_ready, signed_enabled;
 static bool snapshot_ok, worker_created, defer_ota_worker, receipt_mismatch;
 static bool probe_registration;
+static _Thread_local bool on_ota_worker;
+static bool block_failure_record, block_selection;
+static bool invalidate_claim_after_failure, invalidate_claim_after_registration;
+static pthread_mutex_t failure_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t failure_condition = PTHREAD_COND_INITIALIZER;
+static bool failure_entered, allow_failure_finish, worker_finished;
 static unsigned registration_control_probes;
 static esp_base_ota_receipt_result_t register_result, failure_record_result, load_result, query_result;
 static esp_base_ota_operation_state_t query_state;
 static eota_result_t prepare_result, select_result, retire_result, validate_result;
+static eota_result_t recorded_failure;
 static eota_result_t second_retire_result;
 static uint64_t retire_delay_ms;
 static bool stream_begin_ok, stream_bound, stream_started, stream_cancel_after_prepare;
 static unsigned stream_begin_calls, stream_prepare_calls;
+static unsigned stream_request_calls, stream_offer_calls, stream_close_calls, stream_unbind_calls;
 static unsigned register_calls, failure_record_calls, task_calls, prepare_calls, select_calls;
 static unsigned snapshot_calls, load_receipt_calls, retire_calls, validate_calls, query_calls, restart_calls;
 static unsigned reported_calls, wifi_apply_calls, config_commit_calls, config_load_calls;
@@ -172,6 +181,9 @@ static void reset_case(void)
     s_mqtt_restart_pending = false;
     s_reply_mqtt = false;
     atomic_store(&s_ota_done, false); atomic_store(&s_ota_stage_uncertain, false);
+    atomic_store(&s_ota_transfer_finished, false); s_ota_transfer_closed = false;
+    atomic_store(&s_ota_failure_receipt_result, ESP_BASE_OTA_RECEIPT_OK);
+    atomic_store(&s_ota_claim_release_failed, false);
     atomic_store(&s_ota_received, 0);
     esp_base_control_state_set_ota_pending(&s_control_state, false);
     esp_base_control_state_set_ota_download_active(&s_control_state, false);
@@ -179,11 +191,16 @@ static void reset_case(void)
     network_ready = trusted_time_ready = mqtt_ready = signed_enabled = true;
     snapshot_ok = worker_created = defer_ota_worker = true;
     probe_registration = false; registration_control_probes = 0;
+    block_failure_record = block_selection = false;
+    invalidate_claim_after_failure = invalidate_claim_after_registration = false;
+    failure_entered = allow_failure_finish = worker_finished = false;
     receipt_mismatch = false; stream_begin_ok = true; stream_bound = stream_started = false;
     stream_cancel_after_prepare = false; stream_begin_calls = stream_prepare_calls = 0;
+    stream_request_calls = stream_offer_calls = stream_close_calls = stream_unbind_calls = 0;
     register_result = failure_record_result = load_result = ESP_BASE_OTA_RECEIPT_OK;
     query_result = ESP_BASE_OTA_RECEIPT_NOT_FOUND; query_state = ESP_BASE_OTA_OPERATION_SUCCEEDED;
     prepare_result = select_result = retire_result = validate_result = second_retire_result = EOTA_UPDATE_OK;
+    recorded_failure = EOTA_UPDATE_OK;
     register_calls = failure_record_calls = task_calls = prepare_calls = select_calls = 0;
     snapshot_calls = load_receipt_calls = retire_calls = validate_calls = query_calls = restart_calls = 0;
     reported_calls = wifi_apply_calls = config_commit_calls = config_load_calls = 0;
@@ -246,8 +263,27 @@ static bool owner_available(void)
     if (available) assert(esp_base_storage_release(&claim));
     return available;
 }
-static void run_worker(void) { ota_task(NULL); poll_ota(); }
+static void invoke_worker(void)
+{
+    assert(!on_ota_worker);
+    on_ota_worker = true;
+    ota_task(NULL);
+    on_ota_worker = false;
+}
+static void run_worker(void) { invoke_worker(); poll_ota(); }
 static void start_mqtt(unsigned number);
+
+static void pause_worker_for_control(void)
+{
+    assert(on_ota_worker);
+    assert(atomic_load_explicit(&s_ota_transfer_finished, memory_order_acquire));
+    assert(!atomic_load_explicit(&s_ota_done, memory_order_acquire));
+    assert(pthread_mutex_lock(&failure_mutex) == 0);
+    failure_entered = true;
+    assert(pthread_cond_broadcast(&failure_condition) == 0);
+    while (!allow_failure_finish) assert(pthread_cond_wait(&failure_condition, &failure_mutex) == 0);
+    assert(pthread_mutex_unlock(&failure_mutex) == 0);
+}
 
 bool eota_available(void) { return signed_enabled; }
 eota_result_t eota_validate_image_request(const eota_image_t *image)
@@ -430,6 +466,7 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_register(
             ++registration_control_probes;
         }
     }
+    if (invalidate_claim_after_registration) atomic_store(&owner.active_token, s_ota_storage_claim.token + 1U);
     return snapshot_ok ? register_result : ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
 }
 esp_base_ota_receipt_result_t esp_base_ota_receipt_load_for_recovery(
@@ -453,7 +490,12 @@ esp_base_ota_receipt_result_t esp_base_ota_receipt_record_failure(
 {
     assert(!strcmp(device_id, s_context.device_id) && !strcmp(operation_id, registered_request.operation_id));
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && error != EOTA_UPDATE_OK);
-    ++failure_record_calls; return failure_record_result;
+    assert(on_ota_worker && !atomic_load_explicit(&s_ota_done, memory_order_acquire));
+    recorded_failure = error;
+    ++failure_record_calls;
+    if (block_failure_record) pause_worker_for_control();
+    if (invalidate_claim_after_failure) atomic_store(&owner.active_token, s_ota_storage_claim.token + 1U);
+    return failure_record_result;
 }
 esp_base_ota_receipt_result_t esp_base_ota_receipt_query(
     const char *device_id, const char *operation_id, bool worker_active,
@@ -475,7 +517,7 @@ BaseType_t xTaskCreate(void (*task)(void *), const char *name, uint32_t stack_de
     assert(register_calls == 0 && s_ota_active);
     assert((s_ota_request->inbound_stream || s_ota_request == last_decoded_ota_request) && esp_base_storage_claim_active(&s_ota_storage_claim));
     ++task_calls;
-    if (worker_created && !defer_ota_worker) task(argument);
+    if (worker_created && !defer_ota_worker) invoke_worker();
     return worker_created ? pdPASS : 0;
 }
 void vTaskDelete(TaskHandle_t task) { (void)task; }
@@ -521,11 +563,14 @@ eota_result_t eota_retire_inactive(const eota_policy_t *policy, uint8_t target,
         fake_now_ms += retire_delay_ms;
     }
     ++retire_calls;
+    if (retire_calls > 1) assert(atomic_load(&s_ota_transfer_finished));
     return retire_calls == 1 ? retire_result : second_retire_result;
 }
 eota_result_t eota_select(const eota_policy_t *policy, const eota_prepared_t *prepared)
 {
     assert(policy && prepared && prepare_calls + stream_prepare_calls == 1 && esp_base_storage_claim_active(&s_ota_storage_claim));
+    assert(atomic_load(&s_ota_transfer_finished));
+    if (block_selection) pause_worker_for_control();
     ++select_calls; return select_result;
 }
 const char *eota_error(eota_result_t error)
@@ -563,9 +608,10 @@ bool esp_base_mqtt_owner_ota_bind(const char *operation_id,
     assert(handler == handle_mqtt_ota && !context && register_calls == 0);
     stream_bound = true; return true;
 }
-void esp_base_mqtt_owner_ota_unbind(void) { stream_bound = false; }
+void esp_base_mqtt_owner_ota_unbind(void)
+{ assert(!on_ota_worker); ++stream_unbind_calls; stream_bound = false; }
 bool esp_base_mqtt_owner_ota_request(uint64_t now, const ebase_mqtt_ota_frame_t *frame)
-{ (void)now; (void)frame; assert(stream_bound); return true; }
+{ (void)now; (void)frame; assert(stream_bound && !atomic_load(&s_ota_transfer_finished)); return true; }
 bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t idle)
 {
     assert(stream_bound && size == 4096 && idle == 30000);
@@ -573,22 +619,24 @@ bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t idle)
     ++stream_begin_calls; stream_started = stream_begin_ok; return stream_begin_ok;
 }
 bool esp_base_mqtt_ota_transfer_request(ebase_mqtt_ota_frame_t *out)
-{ (void)out; return false; }
+{ (void)out; ++stream_request_calls; return false; }
 ebase_mqtt_ota_admission_t esp_base_mqtt_ota_transfer_offer(const ebase_mqtt_ota_frame_t *frame)
-{ assert(frame && stream_bound); return EBASE_MQTT_OTA_ACCEPTED; }
+{ assert(frame && stream_bound && !atomic_load(&s_ota_transfer_finished)); ++stream_offer_calls; return EBASE_MQTT_OTA_ACCEPTED; }
 int esp_base_mqtt_ota_transfer_read(void *context, uint8_t *bytes, size_t size, uint32_t timeout)
 { (void)context; (void)bytes; (void)size; (void)timeout; return 0; }
 bool esp_base_mqtt_ota_transfer_written(void *context, uint32_t written, uint32_t total)
 { assert(!context && written <= total && stream_started); return true; }
 bool esp_base_mqtt_ota_transfer_select(void)
-{ assert(stream_started && stream_prepare_calls == 1); return !stream_cancel_after_prepare; }
-void esp_base_mqtt_ota_transfer_close(void) { stream_started = false; }
+{ assert(stream_started && stream_prepare_calls == 1 && !atomic_load(&s_ota_transfer_finished)); return !stream_cancel_after_prepare; }
+void esp_base_mqtt_ota_transfer_close(void)
+{ assert(!on_ota_worker); ++stream_close_calls; stream_started = false; }
 eota_result_t eota_validate_stream_request(const eota_stream_t *stream)
 { assert(stream && stream->read && stream->image_size_bytes == 4096); ++validate_calls; return validate_result; }
 eota_result_t eota_prepare_stream(const eota_policy_t *policy, const eota_stream_t *stream,
     eota_progress_t progress, void *context, eota_prepared_t *prepared)
 {
     assert(policy && stream && stream->read == esp_base_mqtt_ota_transfer_read && stream->written == esp_base_mqtt_ota_transfer_written && prepared && progress);
+    assert(!atomic_load(&s_ota_transfer_finished));
     assert(policy->idle_timeout_ms == 30000 && stream->no_total_timeout);
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && stream_begin_calls == 1 && retire_calls == 1);
     check_live_progress("running");
@@ -620,8 +668,8 @@ static void check_mqtt_ota(void)
     assert(s_ota_request == accepted && register_calls == 0);
     start_mqtt(1); expect_reply("accepted", NULL);
     assert(stream_begin_calls == 0 && task_calls == 1);
-    prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; ota_task(NULL);
-    assert(failure_record_calls == 0 && !owner_available() && s_ota_active && s_ota_request);
+    prepare_result = EOTA_UPDATE_RESOURCE_FAILURE; invoke_worker();
+    assert(failure_record_calls == 1 && owner_available() && s_ota_active && s_ota_request);
     assert(!strcmp(s_outcomes[s_ota_slot].state, "accepted"));
     poll_ota();
     assert(stream_prepare_calls == 1 && prepare_calls == 0 && retire_calls == 2 &&
@@ -631,8 +679,8 @@ static void check_mqtt_ota(void)
     reset_case(); start_mqtt(1);
     prepare_result = EOTA_UPDATE_RESOURCE_FAILURE;
     failure_record_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
-    ota_task(NULL);
-    assert(failure_record_calls == 0 && !owner_available() && s_ota_active);
+    invoke_worker();
+    assert(failure_record_calls == 1 && !owner_available() && s_ota_active);
     poll_ota();
     assert(failure_record_calls == 1 && !owner_available() && s_config_uncertain &&
         !s_ota_active && !s_ota_request && !strcmp(s_outcomes[s_ota_slot].state, "unknown"));
@@ -659,6 +707,164 @@ static void check_mqtt_ota(void)
     assert(stream_begin_calls == 0 && stream_prepare_calls == 0 && !owner_available() && !stream_bound);
     reset_case(); mqtt_ready = false; start_mqtt(1); expect_reply("failed", "network_unavailable");
     assert(register_calls == 0 && task_calls == 0 && owner_available() && !stream_bound);
+}
+
+static void *failure_worker_thread(void *argument)
+{
+    assert(argument == NULL);
+    invoke_worker();
+    assert(pthread_mutex_lock(&failure_mutex) == 0);
+    worker_finished = true;
+    assert(pthread_cond_broadcast(&failure_condition) == 0);
+    assert(pthread_mutex_unlock(&failure_mutex) == 0);
+    return NULL;
+}
+
+static void check_failure_worker_handoff(void)
+{
+    const esp_base_ota_receipt_result_t results[] = {
+        ESP_BASE_OTA_RECEIPT_OK, ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN,
+        ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN, ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE,
+        ESP_BASE_OTA_RECEIPT_CONFLICT, ESP_BASE_OTA_RECEIPT_OK};
+    for (unsigned stream = 0; stream < 2; ++stream) {
+        for (unsigned scenario = 0; scenario < sizeof results / sizeof *results; ++scenario) {
+            reset_case();
+            block_failure_record = true;
+            failure_record_result = results[scenario];
+            invalidate_claim_after_failure = scenario == 5;
+            prepare_result = scenario % 3U == 0 ? EOTA_UPDATE_SIGNATURE_INVALID :
+                scenario % 3U == 1 ? EOTA_UPDATE_DOWNLOAD_FAILED : EOTA_UPDATE_RESOURCE_FAILURE;
+            if (stream) start_mqtt(1); else start_valid(1);
+            esp_base_ota_request_t *const original = s_ota_request;
+            pthread_t worker;
+            assert(pthread_create(&worker, NULL, failure_worker_thread, NULL) == 0);
+            assert(pthread_mutex_lock(&failure_mutex) == 0);
+            while (!failure_entered && !worker_finished)
+                assert(pthread_cond_wait(&failure_condition, &failure_mutex) == 0);
+            /* Old control-side finalization finishes the worker without ever
+             * reaching this gate. The callback must execute on the worker. */
+            assert(failure_entered && !worker_finished);
+            assert(pthread_mutex_unlock(&failure_mutex) == 0);
+            assert(atomic_load(&s_ota_transfer_finished) && !s_ota_transfer_closed);
+            /* A worker can stop after control's earlier poll in this pass.
+             * Neither a late authenticated frame nor the outgoing scheduler
+             * may keep using its stream before the next close poll. */
+            ebase_mqtt_ota_frame_t late = {0};
+            handle_mqtt_ota(&late, NULL);
+            poll_network_owners(fake_now_ms);
+            assert(stream_offer_calls == 0 && stream_request_calls == 0);
+            for (unsigned probe = 0; probe < 12; ++probe) {
+                fake_now_ms += 500;
+                poll_ota();
+                assert(!atomic_load_explicit(&s_ota_done, memory_order_acquire));
+                assert(s_ota_transfer_closed && !stream_bound && !stream_started);
+                assert(stream_close_calls == 1 && stream_unbind_calls == 1);
+                assert(s_ota_active && s_ota_request == original && !ota_request_releases);
+                assert(failure_record_calls == 1 && !owner_available());
+                assert(!strcmp(s_outcomes[s_ota_slot].state, stream ? "accepted" : "running"));
+                send_json("{\"protocol_version\":1,\"request_id\":\"55555555-5555-4555-8555-000000000090\",\"command\":\"status\"}");
+                expect_reply("succeeded", NULL);
+                send_json("{\"protocol_version\":1,\"request_id\":\"55555555-5555-4555-8555-000000000091\",\"command\":\"business.status\"}");
+                expect_reply("succeeded", NULL);
+                query(1); expect_reply("running", NULL);
+                assert(query_calls == 0 && snapshot_calls == 0);
+                send_json("{\"protocol_version\":1,\"request_id\":\"55555555-5555-4555-8555-000000000092\",\"command\":\"firmware.status\"}");
+                expect_reply("unknown", "operation_busy");
+                if (stream) start_mqtt(1); else start_valid(1);
+                expect_reply(stream ? "accepted" : "running", NULL);
+                start_valid(2); expect_reply("failed", "ota_in_progress");
+                poll_network_owners(fake_now_ms);
+                assert(register_calls == 1 && task_calls == 1 && failure_record_calls == 1);
+            }
+            assert(mqtt_polls == 13 && !s_config_uncertain && !s_ota_boot_uncertain);
+            assert(pthread_mutex_lock(&failure_mutex) == 0);
+            allow_failure_finish = true;
+            assert(pthread_cond_broadcast(&failure_condition) == 0);
+            assert(pthread_mutex_unlock(&failure_mutex) == 0);
+            assert(pthread_join(worker, NULL) == 0);
+            assert(atomic_load_explicit(&s_ota_done, memory_order_acquire));
+            assert(atomic_load(&s_ota_failure_receipt_result) == (int)results[scenario]);
+            assert(atomic_load(&s_ota_result) == (int)prepare_result && recorded_failure == prepare_result);
+            assert(atomic_load(&s_ota_claim_release_failed) == invalidate_claim_after_failure);
+            assert(s_ota_request == original && !ota_request_releases && s_ota_active);
+            const bool settled = scenario == 0;
+            assert(owner_available() == settled);
+            poll_ota();
+            expect_reply(settled ? "failed" : "unknown", settled ? "resource_failure" : "storage_uncertain");
+            assert(!s_ota_active && !s_ota_request && ota_request_releases == 1);
+            assert(s_config_uncertain == (results[scenario] != ESP_BASE_OTA_RECEIPT_OK));
+            assert(s_ota_boot_uncertain == invalidate_claim_after_failure);
+            assert(register_calls == 1 && failure_record_calls == 1 && restart_calls == 0);
+            poll_ota();
+            assert(failure_record_calls == 1 && ota_request_releases == 1);
+            assert(stream_close_calls == 1 && stream_unbind_calls == 1);
+        }
+    }
+    reset_case(); register_result = ESP_BASE_OTA_RECEIPT_CONFLICT;
+    invalidate_claim_after_registration = true;
+    start_valid(1); invoke_worker();
+    assert(atomic_load(&s_ota_done) && atomic_load(&s_ota_claim_release_failed));
+    assert(!failure_record_calls && !owner_available() && s_ota_request && !s_config_uncertain);
+    poll_ota(); expect_reply("unknown", "storage_uncertain");
+    assert(s_config_uncertain && !s_ota_boot_uncertain && !s_ota_request && ota_request_releases == 1);
+    reset_case();
+}
+
+static void check_transfer_completion_handoff(void)
+{
+    for (unsigned stream = 0; stream < 2; ++stream) {
+        reset_case(); block_selection = true;
+        if (stream) start_mqtt(1); else start_valid(1);
+        pthread_t worker;
+        assert(pthread_create(&worker, NULL, failure_worker_thread, NULL) == 0);
+        assert(pthread_mutex_lock(&failure_mutex) == 0);
+        while (!failure_entered && !worker_finished)
+            assert(pthread_cond_wait(&failure_condition, &failure_mutex) == 0);
+        assert(failure_entered && !worker_finished);
+        assert(pthread_mutex_unlock(&failure_mutex) == 0);
+        assert(atomic_load(&s_ota_transfer_finished) && !atomic_load(&s_ota_done));
+        ebase_mqtt_ota_frame_t late = {0};
+        handle_mqtt_ota(&late, NULL);
+        poll_network_owners(fake_now_ms);
+        assert(stream_offer_calls == 0 && stream_request_calls == 0);
+        poll_ota(); poll_ota();
+        assert(s_ota_transfer_closed && !stream_bound && !stream_started);
+        assert(stream_close_calls == 1 && stream_unbind_calls == 1);
+        assert(s_ota_active && s_ota_request && !ota_request_releases && !owner_available());
+        assert(!restart_calls && !select_calls && !failure_record_calls);
+        assert(!strcmp(s_outcomes[s_ota_slot].state, stream ? "accepted" : "running"));
+        assert(pthread_mutex_lock(&failure_mutex) == 0);
+        allow_failure_finish = true;
+        assert(pthread_cond_broadcast(&failure_condition) == 0);
+        assert(pthread_mutex_unlock(&failure_mutex) == 0);
+        assert(pthread_join(worker, NULL) == 0);
+        assert(atomic_load_explicit(&s_ota_done, memory_order_acquire));
+        poll_ota();
+        assert(select_calls == 1 && restart_calls == 1 && !failure_record_calls);
+        assert(stream_close_calls == 1 && stream_unbind_calls == 1);
+        assert(s_ota_request && !ota_request_releases && !owner_available());
+    }
+    for (unsigned scenario = 0; scenario < 5; ++scenario) {
+        reset_case();
+        switch (scenario) {
+        case 0: register_result = ESP_BASE_OTA_RECEIPT_CONFLICT; break;
+        case 1: register_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN; break;
+        case 2: load_result = ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN; break;
+        case 3: retire_result = EOTA_UPDATE_BOOT_STATE_UNKNOWN; break;
+        case 4: stream_begin_ok = false; break;
+        }
+        start_mqtt(1); invoke_worker();
+        assert(atomic_load(&s_ota_done) && atomic_load(&s_ota_transfer_finished));
+        assert(!s_ota_transfer_closed && stream_bound && !stream_prepare_calls);
+        poll_ota();
+        assert(s_ota_transfer_closed && !stream_bound && !stream_started);
+        assert(stream_close_calls == 1 && stream_unbind_calls == 1);
+        assert(!s_ota_active && !s_ota_request && ota_request_releases == 1);
+        assert(owner_available() == (scenario == 0 || scenario == 4));
+        assert(!strcmp(s_outcomes[s_ota_slot].state, scenario == 0 || scenario == 4 ? "failed" : "unknown"));
+        poll_ota(); assert(stream_close_calls == 1 && stream_unbind_calls == 1);
+    }
+    reset_case();
 }
 
 static void check_config_flash_observation(void)
@@ -743,6 +949,8 @@ int main(void)
     check_config_flash_observation();
     check_ota_phase_observation();
     check_mqtt_ota();
+    check_failure_worker_handoff();
+    check_transfer_completion_handoff();
     for (unsigned stream = 0; stream < 2; ++stream) {
         reset_case(); probe_registration = true;
         if (stream) start_mqtt(1); else start_valid(1);

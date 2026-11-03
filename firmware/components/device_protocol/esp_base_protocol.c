@@ -78,6 +78,10 @@ static size_t s_ota_slot;
  * The worker borrows it until publishing completion; queries never replace it. */
 static esp_base_ota_request_t *s_ota_request;
 static atomic_bool s_ota_done;
+/* Transfer access ends before potentially long cleanup/receipt proof. The
+ * control owner closes its binding once, without mistaking that for done. */
+static atomic_bool s_ota_transfer_finished;
+static bool s_ota_transfer_closed;
 static atomic_bool s_ota_stage_uncertain;
 static atomic_bool s_ota_upload_ready;
 /* Published only after this worker reloads and binds the durable intent.
@@ -85,6 +89,10 @@ static atomic_bool s_ota_upload_ready;
 static atomic_uint s_ota_target_subtype;
 static atomic_int s_ota_result;
 static atomic_int s_ota_registration_result;
+/* Final receipt/claim work belongs to the worker. These results become visible
+ * with s_ota_done; the control owner must never repeat the physical proof. */
+static atomic_int s_ota_failure_receipt_result;
+static atomic_bool s_ota_claim_release_failed;
 static atomic_uint_fast32_t s_ota_received;
 static esp_base_control_state_t s_control_state;
 static size_t s_trial_slot;
@@ -500,10 +508,17 @@ static void poll_configuration(uint64_t now)
     }
 }
 
-static void clear_ota_request(void)
+static void close_ota_transfer(void)
 {
+    if (s_ota_transfer_closed) return;
     esp_base_mqtt_owner_ota_unbind();
     esp_base_mqtt_ota_transfer_close();
+    s_ota_transfer_closed = true;
+}
+
+static void clear_ota_request(void)
+{
+    close_ota_transfer();
     if (s_ota_request == NULL) return;
     /* Preserve the completed history before the original operation is freed. */
     esp_base_flash_observation_emit(s_boot_id);
@@ -560,6 +575,11 @@ static void ota_task(void *argument)
     (void)registration_started_ms;
     atomic_store_explicit(&s_ota_registration_result, registration, memory_order_relaxed);
     if (registration != ESP_BASE_OTA_RECEIPT_OK) {
+        atomic_store_explicit(&s_ota_transfer_finished, true, memory_order_release);
+        if (registration != ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN) {
+            atomic_store_explicit(&s_ota_claim_release_failed,
+                !esp_base_storage_release(&s_ota_storage_claim), memory_order_relaxed);
+        }
         atomic_store_explicit(&s_ota_done, true, memory_order_release);
         vTaskDelete(NULL);
         return;
@@ -612,6 +632,9 @@ static void ota_task(void *argument)
         stage = "mqtt_selection_boundary";
         if (!esp_base_mqtt_ota_transfer_select()) result = EOTA_UPDATE_DOWNLOAD_FAILED;
     }
+    /* prepare and its cancellation boundary are the last transfer users.
+     * Selection, physical cleanup and failure proof only use Flash/receipt. */
+    atomic_store_explicit(&s_ota_transfer_finished, true, memory_order_release);
     if (result == EOTA_UPDATE_OK) {
         stage = "select";
         observe_ota_phase(stage, "begin", result);
@@ -634,6 +657,22 @@ static void ota_task(void *argument)
 uncertain:
     atomic_store_explicit(&s_ota_stage_uncertain, true, memory_order_relaxed);
 done:
+    /* Also cover registration-reload/retirement/stream-begin early failures. */
+    atomic_store_explicit(&s_ota_transfer_finished, true, memory_order_release);
+    if (result != EOTA_UPDATE_OK && result != EOTA_UPDATE_BOOT_STATE_UNKNOWN &&
+        !atomic_load_explicit(&s_ota_stage_uncertain, memory_order_relaxed)) {
+        /* The source's full signed-image proof and NVS commit/readback may
+         * take seconds. Keep the original request and transaction claim here
+         * until that proof settles; control keeps servicing network/commands.
+         * An uncertain receipt retains the claim and is never retried here. */
+        const esp_base_ota_receipt_result_t saved = esp_base_ota_receipt_record_failure(
+            s_context.device_id, s_ota_request->operation_id, result);
+        atomic_store_explicit(&s_ota_failure_receipt_result, saved, memory_order_relaxed);
+        if (saved == ESP_BASE_OTA_RECEIPT_OK) {
+            atomic_store_explicit(&s_ota_claim_release_failed,
+                !esp_base_storage_release(&s_ota_storage_claim), memory_order_relaxed);
+        }
+    }
     if (result != EOTA_UPDATE_OK) {
         ESP_LOGE("base_ota", "ESP_BASE_OTA_FAILURE operation_id=%s stage=%s error=%s consumed_bytes=%u uncertain=%s",
             s_ota_request->operation_id, stage, eota_error(result),
@@ -650,9 +689,11 @@ done:
 
 static void poll_ota(void)
 {
-    if (!s_ota_active || !atomic_load_explicit(&s_ota_done, memory_order_acquire)) return;
-    esp_base_mqtt_owner_ota_unbind();
-    esp_base_mqtt_ota_transfer_close();
+    if (!s_ota_active) return;
+    const bool done = atomic_load_explicit(&s_ota_done, memory_order_acquire);
+    if (done || atomic_load_explicit(&s_ota_transfer_finished, memory_order_acquire))
+        close_ota_transfer();
+    if (!done) return;
     const esp_base_ota_receipt_result_t registration =
         (esp_base_ota_receipt_result_t)atomic_load_explicit(&s_ota_registration_result, memory_order_relaxed);
     if (registration != ESP_BASE_OTA_RECEIPT_OK) {
@@ -666,8 +707,8 @@ static void poll_ota(void)
             registration == ESP_BASE_OTA_RECEIPT_TARGET_STATE_UNKNOWN ? "ota_target_state_unknown" :
             registration == ESP_BASE_OTA_RECEIPT_SAME_IMAGE ? "ota_same_image" :
             registration == ESP_BASE_OTA_RECEIPT_STORAGE_FAILURE ? "storage_failure" : "storage_uncertain";
-        bool uncertain = registration == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN;
-        if (!uncertain && !esp_base_storage_release(&s_ota_storage_claim)) uncertain = true;
+        const bool uncertain = registration == ESP_BASE_OTA_RECEIPT_STORAGE_UNCERTAIN ||
+            atomic_load_explicit(&s_ota_claim_release_failed, memory_order_relaxed);
         if (uncertain) s_config_uncertain = true;
         esp_base_control_state_set_ota_download_active(&s_control_state, false);
         s_ota_active = false;
@@ -705,8 +746,8 @@ static void poll_ota(void)
         s_ota_boot_uncertain = true;
         ESP_LOGE("base_ota", "ESP_BASE_OTA_RECOVERY_REQUIRED selector readback unavailable; avoid resetting device");
     } else {
-        const esp_base_ota_receipt_result_t saved = esp_base_ota_receipt_record_failure(
-            s_context.device_id, s_ota_request->operation_id, result);
+        const esp_base_ota_receipt_result_t saved = (esp_base_ota_receipt_result_t)
+            atomic_load_explicit(&s_ota_failure_receipt_result, memory_order_relaxed);
         if (saved != ESP_BASE_OTA_RECEIPT_OK) {
             s_config_uncertain = true;
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
@@ -716,7 +757,7 @@ static void poll_ota(void)
             clear_ota_request();
             return;
         }
-        if (!esp_base_storage_release(&s_ota_storage_claim)) {
+        if (atomic_load_explicit(&s_ota_claim_release_failed, memory_order_relaxed)) {
             s_ota_boot_uncertain = true;
             esp_base_control_state_set_ota_download_active(&s_control_state, false);
             s_ota_active = false;
@@ -737,6 +778,7 @@ static void poll_ota(void)
 static void handle_mqtt_ota(const ebase_mqtt_ota_frame_t *frame, void *context)
 {
     (void)context;
+    if (atomic_load_explicit(&s_ota_transfer_finished, memory_order_acquire)) return;
     (void)esp_base_mqtt_ota_transfer_offer(frame);
 }
 
@@ -851,7 +893,11 @@ static void handle_command_line(const char *line, size_t length, ebase_command_t
         s_ota_slot = slot;
         s_ota_active = true;
         atomic_store_explicit(&s_ota_done, false, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_transfer_finished, false, memory_order_relaxed);
+        s_ota_transfer_closed = false;
         atomic_store_explicit(&s_ota_registration_result, ESP_BASE_OTA_RECEIPT_OK, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_failure_receipt_result, ESP_BASE_OTA_RECEIPT_OK, memory_order_relaxed);
+        atomic_store_explicit(&s_ota_claim_release_failed, false, memory_order_relaxed);
         atomic_store_explicit(&s_ota_stage_uncertain, false, memory_order_relaxed);
         atomic_store_explicit(&s_ota_upload_ready, false, memory_order_relaxed);
         atomic_store_explicit(&s_ota_target_subtype, 0xffU, memory_order_relaxed);
@@ -1029,6 +1075,7 @@ static void poll_network_owners(uint64_t now)
             esp_base_mqtt_owner_poll(now, esp_base_wifi_ready(), esp_base_time_ready(),
                                      handle_mqtt_command, handle_mqtt_event, NULL);
         if (s_ota_active && s_ota_request->inbound_stream &&
+            !atomic_load_explicit(&s_ota_transfer_finished, memory_order_acquire) &&
             !atomic_load_explicit(&s_ota_done, memory_order_acquire)) {
             ebase_mqtt_ota_frame_t request;
             if (esp_base_mqtt_ota_transfer_request(&request))

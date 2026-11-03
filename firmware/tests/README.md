@@ -36,6 +36,8 @@ ESP_BASE_TEST_TARGET=esp32 bash firmware/tests/run_host_tests.sh
 
 同一 owner 回归还覆盖串口初始化：ESP32 RX 驱动分配失败时不切换 VFS，非阻塞设置失败时退回原 VFS 并释放本次驱动；C3 保持原读取标志。假件验证错误传播和清理，不模拟硬件 FIFO、中断调度或 Flash 停用 cache；合法最大串口输入与周期输出重叠仍须在实板验证。
 
+失败收口回归以两个真实宿主线程运行生产协议源码，在 worker 的失败收据回调内阻塞，控制线程连续执行 12 轮状态／业务／原 ID 进度、重复请求、第二操作拒绝及 MQTT owner 轮询，核对完成前原请求和事务 claim 一直保留。USB／MQTT 两入口覆盖坏签名／下载／资源原错误、来源证明、存储、冲突和 claim 释放故障的同步结果，完成前不发布终态，完成后只消费一次、不重复失败提交。传输结束单独发布，在失败落账和成功选槽阻塞期间由控制线程只关闭一次绑定及 mailbox；同轮迟到数据和块请求被阻止，登记拒绝／不确定及流建立前失败也闭合。回调线程断言及明确的 pthread 交接验证任务归属；真实来源密码学和 NVS 由各自现有测试覆盖，此测试不授 MCU 栈水位、实时延迟或掉电原子性。
+
 `flash_io_concurrency_test.c` 直接编译生产 main 的短 Flash 回调与真实 storage owner：两个宿主线程交接、8192次竞争 I/O 和原500ms BUSY期限，等待者只访问自己的局部 claim，释放前清理共享交接。公开 host 入口包含ASan／UBSan；独立TSan结果与曾复现的数据竞争另存当轮检查点。测试不模拟MCU调度、Flash最坏时延或实时栈水位。
 
 Flash 回调测试同时核对 held 起点随 claim 交接、释放失败成对恢复、倒退时钟不使 BUSY 无限等待，以及成功取得 claim 后仍走真实释放。`flash_observation_test.c` 直接编译 Base 自有观测原语，覆盖 OTA／配置两类并发快照、32位计数与时长饱和、负／倒退时钟永久失效、失败释放不混入完成 claim 最大值和独立 UART 前缀。协议 owner 测试核对配置单次 BUSY 不延后原 Wi-Fi proof deadline，下一次真实成功才增加完成计数；这些均不授实体联合延迟或 R5。

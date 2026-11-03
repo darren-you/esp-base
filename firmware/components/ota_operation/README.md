@@ -16,7 +16,7 @@ HTTPS 拉取使用产品固定的 8KiB parser 响应头计数预算和 1024B RX�
 
 应用写入前先按原收据退役确切 inactive 槽。失败后只有未改 app，或完成原意图限定的 inactive 物理清理、来源 A 验签/摘要和选槽核对，才能持久写 `FAILED`；读回不确定仍为 unknown。流式来源先完成来源验证与 inactive 退役，再接受镜像字节；等待数据时可能已完成原意图授权的退役，没有收到镜像不等于未改 inactive。完整 prepare 后取消也在 select 前被复核，清理候选 C 后保留原 ID 失败终态。已选择 pending C 的进度不能被当作失败清理目标。
 
-MQTT 请求中的 written_offset 只表示实际 Flash 写进度。END 和完整验签也不直接形成持久成功；失败提交与精确读回由控制 owner 执行，成功另需新 boot 确认。宿主遇到 unknown、断链或未证实终态时只查询原 operation_id，不重发 start 或另起操作。
+MQTT 请求中的 written_offset 只表示实际 Flash 写进度。END 和完整验签也不直接形成持久成功；运行中的失败来源复核、失败收据提交／精确读回和相应事务 claim 释放均由同一 OTA worker 执行，成功另需新 boot 确认。worker 在这些步骤结束后发布完成与各项结果；控制 owner 仅消费同步结果、输出终态并释放原请求，不重新执行完整验签或 NVS 操作。失败证明或存储不确定时保留事务 claim；claim 释放失败保留原门禁，不自动重试。宿主遇到 unknown、断链或未证实终态时只查询原 operation_id，不重发 start 或另起操作。
 
 C 的启动确认独立于 Broker 和业务消息：本地 NVS、身份、安全状态、配置和控制任务自检健康满 30 秒，并经过窗口边界后的下一次本地检查，再调用 IDF 确认和读回同槽 `VALID`。需复核 C 完整签名身份与原收据、A 回滚身份及集合稳定性；成功收据 commit/读回完成前保持升级门禁。A 侧中断恢复先核对来源、原 ID 与精确 inactive 槽，完成清理后写失败终态。缺收据只允许首次有线装配产生的已确认 `VALID` 签名基座；无原收据的 pending 固件被拒绝。
 
