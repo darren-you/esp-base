@@ -26,9 +26,9 @@ HASH = re.compile(r"[0-9a-f]{64}")
 ROOT = Path(__file__).resolve().parent.parent
 REQUEST_RECIPE = "managed_tlsf_plain_32bit_v1"
 REQUEST_RECIPE_INPUTS = {
-    "sdk-lock.json": "aa30328518ba10db58f00fa11f04a04a63f8efca05d08e7ae6ced59d7694aa4d",
+    "sdk-lock.json": "e016819ba2a1741db03d8582a10553d5bad070bb0c15b57b2dc267a8fbfbcb74",
     "firmware/components/device_protocol/esp_base_capacity.c": "c73baca9c16c31357cbd3d873c1d21816e1ee2dc20cb2fcec9beeda043629baa",
-    "tools/sdk-patches/capacity-idf.patch": "bd84a200cf235f35241315b41eef9b3064294a16d29edb6ee39192dafc3e7bab",
+    "tools/sdk-patches/capacity-idf.patch": "8d7980ff97dd252c01d8142a2a14ce502993c0c1e6e1e98660dcf037b4b54780",
     "tools/sdk-patches/capacity-tlsf.patch": "afe402d3b0de6e312a4bf84e4491d0a52e1d17b4b02e0ef0fcd958dc8e55a2cd",
 }
 PLAIN_REQUEST_CAPS = (1 << 1) | (1 << 2) | (1 << 11) | (1 << 12) | (1 << 13)

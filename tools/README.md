@@ -124,7 +124,9 @@ python3 tools/prepare_sdk.py --path "$IDF_PATH"
 python3 tools/check_sdk.py --path "$IDF_PATH"
 ```
 
-`sdk-lock.json` 的 schema 2 保持 IDF `578cf89`、lwIP `2758df4` 和官方 TLSF `2867f68` 的精确基线，显式声明两份容量统计补丁、补丁摘要及每个受影响文件的原始／最终摘要。SDK 根唯一 `esp-sdk-derivation.json` 必须逐字等于该冻结 lock；装配在全部原件、Git 状态和两仓 `git apply --check` 通过后才应用，再排他创建只读 stamp。它不覆盖旧 SDK，不删除失败后的 partial，也不清除未知差异。
+`sdk-lock.json` 的 schema 2 保持 IDF `578cf89`、lwIP `2758df4` 和官方 TLSF `2867f68` 的精确基线，显式声明 IDF 与 TLSF 两份受管补丁、补丁摘要及每个受影响文件的原始／最终摘要。IDF 补丁包含容量统计与 TLS 零等待读取修正，TLSF 补丁提供分配器统计。SDK 根唯一 `esp-sdk-derivation.json` 必须逐字等于该冻结 lock；装配在全部原件、Git 状态和两仓 `git apply --check` 通过后才应用，再排他创建只读 stamp。它不覆盖旧 SDK，不删除失败后的 partial，也不清除未知差异。
+
+TLS 读取在 `timeout_ms=0` 时临时采用非阻塞 socket，并恢复原 flags，避免等待完整 TLS record 阻塞 MQTT 循环；获取、设置或恢复 flags 失败均返回连接错误。`WANT_READ` 仍表示暂时无数据，`WANT_WRITE` 保持原致命错误合同，由 MQTT 关闭连接，不承诺异步重协商。因此零等待读取内的 TLS 写入遇到背压会立即失败重连，不再等待原 socket 写入期限；正、负读取期限沿用原行为。host 故障注入与真实 TLS 链验证不代替目标 lwIP 和实板验收。
 
 构建核对受管修改、SDK 索引与工作树、TLSF 和全部其他子模块及最终解析的 lwIP 组件路径。原始 SDK、坏 stamp、部分补丁、未知或暂存修改、子模块漂移、补丁／源码摘要不符均拒绝；不能声称派生 SDK 未修改。Git remote 使用 HTTPS 或 SSH 不改变提交身份。C3 使用 `firmware/dependencies.lock`，ESP32 使用 `firmware/dependencies.lock.esp32`；二者分别固定 target，不能共用生成的 sdkconfig/build 目录。以上入口不访问串口或设备。三个组件的精确派生消费锁是正式双目标构建前置；单独装配 SDK 或 host 通过不代表完整固件已构建。
 
