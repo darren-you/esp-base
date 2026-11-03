@@ -1,6 +1,6 @@
 dependencies:
   esp_ota:
-    component_hash: 518c1cfc133ea6b214381895a3b1bf074be48c65c3f92bc8f6c4e492d3f69ee8
+    component_hash: 489b21fbbdb13a77e2ad7934105e304ebf2352394c4c3ee9c58d49d5ed5c538b
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -8,7 +8,7 @@ dependencies:
       git: https://github.com/darren-you/esp-ota.git
       path: components/esp_ota
       type: git
-    version: ab22629f9d60c99ef0ae6cbb9b8a02be68a93290
+    version: edc92f914658aa2908c1d787426b37f154410548
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -24,7 +24,7 @@ dependencies:
       type: idf
     version: 6.1.0
   mqtt:
-    component_hash: 4c5695a58fb07460200f71f2203ded444c77980ab2fb0a58ca6f416860db84d4
+    component_hash: f9b38e0649c77df39057b21b282b09c4f31f9ce714f0497d93331a69f94fd7ac
     dependencies:
     - name: idf
       version: ==6.1.0
@@ -32,11 +32,11 @@ dependencies:
       git: https://github.com/darren-you/esp-mqtt.git
       path: .
       type: git
-    version: 4f76210d207b471da1813c6c686118a1d1f62e6f
+    version: 33fc94a74d6db6a57750ad240e8a942ed1836dcc
 direct_dependencies:
 - esp_ota
 - espressif/cjson
 - mqtt
-manifest_hash: a09a36a6d1d34dd7bd6b1e50110f28c0f07fac995369319a5cfbb0f1a111ed91
+manifest_hash: 16972a83fadadf0f3fff675445d01878160bb9beb3c9da9f94b9f66013ee5c63
 target: esp32
 version: 3.0.0
