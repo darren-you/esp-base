@@ -59,4 +59,4 @@ ESP32 使用 `esp32_product`、ECDSA v1 的 64 字节官方导出验签公钥及
 
 后续实板窗口必须重新枚举并独占 USB，核对物理芯片、4 MiB、安全/eFuse 状态、源 UUID/MAC 与双恢复件，使用官方有线刷写链完成完整候选写入及全片读回，再验证签名基座、UUID/revision/配置、双槽和恢复。写入或读回不确定时停止自动重试、保留现场，以同板完整恢复件完成独立恢复验收。工具输出明确标记 `software_only`、`device_verified=false`、`hardware_write_authorized=false`；离线候选及测试签名不代表实板授权、首次启动或生产迁入完成。
 
-软件回归入口：固定 SDK 环境下运行 `python -m unittest discover -s tools -p 'test_prepare_native_layout.py' -v`，另有双目标 host 的收据、启动和串行 owner 回归。合成输入、宿主替身及编译不能代替双目标实体断电、恢复、容量和 72 小时长稳验收。
+软件回归入口：固定 SDK 环境下运行 `python -m unittest discover -s tools -p 'test_prepare_native_layout.py' -v`，另有双目标 host 的收据、启动和串行 owner 回归。合成输入、宿主替身及编译不能代替双目标实体断电、恢复、资源和长稳验收。

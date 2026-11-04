@@ -14,4 +14,4 @@ Base采用锁定ESP-IDF v6.1／lwIP和独立MQTT、OTA组件；C3／ESP32均为4
 
 设备通过认证 MQTT 块传输完整固件字节；本机USB的URL型OTA由设备HTTPS拉取，两条路径共用升级事务。退役动态业务运行体系的可选装配、源码仓与专属实验入口已清除，没有第二条引擎路线。
 
-当前未取得双目标真实公网／App／USB、同存峰值、Flash最坏延迟、断电、每板百次和连续72小时资格，正式交付仍待。软件通过不等于设备签名启动或生产入口通过；每轮物理写入须核对唯一目标、安全状态、新鲜双份完整恢复基线与设备租约。实施依据为[嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。
+当前未取得双目标最终候选的真实公网／App／USB、连续升级、实际窗口资源、故障断电和24小时长稳资格，正式交付仍待；合成同存峰值、Flash最坏延迟量测、每板百次和连续72小时按 #35 2026-11-04 决议暂缓。软件通过不等于设备签名启动或生产入口通过；每轮物理写入须核对唯一目标、安全状态、新鲜双份完整恢复基线与设备租约。实施依据为[嵌入式工程标准](https://github.com/darren-you/darren-space/blob/master/harness/docs/workspace/standards/embedded-firmware/embedded-firmware-golden-path.md)。
