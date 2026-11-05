@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* PUBACK 后同一请求的最短重发间隔；慢链路上避免 Server 重复整块下发。 */
+#define EBASE_MQTT_OTA_REQUEST_RESEND_MS 5000U
+
 static emqtt_runtime_t *s_runtime;
 /* Incoming MESSAGE remains live while its handler parses a command. */
 static emqtt_event_t s_event IRAM_BSS_ATTR;
@@ -335,7 +338,7 @@ bool esp_base_mqtt_owner_ota_request(uint64_t now, const ebase_mqtt_ota_frame_t 
         (request->offset == s_ota_last_request.offset &&
          request->written_offset == s_ota_last_request.written_offset &&
          request->expires_at_uptime_ms == s_ota_last_request.expires_at_uptime_ms &&
-         now - s_ota_last_sent_ms < 1000U))) return false;
+         now - s_ota_last_sent_ms < EBASE_MQTT_OTA_REQUEST_RESEND_MS))) return false;
     uint8_t bytes[EBASE_MQTT_OTA_HEADER_BYTES];
     size_t length = 0;
     if (!ebase_mqtt_ota_encode(s_management_key, s_device_id, s_boot_id,

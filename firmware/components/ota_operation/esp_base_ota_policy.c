@@ -44,7 +44,8 @@ eota_policy_t esp_base_ota_policy(bool trusted_time)
         .ota_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
         .connect_timeout_ms = 5000,
         .read_timeout_ms = 1000,
-        .idle_timeout_ms = 30000,
+        /* 弱网下容纳多轮 keepalive 断线与重连；只由严格增加的实际写入偏移续期。 */
+        .idle_timeout_ms = 120000,
         .total_timeout_ms = 300000,
         .trusted_time = trusted_time,
         .flash_io = s_flash_io,

@@ -274,36 +274,36 @@ static void ota_owner_tests(void)
     assert(!esp_base_mqtt_owner_ota_request(18000, &request));
     acknowledge(pending, 18000);
     assert(!esp_base_mqtt_owner_ota_request(16003, &request)); /* Backwards time. */
-    assert(!esp_base_mqtt_owner_ota_request(17003, &request));
-    assert(esp_base_mqtt_owner_ota_request(18000, &request));
+    assert(!esp_base_mqtt_owner_ota_request(21003, &request)); /* 4999 ms after the same request. */
+    assert(esp_base_mqtt_owner_ota_request(21004, &request));
     pending = (int)sends;
-    acknowledge(pending, 18001);
+    acknowledge(pending, 21005);
     request.offset = request.written_offset = 1024;
-    assert(esp_base_mqtt_owner_ota_request(18001, &request)); /* New real write. */
+    assert(esp_base_mqtt_owner_ota_request(21005, &request)); /* New real write. */
     pending = (int)sends;
-    push(EMQTT_EVENT_DISCONNECTED); poll_ota(18002);
-    assert(!esp_base_mqtt_owner_ota_request(19002, &request));
-    push(EMQTT_EVENT_READY); poll_ota(19002);
-    assert(!esp_base_mqtt_owner_ota_request(19002, &request)); /* Old outbox survives. */
-    push_ota(boot_id, operation_id); poll_ota(19003);
+    push(EMQTT_EVENT_DISCONNECTED); poll_ota(21006);
+    assert(!esp_base_mqtt_owner_ota_request(26005, &request));
+    push(EMQTT_EVENT_READY); poll_ota(26005);
+    assert(!esp_base_mqtt_owner_ota_request(26005, &request)); /* Old outbox survives. */
+    push_ota(boot_id, operation_id); poll_ota(26006);
     assert(ota_frames == 2); /* Operation survives a session reconnect. */
-    acknowledge(pending, 19004);
-    assert(esp_base_mqtt_owner_ota_request(19004, &request));
+    acknowledge(pending, 26007);
+    assert(esp_base_mqtt_owner_ota_request(26007, &request));
     pending = (int)sends;
     esp_base_mqtt_owner_ota_unbind();
-    push_ota(boot_id, operation_id); poll_ota(19005);
-    assert(ota_frames == 2 && !esp_base_mqtt_owner_ota_request(20005, &request));
+    push_ota(boot_id, operation_id); poll_ota(26008);
+    assert(ota_frames == 2 && !esp_base_mqtt_owner_ota_request(31008, &request));
     assert(esp_base_mqtt_owner_ota_bind(boot_id, received_ota, &ota_frames));
-    assert(!esp_base_mqtt_owner_ota_request(20005, &request)); /* Rebind cannot grow outbox. */
-    acknowledge(pending, 20005);
+    assert(!esp_base_mqtt_owner_ota_request(31008, &request)); /* Rebind cannot grow outbox. */
+    acknowledge(pending, 31008);
     fail_publish = true;
-    assert(!esp_base_mqtt_owner_ota_request(20005, &request));
+    assert(!esp_base_mqtt_owner_ota_request(31008, &request));
     fail_publish = false;
-    assert(esp_base_mqtt_owner_ota_request(20005, &request));
-    esp_base_mqtt_owner_poll(20006, false, true, NULL, NULL, NULL);
-    poll_ota(20007); push(EMQTT_EVENT_READY); poll_ota(21007);
-    assert(esp_base_mqtt_owner_ota_request(21007, &request)); /* Stop drained the old outbox. */
-    acknowledge((int)sends, 21008);
+    assert(esp_base_mqtt_owner_ota_request(31008, &request));
+    esp_base_mqtt_owner_poll(31009, false, true, NULL, NULL, NULL);
+    poll_ota(31010); push(EMQTT_EVENT_READY); poll_ota(36010);
+    assert(esp_base_mqtt_owner_ota_request(36010, &request)); /* Stop drained the old outbox. */
+    acknowledge((int)sends, 36011);
     assert(!esp_base_mqtt_owner_ota_request(40000, &request));
     mqtt.management_key[0] ^= 1;
     assert(configure(&mqtt) == ESP_OK);

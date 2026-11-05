@@ -146,7 +146,7 @@ eota_result_t eota_observe_slots(const eota_policy_t *policy, eota_slots_t *slot
            policy->ota_1_address_bytes == ESP_BASE_OTA_1_ADDRESS_BYTES &&
            policy->ota_size_bytes == ESP_BASE_OTA_SLOT_SIZE_BYTES &&
            policy->connect_timeout_ms == 5000 && policy->read_timeout_ms == 1000 &&
-           policy->idle_timeout_ms == 30000 && policy->total_timeout_ms == 300000);
+           policy->idle_timeout_ms == 120000 && policy->total_timeout_ms == 300000);
     const uint8_t target_subtype = running_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ?
         ESP_PARTITION_SUBTYPE_APP_OTA_1 : ESP_PARTITION_SUBTYPE_APP_OTA_0;
     *slots = (eota_slots_t){
