@@ -526,6 +526,12 @@ void vTaskDelay(TickType_t ticks) { fake_now_ms += ticks; }
 psa_status_t psa_crypto_init(void) { return PSA_SUCCESS; }
 eota_policy_t esp_base_ota_policy(bool trusted_time)
 { return (eota_policy_t){.trusted_time = trusted_time, .connect_timeout_ms = 5000, .read_timeout_ms = 1000, .idle_timeout_ms = 30000, .total_timeout_ms = 300000}; }
+eota_policy_t esp_base_mqtt_ota_policy(bool trusted_time)
+{
+    eota_policy_t policy = esp_base_ota_policy(trusted_time);
+    policy.idle_timeout_ms = policy.total_timeout_ms = ESP_BASE_MQTT_OTA_IDLE_TIMEOUT_MS;
+    return policy;
+}
 eota_result_t eota_prepare(const eota_policy_t *policy, const eota_image_t *image,
     eota_progress_t progress, void *context, eota_prepared_t *prepared)
 {
@@ -614,7 +620,8 @@ bool esp_base_mqtt_owner_ota_request(uint64_t now, const ebase_mqtt_ota_frame_t 
 { (void)now; (void)frame; assert(stream_bound && !atomic_load(&s_ota_transfer_finished)); return true; }
 bool esp_base_mqtt_ota_transfer_begin(uint32_t size, uint32_t idle)
 {
-    assert(stream_bound && size == 4096 && idle == 30000);
+    /* MQTT 分块使用 600 秒实际写入无进展期限；URL 路径保持原 30 秒。 */
+    assert(stream_bound && size == 4096 && idle == 600000);
     assert(register_calls == 1 && task_calls == 1 && retire_calls == 1);
     ++stream_begin_calls; stream_started = stream_begin_ok; return stream_begin_ok;
 }
@@ -637,7 +644,7 @@ eota_result_t eota_prepare_stream(const eota_policy_t *policy, const eota_stream
 {
     assert(policy && stream && stream->read == esp_base_mqtt_ota_transfer_read && stream->written == esp_base_mqtt_ota_transfer_written && prepared && progress);
     assert(!atomic_load(&s_ota_transfer_finished));
-    assert(policy->idle_timeout_ms == 30000 && stream->no_total_timeout);
+    assert(policy->idle_timeout_ms == 600000 && stream->no_total_timeout);
     assert(esp_base_storage_claim_active(&s_ota_storage_claim) && stream_begin_calls == 1 && retire_calls == 1);
     check_live_progress("running");
     ++stream_prepare_calls; progress(512, stream->image_size_bytes, context);

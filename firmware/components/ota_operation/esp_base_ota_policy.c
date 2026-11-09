@@ -44,11 +44,21 @@ eota_policy_t esp_base_ota_policy(bool trusted_time)
         .ota_size_bytes = ESP_BASE_OTA_SLOT_SIZE_BYTES,
         .connect_timeout_ms = 5000,
         .read_timeout_ms = 1000,
-        /* 弱网下容纳多轮 keepalive 断线与重连；只由严格增加的实际写入偏移续期。 */
-        .idle_timeout_ms = 120000,
+        .idle_timeout_ms = 30000,
         .total_timeout_ms = 300000,
         .trusted_time = trusted_time,
         .flash_io = s_flash_io,
         .observer = s_observer,
     };
+}
+
+eota_policy_t esp_base_mqtt_ota_policy(bool trusted_time)
+{
+    eota_policy_t policy = esp_base_ota_policy(trusted_time);
+    /* MQTT 分块只由严格增加的实际写入偏移续期：链路仍能传输时不因固定期限失败，
+     * 完全无写入 600 秒才结束，优先等弱网恢复后续传。流式核心不设总期限，
+     * total 只满足 idle 不超过 total 的策略不变式。 */
+    policy.idle_timeout_ms = ESP_BASE_MQTT_OTA_IDLE_TIMEOUT_MS;
+    policy.total_timeout_ms = ESP_BASE_MQTT_OTA_IDLE_TIMEOUT_MS;
+    return policy;
 }

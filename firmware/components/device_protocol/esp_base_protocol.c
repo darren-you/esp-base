@@ -584,7 +584,8 @@ static void ota_task(void *argument)
         vTaskDelete(NULL);
         return;
     }
-    const eota_policy_t policy = esp_base_ota_policy(true);
+    const eota_policy_t policy = s_ota_request->inbound_stream ?
+        esp_base_mqtt_ota_policy(true) : esp_base_ota_policy(true);
     esp_base_ota_receipt_recovery_t receipt = {0};
     eota_result_t result = EOTA_UPDATE_BOOT_STATE_UNKNOWN;
     bool mutated = false;

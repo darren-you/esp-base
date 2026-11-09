@@ -42,3 +42,6 @@ bool esp_base_ota_policy_bind_observer(eota_observer_t observer);
 #define ESP_BASE_STAGE_SUCCESS_SET 13U
 #define ESP_BASE_STAGE_SUCCESS_COMMIT 14U
 eota_policy_t esp_base_ota_policy(bool trusted_time);
+/* 同一固定策略，仅把 MQTT 分块的实际写入无进展期限放宽到 600 秒；URL 路径不变。 */
+#define ESP_BASE_MQTT_OTA_IDLE_TIMEOUT_MS 600000U
+eota_policy_t esp_base_mqtt_ota_policy(bool trusted_time);
