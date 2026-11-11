@@ -1,6 +1,6 @@
 # 固件测试
 
-MQTT OTA 二进制编解码和单块状态机的独立入口为 `bash firmware/tests/run_mqtt_ota_tests.sh`，需要 OpenSSL 与 pkg-config；它直接编译正式 C 源码及 PSA→OpenSSL 测试适配，开启 ASan／UBSan。独立 Python HMAC 固定向量与 Server Rust 测试逐字节一致，包含完整 2 KiB 数据向量，覆盖全帧逐字节篡改／每个截断长度、错误身份／方向／topic／QoS／retained，以及有效 MAC 下的坏域和字段。状态机覆盖借用数据复制、实际写确认前背压、重复／冲突、尾块 END、最后完整 1 KiB 写入前禁止冻结 END 请求、取消、无进展期限和时钟倒退。最大 app 槽的软件慢速测试以 2.5 KiB/s 持续写入 768 秒，验证超过原 300／600 秒仍可选槽，传输不设总时限；重复写确认不能延长30秒无进展期限。两个真实宿主线程同时运行控制端和 worker，使用 pthread 临界区与 SDK／Flash 假件交付 40 个完整 2 KiB 块及超过 1 KiB 的尾块，再核对 EOF、延迟写确认和关闭重用；`ESP_BASE_TEST_THREAD_SANITIZER=1` 另执行这段并发的 TSan 构建。这些测试不访问 Broker、NVS 或实体设备。状态机另覆盖验签期间取消／超时／冲突、尾块未写不能选槽，以及选槽开始后的迟到取消。
+MQTT OTA 二进制编解码和单块状态机的独立入口为 `bash firmware/tests/run_mqtt_ota_tests.sh`，需要 OpenSSL 与 pkg-config；它直接编译正式 C 源码及 PSA→OpenSSL 测试适配，开启 ASan／UBSan。独立 Python HMAC 固定向量与 Server Rust 测试逐字节一致，包含完整 2 KiB 数据向量，覆盖全帧逐字节篡改／每个截断长度、错误身份／方向／topic／QoS／retained，以及有效 MAC 下的坏域和字段。状态机覆盖借用数据复制、实际写确认前背压、重复／冲突、尾块 END、最后完整 1 KiB 写入前禁止冻结 END 请求、取消、无进展期限和时钟倒退。最大 app 槽的软件慢速测试以 2.5 KiB/s 持续写入 768 秒，验证超过原 300／600 秒仍可选槽，传输不设总时限；重复写确认不能延长无进展期限（状态机测试以 30 秒参数验证机制；生产 MQTT 路径传入 600 秒，由 protocol owner 测试锁定）。两个真实宿主线程同时运行控制端和 worker，使用 pthread 临界区与 SDK／Flash 假件交付 40 个完整 2 KiB 块及超过 1 KiB 的尾块，再核对 EOF、延迟写确认和关闭重用；`ESP_BASE_TEST_THREAD_SANITIZER=1` 另执行这段并发的 TSan 构建。这些测试不访问 Broker、NVS 或实体设备。状态机另覆盖验签期间取消／超时／冲突、尾块未写不能选槽，以及选槽开始后的迟到取消。
 
 同一 MQTT OTA 入口还以 10 ms 可控 tick 编译真实 transfer 和 mailbox，检查空读每次至多让出一个 tick、跨回调等待不刷新期限、让出期间到达的数据只在后续读取消费一次、短预算与倒退时钟，以及数据／EOF／错误即时返回。宿主调度假件不代表 MCU 时延保证。
 

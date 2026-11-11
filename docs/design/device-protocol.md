@@ -80,7 +80,7 @@ Server 精确回显当前 request 的 offset、written_offset 和 expiry，再�
 
 单块状态机不执行网络、Flash 或 NVS；实际 owner 必须在短临界区串行调用并在区内取单调时钟。worker 等待数据时释放临界区和 Flash claim；结束并确认 worker 已停止后才能清理／复用状态。首版只有同一活动 operation 内的易失续传，断电不保留偏移、不自动重发 start，也不将 unknown 改为失败或成功。
 
-MQTT owner 增加第三个精确订阅 `ota/data`，继续由 SDK 完成全部 SUBACK 后开放管理。它在唯一已登记 operation 上绑定处理器；重连保留绑定，配置撤销解除绑定。数据块经设备／boot／operation、topic、方向和 HMAC 校验后直达固定 mailbox，不进入普通写请求守卫。出站最多保留一个未 PUBACK 的块请求；相同请求收到 PUBACK 后至少间隔 5 秒才能重发，新写偏移可立即请求；Server 在同一连接内对距上次下发不足 3 秒的相同请求不重复整块下发，短于设备周期以免两者对齐后错过一轮。esp-mqtt 运行层的 TCP/TLS 建连、CONNACK、SUBACK、单次写入无进展和半包无进展期限均为 30 秒，写入与半包按实际字节进展重新计时；同连接 QoS1 重传间隔为 15 秒；keepalive 保持 30 秒，发出 PINGREQ 后只要仍有入站字节就不断开，30 秒完全没有入站字节才断开。普通断线不清除尚在 SDK outbox 的消息 ID，停止／销毁 transport 后才清除，避免重连或 operation 更替造成请求积压。
+MQTT owner 增加第三个精确订阅 `ota/data`，继续由 SDK 完成全部 SUBACK 后开放管理。它在唯一已登记 operation 上绑定处理器；重连保留绑定，配置撤销解除绑定。数据块经设备／boot／operation、topic、方向和 HMAC 校验后直达固定 mailbox，不进入普通写请求守卫。出站最多保留一个未 PUBACK 的块请求；相同请求收到 PUBACK 后至少间隔 5 秒才能重发，新写偏移可立即请求；Server 在同一连接内对距上次下发不足 3 秒的相同请求不重复整块下发，短于设备周期以免两者对齐后错过一轮。esp-mqtt 运行层的 TCP/TLS 建连、CONNACK、SUBACK、单次写入无进展和半包无进展期限均为 30 秒，写入与半包按实际字节进展重新计时；QoS1 重传参数为 15 秒（上游核心按 15 秒周期检查，实际重发间隔 15—30 秒，重连后未确认的请求同样等下一次检查）；keepalive 保持 30 秒，发出 PINGREQ 后只要仍有入站字节就不断开，30 秒完全没有入站字节才断开。普通断线不清除尚在 SDK outbox 的消息 ID，停止／销毁 transport 后才清除，避免重连或 operation 更替造成请求积压。
 
 worker 先重读 V4 意图并退役备用槽，再开放块请求；`written` 回调只在实际写入和短 Flash claim 释放成功后推进确认。准备完成后以同一 mailbox 临界区检查 END、全部写入、取消／冲突和期限，并关闭网络取消入口，再调用已有 `eota_select`。该边界之前的有效取消禁止选槽；边界之后的迟到取消无效，客户端继续查询原 operation 的持久结果。入站 read 在暂无数据时于锁外至多让出一个既有 tick 后返回可重试 timeout，由 OTA 核心再次读取并检查原期限；不在单次回调内耗尽读取预算。MQTT 使用 1 秒单次读取和 600 秒实际写入无进展期限，不设总传输时限。只有严格增加的 Flash 写入偏移刷新无进展期限；重复块、PUBACK、心跳、重连和已过期输入均不能刷新。OTA 核心启用 `no_total_timeout`，与来源 mailbox 使用相同的实际写入进展语义；启动授权保持原期限。软件、生产候选和实板资格分别验收。
 
