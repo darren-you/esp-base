@@ -169,7 +169,7 @@ def flash(args):
         if args.app_only and name != "esp_base.bin":
             continue
         files += [offset, signed_path(args.target) if name == "esp_base.bin" else directory / name]
-    esptool = [sys.executable, "-m", "esptool", "--chip", args.target, "--port", args.port, "--baud", "460800"]
+    esptool = [sys.executable, "-m", "esptool", "--chip", args.target, "--port", args.port, "--baud", str(args.baud)]
     with tempfile.TemporaryDirectory(prefix="esp-base-nvs-") as temporary:
         os.chmod(temporary, 0o700)
         if args.provision:
@@ -261,6 +261,7 @@ def main():
     command.add_argument("--provision", help="仓外的出厂资料 JSON（设备 UUID、Wi-Fi、MQTT），写入 NVS 分区")
     command.add_argument("--erase", action="store_true", help="先整片擦除；必须同时给出 --provision")
     command.add_argument("--app-only", action="store_true", help="只写 app，不动 bootloader、分区表和 otadata")
+    command.add_argument("--baud", type=int, default=460800, help="刷写波特率；USB 转串口不稳时降到 230400 或 115200")
     command.set_defaults(run=flash)
 
     command = commands.add_parser("control", help="经 MQTT 查看状态或下发命令")
