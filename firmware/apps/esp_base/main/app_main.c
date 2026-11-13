@@ -204,6 +204,10 @@ static void mqtt_stop(void)
 static void mqtt_start(const base_config_t *config)
 {
     if (s_mqtt) return;
+#if CONFIG_ESP_BASE_TEST_NO_BROKER
+    ESP_LOGW(TAG, "test build: broker connection disabled, rollback expected");
+    return;
+#endif
     const esp_mqtt_client_config_t mqtt = {
         .broker.address.uri = config->mqtt_uri,
         .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,

@@ -1,0 +1,11 @@
+menu "ESP Base"
+
+    config ESP_BASE_TEST_NO_BROKER
+        bool "Test build only: never connect to the MQTT broker"
+        default n
+        help
+            The firmware joins Wi-Fi but never connects to the broker, so it is never
+            confirmed and the bootloader rolls back after the 300 s window. Used only to
+            verify automatic rollback; release packaging refuses images built with it.
+
+endmenu

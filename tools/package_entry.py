@@ -77,6 +77,8 @@ def package(artifact):
     esp_base.build_firmware(target, expected["build_number"], stdout=sys.stderr)
     signed = esp_base.sign_firmware(target, key)
     directory = esp_base.build_dir(target)
+    if "CONFIG_ESP_BASE_TEST_NO_BROKER=y" in (directory / "sdkconfig").read_text():
+        esp_base.fail("测试开关 ESP_BASE_TEST_NO_BROKER 不能进入正式包")
     version = f'{expected["version"]}+{expected["build_number"]}'
     if version.encode() + b"\0" not in signed.read_bytes()[:1024]:
         esp_base.fail("固件内的版本与 Core 分配的不一致")
