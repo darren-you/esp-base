@@ -1,4 +1,0 @@
-#pragma once
-
-#define ESP_PARTITION_SUBTYPE_APP_OTA_0 0x10
-#define ESP_PARTITION_SUBTYPE_APP_OTA_1 0x11

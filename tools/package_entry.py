@@ -1,64 +1,125 @@
 #!/usr/bin/env python3
-"""Core 独立打包入口；冻结完整输入后复用原构建及签名，不分配编号。"""
+"""正式构建入口，由 Fast Deploy Core 的 shared/package_run.py 调用：构建、签名、验签并封装成 ZIP。
+
+环境变量：
+  ESP_BASE_SIGNING_KEY_FILE 或 ESP_BASE_SIGNING_KEY_ENV（FILE:VAR）  仓外的 RSA-3072 签名键
+  ESP_BASE_SIGNING_TRUST    release 或 software-test；后者不得用于正式设备
+版本和构建号由 Core 分配，本入口不分配编号，也不连接设备。
+"""
+import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
-from build_package import (TARGETS, build, current_inputs, encoded, package, portable_input,
-                           read_json, run_inputs, write_once)
+import esp_base
+
+ARCHITECTURES = {"esp32c3": "riscv32", "esp32": "xtensa"}
+SOURCES = ("sdkconfig.defaults", "sdkconfig.defaults.{target}", "dependencies.lock.{target}",
+           "partitions/partitions.csv")
+
+
+def encoded(value):
+    return (json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def signing_arguments():
+    file, env = os.environ.get("ESP_BASE_SIGNING_KEY_FILE"), os.environ.get("ESP_BASE_SIGNING_KEY_ENV")
+    trust = os.environ.get("ESP_BASE_SIGNING_TRUST")
+    if bool(file) == bool(env) or trust not in ("release", "software-test"):
+        esp_base.fail("需要 ESP_BASE_SIGNING_KEY_FILE 或 ESP_BASE_SIGNING_KEY_ENV 其一，以及 ESP_BASE_SIGNING_TRUST")
+    return argparse.Namespace(key_file=file, key_env=env), trust
+
+
+def tool_version(name):
+    path = shutil.which(name)
+    if not path:
+        esp_base.fail("缺少工具 " + name + "，先导出官方 ESP-IDF 环境")
+    return subprocess.check_output([path, "--version"], text=True).splitlines()[0]
 
 
 def inputs(target):
-    if target not in TARGETS:
-        raise ValueError("未知固件目标")
-    trust = os.environ.get("ESP_BASE_SIGNING_TRUST")
-    if trust not in ("software-test", "release"):
-        raise ValueError("必须显式声明 ESP_BASE_SIGNING_TRUST")
-    paths = []
-    for name in ("ESP_BASE_SDKCONFIG", "ESP_BASE_VERIFICATION_KEY"):
-        path = Path(os.environ.get(name, ""))
-        if not path.is_absolute():
-            raise ValueError(name + " 必须为仓外绝对普通文件")
-        paths.append(path)
-    return current_inputs(target, *paths, trust)
+    """冻结进 Core 收据的输入：官方 SDK 提交、工具链、锁与配置的摘要、签名信任根。"""
+    idf = esp_base.idf_path()
+    key, trust = signing_arguments()
+    compiler = ("riscv32" if target == "esp32c3" else "xtensa") + "-esp-elf-gcc"
+    return {
+        "schema_version": 1, "target": target,
+        "idf": {"commit": subprocess.check_output(["git", "-C", str(idf), "rev-parse", "HEAD"], text=True).strip(),
+                "describe": subprocess.check_output(["git", "-C", str(idf), "describe", "--tags", "--dirty"],
+                                                    text=True).strip()},
+        "tools": {name: tool_version(name) for name in ("cmake", "ninja", compiler)},
+        "sources": {name.format(target=target): esp_base.sha256(esp_base.FIRMWARE / name.format(target=target))
+                    for name in SOURCES},
+        "signing": {"scheme": "rsa-3072-v2", "trust": trust, "public_key_sha256": esp_base.public_key_sha256(key)},
+    }
 
 
-def run(artifact):
-    snapshot = Path(os.environ.get("FAST_DEPLOY_CLIENT_VERSION_SNAPSHOT_FILE", ""))
-    if not snapshot.is_absolute():
-        raise ValueError("入口只能由 Core package_run.py 调用")
-    directory = snapshot.parent
-    request = read_json(directory / "package-run.json")
-    value = inputs(request["manifest"]["variant"])
-    run_inputs(value)
-    if artifact != directory / request["manifest"]["artifact"]:
-        raise ValueError("交付路径必须为同次 Core run 指定的原 ZIP")
-    frozen = directory / "firmware-input.json"
-    write_once(frozen, encoded(value))
-    build_directory = directory / "firmware-build"
-    build(frozen, build_directory)
-    signed = {}
-    for name in ("image", "partition", "manifest"):
-        variable = "ESP_BASE_SIGNED_" + name.upper()
-        if os.environ.get(variable):
-            path = Path(os.environ[variable])
-            if not path.is_absolute():
-                raise ValueError(variable + " 必须为绝对普通文件")
-            signed["signed_" + name] = path
-    if not value["automatic_signing"] and "signed_manifest" not in signed:
-        package(frozen, build_directory, None, signed.get("signed_image"),
-                manifest_only=True, signed_partition=signed.get("signed_partition"))
-        raise ValueError("外签清单位于原 run 的 firmware-build；签署后设置 ESP_BASE_SIGNED_MANIFEST 并重试同 run")
-    return package(frozen, build_directory, artifact, signed.pop("signed_image", None), **signed)
+def package(artifact):
+    core = Path(os.environ.get("FAST_DEPLOY_PACKAGE_CORE_ROOT", ""))
+    run_directory = artifact.parent
+    request = json.loads((run_directory / "package-run.json").read_text())
+    target = request["manifest"]["variant"]
+    if not core.is_absolute() or target not in ARCHITECTURES:
+        esp_base.fail("本入口只能由 Core 的 package_run.py 调用")
+    identity = [sys.executable, core / "shared/package_identity.py", "--project-root", esp_base.ROOT,
+                "--platform", "firmware", "--application-id", "esp-base",
+                "--architecture", ARCHITECTURES[target], "--variant", target]
+    expected = json.loads(subprocess.check_output([str(part) for part in [*identity[:2], "resolve", *identity[2:]]]))
+    key, trust = signing_arguments()
+    frozen = inputs(target)
+
+    # 构建目录放在本次 run 的收据目录里，不改动源码树。
+    esp_base.BUILD_ROOT = run_directory / "firmware-build"
+    esp_base.build_firmware(target, expected["build_number"], stdout=sys.stderr)
+    signed = esp_base.sign_firmware(target, key)
+    directory = esp_base.build_dir(target)
+    version = f'{expected["version"]}+{expected["build_number"]}'
+    if version.encode() + b"\0" not in signed.read_bytes()[:1024]:
+        esp_base.fail("固件内的版本与 Core 分配的不一致")
+    if inputs(target) != frozen:
+        esp_base.fail("构建期间输入发生变化")
+
+    stage = run_directory / "firmware-package"
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir()
+    files = {"firmware.bin": signed, "bootloader.bin": directory / "bootloader/bootloader.bin",
+             "partition-table.bin": directory / "partition_table/partition-table.bin",
+             "ota_data_initial.bin": directory / "ota_data_initial.bin", "esp_base.elf": directory / "esp_base.elf",
+             "sdkconfig": directory / "sdkconfig", "LICENSE": esp_base.ROOT / "LICENSE",
+             "dependencies.lock": esp_base.FIRMWARE / f"dependencies.lock.{target}"}
+    for name, source in files.items():
+        shutil.copyfile(source, stage / name)
+    flash = {"bootloader/bootloader.bin": "bootloader.bin", "partition_table/partition-table.bin": "partition-table.bin",
+             "ota_data_initial.bin": "ota_data_initial.bin", "esp_base.bin": "firmware.bin"}
+    offsets = dict(reversed(line.split()) for line in (directory / "flash_args").read_text().splitlines()[1:])
+    manifest = {"schema_version": 3, "kind": "esp-base-firmware", "target": f"{target}/esp_base", "version": version,
+                "inputs": frozen,
+                "flash": {flash[name]: offset for name, offset in offsets.items()},
+                "files": {name: {"bytes": (stage / name).stat().st_size, "sha256": esp_base.sha256(stage / name)}
+                          for name in sorted(files)}}
+    (stage / "manifest.json").write_bytes(encoded(manifest))
+    local = {k: v for k, v in expected.items() if k not in ("build_number", "source_commit_sha", "input_sha256")}
+    local.update(local_validation=True, run_id="")
+    (stage / "build.json").write_bytes(encoded(local))
+    for path in stage.iterdir():
+        path.chmod(0o644)
+    report = subprocess.check_output([str(part) for part in [
+        *identity[:2], "package-directory", *identity[2:], "--directory", stage, "--artifact", artifact]])
+    return {"artifact": json.loads(report), "firmware_sha256": manifest["files"]["firmware.bin"]["sha256"],
+            "version": version, "target": manifest["target"], "signing_trust": trust}
 
 
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "inputs":
-        sys.stdout.buffer.write(encoded(portable_input(inputs(sys.argv[2]))))
+        sys.stdout.buffer.write(encoded(inputs(sys.argv[2])))
     elif len(sys.argv) == 2:
-        sys.stdout.buffer.write(encoded(run(Path(sys.argv[1]))))
+        sys.stdout.buffer.write(encoded(package(Path(sys.argv[1]))))
     else:
-        raise ValueError("用法：package_entry.py inputs <target> 或由 Core 传入原 ZIP 路径")
+        esp_base.fail("用法：package_entry.py inputs <target>，或由 Core 传入 ZIP 路径")
 
 
 if __name__ == "__main__":

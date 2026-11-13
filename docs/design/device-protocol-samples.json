@@ -1,0 +1,136 @@
+{
+  "device_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "topics": {
+    "status": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/status",
+    "rsp": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/rsp",
+    "cmd_filter": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/cmd/+",
+    "ota_desired": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/ota/desired",
+    "ota_state": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/ota/state"
+  },
+  "status": [
+    {
+      "name": "online",
+      "payload": {
+        "online": true,
+        "device_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "boot_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "uptime_s": 3600,
+        "reset": "power_on",
+        "fw": {
+          "version": "1.0.0+68",
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "target": "esp32c3/esp_base",
+          "slot": "ota_0"
+        },
+        "heap": {"free": 178148, "min": 160696, "largest": 110592},
+        "stack": {"main": 4200, "mqtt_task": 2900, "IDLE": 800},
+        "wifi": {"rssi": -52},
+        "config": {"revision": 3, "error": null},
+        "business": {"state": "active", "bytes": 42},
+        "wakeups": 57
+      }
+    },
+    {
+      "name": "offline_will",
+      "payload": {
+        "online": false,
+        "device_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "boot_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "fw": {
+          "version": "1.0.0+68",
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "target": "esp32c3/esp_base",
+          "slot": "ota_0"
+        }
+      }
+    }
+  ],
+  "commands": [
+    {"name": "status", "cmd": "status", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"}},
+    {"name": "restart", "cmd": "restart", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3302"}},
+    {"name": "config_wifi_and_mqtt", "cmd": "config", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3303",
+                 "wifi": {"ssid": "example-ssid", "password": "example-password"},
+                 "mqtt": {"uri": "mqtts://broker.example.test:8883", "username": "device-user", "password": "device-password"}}},
+    {"name": "config_mqtt_only", "cmd": "config", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3304",
+                 "mqtt": {"uri": "mqtts://broker.example.test:8883", "username": "device-user", "password": "device-password"}}},
+    {"name": "config_plain_mqtt_refused", "cmd": "config", "expect": "error:invalid_args",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3305",
+                 "mqtt": {"uri": "mqtt://broker.example.test:1883", "username": "device-user", "password": "device-password"}}},
+    {"name": "config_empty_refused", "cmd": "config", "expect": "error:invalid_args",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3306"}},
+    {"name": "business_add", "cmd": "business", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3307", "op": "add", "data": "hello"}},
+    {"name": "business_pause", "cmd": "business", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3308", "op": "pause"}},
+    {"name": "business_resume", "cmd": "business", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3309", "op": "resume"}},
+    {"name": "business_add_without_data", "cmd": "business", "expect": "error:invalid_args",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c330a", "op": "add"}},
+    {"name": "unknown_command", "cmd": "format", "expect": "error:unknown_command",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c330b"}},
+    {"name": "missing_request_id", "cmd": "restart", "expect": "drop",
+     "payload": {}},
+    {"name": "malformed_request_id", "cmd": "restart", "expect": "drop",
+     "payload": {"request_id": "not-a-uuid"}}
+  ],
+  "responses": [
+    {"name": "ok_without_result",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3302", "cmd": "restart", "ok": true, "error": null, "result": null}},
+    {"name": "ok_with_result",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3307", "cmd": "business", "ok": true, "error": null,
+                 "result": {"state": "active", "bytes": 5}}},
+    {"name": "error",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3305", "cmd": "config", "ok": false, "error": "invalid_args", "result": null}}
+  ],
+  "ota_desired": [
+    {"name": "valid", "expect": "ok",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c8", "version": "1.0.0+69", "target": "esp32c3/esp_base",
+                 "size": 1052672, "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+                 "url": "https://firmware.example.test/fw/esp32c3/2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae.bin?e=1767225600&s=Zm9vYmFy"}},
+    {"name": "plain_http_url", "expect": "reject:invalid_url",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c9", "version": "1.0.0+69", "target": "esp32c3/esp_base",
+                 "size": 1052672, "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+                 "url": "http://firmware.example.test/fw/esp32c3/x.bin"}},
+    {"name": "bad_sha256", "expect": "reject:invalid_desired",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430ca", "version": "1.0.0+69", "target": "esp32c3/esp_base",
+                 "size": 1052672, "sha256": "2C26B46B", "url": "https://firmware.example.test/fw/esp32c3/x.bin"}},
+    {"name": "zero_size", "expect": "reject:invalid_desired",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430cb", "version": "1.0.0+69", "target": "esp32c3/esp_base",
+                 "size": 0, "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+                 "url": "https://firmware.example.test/fw/esp32c3/x.bin"}},
+    {"name": "missing_job", "expect": "invalid",
+     "payload": {"version": "1.0.0+69", "target": "esp32c3/esp_base", "size": 1052672,
+                 "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+                 "url": "https://firmware.example.test/fw/esp32c3/x.bin"}}
+  ],
+  "ota_state": [
+    {"name": "idle",
+     "payload": {"job": null, "state": "idle", "offset": 0, "attempt": 0, "error": null,
+                 "running": {"version": "1.0.0+68", "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                             "target": "esp32c3/esp_base", "slot": "ota_0"}}},
+    {"name": "downloading",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c8", "state": "downloading", "offset": 524288, "attempt": 1, "error": null,
+                 "running": {"version": "1.0.0+68", "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                             "target": "esp32c3/esp_base", "slot": "ota_0"}}},
+    {"name": "downloading_after_transport_error",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c8", "state": "downloading", "offset": 458752, "attempt": 2, "error": "transport",
+                 "running": {"version": "1.0.0+68", "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                             "target": "esp32c3/esp_base", "slot": "ota_0"}}},
+    {"name": "succeeded",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c8", "state": "succeeded", "offset": 1052672, "attempt": 1, "error": null,
+                 "running": {"version": "1.0.0+69", "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+                             "target": "esp32c3/esp_base", "slot": "ota_1"}}},
+    {"name": "rejected",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c9", "state": "rejected", "offset": 0, "attempt": 0, "error": "invalid_url",
+                 "running": {"version": "1.0.0+68", "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                             "target": "esp32c3/esp_base", "slot": "ota_0"}}},
+    {"name": "failed_after_rollbacks",
+     "payload": {"job": "6ba7b810-9dad-41d1-80b4-00c04fd430c8", "state": "failed", "offset": 0, "attempt": 3, "error": "rollback",
+                 "running": {"version": "1.0.0+68", "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                             "target": "esp32c3/esp_base", "slot": "ota_0"}}}
+  ]
+}

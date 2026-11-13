@@ -1,3 +1,2 @@
-idf_component_register(SRCS "esp_base_main.c" "${CMAKE_BINARY_DIR}/esp-base-build/esp_base_build.c" INCLUDE_DIRS "."
-    REQUIRES device_identity device_protocol esp_ota esp_partition esp_timer freertos nvs_flash ota_operation remote_config safety_runtime time_runtime)
-target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_base_build")
+idf_component_register(SRCS "app_main.c" INCLUDE_DIRS "."
+    PRIV_REQUIRES base_net base_ota base_protocol base_store app_update esp_timer heap mbedtls)

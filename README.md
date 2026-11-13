@@ -1,45 +1,83 @@
 # ESP Base
 
-基于锁定 ESP-IDF 的 ESP32-C3／ESP32 原生业务固件。目标是低资源设备的公网管理与 OTA：**复用严格 TLS MQTT 连接进行控制与分块传输，沿用签名 A/B OTA、rollback 和原操作 ID 持久结果**。原生消息计数业务直接编译进 app，动态运行引擎、独立业务包与联合包 OTA 已退出。
+ESP32-C3 与 ESP32 的业务基座固件：设备身份、Wi-Fi、TLS MQTT 管理和公网 OTA。只依赖官方 ESP-IDF 发行版和组件注册表，不维护任何上游派生。
 
-设备通过 MQTT 承载认证控制和完整签名固件数据。设备源码已接通 MQTT 认证二进制块、单块交接与实际 Flash 写入确认，并严格迁移旧配置。双目标依赖由 Component Manager 精确锁定，Server／Web 与维护 CLI 消费设备协议；通用 ESP Tool App 独立提供 ROM 信息、本地刷写和串口日志。**生产候选、线上部署和实板资格按下方 Issue 的完整制品身份与现场证据判断**；软件检查不授予实板资格，测试键制品不用于刷板。
+- **管理**：一份 retained 状态文档，命令走 `cmd/<名称>` 并按 `request_id` 应答去重，遗嘱消息表示离线。
+- **OTA**：Server 经 MQTT 发布期望固件，设备用官方 `esp_https_ota` 通过 HTTPS 拉取，断线或断电后按 Range 续传；镜像用 RSA-3072 签名，新固件连上 Broker 才确认有效，否则由 bootloader 回滚。
+- **事件驱动**：一个控制任务阻塞在事件队列上，空闲时不轮询；Wi-Fi 使用默认省电模式。
 
-动态计划与全部限定证据统一见 [ESP 统一交付 #35](https://github.com/darren-you/darren-space/issues/35)，稳定方法见[原生业务与 MQTT OTA 验收合同](docs/operations/ota-allocation-diagnostic-checkpoint.md)。[原生软件检查点](docs/operations/native-software-checkpoint.md)保留旧组合结果；真实 App／USB、公网连续升级、实际窗口资源、故障断电与 24 小时长稳资格须对应最终候选重新判断。实板接线见[受控实板接入说明](https://github.com/darren-you/esp-tool/blob/master/docs/operations/hardware-lab.md)。
+支持的硬件：ESP32-C3、ESP32-D0WD-V3（芯片版本 v3.0 及以上），4 MiB Flash。不启用硬件 Secure Boot、Flash 加密，不写 eFuse。
 
-## 目标运行链路
+## 快速开始
 
-```mermaid
-flowchart LR
-    public["Server / Web / 设备授权与原 ID"] <--> broker["严格 TLS MQTT / 现有 Broker"]
-    broker <--> mqtt["设备 MQTT / 有界控制与固件块"]
-    mqtt --> protocol["device_protocol / 唯一控制 owner"]
-    usb["实际 USB / 固件维护 CLI"] --> protocol
-    protocol --> native["native_business / 同步消息计数"]
-    protocol --> intent["ota_operation / V4 写前收据与恢复"]
-    mqtt --> stream["有界块交接 / 顺序写备用槽"]
-    intent --> ota["esp-ota / 完整摘要与签名 / A/B"]
-    stream --> ota
-    ota --> app["新 boot / rollback / 30 秒本地确认"]
-    app --> result["原 operation_id 持久结果"]
-    result --> mqtt
+需要 macOS 或 Linux、Python 3，以及官方 [ESP-IDF v6.1](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32c3/get-started/index.html)：
+
+```bash
+git clone --branch v6.1 --recursive https://github.com/espressif/esp-idf.git
+./esp-idf/install.sh esp32c3,esp32
+source ./esp-idf/export.sh
 ```
 
-上图是完整目标链路，设备侧已完成软件接线。块接收不在 RAM 拼接完整镜像，也不新增 Flash 中转副本；设备写入后才推进应用层确认，Broker PUBACK 不作为写入或升级成功证明。完整签名镜像核验通过后才切换启动槽，最终成功还须新 boot 的持久收据及独立固件身份查询。
+以下命令在本仓根目录执行，`<target>` 是 `esp32c3` 或 `esp32`。
 
-ESP Tool App 是通用 ESP 本机工具，Rust 承载跨端逻辑，macOS 使用 Swift、Windows／Linux 使用 egui 薄界面，不含本固件的配置、业务或 URL／OTA 入口。固件维护 CLI 保留 USB 下发 URL、设备 HTTPS 拉取的能力；本地 ROM 刷写／恢复使用明确文件和地址，独立于该应用协议。新公网 OTA 的完整固件字节须走 MQTT，并在 Mac 数据连接移除后验证。
+**1. 构建**。产物是未签名的 `firmware/build/<target>/esp_base.bin`：
 
-## 分区与存量边界
+```bash
+python3 tools/esp_base.py build <target>
+```
 
-两个 4 MiB 目标的 app 槽均为 `0x1e0000`。C3 保留 11 页 `base_store` 与闲置数据区 `0x3e5000/0x10000`；ESP32 保留六页 `base_store`、闲置数据区 `0x3ea000/0x10000` 和只读 `at_old_raw@0x3e5000/0x5000`。网络实现改变不授权普通 app OTA 改分区、重用旧区或清空 NVS；现有身份、配置、revision、有效凭据和 V4 收据仍需兼容与恢复验证。仓库删除也不等于现役设备或共享服务已迁移。
+**2. 签名**。设备只接受与当前运行固件同一把键签名的更新，所以同一批设备始终用同一把键。键放在仓库之外；第一次可以用 `espsecure generate-signing-key --version 2 --scheme rsa3072 <键文件>` 生成：
 
-## 开发入口
+```bash
+python3 tools/esp_base.py sign <target> --key-file /absolute/path/signing-key.pem
+```
 
-先按 [SDK 与工具说明](tools/README.md)准备仓外 SDK，使用 [sdk-lock.json](sdk-lock.json)核对 IDF／lwIP／TLSF 基线及正式容量统计派生。目标通过 Component Manager 精确消费 MQTT／OTA，不从相邻 checkout 导入实现。[组件清单](firmware/components/device_protocol/idf_component.yml)、[C3 锁](firmware/dependencies.lock)及 [ESP32 锁](firmware/dependencies.lock.esp32)均由官方依赖解析器生成，OTA 固定到带实际写入确认接口的完整提交。全新解析后仍须核对实际锁值与下载源码，不能仅凭 reconfigure 成功判断升级生效。
+**3. 准备出厂资料**。在仓库之外写一个 JSON 文件，权限设为 `0600`：
 
-- [固件构建与现有架构](firmware/README.md)
-- [现有设备协议](docs/design/device-protocol.md)
-- [宿主回归](firmware/tests/README.md)
-- [固件独立 OTA 与恢复](firmware/components/ota_operation/README.md)
-- [设备控制与签名固件打包](tools/README.md)
+```json
+{
+  "device_id": "<小写 UUID>",
+  "wifi_ssid": "<2.4 GHz Wi-Fi 名称>",
+  "wifi_password": "<Wi-Fi 密码>",
+  "mqtt_uri": "mqtts://<Broker 域名>:8883",
+  "mqtt_username": "<设备账户>",
+  "mqtt_password": "<设备密码>"
+}
+```
 
-源码说明与唯一协议正文描述当前设备实现；生命周期验证必须使用正式 Server 的 MQTT 调度，不能用历史宿主工具代替。资源门保持内部历史堆至少 16,384 B、最大连续块至少 24,576 B、每个实际任务栈余量至少 1,024 B；须在双板 Wi-Fi／TLS MQTT／原生业务／分块 OTA 同存的实际升级与长稳窗口中实测，软件构建不授予资源、功耗或运行资格。
+**4. 刷写**。首次刷写先整片擦除，再写入 bootloader、分区表、固件和出厂资料：
+
+```bash
+python3 tools/esp_base.py flash <target> --port /dev/cu.usbmodemXXXX --erase --provision /absolute/path/device.json
+```
+
+以后有线更新固件用 `--app-only`，不动出厂资料。刷完后串口日志会打印一行 `ESP_BASE_BOOT`，包含设备 UUID、版本、运行槽和固件 SHA-256。
+
+**5. 查看状态和下发命令**（需要 `python3 -m pip install 'paho-mqtt>=2.1'` 和一个有权限的 Broker 账户）：
+
+```bash
+python3 tools/esp_base.py control status --device <UUID> --uri mqtts://<Broker 域名>:8883 \
+  --username <账户> --password-file /absolute/path/password
+python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --username ... --password-file ...
+```
+
+## 文档
+
+- [设备—云协议](docs/design/device-protocol.md)：主题、状态文档、命令和 OTA 合同；[样例](docs/design/device-protocol-samples.json)同时用于设备和 Server 的解码测试。
+- [固件说明](firmware/README.md)：目录、分区、配置项和测试。
+
+## 开发
+
+```bash
+bash firmware/tests/run_host_tests.sh   # host 测试：协议编解码与 OTA 状态机，需先构建过一次
+```
+
+验证分三层：host 测试、两块板冒烟（刷入后联网、收发命令、完成一次 OTA）、24 小时长稳。host 测试通过不代表实板可用。
+
+依赖只有官方 ESP-IDF 和组件注册表中的 [espressif/mqtt](https://components.espressif.com/components/espressif/mqtt)、[espressif/cjson](https://components.espressif.com/components/espressif/cjson)，版本由 `firmware/dependencies.lock.<target>` 锁定。
+
+问题反馈和计划登记在 [darren-space Issues](https://github.com/darren-you/darren-space/issues)。
+
+## 许可证
+
+[Apache-2.0](LICENSE)。
