@@ -117,3 +117,9 @@ int base_net_rssi(void)
     wifi_ap_record_t ap = {0};
     return s_up && esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
+
+void base_net_set_power_save(bool enabled)
+{
+    const esp_err_t err = esp_wifi_set_ps(enabled ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
+    if (err != ESP_OK) ESP_LOGW(TAG, "power save %s: %s", enabled ? "on" : "off", esp_err_to_name(err));
+}

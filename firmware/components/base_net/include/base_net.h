@@ -19,3 +19,5 @@ esp_err_t base_net_reconfigure(const char *ssid, const char *password);
 bool base_net_time_valid(void);
 /* 当前信号强度（dBm）；未连接时返回 0。 */
 int base_net_rssi(void);
+/* 开关 Wi-Fi 省电（modem sleep）。省电时下行包要等 DTIM 才送达，大文件下载期间应关闭。 */
+void base_net_set_power_save(bool enabled);

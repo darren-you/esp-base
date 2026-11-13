@@ -4,7 +4,7 @@ ESP32-C3 与 ESP32 的业务基座固件：设备身份、Wi-Fi、TLS MQTT 管�
 
 - **管理**：一份 retained 状态文档，命令走 `cmd/<名称>` 并按 `request_id` 应答去重，遗嘱消息表示离线。
 - **OTA**：Server 经 MQTT 发布期望固件，设备用官方 `esp_https_ota` 通过 HTTPS 拉取，断线或断电后按 Range 续传；镜像用 RSA-3072 签名，新固件连上 Broker 才确认有效，否则由 bootloader 回滚。
-- **事件驱动**：一个控制任务阻塞在事件队列上，空闲时不轮询；Wi-Fi 使用默认省电模式。
+- **事件驱动**：一个控制任务阻塞在事件队列上，空闲时不轮询；Wi-Fi 使用默认省电模式，只在 OTA 下载期间关闭。
 
 支持的硬件：ESP32-C3、ESP32-D0WD-V3（芯片版本 v3.0 及以上），4 MiB Flash。不启用硬件 Secure Boot、Flash 加密，不写 eFuse。
 

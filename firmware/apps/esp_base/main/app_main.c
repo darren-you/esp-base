@@ -271,10 +271,13 @@ static void ota_apply(unsigned actions)
                  base_ota_phase_name((base_ota_phase_t)s_ota.record.phase), s_ota.written, s_ota.record.error);
     }
     if (actions & BASE_OTA_ACT_REBOOT) defer(DEFER_RESTART, message_id);
-    if ((actions & BASE_OTA_ACT_START) &&
-        !base_ota_worker_start(s_ota.desired.url, s_ota.record.sha256, s_ota.record.size,
-                               s_ota.record.offset, ota_worker_event))
-        ota_apply(base_ota_on_worker_done(&s_ota, BASE_OTA_RESULT_RETRY, "start"));
+    if (actions & BASE_OTA_ACT_START) {
+        if (base_ota_worker_start(s_ota.desired.url, s_ota.record.sha256, s_ota.record.size,
+                                  s_ota.record.offset, ota_worker_event))
+            base_net_set_power_save(false); /* 下载期间关闭省电：省电时每个下行包都要等 DTIM，经高延迟链路吞吐减半 */
+        else
+            ota_apply(base_ota_on_worker_done(&s_ota, BASE_OTA_RESULT_RETRY, "start"));
+    }
 }
 
 static void handle_desired(const char *payload, size_t length)
@@ -421,6 +424,7 @@ static void handle(const event_t *event)
     case EV_OTA_PROGRESS: ota_apply(base_ota_on_progress(&s_ota, (uint32_t)event->value)); break;
     case EV_OTA_VERIFYING: ota_apply(base_ota_on_verifying(&s_ota)); break;
     case EV_OTA_DONE:
+        base_net_set_power_save(true);
         ota_apply(base_ota_on_worker_done(&s_ota, (base_ota_result_t)event->value,
                                           event->error[0] ? event->error : NULL));
         break;
