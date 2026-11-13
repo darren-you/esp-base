@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware"
@@ -158,20 +159,46 @@ def nvs_image(provision, directory):
     return image
 
 
-def flash(args):
-    directory = build_dir(args.target)
-    if not signed_path(args.target).is_file():
+def build_files(target, app_only):
+    """本地构建：偏移取自 flash_args，app 换成签名镜像。"""
+    directory = build_dir(target)
+    if not signed_path(target).is_file():
         fail("没有签名镜像，先运行 sign")
-    # 偏移取自本次构建生成的 flash_args，app 换成签名镜像。
     files = []
     for line in (directory / "flash_args").read_text().splitlines()[1:]:
         offset, name = line.split()
-        if args.app_only and name != "esp_base.bin":
+        if app_only and name != "esp_base.bin":
             continue
-        files += [offset, signed_path(args.target) if name == "esp_base.bin" else directory / name]
+        files += [offset, signed_path(target) if name == "esp_base.bin" else directory / name]
+    return files, sha256(signed_path(target))
+
+
+def package_files(path, target, app_only, directory):
+    """正式包：偏移取自包内 manifest.json，每个文件先核对摘要再写入。"""
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        if manifest.get("kind") != "esp-base-firmware" or manifest.get("target") != target + "/esp_base":
+            fail("正式包不是 " + target + " 的 esp-base 固件")
+        files = []
+        for name, offset in sorted(manifest["flash"].items(), key=lambda item: int(item[1], 16)):
+            if app_only and name != "firmware.bin":
+                continue
+            data = archive.read(name)
+            if hashlib.sha256(data).hexdigest() != manifest["files"][name]["sha256"]:
+                fail("正式包内 " + name + " 的摘要与 manifest 不符")
+            (Path(directory) / name).write_bytes(data)
+            files += [offset, Path(directory) / name]
+    return files, manifest["files"]["firmware.bin"]["sha256"]
+
+
+def flash(args):
     esptool = [sys.executable, "-m", "esptool", "--chip", args.target, "--port", args.port, "--baud", str(args.baud)]
     with tempfile.TemporaryDirectory(prefix="esp-base-nvs-") as temporary:
         os.chmod(temporary, 0o700)
+        if args.package:
+            files, app_sha256 = package_files(args.package, args.target, args.app_only, temporary)
+        else:
+            files, app_sha256 = build_files(args.target, args.app_only)
         if args.provision:
             files += [hex(NVS_OFFSET), nvs_image(args.provision, temporary)]
         if args.erase:
@@ -179,7 +206,7 @@ def flash(args):
                 fail("整片擦除会清掉设备 UUID 和配置，必须同时给出 --provision")
             run([*esptool, "erase-flash"])
         run([*esptool, "write-flash", "--flash-mode", "dio", "--flash-size", "4MB", *files])
-    print(json.dumps({"target": args.target, "port": args.port, "app_sha256": sha256(signed_path(args.target)),
+    print(json.dumps({"target": args.target, "port": args.port, "app_sha256": app_sha256,
                       "erased": bool(args.erase), "provisioned": bool(args.provision)}, ensure_ascii=False))
 
 
@@ -258,6 +285,7 @@ def main():
     command = commands.add_parser("flash", help="经 USB 刷写签名固件，可同时写入出厂资料")
     command.add_argument("target", choices=TARGETS)
     command.add_argument("--port", required=True)
+    command.add_argument("--package", help="正式构建的 ZIP；缺省刷本地 build 与 sign 的结果")
     command.add_argument("--provision", help="仓外的出厂资料 JSON（设备 UUID、Wi-Fi、MQTT），写入 NVS 分区")
     command.add_argument("--erase", action="store_true", help="先整片擦除；必须同时给出 --provision")
     command.add_argument("--app-only", action="store_true", help="只写 app，不动 bootloader、分区表和 otadata")

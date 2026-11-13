@@ -51,7 +51,7 @@ python3 tools/esp_base.py sign <target> --key-file /absolute/path/signing-key.pe
 python3 tools/esp_base.py flash <target> --port /dev/cu.usbmodemXXXX --erase --provision /absolute/path/device.json
 ```
 
-以后有线更新固件用 `--app-only`，不动出厂资料。USB 转串口在 460800 下不稳时加 `--baud 230400`。刷完后串口日志会打印一行 `ESP_BASE_BOOT`，包含设备 UUID、版本、运行槽和固件 SHA-256。
+以后有线更新固件用 `--app-only`，不动出厂资料。USB 转串口在 460800 下不稳时加 `--baud 230400`。刷正式构建的 ZIP 时加 `--package <ZIP>`：文件和偏移都取自包内 `manifest.json`，写入前逐个核对摘要。刷完后串口日志会打印一行 `ESP_BASE_BOOT`，包含设备 UUID、版本、运行槽和固件 SHA-256。
 
 **5. 查看状态和下发命令**（需要 `python3 -m pip install 'paho-mqtt>=2.1'` 和一个有权限的 Broker 账户）：
 
