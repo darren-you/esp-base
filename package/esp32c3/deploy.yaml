@@ -1,0 +1,21 @@
+# Fast Deploy 发布配置：esp-base esp32c3 固件正式包。
+# Fast Deploy 在 mac-ci-1 分配构建号（firmware／esp-base，两种芯片共用一个计数器）、写出身份文件，
+# 再执行 tools/package_entry.py：构建、用 Profile 快照里的签名键签名、验签并封装成 ZIP。
+# 执行环境须已导出与 dependencies.lock 对应的官方 ESP-IDF（IDF_PATH 与工具链在 PATH 中）。
+kind: package
+project: esp-base-esp32c3-firmware
+
+package:
+  platform: firmware
+  id: esp-base
+  variant: esp32c3
+  architectures: [riscv32]
+  release: release.json
+  entry: tools/package_entry.py
+  artifact: esp-base-esp32c3.zip
+  identity_entry: build.json
+  inputs:
+    - [python3, tools/package_entry.py, inputs, esp32c3]
+  env:
+    ESP_BASE_SIGNING_KEY_ENV: "{profile}/esp-base/firmware/shared.prod.env:ESP_BASE_ESP32C3_SIGNING_KEY_PEM"
+    ESP_BASE_SIGNING_TRUST: release

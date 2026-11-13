@@ -61,6 +61,10 @@ python3 tools/esp_base.py control status --device <UUID> --uri mqtts://<Broker �
 python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --username ... --password-file ...
 ```
 
+## 正式包
+
+正式固件包由 Fast Deploy 的 package Job `esp-base-esp32-firmware`、`esp-base-esp32c3-firmware` 构建（声明见 `package/<芯片>/deploy.yaml`），在工作区根执行 `bash harness/scripts/workspace/fast-deploy.sh trigger --job esp-base-esp32c3-firmware --wait`。两种芯片共用构建号 scope `firmware / esp-base`。Job 在 mac-ci-1 写出本次身份文件，执行 `tools/package_entry.py`：用 Profile 快照中 `esp-base/firmware/shared.prod.env` 的对应签名键构建、签名、验签，封装成含 `manifest.json` 与 `build.json` 的 ZIP；Fast Deploy 再回读包内身份并留存制品。执行环境须已导出官方 ESP-IDF。上面第 4 步的 `--package` 刷写的就是这个 ZIP。
+
 ## 文档
 
 - [设备—云协议](docs/design/device-protocol.md)：主题、状态文档、命令和 OTA 合同；[样例](docs/design/device-protocol-samples.json)同时用于设备和 Server 的解码测试。

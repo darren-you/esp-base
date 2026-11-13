@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""正式构建入口，由 Fast Deploy Core 的 shared/package_run.py 调用：构建、签名、验签并封装成 ZIP。
+"""正式构建入口，由 Fast Deploy 的 package Job 调用：构建、签名、验签并封装成 ZIP。
 
 环境变量：
   ESP_BASE_SIGNING_KEY_FILE 或 ESP_BASE_SIGNING_KEY_ENV（FILE:VAR）  仓外的 RSA-3072 签名键
   ESP_BASE_SIGNING_TRUST    release 或 software-test；后者不得用于正式设备
-版本和构建号由 Core 分配，本入口不分配编号，也不连接设备。
+版本和构建号由 Fast Deploy 分配并写进 FAST_DEPLOY_IDENTITY_FILE，本入口不分配编号，也不连接设备。
 """
 import argparse
 import hashlib
@@ -42,7 +42,7 @@ def tool_version(name):
 
 
 def inputs(target):
-    """冻结进 Core 收据的输入：官方 SDK 提交、工具链、锁与配置的摘要、签名信任根。"""
+    """冻结进 Fast Deploy 输入摘要的内容：官方 SDK 提交、工具链、锁与配置的摘要、签名信任根。"""
     idf = esp_base.idf_path()
     key, trust = signing_arguments()
     compiler = ("riscv32" if target == "esp32c3" else "xtensa") + "-esp-elf-gcc"
@@ -58,17 +58,60 @@ def inputs(target):
     }
 
 
+def formal_identity():
+    """读取 Fast Deploy 写出的本次身份，核对平台、应用身份与目标架构。"""
+    path = os.environ.get("FAST_DEPLOY_IDENTITY_FILE", "")
+    if not path or not Path(path).is_absolute():
+        esp_base.fail("本入口只能由 Fast Deploy 的 package Job 调用（缺少 FAST_DEPLOY_IDENTITY_FILE）")
+    expected = json.loads(Path(path).read_bytes())
+    target = expected.get("variant")
+    if (target not in ARCHITECTURES or expected.get("platform") != "firmware" or expected.get("application_id") != "esp-base"
+            or expected.get("architecture") != ARCHITECTURES[target] or expected.get("local_validation") is not False
+            or type(expected.get("build_number")) is not int or expected["build_number"] < 1):
+        esp_base.fail("本次身份不是 esp-base 固件的正式身份")
+    return target, expected
+
+
+def directory_files(directory):
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            esp_base.fail("固件包目录只能包含普通文件")
+        if path.is_file():
+            files[path.relative_to(directory).as_posix()] = path.read_bytes()
+    return files
+
+
+def package_directory(stage, expected, artifact):
+    """把已签名并核对的固件目录封装成正式 ZIP；根 build.json 换成正式身份，不覆盖已有不同字节。"""
+    import tempfile
+    import zipfile
+    files = directory_files(stage)
+    files["build.json"] = encoded(expected)
+    with tempfile.TemporaryDirectory(prefix=".package-", dir=artifact.parent) as temporary:
+        candidate = Path(temporary) / "package.zip"
+        with zipfile.ZipFile(candidate, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for name, data in sorted(files.items()):
+                item = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+                item.create_system = 3
+                item.external_attr = 0o100644 << 16
+                item.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(item, data)
+        with zipfile.ZipFile(candidate) as archive:
+            if archive.namelist() != sorted(files) or any(archive.read(name) != data for name, data in files.items()):
+                esp_base.fail("最终固件包与封装输入不一致")
+        try:
+            os.link(candidate, artifact)
+        except FileExistsError:
+            if artifact.is_symlink() or artifact.read_bytes() != candidate.read_bytes():
+                esp_base.fail("同版本构建号已有不同固件包，拒绝覆盖")
+    return {"schema_version": 1, "build": expected, "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "artifact_bytes": artifact.stat().st_size}
+
+
 def package(artifact):
-    core = Path(os.environ.get("FAST_DEPLOY_PACKAGE_CORE_ROOT", ""))
     run_directory = artifact.parent
-    request = json.loads((run_directory / "package-run.json").read_text())
-    target = request["manifest"]["variant"]
-    if not core.is_absolute() or target not in ARCHITECTURES:
-        esp_base.fail("本入口只能由 Core 的 package_run.py 调用")
-    identity = [sys.executable, core / "shared/package_identity.py", "--project-root", esp_base.ROOT,
-                "--platform", "firmware", "--application-id", "esp-base",
-                "--architecture", ARCHITECTURES[target], "--variant", target]
-    expected = json.loads(subprocess.check_output([str(part) for part in [*identity[:2], "resolve", *identity[2:]]]))
+    target, expected = formal_identity()
     key, trust = signing_arguments()
     frozen = inputs(target)
 
@@ -81,7 +124,7 @@ def package(artifact):
         esp_base.fail("测试开关 ESP_BASE_TEST_NO_BROKER 不能进入正式包")
     version = f'{expected["version"]}+{expected["build_number"]}'
     if version.encode() + b"\0" not in signed.read_bytes()[:1024]:
-        esp_base.fail("固件内的版本与 Core 分配的不一致")
+        esp_base.fail("固件内的版本与 Fast Deploy 分配的不一致")
     if inputs(target) != frozen:
         esp_base.fail("构建期间输入发生变化")
 
@@ -109,9 +152,10 @@ def package(artifact):
     (stage / "build.json").write_bytes(encoded(local))
     for path in stage.iterdir():
         path.chmod(0o644)
-    report = subprocess.check_output([str(part) for part in [
-        *identity[:2], "package-directory", *identity[2:], "--directory", stage, "--artifact", artifact]])
-    return {"artifact": json.loads(report), "firmware_sha256": manifest["files"]["firmware.bin"]["sha256"],
+    if formal_identity() != (target, expected):
+        esp_base.fail("构建期间本次身份发生变化")
+    report = package_directory(stage, expected, artifact)
+    return {"artifact": report, "firmware_sha256": manifest["files"]["firmware.bin"]["sha256"],
             "version": version, "target": manifest["target"], "signing_trust": trust}
 
 
@@ -121,7 +165,7 @@ def main():
     elif len(sys.argv) == 2:
         sys.stdout.buffer.write(encoded(package(Path(sys.argv[1]))))
     else:
-        esp_base.fail("用法：package_entry.py inputs <target>，或由 Core 传入 ZIP 路径")
+        esp_base.fail("用法：package_entry.py inputs <target>，或由 Fast Deploy 传入 ZIP 路径")
 
 
 if __name__ == "__main__":
