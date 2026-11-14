@@ -97,6 +97,15 @@ def signing_key(args):
         yield path
 
 
+def require_rsa3072(key):
+    """两目标的 sdkconfig 都是 RSA-3072 签名方案（Secure Boot V2）；其他键签出的镜像设备不会接受。"""
+    public = subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout"], check=True, capture_output=True).stdout
+    text = subprocess.run(["openssl", "pkey", "-pubin", "-noout", "-text"], input=public,
+                          check=True, capture_output=True).stdout.decode()
+    if not text.startswith("Public-Key: (3072 bit)") or "Modulus:" not in text:
+        fail("签名键必须是 RSA-3072；两目标共用同一把生产键")
+
+
 def signed_path(target):
     return build_dir(target) / "esp_base-signed.bin"
 
@@ -116,6 +125,7 @@ def sign_firmware(target, args):
     if not unsigned.is_file():
         fail("没有构建产物，先运行 build")
     with signing_key(args) as key:
+        require_rsa3072(key)
         run([sys.executable, "-m", "espsecure", "sign-data", "--version", "2", "--keyfile", key,
              "--output", signed_path(target), unsigned], stdout=subprocess.DEVNULL)
         verify_signed(target, key)
