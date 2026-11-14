@@ -43,10 +43,9 @@ def tool_version(name):
     return subprocess.check_output([path, "--version"], text=True).splitlines()[0]
 
 
-def inputs(target):
-    """冻结进 Fast Deploy 输入摘要的内容：官方 SDK 提交、工具链、锁与配置的摘要、签名信任根。"""
+def toolchain(target):
+    """Fast Deploy 冻结的工具链输入：官方 SDK 提交、工具版本、锁与配置的摘要。不含签名键，执行时也不提供签名键。"""
     idf = esp_base.idf_path()
-    key, trust = signing_arguments()
     compiler = ("riscv32" if target == "esp32c3" else "xtensa") + "-esp-elf-gcc"
     return {
         "schema_version": 1, "target": target,
@@ -56,8 +55,14 @@ def inputs(target):
         "tools": {name: tool_version(name) for name in ("cmake", "ninja", compiler)},
         "sources": {name.format(target=target): esp_base.sha256(esp_base.FIRMWARE / name.format(target=target))
                     for name in SOURCES},
-        "signing": {"scheme": "rsa-3072-v2", "trust": trust, "public_key_sha256": esp_base.public_key_sha256(key)},
     }
+
+
+def inputs(target):
+    """写进包内 manifest 的输入：工具链加签名信任根。"""
+    key, trust = signing_arguments()
+    return {**toolchain(target),
+            "signing": {"scheme": "rsa-3072-v2", "trust": trust, "public_key_sha256": esp_base.public_key_sha256(key)}}
 
 
 def formal_identity():
@@ -182,7 +187,7 @@ def ensure_idf_environment():
 def main():
     ensure_idf_environment()
     if len(sys.argv) == 3 and sys.argv[1] == "inputs":
-        sys.stdout.buffer.write(encoded(inputs(sys.argv[2])))
+        sys.stdout.buffer.write(encoded(toolchain(sys.argv[2])))
     elif len(sys.argv) == 2:
         sys.stdout.buffer.write(encoded(package(Path(sys.argv[1]))))
     else:
