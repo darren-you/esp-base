@@ -17,5 +17,5 @@ package:
   inputs:
     - [python3, tools/package_entry.py, inputs, esp32c3]
   env:
-    ESP_BASE_SIGNING_KEY_ENV: "{profile}/esp-base/firmware/shared.prod.env:ESP_BASE_ESP32C3_SIGNING_KEY_PEM"
+    ESP_BASE_SIGNING_KEY_ENV: "{profile}/esp-base/firmware/shared.prod.env:ESP_BASE_SIGNING_KEY_PEM"
     ESP_BASE_SIGNING_TRUST: release

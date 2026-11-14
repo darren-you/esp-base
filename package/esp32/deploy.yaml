@@ -18,5 +18,5 @@ package:
     - [python3, tools/package_entry.py, inputs, esp32]
   env:
     # 两目标共用同一把 RSA-3072 生产键（darren-space#35 DE3），ESP32 不再使用 ECDSA。
-    ESP_BASE_SIGNING_KEY_ENV: "{profile}/esp-base/firmware/shared.prod.env:ESP_BASE_ESP32C3_SIGNING_KEY_PEM"
+    ESP_BASE_SIGNING_KEY_ENV: "{profile}/esp-base/firmware/shared.prod.env:ESP_BASE_SIGNING_KEY_PEM"
     ESP_BASE_SIGNING_TRUST: release
