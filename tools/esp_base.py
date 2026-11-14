@@ -102,7 +102,7 @@ def require_rsa3072(key):
     public = subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout"], check=True, capture_output=True).stdout
     text = subprocess.run(["openssl", "pkey", "-pubin", "-noout", "-text"], input=public,
                           check=True, capture_output=True).stdout.decode()
-    if not text.startswith("Public-Key: (3072 bit)") or "Modulus:" not in text:
+    if not re.search(r"Public-Key: \(3072 bit\)", text.splitlines()[0]) or "Modulus:" not in text:
         fail("签名键必须是 RSA-3072；两目标共用同一把生产键")
 
 

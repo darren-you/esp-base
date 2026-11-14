@@ -18,6 +18,8 @@ import sys
 import esp_base
 
 ARCHITECTURES = {"esp32c3": "riscv32", "esp32": "xtensa"}
+# 与 dependencies.lock 对应的官方 ESP-IDF 发行版；构建宿主上的位置可用 ESP_BASE_IDF_PATH 覆盖。
+IDF_DEFAULT = Path.home() / ".espressif/frameworks/esp-idf-v6.1"
 SOURCES = ("sdkconfig.defaults", "sdkconfig.defaults.{target}", "dependencies.lock.{target}",
            "partitions/partitions.csv")
 
@@ -159,7 +161,26 @@ def package(artifact):
             "version": version, "target": manifest["target"], "signing_trust": trust}
 
 
+def ensure_idf_environment():
+    """Fast Deploy 不导出 IDF：用官方 export.sh 取得环境，再以 IDF 的 Python 重新执行本入口。
+
+    idf.py 与 espsecure 依赖 IDF 自己的 Python 环境，所以不能只补 PATH。
+    """
+    venv = os.environ.get("IDF_PYTHON_ENV_PATH")
+    if os.environ.get("IDF_PATH") and venv and Path(sys.prefix).resolve() == Path(venv).resolve():
+        return
+    idf = Path(os.environ.get("ESP_BASE_IDF_PATH") or IDF_DEFAULT)
+    if not (idf / "export.sh").is_file():
+        esp_base.fail(f"构建宿主缺少官方 ESP-IDF：{idf}")
+    dump = subprocess.run(["bash", "-c", 'source "$1/export.sh" >/dev/null 2>&1 && env -0', "bash", str(idf)],
+                          check=True, capture_output=True).stdout.decode()
+    environment = dict(item.split("=", 1) for item in dump.split("\0") if "=" in item)
+    python = Path(environment["IDF_PYTHON_ENV_PATH"]) / "bin" / "python"
+    os.execve(python, [str(python), str(Path(__file__).resolve()), *sys.argv[1:]], environment)
+
+
 def main():
+    ensure_idf_environment()
     if len(sys.argv) == 3 and sys.argv[1] == "inputs":
         sys.stdout.buffer.write(encoded(inputs(sys.argv[2])))
     elif len(sys.argv) == 2:
