@@ -1,7 +1,8 @@
 # Fast Deploy 发布配置：esp-base esp32c3 固件正式包。
 # Fast Deploy 在 mac-ci-1 分配构建号（firmware／esp-base，两种芯片共用一个计数器）、写出身份文件，
 # 再执行 tools/package_entry.py：构建、用 Profile 快照里的签名键签名、验签并封装成 ZIP。
-# 执行环境须已导出与 dependencies.lock 对应的官方 ESP-IDF（IDF_PATH 与工具链在 PATH 中）。
+# 构建宿主须装有与 dependencies.lock 对应的官方 ESP-IDF（默认 ~/.espressif/frameworks/esp-idf-v6.1，可用 ESP_BASE_IDF_PATH 覆盖）；
+# 入口未检测到 IDF 环境时自行 source export.sh，并以 IDF 的 Python 重新执行。
 kind: package
 project: esp-base-esp32c3-firmware
 

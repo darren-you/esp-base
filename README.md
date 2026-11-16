@@ -63,7 +63,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 ## 正式包
 
-正式固件包由 Fast Deploy 的 package Job `esp-base-esp32-firmware`、`esp-base-esp32c3-firmware` 构建（声明见 `package/<芯片>/deploy.yaml`），在工作区根执行 `bash harness/scripts/workspace/fast-deploy.sh trigger --job esp-base-esp32c3-firmware --wait`。两种芯片共用构建号 scope `firmware / esp-base`。Job 在 mac-ci-1 写出本次身份文件，执行 `tools/package_entry.py`：用 Profile 快照中 `esp-base/firmware/shared.prod.env` 的对应签名键构建、签名、验签，封装成含 `manifest.json` 与 `build.json` 的 ZIP；Fast Deploy 再回读包内身份并留存制品。执行环境须已导出官方 ESP-IDF。上面第 4 步的 `--package` 刷写的就是这个 ZIP。
+正式固件包由 Fast Deploy 的 package Job `esp-base-esp32-firmware`、`esp-base-esp32c3-firmware` 构建（声明见 `package/<芯片>/deploy.yaml`），在工作区根执行 `bash harness/scripts/workspace/fast-deploy.sh trigger --job esp-base-esp32c3-firmware --wait`。两种芯片共用构建号 scope `firmware / esp-base`。Job 在 mac-ci-1 写出本次身份文件，执行 `tools/package_entry.py`：构建，用 Profile 快照中 `esp-base/firmware/shared.prod.env` 的 `ESP_BASE_SIGNING_KEY_PEM`（两种芯片共用这一把 RSA-3072 键）签名并验签，再封装成含 `manifest.json` 与 `build.json` 的 ZIP；Fast Deploy 再回读包内身份并留存制品。Fast Deploy 不导出 ESP-IDF，入口会自己 source 官方 `export.sh`，再用 IDF 的 Python 重新执行；IDF 默认在构建宿主的 `~/.espressif/frameworks/esp-idf-v6.1`，可用 `ESP_BASE_IDF_PATH` 指定别处。上面第 4 步的 `--package` 刷写的就是这个 ZIP。
 
 ## 文档
 
