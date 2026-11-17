@@ -129,12 +129,12 @@ static void worker(void *argument)
         done(BASE_OTA_RESULT_RETRY, result == ESP_ERR_OTA_ROLLBACK_INVALID_STATE ? "not_confirmed" : "connect");
     }
     uint32_t reported = s_job.offset, last = s_job.offset;
-    int64_t progressed_us = esp_timer_get_time();
     for (;;) {
         if (atomic_load(&s_cancel)) {
             esp_https_ota_abort(handle);
             done(BASE_OTA_RESULT_CANCELED, NULL);
         }
+        const int64_t started_us = esp_timer_get_time();
         result = esp_https_ota_perform(handle);
         if (result != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
         const uint32_t written = (uint32_t)esp_https_ota_get_image_len_read(handle);
@@ -146,17 +146,15 @@ static void worker(void *argument)
             reported = written;
             s_job.callback(BASE_OTA_WORKER_PROGRESS, written, NULL);
         }
-        /* esp_https_ota 把读超时当作「继续等」，TCP keepalive 又会被对端的纯 ACK 应答，所以一条
-         * 不再送数据的连接不会自己结束。这里按时间判断：停滞就放弃，换一条新连接续传。 */
-        const int64_t now_us = esp_timer_get_time();
-        if (written != last) {
-            last = written;
-            progressed_us = now_us;
-        } else if (now_us - progressed_us >= (int64_t)BASE_OTA_STALL_MS * 1000) {
+        /* esp_https_ota 把读超时当作「继续等」，TCP keepalive 又会被对端的纯 ACK 应答，所以一条不再送
+         * 数据的连接不会自己结束。这一次调用没有带回新数据，却阻塞了半个读超时以上，只可能是读等满了
+         * 超时：放弃这条连接，换一条新的续传。不和读超时比同一个时长，它会因节拍取整提前几毫秒返回。 */
+        if (written == last && esp_timer_get_time() - started_us >= (int64_t)BASE_OTA_STALL_MS * 500) {
             ESP_LOGW(TAG, "no data for %u ms at offset %u; reconnecting", (unsigned)BASE_OTA_STALL_MS, (unsigned)written);
             esp_https_ota_abort(handle);
             done(BASE_OTA_RESULT_RETRY, "stalled");
         }
+        last = written;
     }
     if (result != ESP_OK || !esp_https_ota_is_complete_data_received(handle)) {
         const bool invalid = result == ESP_ERR_OTA_VALIDATE_FAILED;
