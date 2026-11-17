@@ -76,7 +76,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 bash firmware/tests/run_host_tests.sh   # host 测试：协议编解码与 OTA 状态机，需先构建过一次
 ```
 
-验证分三层：host 测试、两块板冒烟（刷入后联网、收发命令、完成一次 OTA）、24 小时长稳。host 测试通过不代表实板可用。
+验证分三层：host 测试、两块板冒烟（刷入后联网、收发命令、完成一次 OTA）、24 小时长稳。host 测试通过不代表实板可用。长稳用 esp-tool 的 [`server/scripts/ota_soak.py`](https://github.com/darren-you/esp-tool/blob/1.0.0/server/scripts/ota_soak.py)，在 Server 所在主机上运行：两块板在两个已登记的版本之间来回升级，记录每轮结果、非预期重启和最小空闲堆。
 
 依赖只有官方 ESP-IDF 和组件注册表中的 [espressif/mqtt](https://components.espressif.com/components/espressif/mqtt)、[espressif/cjson](https://components.espressif.com/components/espressif/cjson)，版本由 `firmware/dependencies.lock.<target>` 锁定。
 
