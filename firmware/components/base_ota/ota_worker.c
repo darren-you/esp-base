@@ -16,11 +16,14 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include "psa/crypto.h"
 #include "sdkconfig.h"
 
 #define WORKER_STACK_BYTES 8192
 #define HASH_CHUNK_BYTES 4096
+#define CONNECT_TIMEOUT_MS 20000 /* 连接、握手和取响应头 */
+#define READ_WAIT_MS 5000        /* 下载中单次等数据的上限；连续等满 BASE_OTA_STALL_MS 仍无数据即停滞 */
 
 static const char *TAG = "base_ota";
 
@@ -33,6 +36,7 @@ static struct {
     int http_status;
 } s_job;
 static atomic_bool s_running, s_cancel;
+static esp_http_client_handle_t s_client;
 
 static void to_hex(const uint8_t digest[32], char out[BASE_SHA256_HEX_BYTES])
 {
@@ -88,6 +92,12 @@ static esp_err_t http_event(esp_http_client_event_t *event)
     return ESP_OK;
 }
 
+static esp_err_t http_client_ready(esp_http_client_handle_t client)
+{
+    s_client = client;
+    return ESP_OK;
+}
+
 static void done(base_ota_result_t result, const char *error) __attribute__((noreturn));
 static void done(base_ota_result_t result, const char *error)
 {
@@ -105,7 +115,7 @@ static void worker(void *argument)
     const esp_http_client_config_t http = {
         .url = s_job.url,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = BASE_OTA_STALL_MS, /* 连接、握手和每次等待数据的上限 */
+        .timeout_ms = CONNECT_TIMEOUT_MS,
         .keep_alive_enable = true,
         .buffer_size = 4096,
         .buffer_size_tx = 1024,
@@ -113,6 +123,7 @@ static void worker(void *argument)
     };
     const esp_https_ota_config_t config = {
         .http_config = &http,
+        .http_client_init_cb = http_client_ready,
         .ota_resumption = true,
         .ota_image_bytes_written = s_job.offset,
     };
@@ -128,7 +139,12 @@ static void worker(void *argument)
         }
         done(BASE_OTA_RESULT_RETRY, result == ESP_ERR_OTA_ROLLBACK_INVALID_STATE ? "not_confirmed" : "connect");
     }
-    uint32_t reported = s_job.offset, last = s_job.offset;
+    /* 下载阶段把单次等待缩短：HTTP 层的等待和套接字自身的接收超时都要改，后者管 TLS 记录读到一半的情况。 */
+    esp_http_client_set_timeout_ms(s_client, READ_WAIT_MS);
+    const struct timeval wait = {.tv_sec = READ_WAIT_MS / 1000};
+    const int socket_fd = esp_http_client_get_socket(s_client);
+    if (socket_fd >= 0) setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+    uint32_t reported = s_job.offset, last = s_job.offset, quiet_reads = 0;
     for (;;) {
         if (atomic_load(&s_cancel)) {
             esp_https_ota_abort(handle);
@@ -147,14 +163,18 @@ static void worker(void *argument)
             s_job.callback(BASE_OTA_WORKER_PROGRESS, written, NULL);
         }
         /* esp_https_ota 把读超时当作「继续等」，TCP keepalive 又会被对端的纯 ACK 应答，所以一条不再送
-         * 数据的连接不会自己结束。这一次调用没有带回新数据，却阻塞了半个读超时以上，只可能是读等满了
-         * 超时：放弃这条连接，换一条新的续传。不和读超时比同一个时长，它会因节拍取整提前几毫秒返回。 */
-        if (written == last && esp_timer_get_time() - started_us >= (int64_t)BASE_OTA_STALL_MS * 500) {
+         * 数据的连接不会自己结束。一次调用没有带回新数据、却阻塞了半个等待时长以上，就是一次等满了的
+         * 空读，说明这段时间一个字节也没到。连续的空读累计到 BASE_OTA_STALL_MS：放弃这条连接，换一条
+         * 新的续传。带回数据的调用会把计数清零，所以慢但还在流动的连接不会被放弃。 */
+        if (written != last) {
+            last = written;
+            quiet_reads = 0;
+        } else if (esp_timer_get_time() - started_us >= (int64_t)READ_WAIT_MS * 500 &&
+                   ++quiet_reads * READ_WAIT_MS >= BASE_OTA_STALL_MS) {
             ESP_LOGW(TAG, "no data for %u ms at offset %u; reconnecting", (unsigned)BASE_OTA_STALL_MS, (unsigned)written);
             esp_https_ota_abort(handle);
             done(BASE_OTA_RESULT_RETRY, "stalled");
         }
-        last = written;
     }
     if (result != ESP_OK || !esp_https_ota_is_complete_data_received(handle)) {
         const bool invalid = result == ESP_ERR_OTA_VALIDATE_FAILED;
