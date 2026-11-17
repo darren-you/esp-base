@@ -255,10 +255,13 @@ unsigned base_ota_on_worker_done(base_ota_t *ota, base_ota_result_t result, cons
         finish(ota, BASE_OTA_REJECTED, error ? error : "rejected");
         return BASE_OTA_ACT_PERSIST | BASE_OTA_ACT_PUBLISH;
     }
-    /* 网络类错误或被无故中止：退避后从已落盘偏移续传。 */
+    /* 网络类错误、停滞或被无故中止：退避后续传。已报告的字节都在 Flash 里，续传点取其所在扇区的起点；
+     * 整个镜像都已写入时保持原续传点，重新取回最后一段再校验。 */
     ota->record.phase = BASE_OTA_DOWNLOADING;
     set_error(&ota->record, error ? error : "transport");
-    if (ota->written > ota->attempt_start) ota->fail_streak = 1; /* 有进展：退避回到最短 */
+    const uint32_t resumable = ota->written - ota->written % BASE_OTA_SECTOR_BYTES;
+    if (resumable > ota->record.offset && resumable < ota->record.size) ota->record.offset = resumable;
+    if (ota->record.offset > ota->attempt_start) ota->fail_streak = 1; /* 续传点前进了：退避回到最短 */
     else if (ota->fail_streak < UINT8_MAX) ++ota->fail_streak;
     ota->written = ota->published = ota->record.offset;
     ota->retry_pending = true;

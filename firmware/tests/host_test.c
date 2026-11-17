@@ -76,7 +76,7 @@ static void test_dedupe_and_business(void)
     CHECK(!strcmp(base_business_apply(&business, "erase", 0), "invalid_args"));
 }
 
-/* 新任务：开始下载；偏移每 64 KiB 落盘；每 5% 发布；完成后记录 rebooting 并重启。 */
+/* 新任务：开始下载；下载途中偏移每 64 KiB 落盘；每 5% 发布；完成后记录 rebooting 并重启。 */
 static void test_ota_happy_path(void)
 {
     base_ota_t ota;
@@ -173,6 +173,46 @@ static void test_ota_retry_backoff(void)
     unsigned actions = base_ota_on_desired(&ota, &d);
     CHECK((actions & BASE_OTA_ACT_START) && (actions & BASE_OTA_ACT_STOP_TIMER));
     CHECK(base_ota_on_retry_timer(&ota) == 0);
+}
+
+/* 断线或停滞：续传点精确到扇区；只有续传点前进才算有进展；整个镜像写完后的失败不把续传点推到末尾。 */
+static void test_ota_resume_after_stall(void)
+{
+    base_ota_t ota;
+    base_ota_boot(&ota, NULL, &RUNNING, SLOT, true);
+    base_ota_desired_t d = desired(JOB_A, SHA_NEW);
+    base_ota_on_desired(&ota, &d);
+    base_ota_on_progress(&ota, 65536 + 100);
+    CHECK(ota.record.offset == 65536);
+    CHECK(base_ota_on_progress(&ota, 65536 + 3 * 4096 + 123) == 0); /* 途中不为扇区落盘 */
+    unsigned actions = base_ota_on_worker_done(&ota, BASE_OTA_RESULT_RETRY, "stalled");
+    CHECK(actions == (BASE_OTA_ACT_PERSIST | BASE_OTA_ACT_PUBLISH | BASE_OTA_ACT_RETRY_TIMER));
+    CHECK(ota.record.offset == 65536 + 3 * 4096 && !strcmp(ota.record.error, "stalled"));
+    CHECK(ota.written == ota.record.offset && base_ota_retry_delay_ms(&ota, 0) == BASE_OTA_RETRY_MIN_MS);
+    CHECK(base_ota_on_retry_timer(&ota) & BASE_OTA_ACT_START);
+    CHECK(ota.record.attempt == 2 && ota.attempt_start == 65536 + 3 * 4096);
+
+    /* 这一次没写满一个扇区就停了：续传点不动，记为无进展，退避开始翻倍。 */
+    base_ota_on_progress(&ota, 65536 + 3 * 4096 + 4095);
+    base_ota_on_worker_done(&ota, BASE_OTA_RESULT_RETRY, "stalled");
+    CHECK(ota.record.offset == 65536 + 3 * 4096 && base_ota_retry_delay_ms(&ota, 0) == 2 * BASE_OTA_RETRY_MIN_MS);
+    CHECK(base_ota_on_retry_timer(&ota) & BASE_OTA_ACT_START);
+    base_ota_on_worker_done(&ota, BASE_OTA_RESULT_RETRY, "connect");
+    CHECK(base_ota_retry_delay_ms(&ota, 0) == 4 * BASE_OTA_RETRY_MIN_MS);
+    CHECK(base_ota_on_retry_timer(&ota) & BASE_OTA_ACT_START);
+
+    /* 断电后从落盘的续传点继续，它可以不在 64 KiB 边界上。 */
+    base_ota_record_t stored = ota.record;
+    CHECK(base_ota_boot(&ota, &stored, &RUNNING, SLOT, true) == 0);
+    base_ota_on_confirmed(&ota);
+    CHECK((base_ota_on_desired(&ota, &d) & BASE_OTA_ACT_START) && ota.written == 65536 + 3 * 4096);
+
+    /* 整个镜像已写入但读回失败：保持原续传点，下次重新取回最后一段。 */
+    base_ota_on_progress(&ota, SIZE);
+    const uint32_t durable = ota.record.offset;
+    CHECK(durable < SIZE && durable % 65536 == 0);
+    base_ota_on_worker_done(&ota, BASE_OTA_RESULT_RETRY, "flash_read");
+    CHECK(ota.record.offset == durable && ota.written == durable);
 }
 
 /* 拒绝：target 不符、超出槽容量、字段无效、下载任务判定不可恢复。设备不重启。 */
@@ -401,6 +441,7 @@ int main(int argc, char **argv)
     test_ota_already_running();
     test_ota_resume_after_power_loss();
     test_ota_retry_backoff();
+    test_ota_resume_after_stall();
     test_ota_reject();
     test_ota_rollback_count();
     test_ota_cancel_and_supersede();

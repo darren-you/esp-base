@@ -89,7 +89,7 @@ static void ota_worker_event(base_ota_worker_event_t event, uint32_t value, cons
     event_t posted = {.value = (int32_t)value};
     if (event == BASE_OTA_WORKER_PROGRESS) {
         posted.kind = EV_OTA_PROGRESS;
-        post(&posted, 0); /* 队列满时丢弃进度，下一个 64 KiB 边界会再报 */
+        post(&posted, 0); /* 队列满时丢弃进度，下一个扇区会再报 */
         return;
     }
     posted.kind = event == BASE_OTA_WORKER_VERIFYING ? EV_OTA_VERIFYING : EV_OTA_DONE;

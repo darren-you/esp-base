@@ -68,8 +68,9 @@ Server 把「这台设备应运行哪个固件」发布为 retained 的 `ota/des
 设备规则：
 
 - `sha256` 等于当前运行固件：回报 `succeeded`，不下载。
-- 下载用 HTTP Range 从已写偏移继续；偏移每 64 KiB 存一次 NVS，断线或断电后都能续传。
-- 网络类错误一律退避后重试（5 秒起，每次翻倍，上限 5 分钟，带抖动；有进展就回到 5 秒），不设总期限。任务期限由 Server 判定，到期后 Server 发布空载荷取消。
+- 下载用 HTTP Range 从续传点继续。下载途中续传点每 64 KiB 存一次 NVS，断电后从这里继续；断线或停滞后从已写入的最后一个 4 KiB 扇区起点继续。
+- 连续 20 秒收不到数据视为停滞（`error` 为 `stalled`），设备主动断开，不等这条连接自己恢复。
+- 网络类错误和停滞一律退避后重试（5 秒起，每次翻倍，上限 5 分钟，带抖动；续传点前进了就回到 5 秒），不设总期限。任务期限由 Server 判定，到期后 Server 发布空载荷取消。
 - 不可恢复的错误立即 `rejected`，设备不重启：`target_mismatch`、`image_too_large`、`invalid_desired`、`invalid_url`、`size_mismatch`、`sha256_mismatch`、`image_invalid`（镜像结构、芯片型号或签名不通过）、`http_<4xx>`。
 - 全部字节写入后，先读回 Flash 核对整镜像 SHA-256，再由 ESP-IDF 验签，都通过才切换启动槽并重启。
 - 新固件 300 秒内连上 Broker 才确认有效并回报 `succeeded`；否则 bootloader 回滚，旧固件重新下载。同一任务累计回滚 3 次记为 `failed`，`error` 为 `rollback`。

@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "psa/crypto.h"
@@ -20,7 +21,6 @@
 
 #define WORKER_STACK_BYTES 8192
 #define HASH_CHUNK_BYTES 4096
-#define SECTOR_BYTES 4096u
 
 static const char *TAG = "base_ota";
 
@@ -70,7 +70,7 @@ bool base_ota_running_firmware(base_fw_t *out, uint32_t *slot_bytes, bool *pendi
     esp_image_metadata_t metadata = {0};
     if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &position, &metadata) != ESP_OK) return false;
     /* signed bin = 镜像补齐到 4 KiB，再加一个扇区的签名块；image_len 已含签名块。 */
-    const uint32_t signed_len = (metadata.image_len + SECTOR_BYTES - 1) & ~(SECTOR_BYTES - 1);
+    const uint32_t signed_len = (metadata.image_len + BASE_OTA_SECTOR_BYTES - 1) & ~(BASE_OTA_SECTOR_BYTES - 1);
     if (signed_len > running->size || !partition_sha256(running, signed_len, out->sha256)) return false;
     snprintf(out->version, sizeof out->version, "%s", esp_app_get_description()->version);
     snprintf(out->target, sizeof out->target, "%s/%s", CONFIG_IDF_TARGET, esp_app_get_description()->project_name);
@@ -105,7 +105,7 @@ static void worker(void *argument)
     const esp_http_client_config_t http = {
         .url = s_job.url,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 20000,
+        .timeout_ms = BASE_OTA_STALL_MS, /* 连接、握手和每次等待数据的上限 */
         .keep_alive_enable = true,
         .buffer_size = 4096,
         .buffer_size_tx = 1024,
@@ -128,7 +128,8 @@ static void worker(void *argument)
         }
         done(BASE_OTA_RESULT_RETRY, result == ESP_ERR_OTA_ROLLBACK_INVALID_STATE ? "not_confirmed" : "connect");
     }
-    uint32_t reported = s_job.offset;
+    uint32_t reported = s_job.offset, last = s_job.offset;
+    int64_t progressed_us = esp_timer_get_time();
     for (;;) {
         if (atomic_load(&s_cancel)) {
             esp_https_ota_abort(handle);
@@ -141,9 +142,20 @@ static void worker(void *argument)
             esp_https_ota_abort(handle);
             done(BASE_OTA_RESULT_REJECT, "size_mismatch");
         }
-        if (written / BASE_OTA_PERSIST_STEP_BYTES != reported / BASE_OTA_PERSIST_STEP_BYTES) {
+        if (written / BASE_OTA_SECTOR_BYTES != reported / BASE_OTA_SECTOR_BYTES) {
             reported = written;
             s_job.callback(BASE_OTA_WORKER_PROGRESS, written, NULL);
+        }
+        /* esp_https_ota 把读超时当作「继续等」，TCP keepalive 又会被对端的纯 ACK 应答，所以一条
+         * 不再送数据的连接不会自己结束。这里按时间判断：停滞就放弃，换一条新连接续传。 */
+        const int64_t now_us = esp_timer_get_time();
+        if (written != last) {
+            last = written;
+            progressed_us = now_us;
+        } else if (now_us - progressed_us >= (int64_t)BASE_OTA_STALL_MS * 1000) {
+            ESP_LOGW(TAG, "no data for %u ms at offset %u; reconnecting", (unsigned)BASE_OTA_STALL_MS, (unsigned)written);
+            esp_https_ota_abort(handle);
+            done(BASE_OTA_RESULT_RETRY, "stalled");
         }
     }
     if (result != ESP_OK || !esp_https_ota_is_complete_data_received(handle)) {

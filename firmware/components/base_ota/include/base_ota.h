@@ -8,7 +8,9 @@
 
 #include "base_protocol.h"
 
-#define BASE_OTA_PERSIST_STEP_BYTES 65536u /* 偏移每 64 KiB 存一次 NVS */
+#define BASE_OTA_PERSIST_STEP_BYTES 65536u /* 下载途中偏移每 64 KiB 存一次 NVS，断电后从这里续传 */
+#define BASE_OTA_SECTOR_BYTES 4096u        /* 断线或停滞后的续传点精确到 Flash 扇区 */
+#define BASE_OTA_STALL_MS 20000u           /* 连续这么久收不到数据：放弃这条连接，退避后续传 */
 #define BASE_OTA_MAX_ROLLBACKS 3u
 #define BASE_OTA_RETRY_MIN_MS 5000u
 #define BASE_OTA_RETRY_MAX_MS 300000u
@@ -30,7 +32,7 @@ typedef struct {
     uint8_t attempt;   /* 本任务已开始的下载次数 */
     uint8_t rollbacks; /* 本任务因自检失败回滚的次数 */
     uint32_t size;
-    uint32_t offset; /* 已写入备用槽且已落盘的偏移 */
+    uint32_t offset; /* 续传点：不超过已写入备用槽的字节数，按扇区对齐 */
     char job[BASE_UUID_BYTES];
     char sha256[BASE_SHA256_HEX_BYTES];
     char error[BASE_ERROR_BYTES];
@@ -46,7 +48,7 @@ typedef struct {
 
 typedef enum {
     BASE_OTA_RESULT_SWITCHED, /* 镜像校验通过，启动槽已切换 */
-    BASE_OTA_RESULT_RETRY,    /* 网络类错误：退避后续传 */
+    BASE_OTA_RESULT_RETRY,    /* 网络类错误或停滞：退避后续传 */
     BASE_OTA_RESULT_REJECT,   /* 不可恢复：签名、摘要、target、容量、403／404 */
     BASE_OTA_RESULT_CANCELED,
 } base_ota_result_t;
@@ -69,10 +71,10 @@ typedef struct {
     bool worker_running;
     bool confirmed;          /* 本次启动的固件已确认有效（可以开始新的 OTA） */
     bool retry_pending;      /* 重试定时器在跑 */
-    uint8_t fail_streak;     /* 连续无进展的失败次数，决定退避时长 */
+    uint8_t fail_streak;     /* 连续没有推进续传点的失败次数，决定退避时长 */
     uint32_t written;        /* 下载任务报告的实时偏移 */
     uint32_t published;      /* 上次发布状态时的偏移 */
-    uint32_t attempt_start;  /* 本次下载开始时的偏移，用于判断是否有进展 */
+    uint32_t attempt_start;  /* 本次下载开始时的续传点，用于判断是否有进展 */
     base_fw_t running;
     uint32_t slot_bytes;
 } base_ota_t;
@@ -99,7 +101,7 @@ int base_ota_state_encode(const base_ota_t *ota, char *out, size_t size);
 
 /* ---- 下载任务（仅设备）---- */
 typedef enum {
-    BASE_OTA_WORKER_PROGRESS,  /* value = 已写入偏移 */
+    BASE_OTA_WORKER_PROGRESS,  /* value = 已写入偏移，每写满一个扇区报一次 */
     BASE_OTA_WORKER_VERIFYING,
     BASE_OTA_WORKER_DONE,      /* value = base_ota_result_t，error 为原因 */
 } base_ota_worker_event_t;
