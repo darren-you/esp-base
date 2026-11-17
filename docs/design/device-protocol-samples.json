@@ -26,7 +26,6 @@
         "stack": {"main": 4200, "mqtt_task": 2900, "IDLE": 800},
         "wifi": {"rssi": -52},
         "config": {"revision": 3, "error": null},
-        "business": {"state": "active", "bytes": 42},
         "wakeups": 57
       }
     },
@@ -62,14 +61,6 @@
                  "mqtt": {"uri": "mqtt://broker.example.test:1883", "username": "device-user", "password": "device-password"}}},
     {"name": "config_empty_refused", "cmd": "config", "expect": "error:invalid_args",
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3306"}},
-    {"name": "business_add", "cmd": "business", "expect": "ok",
-     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3307", "op": "add", "data": "hello"}},
-    {"name": "business_pause", "cmd": "business", "expect": "ok",
-     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3308", "op": "pause"}},
-    {"name": "business_resume", "cmd": "business", "expect": "ok",
-     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3309", "op": "resume"}},
-    {"name": "business_add_without_data", "cmd": "business", "expect": "error:invalid_args",
-     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c330a", "op": "add"}},
     {"name": "unknown_command", "cmd": "format", "expect": "error:unknown_command",
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c330b"}},
     {"name": "missing_request_id", "cmd": "restart", "expect": "drop",
@@ -78,11 +69,8 @@
      "payload": {"request_id": "not-a-uuid"}}
   ],
   "responses": [
-    {"name": "ok_without_result",
+    {"name": "ok",
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3302", "cmd": "restart", "ok": true, "error": null, "result": null}},
-    {"name": "ok_with_result",
-     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3307", "cmd": "business", "ok": true, "error": null,
-                 "result": {"state": "active", "bytes": 5}}},
     {"name": "error",
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3305", "cmd": "config", "ok": false, "error": "invalid_args", "result": null}}
   ],

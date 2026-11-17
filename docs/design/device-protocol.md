@@ -27,7 +27,6 @@ ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `s
  "stack":{"main":4200,"mqtt_task":2900},                 // 各任务栈的历史最小余量，字节
  "wifi":{"rssi":-52},
  "config":{"revision":3,"error":null},                   // error：最近一次配置试用失败的原因
- "business":{"state":"active","bytes":42},
  "wakeups":57}                                           // 控制任务处理过的事件数
 ```
 
@@ -40,15 +39,14 @@ ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `s
 | `status` | 无 | 立即重新发布状态文档 |
 | `restart` | 无 | 应答发出后重启 |
 | `config` | `wifi`:{`ssid`,`password`} 和 `mqtt`:{`uri`,`username`,`password`}，至少一项；`uri` 必须是 `mqtts://` | 应答发出后试用新配置：连上 Broker 才保存并把 `config.revision` 加一；120 秒内连不上则恢复旧配置，`config.error` 为 `trial_failed` |
-| `business` | `op`:`add`（另带非空字符串 `data`）、`pause`、`resume` | 原生业务：累计 `data` 的字节数；暂停时 `add` 返回 `paused` |
 
 应答：
 
 ```jsonc
-{"request_id":"<uuid>","cmd":"business","ok":true,"error":null,"result":{"state":"active","bytes":5}}
+{"request_id":"<uuid>","cmd":"restart","ok":true,"error":null,"result":null}
 ```
 
-`error` 取值：`invalid_args`、`unknown_command`、`busy`（已有重启或配置试用在进行）、`paused`、`overflow`。
+`error` 取值：`invalid_args`、`unknown_command`、`busy`（已有重启或配置试用在进行）。`result` 留给有返回值的命令，现有命令都没有，固定为 `null`。
 
 ## OTA
 

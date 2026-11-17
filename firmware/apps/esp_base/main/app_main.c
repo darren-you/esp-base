@@ -56,7 +56,6 @@ static const char *s_config_error;
 static esp_mqtt_client_handle_t s_mqtt;
 static bool s_mqtt_connected, s_pending_verify;
 static base_ota_t s_ota;
-static base_business_t s_business;
 static base_dedupe_t s_dedupe;
 static deferred_t s_deferred;
 static int s_deferred_message_id;
@@ -148,7 +147,7 @@ static const char *reset_reason(void)
     }
 }
 
-/* 状态文档：固件、启动 ID、堆和各任务栈余量、Wi-Fi 信号、配置与业务。 */
+/* 状态文档：固件、启动 ID、堆和各任务栈余量、Wi-Fi 信号与配置。 */
 static int status_encode(char *out, size_t size)
 {
     int n = snprintf(out, size,
@@ -175,13 +174,11 @@ static int status_encode(char *out, size_t size)
         n += m;
     }
     free(tasks);
-    char business[48];
-    if (base_business_encode(&s_business, business, sizeof business) < 0) return -1;
     char error[BASE_ERROR_BYTES + 2] = "null";
     if (s_config_error) snprintf(error, sizeof error, "\"%s\"", s_config_error);
     const int m = snprintf(out + n, size - (size_t)n,
-        "},\"wifi\":{\"rssi\":%d},\"config\":{\"revision\":%" PRIu32 ",\"error\":%s},\"business\":%s,\"wakeups\":%" PRIu32 "}",
-        base_net_rssi(), s_config.revision, error, business, s_wakeups);
+        "},\"wifi\":{\"rssi\":%d},\"config\":{\"revision\":%" PRIu32 ",\"error\":%s},\"wakeups\":%" PRIu32 "}",
+        base_net_rssi(), s_config.revision, error, s_wakeups);
     return m > 0 && (size_t)m < size - (size_t)n ? n + m : -1;
 }
 
@@ -307,8 +304,6 @@ static void handle_command(const char *name, const char *payload, size_t length)
         publish(BASE_TOPIC_RSP, cached, false);
         return;
     }
-    char result[48];
-    const char *result_json = NULL;
     deferred_t after = DEFER_NONE;
     if (decoded) {
         switch (command.kind) {
@@ -334,14 +329,10 @@ static void handle_command(const char *name, const char *payload, size_t length)
             s_config_error = NULL;
             after = DEFER_APPLY_CONFIG;
             break;
-        case BASE_CMD_BUSINESS:
-            error = base_business_apply(&s_business, command.business_op, command.business_bytes);
-            if (base_business_encode(&s_business, result, sizeof result) > 0) result_json = result;
-            break;
         }
     }
     char response[BASE_RSP_BYTES];
-    if (base_rsp_encode(response, command.request_id, name, error, result_json) < 0) return;
+    if (base_rsp_encode(response, command.request_id, name, error) < 0) return;
     base_dedupe_store(&s_dedupe, command.request_id, response);
     const int message_id = publish(BASE_TOPIC_RSP, response, false);
     memset(&command, 0, sizeof command); /* 不保留凭据 */

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// 设备—云协议的纯逻辑：主题、命令解码、应答与去重、原生业务。不依赖 ESP-IDF，可在 host 上测试。
+// 设备—云协议的纯逻辑：主题、命令解码、应答与去重。不依赖 ESP-IDF，可在 host 上测试。
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -29,7 +29,7 @@ bool base_topic(char out[BASE_TOPIC_BYTES], const char *device_id, base_topic_t 
 bool base_topic_command(const char *topic, size_t topic_len, const char *device_id,
                         char name[BASE_CMD_NAME_BYTES]);
 
-typedef enum { BASE_CMD_STATUS, BASE_CMD_RESTART, BASE_CMD_CONFIG, BASE_CMD_BUSINESS } base_cmd_kind_t;
+typedef enum { BASE_CMD_STATUS, BASE_CMD_RESTART, BASE_CMD_CONFIG } base_cmd_kind_t;
 
 typedef struct {
     bool has_wifi;
@@ -45,8 +45,6 @@ typedef struct {
     char request_id[BASE_UUID_BYTES];
     base_cmd_kind_t kind;
     base_config_update_t config; /* kind == BASE_CMD_CONFIG */
-    char business_op[8];         /* kind == BASE_CMD_BUSINESS：add、pause、resume */
-    uint32_t business_bytes;     /* add 时 data 字符串的字节数 */
 } base_cmd_t;
 
 /* 解码命令。返回 false 且 request_id 为空：载荷不可应答，丢弃。
@@ -54,10 +52,9 @@ typedef struct {
 bool base_cmd_decode(const char *name, const char *payload, size_t length,
                      base_cmd_t *out, const char **error);
 
-/* 应答：{"request_id":…,"cmd":…,"ok":true|false,"error":null|"…","result":null|{…}}。
- * 返回写入长度；缓冲不足返回 -1。result_json 必须是合法 JSON 值或 NULL。 */
-int base_rsp_encode(char out[BASE_RSP_BYTES], const char *request_id, const char *cmd,
-                    const char *error, const char *result_json);
+/* 应答：{"request_id":…,"cmd":…,"ok":true|false,"error":null|"…","result":null}。
+ * result 留给有返回值的命令，现有命令都没有。返回写入长度；缓冲不足返回 -1。 */
+int base_rsp_encode(char out[BASE_RSP_BYTES], const char *request_id, const char *cmd, const char *error);
 
 /* QoS 1 会重投：记住最近若干条应答，重复的 request_id 只重发原应答，不重复执行。 */
 #define BASE_DEDUPE_SLOTS 8
@@ -70,15 +67,6 @@ typedef struct {
 } base_dedupe_t;
 const char *base_dedupe_find(const base_dedupe_t *dedupe, const char *request_id);
 void base_dedupe_store(base_dedupe_t *dedupe, const char *request_id, const char *response);
-
-/* 原生业务：消息字节计数，可暂停与恢复。 */
-typedef struct {
-    bool paused;
-    uint32_t bytes;
-} base_business_t;
-/* 成功返回 NULL，否则返回错误码字符串。 */
-const char *base_business_apply(base_business_t *business, const char *op, uint32_t data_bytes);
-int base_business_encode(const base_business_t *business, char *out, size_t size);
 
 /* OTA 期望固件（ota/desired）。 */
 typedef struct {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// host 测试：协议编解码、去重、原生业务、OTA 状态机，以及与 Server 共用的合同样例。
+// host 测试：协议编解码、去重、OTA 状态机，以及与 Server 共用的合同样例。
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,28 +52,19 @@ static void test_topics(void)
     CHECK(!base_topic_command(empty, strlen(empty), DEVICE, name));
 }
 
-static void test_dedupe_and_business(void)
+static void test_dedupe(void)
 {
     base_dedupe_t dedupe = {0};
     char response[BASE_RSP_BYTES], id[BASE_UUID_BYTES];
     for (int i = 0; i < BASE_DEDUPE_SLOTS + 1; ++i) {
         snprintf(id, sizeof id, "3f2504e0-4f89-41d3-9a0c-0305e82c33%02x", i);
-        CHECK(base_rsp_encode(response, id, "status", NULL, NULL) > 0);
+        CHECK(base_rsp_encode(response, id, "status", NULL) > 0);
         base_dedupe_store(&dedupe, id, response);
     }
     CHECK(base_dedupe_find(&dedupe, "3f2504e0-4f89-41d3-9a0c-0305e82c3300") == NULL); /* 最旧的被挤出 */
     const char *kept = base_dedupe_find(&dedupe, "3f2504e0-4f89-41d3-9a0c-0305e82c3308");
     CHECK(kept && strstr(kept, "\"ok\":true"));
     CHECK(base_dedupe_find(&dedupe, "") == NULL);
-
-    base_business_t business = {0};
-    CHECK(base_business_apply(&business, "add", 5) == NULL && business.bytes == 5);
-    CHECK(base_business_apply(&business, "pause", 0) == NULL && business.paused);
-    CHECK(!strcmp(base_business_apply(&business, "add", 5), "paused") && business.bytes == 5);
-    CHECK(base_business_apply(&business, "resume", 0) == NULL && !business.paused);
-    business.bytes = UINT32_MAX - 1;
-    CHECK(!strcmp(base_business_apply(&business, "add", 2), "overflow"));
-    CHECK(!strcmp(base_business_apply(&business, "erase", 0), "invalid_args"));
 }
 
 /* 新任务：开始下载；下载途中偏移每 64 KiB 落盘；每 5% 发布；完成后记录 rebooting 并重启。 */
@@ -400,15 +391,12 @@ static void test_contract_samples(const char *path)
     cJSON_ArrayForEach(sample, cJSON_GetObjectItem(root, "responses")) {
         const cJSON *payload = cJSON_GetObjectItem(sample, "payload");
         const cJSON *sample_error = cJSON_GetObjectItem(payload, "error");
-        char *result = cJSON_IsNull(cJSON_GetObjectItem(payload, "result")) ? NULL :
-                       cJSON_PrintUnformatted(cJSON_GetObjectItem(payload, "result"));
         CHECK(base_rsp_encode(response, cJSON_GetObjectItem(payload, "request_id")->valuestring,
                               cJSON_GetObjectItem(payload, "cmd")->valuestring,
-                              cJSON_IsNull(sample_error) ? NULL : sample_error->valuestring, result) > 0);
+                              cJSON_IsNull(sample_error) ? NULL : sample_error->valuestring) > 0);
         cJSON *encoded = cJSON_Parse(response);
         CHECK(encoded && cJSON_Compare(encoded, payload, true));
         cJSON_Delete(encoded);
-        free(result);
     }
     base_ota_t ota;
     base_ota_boot(&ota, NULL, &RUNNING, SLOT, true);
@@ -436,7 +424,7 @@ static void test_contract_samples(const char *path)
 int main(int argc, char **argv)
 {
     test_topics();
-    test_dedupe_and_business();
+    test_dedupe();
     test_ota_happy_path();
     test_ota_already_running();
     test_ota_resume_after_power_loss();

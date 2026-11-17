@@ -114,15 +114,6 @@ bool base_cmd_decode(const char *name, const char *payload, size_t length,
         out->kind = BASE_CMD_CONFIG;
         ok = decode_config(root, &out->config);
         if (!ok) *error = "invalid_args";
-    } else if (!strcmp(name, "business")) {
-        out->kind = BASE_CMD_BUSINESS;
-        ok = copy_string(root, "op", out->business_op, sizeof out->business_op, false);
-        if (ok && !strcmp(out->business_op, "add")) {
-            const cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
-            ok = cJSON_IsString(data) && data->valuestring && data->valuestring[0] != '\0';
-            if (ok) out->business_bytes = (uint32_t)strlen(data->valuestring);
-        }
-        if (!ok) *error = "invalid_args";
     } else {
         ok = false;
         *error = "unknown_command";
@@ -131,8 +122,7 @@ bool base_cmd_decode(const char *name, const char *payload, size_t length,
     return ok;
 }
 
-int base_rsp_encode(char out[BASE_RSP_BYTES], const char *request_id, const char *cmd,
-                    const char *error, const char *result_json)
+int base_rsp_encode(char out[BASE_RSP_BYTES], const char *request_id, const char *cmd, const char *error)
 {
     if (!out || !base_is_uuid(request_id) || !cmd) return -1;
     char quoted_error[BASE_ERROR_BYTES + 2] = "null";
@@ -141,8 +131,8 @@ int base_rsp_encode(char out[BASE_RSP_BYTES], const char *request_id, const char
         if (e <= 0 || (size_t)e >= sizeof quoted_error) return -1;
     }
     const int n = snprintf(out, BASE_RSP_BYTES,
-        "{\"request_id\":\"%s\",\"cmd\":\"%s\",\"ok\":%s,\"error\":%s,\"result\":%s}",
-        request_id, cmd, error ? "false" : "true", quoted_error, result_json ? result_json : "null");
+        "{\"request_id\":\"%s\",\"cmd\":\"%s\",\"ok\":%s,\"error\":%s,\"result\":null}",
+        request_id, cmd, error ? "false" : "true", quoted_error);
     return n > 0 && n < BASE_RSP_BYTES ? n : -1;
 }
 
@@ -161,35 +151,6 @@ void base_dedupe_store(base_dedupe_t *dedupe, const char *request_id, const char
     memcpy(dedupe->entries[dedupe->next].request_id, request_id, BASE_UUID_BYTES);
     strcpy(dedupe->entries[dedupe->next].response, response);
     dedupe->next = (dedupe->next + 1) % BASE_DEDUPE_SLOTS;
-}
-
-const char *base_business_apply(base_business_t *business, const char *op, uint32_t data_bytes)
-{
-    if (!business || !op) return "invalid_args";
-    if (!strcmp(op, "add")) {
-        if (business->paused) return "paused";
-        if (data_bytes == 0) return "invalid_args";
-        if (data_bytes > UINT32_MAX - business->bytes) return "overflow";
-        business->bytes += data_bytes;
-        return NULL;
-    }
-    if (!strcmp(op, "pause")) {
-        business->paused = true;
-        return NULL;
-    }
-    if (!strcmp(op, "resume")) {
-        business->paused = false;
-        return NULL;
-    }
-    return "invalid_args";
-}
-
-int base_business_encode(const base_business_t *business, char *out, size_t size)
-{
-    if (!business || !out) return -1;
-    const int n = snprintf(out, size, "{\"state\":\"%s\",\"bytes\":%lu}",
-                           business->paused ? "paused" : "active", (unsigned long)business->bytes);
-    return n > 0 && (size_t)n < size ? n : -1;
 }
 
 base_desired_result_t base_ota_desired_decode(const char *payload, size_t length,

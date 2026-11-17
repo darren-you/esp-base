@@ -304,7 +304,7 @@ def main():
 
     command = commands.add_parser("control", help="经 MQTT 查看状态或下发命令")
     command.add_argument("action", choices=("status", "cmd", "watch"))
-    command.add_argument("name", nargs="?", help="cmd 的命令名：status、restart、config、business")
+    command.add_argument("name", nargs="?", help="cmd 的命令名：status、restart、config")
     command.add_argument("--json", help="cmd 的参数（JSON 对象，不含 request_id）")
     command.add_argument("--device", required=True)
     command.add_argument("--uri", required=True, help="mqtts://host[:port]")

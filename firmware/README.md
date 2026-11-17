@@ -7,7 +7,7 @@
 | 路径 | 内容 |
 | --- | --- |
 | `apps/esp_base/main` | 主程序：控制任务、MQTT 客户端、状态文档、命令执行 |
-| `components/base_protocol` | 主题、命令解码、应答与去重、原生业务；纯逻辑，不依赖 ESP-IDF |
+| `components/base_protocol` | 主题、命令解码、应答与去重；纯逻辑，不依赖 ESP-IDF |
 | `components/base_ota` | OTA 状态机（纯逻辑）和基于 `esp_https_ota` 的下载任务 |
 | `components/base_store` | NVS 中的设备 UUID、配置和 OTA 记录 |
 | `components/base_net` | Wi-Fi STA 与 SNTP |
@@ -51,4 +51,4 @@ coredump  0x3e0000  64 KiB
 bash tests/run_host_tests.sh
 ```
 
-覆盖协议编解码、命令去重、原生业务，以及 OTA 状态机的断电与停滞续传、重试退避、拒绝、回滚计数、取消和换任务，并用[合同样例](../docs/design/device-protocol-samples.json)核对与 Server 一致。host 测试不写设备；实板验证见仓库 README 的三层验证。
+覆盖协议编解码、命令去重，以及 OTA 状态机的断电与停滞续传、重试退避、拒绝、回滚计数、取消和换任务，并用[合同样例](../docs/design/device-protocol-samples.json)核对与 Server 一致。host 测试不写设备；实板验证见仓库 README 的三层验证。
