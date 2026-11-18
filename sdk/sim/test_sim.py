@@ -325,6 +325,17 @@ class ToolTest(unittest.TestCase):
                 sim.advance(3000)
                 self.assertEqual([item.topic for item in sim.published], ["door-bell/tick"] * 3)
 
+    def test_run_shows_events(self):
+        script = "up\nmsg hello/in ping\nmsg hello/in \\x00\nstop\n"
+        ran = self.tool("run", str(APPS / "hello.ebapp"), input=script)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        for line in ("connect keepalive_s=30, will={topic=hello/state, payload=offline, qos=1, retain=true}",
+                     "publish topic=hello/state, payload=online, qos=1, retain=true, will=false",
+                     "publish topic=hello/echo, payload=ping, qos=0, retain=false, will=false",
+                     "publish topic=hello/state, payload=offline, qos=1, retain=true, will=true",   # 停止时宿主代发的遗嘱
+                     "stopped"):
+            self.assertIn("] " + line + "\n", ran.stdout)
+
     def test_run_reports_faults(self):
         ran = self.tool("run", str(APPS / "trial_fault.wasm"), input="adv 2000\n")
         self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)

@@ -259,17 +259,21 @@ class Simulator:
             self.subscriptions, self.timers = [], {}
 
 
+def _show(value):
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return "hex:" + value.hex()
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{key}={_show(item)}" for key, item in value.items()) + "}"
+    if value is None or isinstance(value, bool):
+        return {None: "null", True: "true", False: "false"}[value]
+    return str(value)
+
+
 def describe(event):
     """一个事件的单行文本，给 app run 显示用。"""
-    shown = dict(event)
-    kind = shown.pop("event")
-    for holder in (shown, shown.get("will") or {}):
-        payload = holder.get("payload")
-        if isinstance(payload, bytes):
-            try:
-                holder["payload"] = payload.decode("utf-8")
-            except UnicodeDecodeError:
-                holder["payload"] = "hex:" + payload.hex()
-    if kind == "log":
-        return f"log {('?', 'error', 'warn', 'info')[min(max(shown['level'], 0), 3)]}: {shown['text']}"
-    return (kind + " " + json.dumps(shown, ensure_ascii=False, separators=(", ", "="))[1:-1].replace('"', "")).rstrip()
+    if event["event"] == "log":
+        return f"log {('?', 'error', 'warn', 'info')[min(max(event['level'], 0), 3)]}: {event['text']}"
+    return (event["event"] + " " + ", ".join(f"{key}={_show(value)}" for key, value in event.items() if key != "event")).rstrip()
