@@ -39,7 +39,7 @@ coredump  0x3e0000  64 KiB
 业务固件是一个独立的 ESP-IDF 工程，按精确提交引用本仓：把 `firmware/components` 加进 `EXTRA_COMPONENT_DIRS`，`SDKCONFIG_DEFAULTS` 先列本仓的 `sdkconfig.defaults`（目标专属的 `.<target>` 会一并加载）再列自己的，分区表与本仓逐字节相同（正式打包时核对）。它的 `app_main` 调用 `base_app_run(&业务回调)`：
 
 - `init(device_id, config)`：控制任务启动时、联网之前调用一次，用来把输出脚置到安全状态、读取业务参数（`base_store_business_string`，NVS 的 `business` 命名空间）。
-- `connect(business_mqtt)`：时间同步后调用一次，业务 MQTT 经 `cmd/config` 更新后再调用一次；业务层据此（重新）建立自己的连接。
+- `connect(business_mqtt)`：系统 MQTT 首次连上后调用一次（60 秒内连不上则不再等），业务 MQTT 经 `cmd/config` 更新后再调用一次；业务层据此（重新）建立自己的连接。两条连接错开握手：在单核的 C3 上同时做两次 TLS 握手会连续数秒占满 CPU，触发任务看门狗告警。业务连接的重连间隔也应与系统连接（5 秒）错开。
 
 业务连接的客户端 ID 不能用设备 UUID（系统 MQTT 在用，同一 Broker 上会互相挤下线），也不能用系统 MQTT 的账户和主题。基座的状态文档、命令、OTA 与业务层无关，target 是 `<芯片>/<业务工程名>`，OTA 只在同一 target 之间进行。
 

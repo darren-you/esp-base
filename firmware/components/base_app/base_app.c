@@ -24,6 +24,7 @@
 
 #define ROLLBACK_WINDOW_MS 300000u      /* 新固件须在此时间内连上 Broker，否则回滚 */
 #define CONFIG_TRIAL_MS 120000u         /* 新 Wi-Fi 须在此时间内连上 Broker，否则恢复旧配置 */
+#define BUSINESS_FALLBACK_MS 60000u     /* 系统 MQTT 迟迟连不上时，业务连接最多等这么久 */
 #define DEFERRED_FALLBACK_MS 3000u      /* 等应答发出的最长时间 */
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
 #define MESSAGE_MAX_BYTES 1536u
@@ -34,7 +35,7 @@ typedef enum {
     EV_MQTT_CONNECTED, EV_MQTT_DISCONNECTED, EV_MQTT_MESSAGE, EV_MQTT_PUBLISHED,
     EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE,
 } event_kind_t;
-typedef enum { TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED, TIMER_COUNT } timer_id_t;
+typedef enum { TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED, TIMER_BUSINESS, TIMER_COUNT } timer_id_t;
 typedef enum { DEFER_NONE, DEFER_RESTART, DEFER_APPLY_CONFIG } deferred_t;
 
 typedef struct {
@@ -172,7 +173,13 @@ static int status_encode(char *out, size_t size)
             const char ch = tasks[i].pcTaskName[c];
             name[c] = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ? ch : '_';
         }
-        const int m = snprintf(out + n, size - (size_t)n, "%s\"%s\":%u", i ? "," : "", name,
+        /* 同名任务（如系统与业务两条 MQTT 连接的 mqtt_task）加序号，避免状态文档里出现重复的键。 */
+        unsigned same = 0;
+        for (UBaseType_t j = 0; j < i; ++j)
+            same += !strncmp(tasks[j].pcTaskName, tasks[i].pcTaskName, configMAX_TASK_NAME_LEN);
+        char suffix[8] = "";
+        if (same) snprintf(suffix, sizeof suffix, "_%u", same + 1);
+        const int m = snprintf(out + n, size - (size_t)n, "%s\"%s%s\":%u", i ? "," : "", name, suffix,
                                (unsigned)tasks[i].usStackHighWaterMark);
         if (m <= 0 || (size_t)m >= size - (size_t)n) { free(tasks); return -1; }
         n += m;
@@ -291,6 +298,7 @@ static void business_connect(bool changed)
     if (!s_business || !s_business->connect || !base_net_time_valid()) return;
     if (s_business_connected && !changed) return;
     s_business_connected = true;
+    esp_timer_stop(s_timers[TIMER_BUSINESS]);
     s_business->connect(&s_config.business_mqtt);
 }
 
@@ -381,6 +389,7 @@ static void on_mqtt_connected(void)
     esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_OTA_DESIRED], 1);
     publish_status();
     if (!s_pending_verify) ota_apply(base_ota_on_confirmed(&s_ota));
+    business_connect(false);
 }
 
 static void on_timer(timer_id_t id)
@@ -404,6 +413,7 @@ static void on_timer(timer_id_t id)
         mqtt_start(&s_config);
         break;
     case TIMER_DEFERRED: run_deferred(); break;
+    case TIMER_BUSINESS: business_connect(false); break;
     default: break;
     }
 }
@@ -416,7 +426,8 @@ static void handle(const event_t *event)
         /* 严格 TLS 要校验证书有效期：时间同步后才连接 Broker。 */
         if (base_net_time_valid()) {
             mqtt_start(s_trial_active ? &s_trial : &s_config);
-            business_connect(false);
+            /* 业务连接等系统 MQTT 先连上再建：两次 TLS 握手同时进行会让单核芯片连续数秒占满 CPU。 */
+            if (s_business && !s_business_connected) timer_start(TIMER_BUSINESS, BUSINESS_FALLBACK_MS);
         }
         break;
     case EV_NET_DOWN: break;
