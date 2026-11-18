@@ -11,30 +11,49 @@
 #![no_std]
 
 /// 宿主接口的原始声明：导入模块 `base`。指针都是应用线性内存里的偏移，由宿主核对范围。
+///
+/// 本机（`cargo test`）上没有宿主：这里是同名的函数，只为了让应用能链接成测试程序，调用即 panic。业务逻辑的
+/// 单元测试不该碰到它们；要连同宿主接口一起测，用 `esp_base.py app run` 在本机运行编译好的应用。
 pub mod sys {
-    #[link(wasm_import_module = "base")]
-    extern "C" {
-        pub fn log(level: u32, text: *const u8, length: u32);
-        pub fn uptime_ms() -> u64;
-        pub fn unix_ms() -> u64;
-        pub fn timer_set(id: u32, delay_ms: u32, period_ms: u32) -> i32;
-        pub fn timer_cancel(id: u32) -> i32;
-        pub fn sleep_ms(ms: u32) -> i32;
-        pub fn mqtt_connect(will_topic: *const u8, will_topic_length: u32, will_payload: *const u8,
-                            will_payload_length: u32, will_qos: u32, will_retain: u32, keepalive_s: u32) -> i32;
-        pub fn mqtt_disconnect() -> i32;
-        pub fn mqtt_subscribe(filter: *const u8, length: u32, qos: u32) -> i32;
-        pub fn mqtt_publish(topic: *const u8, topic_length: u32, payload: *const u8, payload_length: u32, qos: u32,
-                            retain: u32) -> i32;
-        pub fn event_topic(buffer: *mut u8, capacity: u32) -> i32;
-        pub fn event_payload(buffer: *mut u8, capacity: u32) -> i32;
-        pub fn param(key: *const u8, key_length: u32, buffer: *mut u8, capacity: u32) -> i32;
-        pub fn info(what: u32, buffer: *mut u8, capacity: u32) -> i32;
-        pub fn gpio_write(pin: u32, level: u32) -> i32;
-        pub fn gpio_read(pin: u32) -> i32;
-        pub fn pwm_config(pin: u32, frequency_hz: u32, resolution_bits: u32) -> i32;
-        pub fn pwm_write(pin: u32, duty: u32) -> i32;
-        pub fn pwm_read(pin: u32) -> i32;
+    macro_rules! host {
+        ($(fn $name:ident($($argument:ident: $kind:ty),*) $(-> $result:ty)?;)*) => {
+            #[cfg(target_arch = "wasm32")]
+            #[link(wasm_import_module = "base")]
+            extern "C" {
+                $(pub fn $name($($argument: $kind),*) $(-> $result)?;)*
+            }
+            $(
+                #[cfg(not(target_arch = "wasm32"))]
+                #[allow(unused_variables, clippy::missing_safety_doc)]
+                pub unsafe fn $name($($argument: $kind),*) $(-> $result)? {
+                    panic!("the host interface is only available on the device and in `app run`")
+                }
+            )*
+        };
+    }
+
+    host! {
+        fn log(level: u32, text: *const u8, length: u32);
+        fn uptime_ms() -> u64;
+        fn unix_ms() -> u64;
+        fn timer_set(id: u32, delay_ms: u32, period_ms: u32) -> i32;
+        fn timer_cancel(id: u32) -> i32;
+        fn sleep_ms(ms: u32) -> i32;
+        fn mqtt_connect(will_topic: *const u8, will_topic_length: u32, will_payload: *const u8, will_payload_length: u32,
+                        will_qos: u32, will_retain: u32, keepalive_s: u32) -> i32;
+        fn mqtt_disconnect() -> i32;
+        fn mqtt_subscribe(filter: *const u8, length: u32, qos: u32) -> i32;
+        fn mqtt_publish(topic: *const u8, topic_length: u32, payload: *const u8, payload_length: u32, qos: u32,
+                        retain: u32) -> i32;
+        fn event_topic(buffer: *mut u8, capacity: u32) -> i32;
+        fn event_payload(buffer: *mut u8, capacity: u32) -> i32;
+        fn param(key: *const u8, key_length: u32, buffer: *mut u8, capacity: u32) -> i32;
+        fn info(what: u32, buffer: *mut u8, capacity: u32) -> i32;
+        fn gpio_write(pin: u32, level: u32) -> i32;
+        fn gpio_read(pin: u32) -> i32;
+        fn pwm_config(pin: u32, frequency_hz: u32, resolution_bits: u32) -> i32;
+        fn pwm_write(pin: u32, duty: u32) -> i32;
+        fn pwm_read(pin: u32) -> i32;
     }
 }
 

@@ -8,19 +8,17 @@
 
 ## 快速开始
 
-需要 [rustup](https://rustup.rs)。工具链版本和编译目标 `wasm32v1-none` 由 `rust-toolchain.toml` 固定，第一次构建时自动安装。在本目录执行：
+需要 [rustup](https://rustup.rs)。工具链版本和编译目标 `wasm32v1-none` 由 `rust-toolchain.toml` 固定，第一次构建时自动安装。下面的 `esp_base.py` 是本仓的 `tools/esp_base.py`，应用工程可以放在任何地方（别的仓库里也行）：
 
 ```bash
-cargo build --release -p hello
-ls -l target/wasm32v1-none/release/hello.wasm   # 约 1.5 KB
+python3 tools/esp_base.py app new ../my-app        # 新建工程：一个能跑的最小应用，约 0.6 KB
+python3 tools/esp_base.py app test ../my-app       # 本机跑单元测试
+python3 tools/esp_base.py app run ../my-app        # 本机运行：模拟定时器、业务 MQTT 和引脚
+python3 tools/esp_base.py app build ../my-app      # 构建、检查并封装成未签名的应用包（.ebapp）
+python3 tools/esp_base.py app sign ../my-app/target/esp-base/my_app.ebapp --key-file /absolute/path/signing-key.pem
 ```
 
-把应用封装成可以部署的[应用包](../../docs/design/app-package.md)（在仓根执行，签名需要已导出的官方 ESP-IDF 环境）：
-
-```bash
-python3 tools/esp_base.py app build sdk/rust/examples/hello
-python3 tools/esp_base.py app sign sdk/rust/target/esp-base/hello.ebapp --key-file /absolute/path/signing-key.pem
-```
+`app run` 和 `app sign` 用到固件那一侧的东西：前者要 cmake、C 编译器，以及组件管理器给固件取回的 WAMR 和 cJSON（先在已导出 ESP-IDF 环境的终端里构建过一次固件）；后者要官方的 `espsecure`。[应用包](../../docs/design/app-package.md)的格式、清单和引脚规则见设计文档。
 
 ## 写一个应用
 
@@ -89,6 +87,44 @@ pwm::write(7, 1228)?;                  // 占空比 0 到 2^14-1
 
 输出脚后面的数字是安全电平：设备启动后、应用的代码运行之前，应用停止、出故障、被替换之后，宿主都把引脚保持在这个电平，`pwm` 引脚保持低电平。应用不用自己在 `init` 里「先把输出关掉」，也不用担心出故障时输出停在半途。每种芯片能用哪些引脚见[应用包](../../docs/design/app-package.md#引脚)。
 
+## 本机测试和运行
+
+改业务不用碰设备：逻辑用单元测试测，整个应用在本机的模拟器里跑。
+
+**单元测试**。把业务逻辑（协议解析、状态变化）写成不碰宿主接口的函数，测试写在同一个文件的 `#[cfg(test)]` 模块里。工程默认编译到 WASM，`app test` 替你把测试编译到本机再跑（`--` 之后的内容原样交给 `cargo test`）。本机上没有宿主，碰到宿主接口的代码一调用就 panic。
+
+**本机运行**。`app run` 运行的是编译好的 `.wasm`，用的是设备上的同一份宿主核心加 WAMR 的本机构建，所以清单写错、引脚在这个芯片上不能用、碰了没有声明的引脚、死循环、陷阱，在本机就能看到。时间是虚拟的：定时器只在你推进时钟时到期，应用睡眠直接把时钟拨快，结果是确定的。
+
+```console
+$ python3 tools/esp_base.py app run ../my-app --param site=lab
+my_app 0.1.0+0：wasm 629 字节，内存上限 12288 字节，芯片 esp32c3
+[       0 ms] log info: my-app: init
+[       0 ms] connect keepalive_s=30, will=null
+[       0 ms] timer id=0, delay_ms=1000, period_ms=1000
+up                                  ← 业务 MQTT 连上了
+adv 1000                            ← 时钟推进 1 秒
+[    1000 ms] publish topic=my-app/tick, payload=1, qos=0, retain=false, will=false
+```
+
+命令：`up`、`down`（业务 MQTT 连上、断开），`msg <主题> [载荷]`（送一条消息给应用），`adv <毫秒>`，`in <引脚> <0|1>`（给输入脚加电平），`clock <Unix 毫秒>`（对时），`start`、`stop`、`stats`、`quit`。`--script <文件>` 从文件读命令；应用启动失败或出过故障时退出码是 1。
+
+要自动核对结果，用 Python 驱动模拟器（`tools/esp_base_sim.py`），配合 `unittest`：
+
+```python
+from esp_base_sim import Simulator
+
+with Simulator("target/esp-base/hxh_lift.ebapp", params={"hxh_site": "lab"}) as sim:
+    sim.start()
+    sim.mqtt_up()
+    sim.message("hxh-studio/lab/lift/cmd/move", {"direction": "up"})
+    assert sim.gpio[21] == 1          # 输出脚的电平
+    sim.advance(2000)                 # 没有续租：推杆自己停下
+    assert sim.gpio[21] == 0
+    assert sim.published[-1].json()["motion"] == "stop"
+```
+
+每个命令返回它期间发生的事件；`sim.gpio`、`sim.pwm`、`sim.published`、`sim.logs`、`sim.subscriptions`、`sim.timers`、`sim.will`、`sim.fault` 是累计下来的状态。与设备的差别：不验签；本机的指针是 64 位，运行时自己的结构比设备上大三成左右，所以模拟器给的内存池是清单 `memory` 的 1.5 倍，`stats` 报的也是本机的数字——设备上的实际用量看 `app/state` 里的 `pool_used`、`pool_peak`；PWM 只核对这个频率配不配得出这样的分辨率，不模拟波形。
+
 ## 约束
 
 - **体积就是内存。** ESP32-C3 上应用整体载入内存，每大 1 KB 就多占 1 KB。不要用 `format!`、`core::fmt` 和带格式的 `panic!`；数字转字符串自己写（见样例）。
@@ -106,4 +142,5 @@ pwm::write(7, 1228)?;                  // 占空比 0 到 2^14-1
 ```bash
 ./build_fixtures.sh                                # 写到 ../../firmware/tests/apps/
 bash ../../firmware/tests/run_wasm_host_tests.sh   # 用这些应用跑宿主测试
+python3 ../sim/test_sim.py                         # 模拟器、它的 Python 封装和 app new／build／test／run
 ```

@@ -69,7 +69,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 ## 业务应用（WASM）
 
-业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。应用封装成签名的[应用包](docs/design/app-package.md)，经 `app/desired` 部署到设备的应用槽里：换应用不重启设备，新应用启动失败或试运行期间出故障时自动回到上一版。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)，部署合同见[设备—云协议](docs/design/device-protocol.md#应用部署)。
+业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。应用封装成签名的[应用包](docs/design/app-package.md)，经 `app/desired` 部署到设备的应用槽里：换应用不重启设备，新应用启动失败或试运行期间出故障时自动回到上一版。应用工程用 `tools/esp_base.py app new` 新建，`app test` 在本机跑单元测试，`app run` 在本机用同一份宿主核心运行编译好的应用，不用碰设备。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)，部署合同见[设备—云协议](docs/design/device-protocol.md#应用部署)。
 
 ## 业务固件
 

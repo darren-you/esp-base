@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ESP Base 固件维护入口：build、sign、flash、control，以及业务应用的 app build、app sign、app inspect。
+"""ESP Base 固件维护入口：build、sign、flash、control，以及业务应用的 app new、build、test、run、sign、inspect。
 
 在已导出官方 ESP-IDF 环境（IDF_PATH、idf.py、esptool、espsecure）的 macOS／Linux 上运行。
 私钥、Wi-Fi 与 MQTT 凭据只从仓外文件读取，不打印、不写入仓库。
@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import ssl
+import string
 import subprocess
 import sys
 import tempfile
@@ -325,9 +326,143 @@ def cargo():
     return path
 
 
-def app_build(args):
-    """构建应用并封装成未签名的应用包：<cargo 的 target 目录>/esp-base/<应用名>.ebapp。"""
+APP_FILES = {
+    "Cargo.toml": """[package]
+name = "$name"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+esp-base-app = { path = "$sdk" }
+
+# 应用清单。memory 是应用的内存上限（运行时内存池，字节）：大约是 .wasm 的字节数加线性内存（4 KiB 栈加静态数据）
+# 再加 2 KB，留一些余量；设备上的实际用量看 app/state 里的 pool_peak。stack 是操作数栈。
+[package.metadata.esp-base]
+memory = 12288
+stack = 2048
+# chips = ["esp32c3"]            # 只允许装到这些芯片上；不写表示不限
+
+# 用到的引脚：in、in_pullup、in_pulldown、out0、out1（数字是安全电平）、pwm。没有声明的引脚应用碰不到。
+# [package.metadata.esp-base.pins]
+# 4 = "out0"
+
+# 这个工程自己就是 cargo 的工作区：下面的 profile 才会生效。
+[workspace]
+
+# 体积就是内存：ESP32-C3 上应用整体载入内存。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+""",
+    ".cargo/config.toml": """[build]
+target = "wasm32v1-none"
+
+# 栈 4 KiB；导出 __heap_base 与 __data_end，宿主据此把线性内存收缩到实际用量。不要改。
+[target.wasm32v1-none]
+rustflags = [
+    "-C", "link-arg=-zstack-size=4096",
+    "-C", "link-arg=--export=__heap_base",
+    "-C", "link-arg=--export=__data_end",
+]
+""",
+    "rust-toolchain.toml": """[toolchain]
+channel = "$channel"
+profile = "minimal"
+targets = ["wasm32v1-none"]
+""",
+    ".gitignore": "target/\n",
+    "src/lib.rs": """//! $name：ESP Base 业务应用。
+//!
+//! 在这个目录里（$tool 是 esp-base 的 tools/esp_base.py）：
+//!   python3 $tool app test .     本机跑单元测试
+//!   python3 $tool app run .      本机运行（模拟定时器、业务 MQTT 和引脚）
+//!   python3 $tool app build .    构建并封装成应用包
+#![cfg_attr(not(test), no_std)]
+
+use esp_base_app::{log, mqtt, timer, App, Error, Event};
+
+struct $type {
+    ticks: u32,
+}
+
+/// 业务逻辑写成不碰宿主接口的函数，就能在本机用 `app test` 测。
+fn next_tick(ticks: u32) -> u32 {
+    ticks.wrapping_add(1)
+}
+
+impl App for $type {
+    fn init() -> Result<Self, Error> {
+        log::info("$name: init");
+        mqtt::connect(None, 30)?;
+        timer::set(0, 1000, 1000)?;
+        Ok($type { ticks: 0 })
+    }
+
+    fn event(&mut self, event: Event) {
+        if let Event::Timer(0) = event {
+            self.ticks = next_tick(self.ticks);
+            let _ = mqtt::publish("$name/tick", b"1", mqtt::Qos::AtMostOnce, false);
+        }
+    }
+}
+
+esp_base_app::app!($type);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticks_wrap_around() {
+        assert_eq!(next_tick(0), 1);
+        assert_eq!(next_tick(u32::MAX), 0);
+    }
+}
+""",
+}
+
+
+def app_new(args):
+    """新建一个应用工程：Cargo 工程、链接参数、固定的工具链和一个能跑的最小应用。"""
+    project = Path(args.directory).resolve()
+    name = args.name or project.name
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,22}", name):
+        fail("应用名必须是 1–23 个小写字母、数字、下划线或连字符，字母开头（用 --name 指定，默认取目录名）")
+    if project.exists() and any(project.iterdir()):
+        fail(f"{project} 已经存在而且不是空的")
+    sdk = ROOT / "sdk/rust"
+    channel = re.search(r'^channel = "([^"]+)"', (sdk / "rust-toolchain.toml").read_text(), re.M).group(1)
+    values = {"name": name, "type": "".join(part.capitalize() for part in re.split(r"[-_]", name)),
+              "sdk": Path(os.path.relpath(sdk / "esp-base-app", project)).as_posix(), "channel": channel,
+              "tool": Path(os.path.relpath(Path(__file__).resolve(), project)).as_posix()}
+    for relative, content in APP_FILES.items():
+        path = project / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(string.Template(content).substitute(values), encoding="utf-8")
+    print(json.dumps({"name": name, "project": str(project), "files": sorted(APP_FILES)}, ensure_ascii=False))
+
+
+def app_test(args):
+    """在本机跑应用的单元测试：工程默认编译到 WASM，测试要编译到本机。"""
     project = Path(args.project).resolve()
+    if not (project / "Cargo.toml").is_file():
+        fail(f"{project} 里没有 Cargo.toml")
+    described = subprocess.run([Path(cargo()).with_name("rustc"), "-vV"], cwd=project, check=True, capture_output=True,
+                               text=True).stdout
+    host = re.search(r"^host: (\S+)", described, re.M).group(1)
+    run([cargo(), "test", "--target", host, *args.cargo_args], cwd=project)
+
+
+def build_app(project, build_number):
+    """构建应用并封装成未签名的应用包：<cargo 的 target 目录>/esp-base/<应用名>.ebapp。返回清单和产物的信息。"""
+    project = Path(project).resolve()
     if not (project / "Cargo.toml").is_file():
         fail(f"{project} 里没有 Cargo.toml")
     run([cargo(), "build", "--release"], cwd=project, stdout=sys.stderr)
@@ -340,15 +475,84 @@ def app_build(args):
             fail(f"没有找到 {wasm_path}：应用要用 SDK 的 .cargo/config.toml 编译到 wasm32v1-none，crate-type 是 cdylib")
         wasm = wasm_path.read_bytes()
         checked = esp_base_app.inspect(wasm)
-        fields = esp_base_app.manifest(project, args.build_number, checked["abi"])
+        fields = esp_base_app.manifest(project, build_number, checked["abi"])
         package = esp_base_app.pack(wasm, fields)
     except esp_base_app.AppError as error:
         fail(str(error))
     output = Path(metadata["target_directory"]) / "esp-base" / (fields["name"] + ".ebapp")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(package)
-    print(json.dumps({**fields, "package": str(output), "package_bytes": len(package), "wasm_bytes": len(wasm),
-                      "linear_bytes": checked["linear_bytes"], "imports": checked["imports"]}, ensure_ascii=False))
+    # 内存池的用量大约是 .wasm 加线性内存再加 2 KB 的运行时开销（ESP32-C3 实测）：清单给得比这还小，设备上多半装不下。
+    estimate = len(wasm) + checked["linear_bytes"] + 2048
+    if fields["memory"] < estimate:
+        print(f"esp_base: 清单的 memory 是 {fields['memory']} 字节，这个应用估计要用 {estimate} 字节左右；"
+              "装到设备上可能启动失败", file=sys.stderr)
+    return {**fields, "package": str(output), "package_bytes": len(package), "wasm_bytes": len(wasm),
+            "linear_bytes": checked["linear_bytes"], "memory_estimate": estimate, "imports": checked["imports"]}
+
+
+def app_build(args):
+    print(json.dumps(build_app(args.project, args.build_number), ensure_ascii=False))
+
+
+def app_run(args):
+    """在本机运行应用：模拟器是设备上的同一份宿主核心加 WAMR 的本机构建，时间是虚拟的。"""
+    import esp_base_sim
+    app = Path(args.app).resolve()
+    if app.is_dir():
+        app = Path(build_app(app, 0)["package"])
+    options = {"chip": args.chip, "device_id": args.device_id, "memory": args.memory, "stack": args.stack}
+    try:
+        options["params"] = dict(item.split("=", 1) for item in args.param)
+        options["pins"] = dict(item.split("=", 1) for item in args.pin)
+    except ValueError:
+        fail("--param 的格式是 键=值，--pin 的格式是 引脚号=用途")
+    lines = Path(args.script).read_text(encoding="utf-8").splitlines() if args.script else None
+    failed = False
+
+    def show(events):
+        nonlocal failed
+        for event in events:
+            failed = failed or event["event"] in ("fault", "start_failed")
+            print(f"[{sim.uptime_ms:>8} ms] {esp_base_sim.describe(event)}", flush=True)
+
+    try:
+        with esp_base_sim.Simulator(app, **options) as sim:
+            print(f"{sim.info['name']} {sim.info['version']}：wasm {sim.info['wasm_bytes']} 字节，内存上限 "
+                  f"{sim.info['memory']} 字节，芯片 {sim.info['chip']}", flush=True)
+            if not args.no_start:
+                show(sim.start())
+            if lines is None and sys.stdin.isatty():
+                print("命令：up、down、msg <主题> [载荷]、adv <毫秒>、in <引脚> <0|1>、clock <Unix 毫秒>、start、stop、stats、quit")
+            for line in (lines if lines is not None else sys.stdin):
+                words = line.strip().split(None, 2)
+                if not words or words[0].startswith("#"):
+                    continue
+                name = words[0]
+                try:
+                    if name == "quit":
+                        break
+                    elif name in ("start", "stop"):
+                        show(getattr(sim, name)())
+                    elif name in ("up", "down"):
+                        show(getattr(sim, "mqtt_" + name)())
+                    elif name == "msg" and len(words) >= 2:
+                        show(sim.message(words[1], words[2] if len(words) > 2 else ""))
+                    elif name == "adv" and len(words) == 2:
+                        show(sim.advance(int(words[1])))
+                    elif name == "in" and len(words) == 3:
+                        show(sim.input(int(words[1]), int(words[2])))
+                    elif name == "clock" and len(words) == 2:
+                        show(sim.clock(int(words[1])))
+                    elif name == "stats":
+                        show([sim.stats()])
+                    else:
+                        print(f"不认识的命令：{line.strip()}", flush=True)
+                except (ValueError, esp_base_sim.SimulatorError) as error:
+                    print(f"esp_base: {error}", flush=True)
+    except esp_base_sim.SimulatorError as error:
+        fail(str(error))
+    sys.exit(1 if failed else 0)
 
 
 def app_signed_path(package):
@@ -431,12 +635,31 @@ def main():
     command.add_argument("--timeout", type=float, default=30)
     command.set_defaults(run=control)
 
-    command = commands.add_parser("app", help="业务应用（WASM）：构建、签名、查看")
+    command = commands.add_parser("app", help="业务应用（WASM）：新建、构建、测试、本机运行、签名、查看")
     actions = command.add_subparsers(dest="action", required=True)
+    action = actions.add_parser("new", help="新建一个应用工程")
+    action.add_argument("directory", help="工程目录：不存在，或是空目录")
+    action.add_argument("--name", help="应用名；默认取目录名")
+    action.set_defaults(run=app_new)
     action = actions.add_parser("build", help="用 cargo 构建应用，检查模块并封装成未签名的应用包")
     action.add_argument("project", help="应用工程目录（含 Cargo.toml）")
     action.add_argument("--build-number", type=int, default=0, help="正式构建号；本地构建为 0")
     action.set_defaults(run=app_build)
+    action = actions.add_parser("test", help="在本机跑应用的单元测试（cargo test，编译到本机）")
+    action.add_argument("project", help="应用工程目录（含 Cargo.toml）")
+    action.add_argument("cargo_args", nargs="*", help="-- 之后的内容原样交给 cargo test")
+    action.set_defaults(run=app_test)
+    action = actions.add_parser("run", help="在本机运行应用：同一份宿主核心加 WAMR 的本机构建，时间是虚拟的")
+    action.add_argument("app", help="应用包（.ebapp）、.wasm，或应用工程目录（先构建）")
+    action.add_argument("--chip", default="esp32c3", choices=TARGETS)
+    action.add_argument("--device-id", help="应用读到的设备 UUID；默认是一个固定的假 UUID")
+    action.add_argument("--param", action="append", default=[], metavar="键=值", help="业务参数，可以给多个")
+    action.add_argument("--script", help="命令脚本，一行一条；不给时从标准输入读")
+    action.add_argument("--no-start", action="store_true", help="不自动启动应用")
+    action.add_argument("--memory", type=int, help="裸的 .wasm：内存上限")
+    action.add_argument("--stack", type=int, help="裸的 .wasm：操作数栈")
+    action.add_argument("--pin", action="append", default=[], metavar="引脚号=用途", help="裸的 .wasm：声明的引脚")
+    action.set_defaults(run=app_run)
     action = actions.add_parser("sign", help="用 RSA-3072 键给应用包签名并用官方 espsecure 验签")
     action.add_argument("package", help="app build 产出的 .ebapp")
     key = action.add_mutually_exclusive_group(required=True)

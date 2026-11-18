@@ -141,6 +141,7 @@ ESP32-C3 实板上系统 MQTT 和业务 MQTT 两条 TLS 连接在线、样例应
 ```bash
 bash tests/run_host_tests.sh        # 协议、守卫与 OTA 状态机
 bash tests/run_wasm_host_tests.sh   # WASM 宿主核心：需要 cmake，经典与快速解释器各跑一遍
+python3 ../sdk/sim/test_sim.py      # 本机运行（模拟器）和应用的命令行工具：需要 cmake 和 rustup
 ```
 
 覆盖协议编解码、命令去重、Profile 编码（名称规则、默认名称、可上报的地址、任务名去重、JSON 转义与最长文档）、业务守卫（连续异常重启、正常重启、稳定运行与换固件），以及 OTA 状态机的断电与停滞续传、重试退避、拒绝、回滚计数、取消和换任务，并用[合同样例](../docs/design/device-protocol-samples.json)核对与 Server 一致。host 测试不写设备；实板验证见仓库 README 的三层验证。
@@ -148,6 +149,8 @@ bash tests/run_wasm_host_tests.sh   # WASM 宿主核心：需要 cmake，经典�
 `run_host_tests.sh` 还覆盖应用包的包头与清单解析（含引脚声明和两种芯片的引脚规则），以及部署状态机的首次部署、替换、启动失败与试运行故障的回退、试运行期间设备重启、断电续做、重试退避、取消、换任务、拒绝和连续异常重启后的停用，并用合同样例核对期望应用的解码和应用状态的形状。
 
 `run_wasm_host_tests.sh` 把宿主核心和 WAMR 编到本机，用真实的应用（`tests/apps/*.wasm`）核对宿主接口与事件分发：每个接口的正常路径和参数范围，没有声明的引脚、用途不对的引脚一律被拒绝且不会碰到硬件，睡眠的累计上限；以及每一类应用故障都只停掉应用：死循环、陷阱、栈耗尽、越界指针、缺少的宿主接口、没有收缩的线性内存、截断或改坏的镜像。这些应用由 `../sdk/rust/build_fixtures.sh` 生成，产物随源码一起提交。
+
+`../sdk/sim` 是给业务开发用的[本机运行](../sdk/rust/README.md#本机测试和运行)：宿主核心和应用包的验收规则与设备共用同一份源码，平台服务换成模拟实现，时间是虚拟的。它的测试用同一批应用核对定时器、业务 MQTT、引脚与 PWM、安全电平、各类故障，以及 `app new` 出来的工程能构建、测试和运行。
 
 设备上的部署用 QEMU 测（需要已导出的 ESP-IDF 环境和 Espressif 的 QEMU）：
 

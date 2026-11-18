@@ -82,7 +82,10 @@
 python3 tools/esp_base.py app build sdk/rust/examples/hello            # 构建、检查并封装，产出未签名的 .ebapp
 python3 tools/esp_base.py app sign <.ebapp> --key-file /absolute/path/signing-key.pem
 python3 tools/esp_base.py app inspect <.ebapp 或 .wasm>                 # 清单、体积、用到的宿主接口、线性内存
+python3 tools/esp_base.py app run <.ebapp、.wasm 或工程目录>             # 本机运行：按设备的规则验收清单，不验签
 ```
+
+新建工程（`app new`）、本机测试（`app test`）和本机运行的用法见 [SDK 说明](../../sdk/rust/README.md)。
 
 `app build` 的清单取自应用工程的 `Cargo.toml`：`name`、`version` 来自 `[package]`（包名里的连字符换成下划线），`memory`、`stack` 和可选的 `chips` 来自 `[package.metadata.esp-base]`，可选的 `pins` 来自 `[package.metadata.esp-base.pins]`，`abi` 按模块实际导入的宿主接口算出，构建号用 `--build-number` 给出。工具只核对 `pins` 的写法；某个引脚在某种芯片上能不能用由设备在安装时判定。
 
