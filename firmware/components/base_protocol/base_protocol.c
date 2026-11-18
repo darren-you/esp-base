@@ -69,10 +69,16 @@ static bool copy_string(const cJSON *object, const char *key, char *out, size_t 
     return true;
 }
 
+/* 只接受 wifi 和 business_mqtt；其他字段（包括旧协议改系统 MQTT 的 mqtt）一律拒绝，不部分执行。 */
 static bool decode_config(const cJSON *root, base_config_update_t *out)
 {
+    const cJSON *item;
+    cJSON_ArrayForEach(item, root) {
+        if (strcmp(item->string, "request_id") && strcmp(item->string, "wifi") &&
+            strcmp(item->string, "business_mqtt")) return false;
+    }
     const cJSON *wifi = cJSON_GetObjectItemCaseSensitive(root, "wifi");
-    const cJSON *mqtt = cJSON_GetObjectItemCaseSensitive(root, "mqtt");
+    const cJSON *mqtt = cJSON_GetObjectItemCaseSensitive(root, "business_mqtt");
     if (wifi) {
         if (!cJSON_IsObject(wifi) ||
             !copy_string(wifi, "ssid", out->wifi_ssid, sizeof out->wifi_ssid, false) ||
@@ -81,14 +87,15 @@ static bool decode_config(const cJSON *root, base_config_update_t *out)
         out->has_wifi = true;
     }
     if (mqtt) {
+        base_mqtt_t *business = &out->business_mqtt;
         if (!cJSON_IsObject(mqtt) ||
-            !copy_string(mqtt, "uri", out->mqtt_uri, sizeof out->mqtt_uri, false) ||
-            !copy_string(mqtt, "username", out->mqtt_username, sizeof out->mqtt_username, false) ||
-            !copy_string(mqtt, "password", out->mqtt_password, sizeof out->mqtt_password, false) ||
-            strncmp(out->mqtt_uri, "mqtts://", 8) != 0) return false;
-        out->has_mqtt = true;
+            !copy_string(mqtt, "uri", business->uri, sizeof business->uri, false) ||
+            !copy_string(mqtt, "username", business->username, sizeof business->username, false) ||
+            !copy_string(mqtt, "password", business->password, sizeof business->password, false) ||
+            strncmp(business->uri, "mqtts://", 8) != 0) return false;
+        out->has_business_mqtt = true;
     }
-    return out->has_wifi || out->has_mqtt;
+    return out->has_wifi || out->has_business_mqtt;
 }
 
 bool base_cmd_decode(const char *name, const char *payload, size_t length,

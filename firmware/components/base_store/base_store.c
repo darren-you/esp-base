@@ -24,6 +24,13 @@ static esp_err_t get_string(nvs_handle_t handle, const char *key, char *out, siz
     return result;
 }
 
+/* 出厂资料里没有的键（业务 MQTT）缺失时为空串，不算错误。 */
+static esp_err_t get_optional_string(nvs_handle_t handle, const char *key, char *out, size_t size)
+{
+    const esp_err_t result = get_string(handle, key, out, size);
+    return result == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : result;
+}
+
 esp_err_t base_store_device_id(char out[BASE_UUID_BYTES])
 {
     nvs_handle_t handle;
@@ -56,6 +63,10 @@ esp_err_t base_store_load_config(base_config_t *config)
     if (result == ESP_OK) result = get_string(handle, "mqtt_uri", config->mqtt_uri, sizeof config->mqtt_uri);
     if (result == ESP_OK) result = get_string(handle, "mqtt_user", config->mqtt_username, sizeof config->mqtt_username);
     if (result == ESP_OK) result = get_string(handle, "mqtt_pass", config->mqtt_password, sizeof config->mqtt_password);
+    base_mqtt_t *business = &config->business_mqtt;
+    if (result == ESP_OK) result = get_optional_string(handle, "biz_mqtt_uri", business->uri, sizeof business->uri);
+    if (result == ESP_OK) result = get_optional_string(handle, "biz_mqtt_user", business->username, sizeof business->username);
+    if (result == ESP_OK) result = get_optional_string(handle, "biz_mqtt_pass", business->password, sizeof business->password);
     if (result == ESP_OK && nvs_get_u32(handle, "cfg_rev", &config->revision) != ESP_OK) config->revision = 0;
     nvs_close(handle);
     return result;
@@ -71,6 +82,9 @@ esp_err_t base_store_save_config(base_config_t *config)
     if (result == ESP_OK) result = nvs_set_str(handle, "mqtt_uri", config->mqtt_uri);
     if (result == ESP_OK) result = nvs_set_str(handle, "mqtt_user", config->mqtt_username);
     if (result == ESP_OK) result = nvs_set_str(handle, "mqtt_pass", config->mqtt_password);
+    if (result == ESP_OK) result = nvs_set_str(handle, "biz_mqtt_uri", config->business_mqtt.uri);
+    if (result == ESP_OK) result = nvs_set_str(handle, "biz_mqtt_user", config->business_mqtt.username);
+    if (result == ESP_OK) result = nvs_set_str(handle, "biz_mqtt_pass", config->business_mqtt.password);
     if (result == ESP_OK) result = nvs_set_u32(handle, "cfg_rev", config->revision + 1);
     if (result == ESP_OK) result = nvs_commit(handle);
     if (result == ESP_OK) ++config->revision;

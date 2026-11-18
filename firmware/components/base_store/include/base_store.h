@@ -11,18 +11,21 @@
 typedef struct {
     char wifi_ssid[33];
     char wifi_password[65];
+    /* 系统 MQTT：esp-base 连本协议 Broker 的地址和账户，只由出厂资料写入。 */
     char mqtt_uri[128];
     char mqtt_username[65];
     char mqtt_password[129];
+    /* 业务 MQTT：经 config 命令下发，留给业务层另开一条连接；esp-base 自己不连接。未配置时各字段为空。 */
+    base_mqtt_t business_mqtt;
     uint32_t revision;
 } base_config_t;
 
 esp_err_t base_store_init(void);
 /* 读取设备 UUID；没有时生成一个并保存。 */
 esp_err_t base_store_device_id(char out[BASE_UUID_BYTES]);
-/* 读取配置；没有刷入配置时返回 ESP_ERR_NVS_NOT_FOUND。 */
+/* 读取配置；没有刷入出厂配置时返回 ESP_ERR_NVS_NOT_FOUND。业务 MQTT 可以没有。 */
 esp_err_t base_store_load_config(base_config_t *config);
-/* 保存已验证可用的配置，revision 加一。 */
+/* 保存配置，revision 加一。 */
 esp_err_t base_store_save_config(base_config_t *config);
 esp_err_t base_store_load_ota(base_ota_record_t *record);
 esp_err_t base_store_save_ota(const base_ota_record_t *record);

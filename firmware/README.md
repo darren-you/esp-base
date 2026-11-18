@@ -9,7 +9,7 @@
 | `apps/esp_base/main` | 主程序：控制任务、MQTT 客户端、状态文档、命令执行 |
 | `components/base_protocol` | 主题、命令解码、应答与去重；纯逻辑，不依赖 ESP-IDF |
 | `components/base_ota` | OTA 状态机（纯逻辑）和基于 `esp_https_ota` 的下载任务 |
-| `components/base_store` | NVS 中的设备 UUID、配置和 OTA 记录 |
+| `components/base_store` | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置和 OTA 记录 |
 | `components/base_net` | Wi-Fi STA 与 SNTP |
 | `partitions/partitions.csv` | 两个目标共用的 4 MiB 分区表 |
 | `tests` | host 测试 |
@@ -31,7 +31,7 @@ ota_1     0x200000  1920 KiB
 coredump  0x3e0000  64 KiB
 ```
 
-设备 UUID 和 Wi-Fi／MQTT 配置在 NVS 的 `base` 命名空间，由 `tools/esp_base.py flash --provision` 生成 NVS 镜像写入；固件出错时不擦除 NVS。经 `cmd/config` 下发的新配置先试用，连上 Broker 才保存，120 秒内连不上就恢复旧配置。
+设备 UUID、Wi-Fi 和系统 MQTT 配置在 NVS 的 `base` 命名空间，由 `tools/esp_base.py flash --provision` 生成 NVS 镜像写入；固件出错时不擦除 NVS。系统 MQTT 是 esp-base 连管理 Broker 的那条连接，只能经出厂资料修改。经 `cmd/config` 下发的新 Wi-Fi 先试用，连上 Broker 才保存，120 秒内连不上就恢复旧配置。`cmd/config` 下发的业务 MQTT（`biz_mqtt_uri`、`biz_mqtt_user`、`biz_mqtt_pass`）收到即保存，留给业务层另开连接，由 `base_store_load_config()` 读取；esp-base 自己不连接它。
 
 ## 公网下载
 

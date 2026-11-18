@@ -1,6 +1,6 @@
 # 设备—云协议
 
-设备作为 MQTT 3.1.1 客户端连接 Broker 的 TLS 端口，客户端 ID 是设备 UUID。全部消息是 UTF-8 JSON，使用 QoS 1。鉴权靠 TLS、Broker 账户和 Topic ACL；固件真实性靠镜像签名。[样例](device-protocol-samples.json)是本文的可执行版本，设备和 Server 都用它做解码测试。
+设备作为 MQTT 3.1.1 客户端连接 Broker 的 TLS 端口，客户端 ID 是设备 UUID。这条连接是 esp-base 的系统 MQTT，地址和账户只在 USB 刷写时由出厂资料写入，不能远程修改：改错或改到别的 Broker，Server 就再也管不到这台设备。业务需要 MQTT 时另开一条连接，连接信息经 `config` 命令的 `business_mqtt` 下发。全部消息是 UTF-8 JSON，使用 QoS 1。鉴权靠 TLS、Broker 账户和 Topic ACL；固件真实性靠镜像签名。[样例](device-protocol-samples.json)是本文的可执行版本，设备和 Server 都用它做解码测试。
 
 ## 主题
 
@@ -26,7 +26,7 @@ ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `s
  "heap":{"free":178148,"min":160696,"largest":110592},   // 字节；min 是本次启动以来的最小空闲堆
  "stack":{"main":4200,"mqtt_task":2900},                 // 各任务栈的历史最小余量，字节
  "wifi":{"rssi":-52},
- "config":{"revision":3,"error":null},                   // error：最近一次配置试用失败的原因
+ "config":{"revision":3,"error":null},                   // error：最近一次配置失败的原因，trial_failed 或 not_saved
  "wakeups":57}                                           // 控制任务处理过的事件数
 ```
 
@@ -38,7 +38,7 @@ ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `s
 | --- | --- | --- |
 | `status` | 无 | 立即重新发布状态文档 |
 | `restart` | 无 | 应答发出后重启 |
-| `config` | `wifi`:{`ssid`,`password`} 和 `mqtt`:{`uri`,`username`,`password`}，至少一项；`uri` 必须是 `mqtts://` | 应答发出后试用新配置：连上 Broker 才保存并把 `config.revision` 加一；120 秒内连不上则恢复旧配置，`config.error` 为 `trial_failed` |
+| `config` | `wifi`:{`ssid`,`password`} 和 `business_mqtt`:{`uri`,`username`,`password`}，至少一项；`uri` 必须是 `mqtts://`；其他字段（包括改系统 MQTT 的 `mqtt`）一律 `invalid_args` | `business_mqtt`：业务层另开连接用的 Broker，esp-base 不连接它，收到即保存并把 `config.revision` 加一，保存失败时 `config.error` 为 `not_saved`。`wifi`：应答发出后试用新网络，连上 Broker 才保存并把 `config.revision` 加一；120 秒内连不上则恢复旧配置，`config.error` 为 `trial_failed` |
 
 应答：
 

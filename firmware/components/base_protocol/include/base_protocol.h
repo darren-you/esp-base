@@ -31,14 +31,21 @@ bool base_topic_command(const char *topic, size_t topic_len, const char *device_
 
 typedef enum { BASE_CMD_STATUS, BASE_CMD_RESTART, BASE_CMD_CONFIG } base_cmd_kind_t;
 
+/* 一个 MQTT Broker 的连接信息。 */
+typedef struct {
+    char uri[128];
+    char username[65];
+    char password[129];
+} base_mqtt_t;
+
+/* config 命令只改 Wi-Fi 和业务 MQTT。连本协议 Broker 的系统 MQTT 只由出厂资料写入：
+ * 远程改错或改到别的 Broker，Server 就再也管不到这台设备。 */
 typedef struct {
     bool has_wifi;
     char wifi_ssid[33];
     char wifi_password[65];
-    bool has_mqtt;
-    char mqtt_uri[128];
-    char mqtt_username[65];
-    char mqtt_password[129];
+    bool has_business_mqtt;
+    base_mqtt_t business_mqtt;
 } base_config_update_t;
 
 typedef struct {

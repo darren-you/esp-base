@@ -21,7 +21,7 @@
 #include "mqtt_client.h"
 
 #define ROLLBACK_WINDOW_MS 300000u      /* 新固件须在此时间内连上 Broker，否则回滚 */
-#define CONFIG_TRIAL_MS 120000u         /* 新配置须在此时间内连上 Broker，否则恢复旧配置 */
+#define CONFIG_TRIAL_MS 120000u         /* 新 Wi-Fi 须在此时间内连上 Broker，否则恢复旧配置 */
 #define DEFERRED_FALLBACK_MS 3000u      /* 等应答发出的最长时间 */
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
 #define MESSAGE_MAX_BYTES 1536u
@@ -51,7 +51,7 @@ static char s_topics[5][BASE_TOPIC_BYTES];
 static char s_will[384];
 static const char *s_reset_reason = "other";
 static base_config_t s_config, s_trial;
-static bool s_trial_active, s_trial_wifi;
+static bool s_trial_active;
 static const char *s_config_error;
 static esp_mqtt_client_handle_t s_mqtt;
 static bool s_mqtt_connected, s_pending_verify;
@@ -245,9 +245,9 @@ static void run_deferred(void)
         ESP_LOGI(TAG, "restarting");
         esp_restart();
     } else if (action == DEFER_APPLY_CONFIG) {
-        /* 试用新配置：连上 Broker 才保存，超时恢复旧配置。 */
+        /* 试用新 Wi-Fi：连上 Broker 才保存，超时恢复旧配置。 */
         mqtt_stop();
-        if (s_trial_wifi) base_net_reconfigure(s_trial.wifi_ssid, s_trial.wifi_password);
+        base_net_reconfigure(s_trial.wifi_ssid, s_trial.wifi_password);
         mqtt_start(&s_trial);
         timer_start(TIMER_CONFIG_TRIAL, CONFIG_TRIAL_MS);
     }
@@ -314,20 +314,19 @@ static void handle_command(const char *name, const char *payload, size_t length)
             break;
         case BASE_CMD_CONFIG:
             if (s_deferred != DEFER_NONE || s_trial_active) { error = "busy"; break; }
-            s_trial = s_config;
-            s_trial_wifi = command.config.has_wifi;
+            s_config_error = NULL;
+            if (command.config.has_business_mqtt) {
+                /* 业务 MQTT 由业务层另开连接使用，esp-base 不连接它、无从试用：收到即保存。 */
+                s_config.business_mqtt = command.config.business_mqtt;
+                if (base_store_save_config(&s_config) != ESP_OK) s_config_error = "not_saved";
+            }
             if (command.config.has_wifi) {
+                s_trial = s_config;
                 strcpy(s_trial.wifi_ssid, command.config.wifi_ssid);
                 strcpy(s_trial.wifi_password, command.config.wifi_password);
+                s_trial_active = true;
+                after = DEFER_APPLY_CONFIG;
             }
-            if (command.config.has_mqtt) {
-                strcpy(s_trial.mqtt_uri, command.config.mqtt_uri);
-                strcpy(s_trial.mqtt_username, command.config.mqtt_username);
-                strcpy(s_trial.mqtt_password, command.config.mqtt_password);
-            }
-            s_trial_active = true;
-            s_config_error = NULL;
-            after = DEFER_APPLY_CONFIG;
             break;
         }
     }
@@ -380,11 +379,11 @@ static void on_timer(timer_id_t id)
         break;
     case TIMER_CONFIG_TRIAL:
         if (!s_trial_active) break;
-        ESP_LOGW(TAG, "new configuration did not reach the broker; restoring the previous one");
+        ESP_LOGW(TAG, "new Wi-Fi did not reach the broker; restoring the previous one");
         s_trial_active = false;
         s_config_error = "trial_failed";
         mqtt_stop();
-        if (s_trial_wifi) base_net_reconfigure(s_config.wifi_ssid, s_config.wifi_password);
+        base_net_reconfigure(s_config.wifi_ssid, s_config.wifi_password);
         memset(&s_trial, 0, sizeof s_trial);
         mqtt_start(&s_config);
         break;

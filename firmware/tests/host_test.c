@@ -67,6 +67,24 @@ static void test_dedupe(void)
     CHECK(base_dedupe_find(&dedupe, "") == NULL);
 }
 
+/* config 只改 Wi-Fi 和业务 MQTT；业务 MQTT 解码到独立字段，系统 MQTT 的 mqtt 字段整条拒绝。 */
+static void test_config_decode(void)
+{
+    base_cmd_t command;
+    const char *error = NULL;
+    const char *business = "{\"request_id\":\"3f2504e0-4f89-41d3-9a0c-0305e82c3304\","
+        "\"business_mqtt\":{\"uri\":\"mqtts://business.example.test:8883\",\"username\":\"u\",\"password\":\"p\"}}";
+    CHECK(base_cmd_decode("config", business, strlen(business), &command, &error) && !error);
+    CHECK(command.kind == BASE_CMD_CONFIG && !command.config.has_wifi && command.config.has_business_mqtt);
+    CHECK(!strcmp(command.config.business_mqtt.uri, "mqtts://business.example.test:8883") &&
+          !strcmp(command.config.business_mqtt.username, "u") && !strcmp(command.config.business_mqtt.password, "p"));
+    const char *system = "{\"request_id\":\"3f2504e0-4f89-41d3-9a0c-0305e82c3308\","
+        "\"wifi\":{\"ssid\":\"lab\",\"password\":\"password-1\"},"
+        "\"mqtt\":{\"uri\":\"mqtts://broker.example.test:8883\",\"username\":\"u\",\"password\":\"p\"}}";
+    CHECK(!base_cmd_decode("config", system, strlen(system), &command, &error) &&
+          command.request_id[0] && error && !strcmp(error, "invalid_args"));
+}
+
 /* 新任务：开始下载；下载途中偏移每 64 KiB 落盘；每 5% 发布；完成后记录 rebooting 并重启。 */
 static void test_ota_happy_path(void)
 {
@@ -425,6 +443,7 @@ int main(int argc, char **argv)
 {
     test_topics();
     test_dedupe();
+    test_config_decode();
     test_ota_happy_path();
     test_ota_already_running();
     test_ota_resume_after_power_loss();
