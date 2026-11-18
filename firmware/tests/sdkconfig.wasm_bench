@@ -1,0 +1,3 @@
+# 测试固件：只做 WASM 内存实测（darren-space#113 T3），不启动系统层。正式打包入口拒绝带这个开关的镜像。
+# 用法见 firmware/README.md「WASM 实测」。
+CONFIG_ESP_BASE_TEST_WASM_BENCH=y

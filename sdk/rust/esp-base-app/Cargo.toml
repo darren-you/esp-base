@@ -1,0 +1,10 @@
+[package]
+name = "esp-base-app"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "ESP Base 业务应用 SDK：把业务编译成 WASM 应用，经宿主接口使用设备能力"
+publish = false
+
+[lib]
+path = "src/lib.rs"

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// ESP Base 固件：只运行系统层，没有业务层。业务固件用同样的方式调用 base_system_run 并交出自己的业务描述。
+// ESP Base 固件：系统层加 WASM 宿主。业务是编译成 WASM 的应用，由宿主加载运行，不编进固件。
 #include "base_system.h"
+#include "base_wasm.h"
 #include "sdkconfig.h"
 
 #if CONFIG_ESP_BASE_TEST_BUSINESS_PANIC || CONFIG_ESP_BASE_TEST_BUSINESS_HANG
@@ -32,10 +33,14 @@ static void test_init(void)
 static const base_business_t s_test_business = {.name = "test_fault", .init = test_init};
 #define BUSINESS (&s_test_business)
 #else
-#define BUSINESS NULL
+#define BUSINESS (&base_wasm_business)
 #endif
 
 void app_main(void)
 {
+#if CONFIG_ESP_BASE_TEST_WASM_BENCH
+    base_wasm_bench(); /* 测试固件：只做 WASM 内存实测，不启动系统层 */
+#else
     base_system_run(BUSINESS);
+#endif
 }

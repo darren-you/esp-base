@@ -1,0 +1,12 @@
+menu "ESP Base WASM"
+
+    config ESP_BASE_TEST_WASM_BENCH
+        bool "Test build only: run the WASM memory benchmark instead of the system"
+        default n
+        help
+            The firmware loads an embedded sample application, prints heap and stack usage for
+            each phase, and never starts the system layer (no Wi-Fi, no broker). Used only to
+            measure the runtime on a board or in QEMU; release packaging refuses images built
+            with it.
+
+endmenu

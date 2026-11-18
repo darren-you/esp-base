@@ -1,0 +1,2 @@
+# 实测对照：把 WAMR 换成快速解释器（缺省是经典解释器）。
+CONFIG_WAMR_INTERP_FAST=y

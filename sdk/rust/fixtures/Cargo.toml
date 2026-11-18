@@ -1,0 +1,37 @@
+# 宿主测试用的夹具应用：每个都故意触发一种故障。构建产物由 build_fixtures.sh 拷到 firmware/tests/apps/。
+[package]
+name = "fixtures"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+esp-base-app = { path = "../esp-base-app" }
+
+[[example]]
+name = "spin"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "trap"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "init_fail"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "bad_pointer"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "unknown_import"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "no_event"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "deep"
+crate-type = ["cdylib"]

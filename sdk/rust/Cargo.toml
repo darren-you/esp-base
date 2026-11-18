@@ -1,0 +1,12 @@
+# ESP Base 业务应用的 Rust 工作区：SDK、样例应用和宿主测试用的夹具应用。
+[workspace]
+resolver = "2"
+members = ["esp-base-app", "examples/hello", "fixtures"]
+
+# 体积就是内存：ESP32-C3 上应用整体载入内存。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

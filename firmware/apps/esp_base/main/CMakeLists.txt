@@ -1,1 +1,1 @@
-idf_component_register(SRCS "app_main.c" INCLUDE_DIRS "." PRIV_REQUIRES base_system)
+idf_component_register(SRCS "app_main.c" INCLUDE_DIRS "." PRIV_REQUIRES base_system base_wasm)

@@ -1,6 +1,6 @@
 # ESP Base
 
-ESP32-C3 与 ESP32 的业务基座固件：设备身份、Wi-Fi、TLS MQTT 管理和公网 OTA。只依赖官方 ESP-IDF 发行版和组件注册表，不维护任何上游派生。
+ESP32-C3 与 ESP32 的业务基座固件：设备身份、Wi-Fi、TLS MQTT 管理和公网 OTA，业务以 WASM 应用的形式由固件里的宿主加载运行。只依赖官方 ESP-IDF 发行版、组件注册表和原样引用的官方 WAMR 发行版，不维护任何上游派生。
 
 固件分两层：**系统层**负责联网、系统 MQTT、命令、远程配置、OTA 和设备 Profile；**业务层**只实现自己的功能，通过业务运行时（`base_runtime`）这一个接口取得设备身份、业务参数和业务 MQTT 配置，创建任务、打开自己的连接。业务看不到系统的 Wi-Fi、系统 MQTT 账户和 NVS，系统的升级与管理也不经过业务代码。这是代码上的解耦，不是内存隔离：两层在同一个镜像里（C3 这类芯片没有条件做真正的隔离）。
 
@@ -66,6 +66,10 @@ python3 tools/esp_base.py control status --device <UUID> --uri mqtts://<Broker �
 python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --username ... --password-file ...
 ```
 
+## 业务应用（WASM）
+
+业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)。目前应用还是随固件内嵌的样例，独立部署尚未实现。
+
 ## 业务固件
 
 业务以独立的 ESP-IDF 工程在本仓之上开发：引用本仓的组件、配置和分区表，在 `app_main` 里调用 `base_system_run` 并交出业务描述（名称和两个回调），业务组件只依赖 `base_runtime`。接口和做法见[固件说明](firmware/README.md#业务固件)；本仓的工具以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根即可构建、签名、刷写和正式打包。
@@ -87,7 +91,7 @@ bash firmware/tests/run_host_tests.sh   # host 测试：协议编解码与 OTA �
 
 验证分三层：host 测试、两块板冒烟（刷入后联网、收发命令、完成一次 OTA）、24 小时长稳。host 测试通过不代表实板可用。长稳用 esp-tool 的 [`server/scripts/ota_soak.py`](https://github.com/darren-you/esp-tool/blob/1.0.0/server/scripts/ota_soak.py)，在 Server 所在主机上运行：两块板在两个已登记的版本之间来回升级，记录每轮结果、非预期重启和最小空闲堆。
 
-依赖只有官方 ESP-IDF 和组件注册表中的 [espressif/mqtt](https://components.espressif.com/components/espressif/mqtt)、[espressif/cjson](https://components.espressif.com/components/espressif/cjson)，版本由 `firmware/dependencies.lock.<target>` 锁定。
+依赖只有官方 ESP-IDF、组件注册表中的 [espressif/mqtt](https://components.espressif.com/components/espressif/mqtt)、[espressif/cjson](https://components.espressif.com/components/espressif/cjson)，以及按精确提交原样引用的 [WAMR](https://github.com/wasm-micro-runtime/wasm-micro-runtime) 2.4.6，版本由 `firmware/dependencies.lock.<target>` 锁定。首次构建时组件管理器要从 GitHub 取回 WAMR 的完整仓库（约 250 MB，之后走本机缓存）。
 
 问题反馈和计划登记在 [darren-space Issues](https://github.com/darren-you/darren-space/issues)。
 

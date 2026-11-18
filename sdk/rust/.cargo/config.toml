@@ -1,0 +1,10 @@
+[build]
+target = "wasm32v1-none"
+
+# 栈 4 KiB；导出 __heap_base 与 __data_end，宿主据此把线性内存收缩到实际用量。
+[target.wasm32v1-none]
+rustflags = [
+    "-C", "link-arg=-zstack-size=4096",
+    "-C", "link-arg=--export=__heap_base",
+    "-C", "link-arg=--export=__data_end",
+]

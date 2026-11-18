@@ -1,0 +1,11 @@
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+esp-base-app = { path = "../../esp-base-app" }

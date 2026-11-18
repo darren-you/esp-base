@@ -1,0 +1,6 @@
+dependencies:
+  idf: ">=6.1"
+  # WAMR 官方上游发行版 2.4.6，按精确提交原样引用（darren-space#113 D3）：不派生、不打补丁。
+  wasm-micro-runtime:
+    git: https://github.com/wasm-micro-runtime/wasm-micro-runtime.git
+    version: 0fa421193212b3fb45c7f59ec53662cc2851fcc7

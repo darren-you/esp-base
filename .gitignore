@@ -14,3 +14,4 @@ receipts/private/
 *.key
 .env
 __pycache__/
+target/

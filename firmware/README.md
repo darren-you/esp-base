@@ -6,7 +6,7 @@
 
 | 路径 | 层 | 内容 |
 | --- | --- | --- |
-| `apps/esp_base/main` | 入口 | 基座固件入口：只调用 `base_system_run(NULL)`，没有业务层 |
+| `apps/esp_base/main` | 入口 | 基座固件入口：把 WASM 宿主（`base_wasm_business`）作为业务层交给 `base_system_run` |
 | `components/base_system` | 系统 | 主程序：控制任务、系统 MQTT、状态文档发布、命令执行、配置试用、OTA 编排，以及业务守卫（安全模式） |
 | `components/base_profile` | 系统 | 设备 Profile 的唯一来源：启动时采集芯片、MAC、IDF 版本，采样任务异步采样堆、系统任务栈、Wi-Fi 与 IPv4／IPv6，并向业务运行时读取业务部分；状态文档与遗嘱都按它的快照编码 |
 | `components/base_protocol` | 系统 | 主题、命令解码、应答与去重，Profile 结构及状态文档／遗嘱的编码；纯逻辑，不依赖 ESP-IDF |
@@ -14,8 +14,9 @@
 | `components/base_store` | 系统 | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置、设备名称与所属 Group、OTA 记录和业务守卫记录 |
 | `components/base_net` | 系统 | Wi-Fi STA、IPv6（链路本地与 SLAAC）与 SNTP |
 | `components/base_runtime` | 运行时 | 业务层唯一能依赖的组件：公开目录里只有 `base_runtime.h`；`system/` 是留给系统层的接口和业务守卫的纯逻辑 |
+| `components/base_wasm` | 业务 | WASM 宿主：以一个业务的身份跑在 `base_runtime` 上，用 WAMR 解释器运行编译成 WASM 的业务应用。`core/` 是不依赖 ESP-IDF 的宿主核心（宿主接口、事件分发、故障处理），`base_wasm.c` 是设备上的平台实现（应用任务、定时器、业务 MQTT） |
 | `partitions/partitions.csv` | | 两个目标共用的 4 MiB 分区表 |
-| `tests` | | host 测试 |
+| `tests` | | host 测试、宿主测试用的应用（`apps/*.wasm`，源码在 [`../sdk/rust`](../sdk/rust/README.md)）和测试固件的 sdkconfig 片段 |
 
 ## 分层
 
@@ -86,6 +87,27 @@ coredump  0x3e0000  64 KiB
 
 构建、签名、刷写和正式打包用本仓的 `tools/`，以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根；正式打包另设 `ESP_BASE_APPLICATION_ID` 为 Fast Deploy 身份里的应用 ID。
 
+## WASM 宿主
+
+基座固件的业务层是 WASM 宿主：业务不编进固件，而是编译成 WASM 应用由宿主加载运行。应用用 [Rust SDK](../sdk/rust/README.md) 开发；目前只能运行随固件内嵌的样例应用（`tests/apps/hello.wasm`），应用的签名、存放和经公网部署尚未实现。
+
+- **事件驱动**：应用导出 `app_init` 和 `app_event`。一个应用任务阻塞在事件队列上，定时器、业务 MQTT 和系统的 connect 通知只向队列投递事件，同一时刻只有一次调用在执行，应用里没有线程。
+- **宿主接口**（导入模块 `base`）：日志、单调时间与 UTC 时间、4 个定时器、睡眠、业务 MQTT（连接与遗嘱、订阅、发布，消息以事件送达）。业务 MQTT 的地址和账户留在宿主里，应用拿不到；连接由宿主建立并自动重连，每次连上后重新订阅。接口只增不改，定义在 `core/wasm_host.h`、`core/wasm_port.h`。
+- **故障只停应用**：每次调用有指令预算（死循环会被停下），陷阱、越界指针、栈耗尽都只让这一次调用失败。宿主随即停掉应用：取消定时器、替应用发出遗嘱并断开连接，退避后重新启动（5 秒起，每次翻倍，上限 5 分钟）。应用用到的宿主接口固件必须全都有，缺一个就拒绝加载。
+- **内存**：运行时的内存取自一块池，池的大小就是应用的内存上限，应用停止时整池归还。线性内存按模块实际用量收缩（要求模块不含 `memory.grow`，并导出 `__heap_base` 与 `__data_end`），没有收缩的模块被拒绝。
+
+运行时是 [WAMR](https://github.com/wasm-micro-runtime/wasm-micro-runtime) 2.4.6 的经典解释器，由组件管理器按精确提交取回、原样使用（`components/base_wasm/idf_component.yml`），关闭 AOT、WASI、线程和内置 libc，打开线性内存收缩与指令计量。它的 ESP-IDF 端口在 ESP-IDF 6 上有几处问题，都在构建和链接时处理，不改它的源码：
+
+| 问题 | 处理 | 位置 |
+| --- | --- | --- |
+| 用到 `struct stat`、`renameat` 却没有包含声明 | 强制包含 `port/wamr_idf6.h` | `CMakeLists.txt` |
+| 自己设了 `-Wno-format`，缺配套的 `-Wno-format-security` | 补上 | `CMakeLists.txt` |
+| 内存保护开启时 ESP-IDF 6 不定义 `MALLOC_CAP_EXEC` | 定义为无效能力；可执行内存只有 AOT 用 | `CMakeLists.txt` |
+| 用 `pthread_self()` 取当前线程，在普通 FreeRTOS 任务里断言失败 | 链接时把 `os_self_thread` 换成按任务句柄实现的版本 | `components/base_wasm/CMakeLists.txt` |
+| `os_realloc` 在内存块被挪动后可能把数据错位 4 字节 | 运行时用 WAMR 自带的池分配器，不经过它 | `core/wasm_host.c` |
+
+ESP32-C3 上 WAMR 占 Flash 约 57 KB，宿主约 7 KB。QEMU 里的实测（样例应用 1,550 字节）：内存池实际用掉 5,832 字节，线性内存 4,176 字节，应用任务的栈最多用到约 2 KB；应用停止后堆回到启动前的水平。
+
 ## 公网下载
 
 固件经公网（跨境链路常有丢包）用 HTTPS 下载，`sdkconfig.defaults` 为此调了三处 TCP 默认值：接收窗口 23,040 B（默认 5,760 B，链路好时下载被它限速）、开启 SACK、乱序队列放到上限。下载任务（`components/base_ota/ota_worker.c`）连续 20 秒收不到数据就放弃当前连接，退避后从已写入的扇区续传；`esp_https_ota` 自己把读超时当作继续等待，不会结束一条不再送数据的连接。
@@ -103,7 +125,12 @@ coredump  0x3e0000  64 KiB
 ## 测试
 
 ```bash
-bash tests/run_host_tests.sh
+bash tests/run_host_tests.sh        # 协议、守卫与 OTA 状态机
+bash tests/run_wasm_host_tests.sh   # WASM 宿主核心：需要 cmake，经典与快速解释器各跑一遍
 ```
 
 覆盖协议编解码、命令去重、Profile 编码（名称规则、默认名称、可上报的地址、任务名去重、JSON 转义与最长文档）、业务守卫（连续异常重启、正常重启、稳定运行与换固件），以及 OTA 状态机的断电与停滞续传、重试退避、拒绝、回滚计数、取消和换任务，并用[合同样例](../docs/design/device-protocol-samples.json)核对与 Server 一致。host 测试不写设备；实板验证见仓库 README 的三层验证。
+
+`run_wasm_host_tests.sh` 把宿主核心和 WAMR 编到本机，用真实的应用（`tests/apps/*.wasm`）核对宿主接口与事件分发，以及每一类应用故障都只停掉应用：死循环、陷阱、栈耗尽、越界指针、缺少的宿主接口、没有收缩的线性内存、截断或改坏的镜像。这些应用由 `../sdk/rust/build_fixtures.sh` 生成，产物随源码一起提交。
+
+要在设备或 QEMU 上量内存，用测试开关 `CONFIG_ESP_BASE_TEST_WASM_BENCH` 构建一个不启动系统层的固件（片段 `tests/sdkconfig.wasm_bench`；在 QEMU 里再加 `tests/sdkconfig.qemu` 让日志走 UART，加 `tests/sdkconfig.wasm_fast` 换成快速解释器对照），串口上每个阶段打印一行 `WASM_BENCH`。固件开着更新时验签，没签名的镜像启动即退出，所以在 QEMU 里运行前也要用任意一把 RSA-3072 键签名。正式打包入口拒绝带这个开关的镜像。
