@@ -41,7 +41,7 @@ flowchart TB
 
 业务守卫（`base_runtime/system/base_guard.h`，纯逻辑）在每次启动时判定要不要拉起业务：
 
-- 同一个固件连续 3 次异常重启（`panic`、各类看门狗，以及业务任务看门狗超时后运行时主动重启的 `business_watchdog`），就不再调用任何业务代码。状态文档里 `business.state` 为 `disabled`、`error` 为 `crash_loop`，串口打印 `ESP_BASE_BUSINESS_DISABLED`；系统 MQTT、命令、远程配置和 OTA 照常。
+- 同一个固件连续 3 次异常重启（`panic`、各类看门狗，以及业务任务看门狗超时或业务回调超时后运行时主动重启的 `business_watchdog`），就不再调用任何业务代码。状态文档里 `business.state` 为 `disabled`、`error` 为 `crash_loop`，串口打印 `ESP_BASE_BUSINESS_DISABLED`；系统 MQTT、命令、远程配置和 OTA 照常。
 - 正常重启（上电、`restart` 命令、有线刷写）或换了固件后重新计数；业务连续运行 5 分钟后也清零。所以在网页里点「重启」会让业务再试一次，升级固件会直接恢复。
 - 异常复位只记在出事的那个固件头上（上一次运行的固件摘要留在 RTC 内存里）：新固件崩溃后回滚回来的旧固件不计这一次。
 - 计数存在 NVS 的 `biz_guard`；没有异常重启时不产生写入。
@@ -70,7 +70,8 @@ coredump  0x3e0000  64 KiB
 
 - `name`：业务名，1–23 字节的小写字母、数字和下划线，上报在状态文档的 `business.name`。
 - `init()`：启动时、联网之前调用一次，用来把输出脚置到安全状态、读取业务参数、创建任务。
-- `connect()`：系统 MQTT 首次连上后调用一次（60 秒内连不上则不再等），业务 MQTT 配置经 `cmd/config` 更新后再调用一次；业务据此（重新）建立自己的连接。在控制任务里调用，不要阻塞。
+- 两个回调都在系统的控制任务里执行，各自最多 10 秒（`BASE_RUNTIME_CALLBACK_MS`）：卡在里面系统就不能联网、应答命令和升级，所以超时算一次业务故障，运行时重启设备。耗时的工作放到业务任务里做。
+- `connect()`：系统 MQTT 首次连上后调用一次（60 秒内连不上则不再等），业务 MQTT 配置经 `cmd/config` 更新后再调用一次；业务据此（重新）建立自己的连接：只通知业务任务，立即返回。
 
 业务接口（`base_runtime.h`）：
 
@@ -80,7 +81,7 @@ coredump  0x3e0000  64 KiB
 | `base_runtime_param(key, out, size)` | 业务参数：出厂资料里 `business` 对象的字符串值（NVS 的 `business` 命名空间） |
 | `base_runtime_mqtt_config(&mqtt)` | 系统代为保存、可以远程配置的业务 MQTT（地址、账户、密码）；业务可以用它，也可以按自己的参数连别的服务器 |
 | `base_runtime_task(name, entry, arg, stack, priority, watchdog_ms)` | 创建业务任务（最多 4 个），记在业务名下；`watchdog_ms` 非 0 时任务必须按期调用 `base_runtime_feed()`，否则运行时重启设备并记一次业务故障 |
-| `base_runtime_mqtt_open(name, &config)`／`base_runtime_mqtt_close(client)` | 打开／关闭一条业务 MQTT 连接（最多 3 条）。返回官方 esp-mqtt 的 client：业务自己注册事件、`esp_mqtt_client_start`、订阅和发布；运行时只记录连接的名称、地址（不含账户和密码）和是否已连上，随状态文档上报 |
+| `base_runtime_mqtt_open(name, &config)`／`base_runtime_mqtt_close(client)` | 打开／关闭一条业务 MQTT 连接（最多 3 条）。返回官方 esp-mqtt 的 client：业务自己注册事件、`esp_mqtt_client_start`、订阅和发布；运行时只记录连接的名称、地址（不含账户和密码）和是否已连上，随状态文档上报。关闭只能用 `base_runtime_mqtt_close`，并且不能在这条连接自己的事件处理函数里调用 |
 
 连到哪台服务器、连几条、用什么主题都由业务决定。两条连接错开握手：`connect` 在系统 MQTT 连上之后才调用，业务连接的任务优先级又低于系统 MQTT，在单核的 C3 上不会和系统抢握手。业务连接的重连间隔也应与系统连接（5 秒）错开。业务连接的客户端 ID 不能用设备 UUID（系统 MQTT 在用，同一 Broker 上会互相挤下线），也不能用系统 MQTT 的账户和主题。系统层的状态文档、命令、OTA 与业务无关，target 是 `<芯片>/<业务工程名>`，OTA 只在同一 target 之间进行。
 
@@ -98,7 +99,7 @@ coredump  0x3e0000  64 KiB
 
 验证自动回滚时，用 `CONFIG_ESP_BASE_TEST_NO_BROKER=y` 构建一个只联网、从不连接 Broker 的测试固件（额外的 sdkconfig 片段经 `-DSDKCONFIG_DEFAULTS="sdkconfig.defaults;<片段>"` 传入），用同一把键签名后经 OTA 下发。正式打包入口拒绝打开了这个开关的镜像，测试固件验收后从登记库删除。
 
-验证业务看门狗和安全模式时，用 `CONFIG_ESP_BASE_TEST_BUSINESS_PANIC=y` 或 `CONFIG_ESP_BASE_TEST_BUSINESS_HANG=y` 构建基座固件：它带一个名为 `test_fault` 的业务，每次启动 20 秒后 `abort()`，或不再向看门狗报到（10 秒后运行时重启设备）。连续 3 次后设备应进入安全模式并保持在线；`restart` 命令让业务再试一次。测试镜像经 USB 写入实验板，验收后写回正式固件；正式打包入口同样拒绝这两个开关。
+验证业务看门狗和安全模式时，用 `CONFIG_ESP_BASE_TEST_BUSINESS_PANIC=y`、`CONFIG_ESP_BASE_TEST_BUSINESS_HANG=y` 或 `CONFIG_ESP_BASE_TEST_BUSINESS_INIT_HANG=y` 构建基座固件：它带一个名为 `test_fault` 的业务，每次启动 20 秒后 `abort()`，或不再向看门狗报到（10 秒后运行时重启设备），或 `init` 回调不返回（10 秒后运行时重启设备）。连续 3 次后设备应进入安全模式并保持在线；`restart` 命令让业务再试一次。测试镜像经 USB 写入实验板，验收后写回正式固件；正式打包入口同样拒绝这三个开关。
 
 ## 测试
 

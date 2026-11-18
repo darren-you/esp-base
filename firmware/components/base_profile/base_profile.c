@@ -67,18 +67,22 @@ static void collect_static(base_profile_t *p)
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) format_mac(p->mac, mac);
 }
 
-/* 系统任务栈的历史最小余量；记在业务名下的任务由业务运行时报告（Profile 的 business.tasks）。 */
+/* 各任务栈的历史最小余量：只采样此刻还在的任务。记在业务名下的归到 business.tasks，其余是系统任务。 */
 static void sample_stacks(base_profile_t *p)
 {
     p->stack_count = 0;
+    p->business.task_count = 0;
     const UBaseType_t capacity = uxTaskGetNumberOfTasks() + 2;
     TaskStatus_t *tasks = malloc(capacity * sizeof *tasks);
     const UBaseType_t count = tasks ? uxTaskGetSystemState(tasks, capacity, NULL) : 0;
     for (UBaseType_t i = 0; i < count; ++i) {
-        if (base_runtime_owns_task(tasks[i].xHandle)) continue;
         char name[configMAX_TASK_NAME_LEN + 1] = {0};
         memcpy(name, tasks[i].pcTaskName, strnlen(tasks[i].pcTaskName, configMAX_TASK_NAME_LEN));
-        base_task_stack_add(p->stack, &p->stack_count, BASE_STACK_SLOTS, name, (uint32_t)tasks[i].usStackHighWaterMark);
+        const uint32_t bytes = (uint32_t)tasks[i].usStackHighWaterMark;
+        if (base_runtime_owns_task(tasks[i].xHandle))
+            base_task_stack_add(p->business.tasks, &p->business.task_count, BASE_BUSINESS_TASK_SLOTS, name, bytes);
+        else
+            base_task_stack_add(p->stack, &p->stack_count, BASE_STACK_SLOTS, name, bytes);
     }
     free(tasks);
 }
@@ -160,10 +164,10 @@ static void sampler(void *argument)
         p->heap_free = esp_get_free_heap_size();
         p->heap_min = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
         p->heap_largest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+        base_runtime_snapshot(&p->business); /* 先取业务的状态和连接，任务栈由下面的采样填入 */
         sample_stacks(p);
         sample_wifi(p);
         sample_netif(p);
-        base_runtime_snapshot(&p->business);
         xSemaphoreTake(s_lock, portMAX_DELAY);
         store_runtime(&s_profile, p);
         xSemaphoreGive(s_lock);

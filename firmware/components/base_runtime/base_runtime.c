@@ -47,9 +47,36 @@ static base_mqtt_t s_mqtt;
 static base_runtime_changed_cb_t s_changed;
 static task_slot_t s_tasks[TASK_SLOTS];
 static link_slot_t s_links[BASE_LINK_SLOTS];
+static esp_timer_handle_t s_callback_watchdog;
+static const char *s_callback; /* 正在执行的业务回调，只用于日志 */
 
 static void lock(void) { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGive(s_lock); }
+
+/* 在定时器任务里：不写 NVS，只留标记，下次启动由系统计入业务守卫。 */
+static void business_fault(void)
+{
+    s_fault = FAULT_MAGIC;
+    esp_restart();
+}
+
+static void callback_expired(void *argument)
+{
+    (void)argument;
+    ESP_LOGE(TAG, "ESP_BASE_BUSINESS_WATCHDOG %s did not return within %u ms; restarting", s_callback,
+             (unsigned)BASE_RUNTIME_CALLBACK_MS);
+    business_fault();
+}
+
+/* 业务的回调在系统的控制任务里执行：卡在里面系统就不能联网、应答命令和升级，所以限时，超时按业务故障处理。 */
+static void call_business(void (*callback)(void), const char *name)
+{
+    if (!callback) return;
+    s_callback = name;
+    if (s_callback_watchdog) esp_timer_start_once(s_callback_watchdog, (uint64_t)BASE_RUNTIME_CALLBACK_MS * 1000u);
+    callback();
+    if (s_callback_watchdog) esp_timer_stop(s_callback_watchdog);
+}
 
 /* ---------- 留给系统层的接口 ---------- */
 
@@ -82,7 +109,9 @@ void base_runtime_boot(const base_business_t *business, const char *device_id, c
         return;
     }
     ESP_LOGI(TAG, "ESP_BASE_BUSINESS name=%s", business->name);
-    if (business->init) business->init();
+    const esp_timer_create_args_t watchdog = {.callback = callback_expired, .name = "biz_call"};
+    if (esp_timer_create(&watchdog, &s_callback_watchdog) != ESP_OK) ESP_LOGE(TAG, "business callbacks run without a time limit");
+    call_business(business->init, "init");
 }
 
 bool base_runtime_active(void)
@@ -100,9 +129,10 @@ void base_runtime_set_mqtt(const base_mqtt_t *mqtt)
 
 void base_runtime_connect(void)
 {
-    if (s_running && s_business->connect) s_business->connect();
+    if (s_running) call_business(s_business->connect, "connect");
 }
 
+/* 只比较句柄，不访问任务：业务违反约定自己停掉连接后，留下的旧句柄也不会被解引用。 */
 bool base_runtime_owns_task(TaskHandle_t task)
 {
     if (!s_lock || !task) return false;
@@ -124,11 +154,6 @@ void base_runtime_snapshot(base_business_profile_t *out)
     snprintf(out->error, sizeof out->error, "%s", s_error);
     lock();
     base_public_uri(out->mqtt_uri, s_mqtt.uri);
-    for (int i = 0; i < TASK_SLOTS; ++i) {
-        if (!s_tasks[i].handle) continue;
-        base_task_stack_add(out->tasks, &out->task_count, BASE_BUSINESS_TASK_SLOTS, pcTaskGetName(s_tasks[i].handle),
-                            (uint32_t)uxTaskGetStackHighWaterMark(s_tasks[i].handle));
-    }
     for (int i = 0; i < BASE_LINK_SLOTS; ++i) {
         const link_slot_t *link = &s_links[i];
         if (!link->client) continue;
@@ -136,9 +161,6 @@ void base_runtime_snapshot(base_business_profile_t *out)
         snprintf(out->links[out->link_count].uri, BASE_URI_BYTES, "%s", link->uri);
         out->links[out->link_count].connected = link->connected;
         ++out->link_count;
-        if (link->task)
-            base_task_stack_add(out->tasks, &out->task_count, BASE_BUSINESS_TASK_SLOTS, pcTaskGetName(link->task),
-                                (uint32_t)uxTaskGetStackHighWaterMark(link->task));
     }
     unlock();
 }
@@ -174,9 +196,7 @@ static void watchdog_expired(void *argument)
     const task_slot_t *slot = argument;
     ESP_LOGE(TAG, "ESP_BASE_BUSINESS_WATCHDOG task=%s silent for %u ms; restarting", pcTaskGetName(slot->handle),
              (unsigned)slot->watchdog_ms);
-    /* 在定时器任务里：不写 NVS，只留标记，下次启动由系统计入业务守卫。 */
-    s_fault = FAULT_MAGIC;
-    esp_restart();
+    business_fault();
 }
 
 static void release_task(task_slot_t *slot)
@@ -312,15 +332,18 @@ esp_mqtt_client_handle_t base_runtime_mqtt_open(const char *name, const esp_mqtt
 void base_runtime_mqtt_close(esp_mqtt_client_handle_t client)
 {
     if (!s_lock || !client) return;
-    bool found = false;
+    bool found = false, inside = false;
     lock();
     for (int i = 0; i < BASE_LINK_SLOTS && !found; ++i) {
         if (s_links[i].client != client) continue;
-        memset(&s_links[i], 0, sizeof s_links[i]); /* 先注销：之后的事件和采样都不再碰这条连接的任务 */
         found = true;
+        /* esp-mqtt 不能在自己的任务里停止；接着销毁会释放一个还在运行的 client。 */
+        inside = s_links[i].task == xTaskGetCurrentTaskHandle();
+        if (!inside) memset(&s_links[i], 0, sizeof s_links[i]); /* 先注销：之后的事件和采样都不再认这条连接 */
     }
     unlock();
-    if (!found) return;
+    if (inside) ESP_LOGE(TAG, "business link cannot be closed from its own event handler; left open");
+    if (!found || inside) return;
     esp_mqtt_client_stop(client);
     esp_mqtt_client_destroy(client);
     if (s_changed) s_changed();

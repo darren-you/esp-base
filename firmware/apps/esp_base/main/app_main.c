@@ -3,13 +3,13 @@
 #include "base_system.h"
 #include "sdkconfig.h"
 
-#if CONFIG_ESP_BASE_TEST_BUSINESS_PANIC || CONFIG_ESP_BASE_TEST_BUSINESS_HANG
+#if CONFIG_ESP_BASE_TEST_BUSINESS_PANIC || CONFIG_ESP_BASE_TEST_BUSINESS_HANG || CONFIG_ESP_BASE_TEST_BUSINESS_INIT_HANG
 #include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// 测试开关：一个启动 20 秒后出故障的业务，用来在实板上验证业务看门狗和安全模式。正式打包拒绝带这个开关的镜像。
+// 测试开关：一个每次启动都出故障的业务，用来在实板上验证业务看门狗和安全模式。正式打包拒绝带这些开关的镜像。
 static void test_task(void *argument)
 {
     (void)argument;
@@ -26,6 +26,9 @@ static void test_task(void *argument)
 
 static void test_init(void)
 {
+#if CONFIG_ESP_BASE_TEST_BUSINESS_INIT_HANG
+    for (;;) vTaskDelay(portMAX_DELAY); /* 回调不返回：系统的控制任务被占住，运行时到时限后重启设备 */
+#endif
     base_runtime_task("test_fault", test_task, NULL, 3072, 3, 10000);
 }
 

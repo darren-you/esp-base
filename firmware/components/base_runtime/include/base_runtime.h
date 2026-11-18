@@ -19,6 +19,10 @@
 /* 业务任务的最高优先级：系统任务都在它之上，业务任务占满 CPU 时系统仍能应答命令和升级。 */
 #define BASE_RUNTIME_PRIORITY_MAX 4
 
+/* init、connect 这两个回调在系统的控制任务里执行，各自最多占用这么久：超时算一次业务故障，运行时重启设备
+ * （复位原因 business_watchdog），连续 3 次后进入安全模式。耗时的工作放到业务任务里做。 */
+#define BASE_RUNTIME_CALLBACK_MS 10000u
+
 /* 业务固件在 app_main 里把它交给 base_system_run。 */
 typedef struct {
     /* 业务名：1–23 字节的小写字母、数字和下划线；上报在状态文档的 business.name。 */
@@ -27,7 +31,7 @@ typedef struct {
      * 安全模式下不调用（任何业务代码都不运行），所以硬件必须在引脚保持复位状态时就是安全的。 */
     void (*init)(void);
     /* 该（重新）建立业务连接了：系统 MQTT 首次连上后调用一次（60 秒内连不上则不再等），
-     * 业务 MQTT 配置经远程配置更新后再调用一次。在系统的控制任务里调用，不要阻塞。 */
+     * 业务 MQTT 配置经远程配置更新后再调用一次。在系统的控制任务里调用：只通知业务任务，立即返回。 */
     void (*connect)(void);
 } base_business_t;
 
@@ -58,6 +62,7 @@ void base_runtime_feed(void);
  * 返回官方 esp-mqtt 的 client，还没有启动：业务先用 esp_mqtt_client_register_event 注册自己的事件，再调用
  * esp_mqtt_client_start，之后订阅、发布都用 esp-mqtt 的接口。name 是 1–15 字节的小写字母、数字和下划线。
  * 连接任务的优先级固定为 BASE_RUNTIME_PRIORITY_MAX：与系统 MQTT 同时握手时系统优先。
- * 关闭必须用 base_runtime_mqtt_close（不要自己 stop／destroy）。最多 3 条；失败返回 NULL。 */
+ * 关闭必须用 base_runtime_mqtt_close（不要自己 stop／destroy），而且不能在这条连接自己的事件处理函数里调用
+ * （esp-mqtt 不能在自己的任务里停止）：在事件里通知业务任务，由业务任务关闭。最多 3 条；失败返回 NULL。 */
 esp_mqtt_client_handle_t base_runtime_mqtt_open(const char *name, const esp_mqtt_client_config_t *config);
 void base_runtime_mqtt_close(esp_mqtt_client_handle_t client);

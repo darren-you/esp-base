@@ -153,7 +153,8 @@ def package(artifact):
     signed = esp_base.sign_firmware(target, key)
     directory = esp_base.build_dir(target)
     sdkconfig = (directory / "sdkconfig").read_text()
-    for switch in ("ESP_BASE_TEST_NO_BROKER", "ESP_BASE_TEST_BUSINESS_PANIC", "ESP_BASE_TEST_BUSINESS_HANG"):
+    for switch in ("ESP_BASE_TEST_NO_BROKER", "ESP_BASE_TEST_BUSINESS_PANIC", "ESP_BASE_TEST_BUSINESS_HANG",
+                   "ESP_BASE_TEST_BUSINESS_INIT_HANG"):
         if f"CONFIG_{switch}=y" in sdkconfig:
             esp_base.fail(f"测试开关 {switch} 不能进入正式包")
     version = f'{expected["version"]}+{expected["build_number"]}'
