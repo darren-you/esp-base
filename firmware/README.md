@@ -58,6 +58,8 @@ ota_1     0x200000  1920 KiB
 coredump  0x3e0000  64 KiB
 ```
 
+固件 panic 时把 Core Dump 写进 `coredump` 分区（只留最近一次），经 USB 用 `idf.py coredump-info` 读取；`base_system` 显式依赖 `espcoredump`，因为工程只构建入口组件的依赖闭包。
+
 设备 UUID、Wi-Fi 和系统 MQTT 配置在 NVS 的 `base` 命名空间，由 `tools/esp_base.py flash --provision` 生成 NVS 镜像写入；固件出错时不擦除 NVS。系统 MQTT 是 esp-base 连管理 Broker 的那条连接，只能经出厂资料修改。经 `cmd/config` 下发的新 Wi-Fi 先试用，连上 Broker 才保存，120 秒内连不上就恢复旧配置。`cmd/config` 下发的业务 MQTT（`biz_mqtt_uri`、`biz_mqtt_user`、`biz_mqtt_pass`）收到即保存，业务层经 `base_runtime_mqtt_config()` 读取并自己连接；系统层不连接它。
 
 ## 业务固件
@@ -95,6 +97,8 @@ coredump  0x3e0000  64 KiB
 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 打开。新固件首次启动后有 300 秒连上 Broker，连上才调用 `esp_ota_mark_app_valid_cancel_rollback()`；超时、崩溃或看门狗复位都会回到旧固件。同一任务累计回滚 3 次记为失败。
 
 验证自动回滚时，用 `CONFIG_ESP_BASE_TEST_NO_BROKER=y` 构建一个只联网、从不连接 Broker 的测试固件（额外的 sdkconfig 片段经 `-DSDKCONFIG_DEFAULTS="sdkconfig.defaults;<片段>"` 传入），用同一把键签名后经 OTA 下发。正式打包入口拒绝打开了这个开关的镜像，测试固件验收后从登记库删除。
+
+验证业务看门狗和安全模式时，用 `CONFIG_ESP_BASE_TEST_BUSINESS_PANIC=y` 或 `CONFIG_ESP_BASE_TEST_BUSINESS_HANG=y` 构建基座固件：它带一个名为 `test_fault` 的业务，每次启动 20 秒后 `abort()`，或不再向看门狗报到（10 秒后运行时重启设备）。连续 3 次后设备应进入安全模式并保持在线；`restart` 命令让业务再试一次。测试镜像经 USB 写入实验板，验收后写回正式固件；正式打包入口同样拒绝这两个开关。
 
 ## 测试
 

@@ -8,4 +8,20 @@ menu "ESP Base"
             confirmed and the bootloader rolls back after the 300 s window. Used only to
             verify automatic rollback; release packaging refuses images built with it.
 
+    choice ESP_BASE_TEST_BUSINESS
+        prompt "Test build only: built-in business layer that misbehaves"
+        default ESP_BASE_TEST_BUSINESS_NONE
+        help
+            Makes the base firmware (apps/esp_base) carry a business layer named test_fault that
+            misbehaves 20 s after every boot. Used only to verify the business watchdog and safe
+            mode on a real board; release packaging refuses images built with it.
+
+        config ESP_BASE_TEST_BUSINESS_NONE
+            bool "none"
+        config ESP_BASE_TEST_BUSINESS_PANIC
+            bool "abort() 20 s after boot"
+        config ESP_BASE_TEST_BUSINESS_HANG
+            bool "stop feeding the business watchdog 20 s after boot"
+    endchoice
+
 endmenu
