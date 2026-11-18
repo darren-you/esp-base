@@ -11,7 +11,7 @@
 需要 [rustup](https://rustup.rs)。工具链版本和编译目标 `wasm32v1-none` 由 `rust-toolchain.toml` 固定，第一次构建时自动安装。下面的 `esp_base.py` 是本仓的 `tools/esp_base.py`，应用工程可以放在任何地方（别的仓库里也行）：
 
 ```bash
-python3 tools/esp_base.py app new ../my-app        # 新建工程：一个能跑的最小应用，约 0.4 KB
+python3 tools/esp_base.py app new ../my-app        # 新建工程：一个能跑的最小应用，约 0.5 KB
 python3 tools/esp_base.py app test ../my-app       # 本机跑单元测试
 python3 tools/esp_base.py app run ../my-app        # 本机运行：模拟定时器、业务 MQTT 和引脚
 python3 tools/esp_base.py app build ../my-app      # 构建、检查并封装成未签名的应用包（.ebapp）
@@ -100,7 +100,7 @@ pwm::write(7, 1228)?;                  // 占空比 0 到 2^14-1
 
 ```console
 $ python3 tools/esp_base.py app run ../my-app --param site=lab
-my_app 0.1.0+0：wasm 431 字节，内存上限 12288 字节，芯片 esp32c3
+my_app 0.1.0+0：wasm 545 字节，内存上限 12288 字节，芯片 esp32c3
 [       0 ms] log info: my-app: init
 [       0 ms] connect keepalive_s=30, will=null
 [       0 ms] timer id=0, delay_ms=1000, period_ms=1000
@@ -130,7 +130,7 @@ with Simulator("target/esp-base/hxh_lift.ebapp", params={"hxh_site": "lab"}) as 
 
 ## 约束
 
-- **体积就是内存。** ESP32-C3 上应用整体载入内存，每大 1 KB 就多占 1 KB。不要用 `format!`、`core::fmt` 和带格式的 `panic!`；数字转字符串自己写（见样例）。
+- **体积就是内存。** ESP32-C3 上应用整体载入内存，每大 1 KB 就多占约 1.5 KB。不要用 `format!`、`core::fmt` 和带格式的 `panic!`；数字转字符串自己写（见样例）。SDK 自带小而慢的 `memcpy`、`memset`，取代编译器那一对为速度优化的实现（约 1.4 KB）。
 - **没有堆。** 状态放在应用结构体里，缓冲用定长数组。
 - **每次调用有指令预算。** 死循环或算得太久的调用会被宿主停掉，应用随后被重启。长时间的事拆成定时器事件。
 - **睡眠是短的。** 应用睡着时事件都在排队，所以一次调用（`init` 或一个事件）里累计最多睡 1000 毫秒，超出的那次返回 `Error::TooLarge`、不睡。换向前停 200 毫秒这样的事可以睡，更长的等待用定时器。

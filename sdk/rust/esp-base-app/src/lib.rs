@@ -358,6 +358,36 @@ macro_rules! app {
     };
 }
 
+/// 小而慢的 `memcpy` 和 `memset`，取代编译器自带的那一对（为速度做了对齐和展开，合起来约 1.4 KB，而应用的
+/// 体积就是内存；应用里拷贝的都是几十上百字节的缓冲）。逐字节用 volatile 读写：不让编译器把循环认成 memcpy、
+/// memset 再调回自己。
+#[cfg(target_arch = "wasm32")]
+mod mem {
+    use core::ffi::c_void;
+
+    #[no_mangle]
+    unsafe extern "C" fn memcpy(destination: *mut c_void, source: *const c_void, count: usize) -> *mut c_void {
+        let (to, from) = (destination as *mut u8, source as *const u8);
+        let mut index = 0;
+        while index < count {
+            to.add(index).write_volatile(from.add(index).read_volatile());
+            index += 1;
+        }
+        destination
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn memset(destination: *mut c_void, value: i32, count: usize) -> *mut c_void {
+        let to = destination as *mut u8;
+        let mut index = 0;
+        while index < count {
+            to.add(index).write_volatile(value as u8);
+            index += 1;
+        }
+        destination
+    }
+}
+
 /// 业务出错时直接陷阱：宿主停掉应用并按策略重启或回退。不带格式化信息，省体积。
 #[cfg(target_arch = "wasm32")]
 #[panic_handler]
