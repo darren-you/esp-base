@@ -18,6 +18,7 @@
 
 static const char *TAG = "base_net";
 static base_net_cb_t s_callback;
+static esp_netif_t *s_netif;
 static esp_timer_handle_t s_reconnect;
 static uint32_t s_delay_ms = RECONNECT_MIN_MS;
 static bool s_up, s_sntp_started;
@@ -39,6 +40,11 @@ static void on_event(void *argument, esp_event_base_t base, int32_t id, void *da
     (void)argument;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        /* 链路本地地址；路由器发布前缀时 lwIP 再按 SLAAC 生成全局地址。 */
+        if (esp_netif_create_ip6_linklocal(s_netif) != ESP_OK) ESP_LOGW(TAG, "ipv6 link-local unavailable");
+    } else if (base == IP_EVENT && id == IP_EVENT_GOT_IP6) {
+        s_callback(BASE_NET_IP6);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *event = data;
         ESP_LOGW(TAG, "wifi disconnected reason=%d retry_ms=%u", event->reason, (unsigned)s_delay_ms);
@@ -75,13 +81,15 @@ esp_err_t base_net_start(const char *ssid, const char *password, base_net_cb_t c
     s_callback = callback;
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop");
-    if (!esp_netif_create_default_wifi_sta()) return ESP_ERR_NO_MEM;
+    s_netif = esp_netif_create_default_wifi_sta();
+    if (!s_netif) return ESP_ERR_NO_MEM;
     const esp_timer_create_args_t timer = {.callback = reconnect, .name = "wifi_retry"};
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer, &s_reconnect), TAG, "timer");
     const wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(esp_wifi_init(&init), TAG, "wifi init");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL), TAG, "handler");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL), TAG, "handler");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, on_event, NULL), TAG, "handler");
     /* 凭据只在 base 命名空间保存一份；省电模式保持 IDF 默认值。 */
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "storage");
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
@@ -110,12 +118,6 @@ esp_err_t base_net_reconfigure(const char *ssid, const char *password)
 bool base_net_time_valid(void)
 {
     return time(NULL) >= VALID_UNIX_SECONDS;
-}
-
-int base_net_rssi(void)
-{
-    wifi_ap_record_t ap = {0};
-    return s_up && esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
 
 void base_net_set_power_save(bool enabled)

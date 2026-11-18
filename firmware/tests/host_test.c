@@ -83,6 +83,17 @@ static void test_config_decode(void)
         "\"mqtt\":{\"uri\":\"mqtts://broker.example.test:8883\",\"username\":\"u\",\"password\":\"p\"}}";
     CHECK(!base_cmd_decode("config", system, strlen(system), &command, &error) &&
           command.request_id[0] && error && !strcmp(error, "invalid_args"));
+    /* 名称和 Group：group 为 null 表示移出。 */
+    const char *profile = "{\"request_id\":\"3f2504e0-4f89-41d3-9a0c-0305e82c3311\",\"name\":\"Lab C3\","
+        "\"group\":\"1b4e28ba-2fa1-41d2-883f-0016d3cca427\"}";
+    CHECK(base_cmd_decode("config", profile, strlen(profile), &command, &error) && !error);
+    CHECK(command.config.has_name && !strcmp(command.config.name, "Lab C3") && command.config.has_group &&
+          !strcmp(command.config.group, "1b4e28ba-2fa1-41d2-883f-0016d3cca427") && !command.config.has_wifi);
+    const char *leave = "{\"request_id\":\"3f2504e0-4f89-41d3-9a0c-0305e82c3312\",\"group\":null}";
+    CHECK(base_cmd_decode("config", leave, strlen(leave), &command, &error) && !error);
+    CHECK(command.config.has_group && !command.config.group[0] && !command.config.has_name);
+    const char *number = "{\"request_id\":\"3f2504e0-4f89-41d3-9a0c-0305e82c3313\",\"name\":7}";
+    CHECK(!base_cmd_decode("config", number, strlen(number), &command, &error) && error && !strcmp(error, "invalid_args"));
 }
 
 /* 新任务：开始下载；下载途中偏移每 64 KiB 落盘；每 5% 发布；完成后记录 rebooting 并重启。 */
@@ -357,6 +368,105 @@ static bool same_shape(const cJSON *expected, const cJSON *actual)
     return true;
 }
 
+/* 与样例 online 对应的 Profile；unnamed 为真时对应 online_unnamed。 */
+static void profile_fixture(base_profile_t *p, bool unnamed)
+{
+    memset(p, 0, sizeof *p);
+    strcpy(p->device_id, DEVICE);
+    strcpy(p->boot_id, "7c9e6679-7425-40de-944b-e07fc1f90ae7");
+    strcpy(p->reset, unnamed ? "software" : "power_on");
+    p->fw = RUNNING;
+    strcpy(p->chip_model, "esp32c3");
+    strcpy(p->chip_revision, "v0.4");
+    p->cores = 1;
+    p->cpu_mhz = 160;
+    p->chip_features = BASE_CHIP_WIFI | BASE_CHIP_BLE;
+    p->flash_bytes = 4194304;
+    strcpy(p->idf, "v6.1");
+    strcpy(p->mac, "02:00:00:4a:1b:2c");
+    strcpy(p->mqtt_uri, "mqtts://broker.example.test:8883");
+    p->heap_free = 178148;
+    p->heap_min = 160696;
+    p->heap_largest = 110592;
+    strcpy(p->ssid, "example-ssid");
+    strcpy(p->bssid, "02:00:00:00:00:01");
+    strcpy(p->hostname, "espressif");
+    if (unnamed) {
+        p->uptime_s = 42;
+        p->rssi = -70;
+        p->channel = 11;
+        p->config_revision = 4;
+        strcpy(p->config_error, "trial_failed");
+        p->wakeups = 9;
+        return;
+    }
+    p->uptime_s = 3600;
+    strcpy(p->name, "\xe5\xae\x9e\xe9\xaa\x8c\xe6\x9d\xbf \"C3\""); /* 实验板 "C3"：UTF-8 原样，引号转义 */
+    strcpy(p->group, "1b4e28ba-2fa1-41d2-883f-0016d3cca427");
+    strcpy(p->business_mqtt_uri, "mqtts://business.example.test:8883");
+    static const struct { const char *name; uint32_t bytes; } stack[] = {
+        {"main", 4200}, {"mqtt_task", 2900}, {"mqtt_task_2", 3100}, {"IDLE", 800}};
+    for (size_t i = 0; i < sizeof stack / sizeof *stack; ++i) {
+        strcpy(p->stack[i].name, stack[i].name);
+        p->stack[i].bytes = stack[i].bytes;
+    }
+    p->stack_count = 4;
+    p->rssi = -52;
+    p->channel = 6;
+    p->has_ipv4 = true;
+    strcpy(p->ipv4, "192.0.2.20");
+    strcpy(p->netmask, "255.255.255.0");
+    strcpy(p->gateway, "192.0.2.1");
+    strcpy(p->ipv6[0], "fe80::ff:fe4a:1b2c");
+    strcpy(p->ipv6[1], "2001:db8::ff:fe4a:1b2c");
+    p->ipv6_count = 2;
+    p->config_revision = 3;
+    p->wakeups = 57;
+}
+
+/* 名称规则、默认名称和编码缓冲不足。 */
+static void test_profile(void)
+{
+    char name[BASE_NAME_BYTES];
+    base_default_name(name, "esp32c3", "02:00:00:4a:1b:2c");
+    CHECK(!strcmp(name, "ESP32-C3-4A1B2C"));
+    base_default_name(name, "esp32", "24:0a:c4:00:ab:cd");
+    CHECK(!strcmp(name, "ESP32-00ABCD"));
+    base_default_name(name, "esp32s3", "");
+    CHECK(!strcmp(name, "ESP32-S3"));
+    CHECK(base_is_device_name("12345678901234567890123456789012"));
+    CHECK(!base_is_device_name("123456789012345678901234567890123"));
+    CHECK(!base_is_device_name("") && !base_is_device_name("lab ") && !base_is_device_name("a\tb"));
+    CHECK(base_is_device_name("\xe5\xae\x9e\xe9\xaa\x8c\xe6\x9d\xbf C3"));
+
+    static base_profile_t profile;
+    profile_fixture(&profile, false);
+    char small[256], status[2560];
+    CHECK(base_status_encode(&profile, small, sizeof small) == -1);
+    const int n = base_status_encode(&profile, status, sizeof status);
+    CHECK(n > 0 && (size_t)n == strlen(status));
+    cJSON *parsed = cJSON_Parse(status);
+    CHECK(parsed && !strcmp(cJSON_GetObjectItem(parsed, "name")->valuestring, "\xe5\xae\x9e\xe9\xaa\x8c\xe6\x9d\xbf \"C3\""));
+    cJSON_Delete(parsed);
+    /* 控制字符在 JSON 里转义，不会截断文档。 */
+    strcpy(profile.ssid, "a\x01" "b"); /* \x01b 会被当成一个十六进制转义 */
+    CHECK(base_status_encode(&profile, status, sizeof status) > 0 && strstr(status, "\"a\\u0001b\""));
+    /* 栈槽位写满、IPv6 写满时仍放得下。 */
+    for (int i = 0; i < BASE_STACK_SLOTS; ++i) {
+        snprintf(profile.stack[i].name, BASE_TASK_NAME_BYTES, "task_name_%02d_x", i);
+        profile.stack[i].bytes = 99999;
+    }
+    profile.stack_count = BASE_STACK_SLOTS;
+    for (int i = 0; i < BASE_IPV6_SLOTS; ++i) strcpy(profile.ipv6[i], "2001:db8:1234:5678:9abc:def0:1234:5678");
+    profile.ipv6_count = BASE_IPV6_SLOTS;
+    memset(profile.business_mqtt_uri, 'b', sizeof profile.business_mqtt_uri - 1);
+    memset(profile.mqtt_uri, 'm', sizeof profile.mqtt_uri - 1);
+    CHECK(base_status_encode(&profile, status, sizeof status) > 0);
+    char will[640];
+    memset(profile.name, '"', BASE_NAME_BYTES - 1);
+    CHECK(base_will_encode(&profile, will, sizeof will) > 0);
+}
+
 static void test_contract_samples(const char *path)
 {
     FILE *file = fopen(path, "rb");
@@ -416,6 +526,24 @@ static void test_contract_samples(const char *path)
         CHECK(encoded && cJSON_Compare(encoded, payload, true));
         cJSON_Delete(encoded);
     }
+    /* 设备按 Profile 编码的状态文档与遗嘱，与样例逐字段相同。 */
+    static base_profile_t profile;
+    char document[2560];
+    cJSON_ArrayForEach(sample, cJSON_GetObjectItem(root, "status")) {
+        const char *sample_name = cJSON_GetObjectItem(sample, "name")->valuestring;
+        const bool online = !strcmp(sample_name, "online"), unnamed = !strcmp(sample_name, "online_unnamed");
+        const bool will = !strcmp(sample_name, "offline_will");
+        if (!online && !unnamed && !will) continue; /* *_legacy 是旧固件的文档，只由 Server 解码 */
+        profile_fixture(&profile, unnamed);
+        const int n = will ? base_will_encode(&profile, document, sizeof document)
+                           : base_status_encode(&profile, document, sizeof document);
+        cJSON *encoded = n > 0 ? cJSON_Parse(document) : NULL;
+        CHECK(encoded && cJSON_Compare(encoded, cJSON_GetObjectItem(sample, "payload"), true));
+        if (!(encoded && cJSON_Compare(encoded, cJSON_GetObjectItem(sample, "payload"), true)))
+            fprintf(stderr, "  %s: %s\n", sample_name, document);
+        cJSON_Delete(encoded);
+    }
+
     base_ota_t ota;
     base_ota_boot(&ota, NULL, &RUNNING, SLOT, true);
     char state[448];
@@ -444,6 +572,7 @@ int main(int argc, char **argv)
     test_topics();
     test_dedupe();
     test_config_decode();
+    test_profile();
     test_ota_happy_path();
     test_ota_already_running();
     test_ota_resume_after_power_loss();

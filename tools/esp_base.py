@@ -164,10 +164,16 @@ def sign(args):
 def nvs_image(provision, directory):
     """用官方 NVS 分区生成器把出厂资料做成镜像。
 
-    必填设备 UUID、Wi-Fi 和系统 MQTT；可选业务 MQTT（三项同时给出）和 business 对象（业务参数，
-    键是最多 15 个字符的小写字母、数字、下划线，值是非空字符串），写进 business 命名空间。"""
+    必填设备 UUID、Wi-Fi 和系统 MQTT；可选设备名称 name（1–32 字节 UTF-8，无控制字符，首尾不是空格；
+    没给时设备上报「型号-MAC 后 3 字节」）、业务 MQTT（三项同时给出）和 business 对象（业务参数，
+    键是最多 15 个字符的小写字母、数字、下划线，值是非空字符串），写进 business 命名空间。
+    所属 Group 只在网页里设置，不在出厂资料里。"""
     values = json.loads(Path(provision).read_text())
     business = values.pop("business", {})
+    name = values.pop("name", None)
+    if name is not None and not (isinstance(name, str) and 0 < len(name.encode()) <= 32 and name == name.strip(" ")
+                                 and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in name)):
+        fail("name 必须是 1–32 字节、不含控制字符、首尾没有空格的字符串")
     optional = set(values) - set(PROVISION_KEYS)
     if not set(PROVISION_KEYS) <= set(values) or optional not in (set(), set(BUSINESS_MQTT_KEYS)) or \
             not all(isinstance(v, str) and v for v in values.values()):
@@ -182,6 +188,8 @@ def nvs_image(provision, directory):
              "mqtt_uri": "mqtt_uri", "mqtt_username": "mqtt_user", "mqtt_password": "mqtt_pass", **BUSINESS_MQTT_KEYS}
     rows = ["key,type,encoding,value", "base,namespace,,"]
     entries = [(names[key], value) for key, value in values.items()]
+    if name is not None:
+        entries.append(("name", name))
     if business:
         entries.append(("business", None))
         entries += sorted(business.items())

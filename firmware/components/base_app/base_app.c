@@ -8,10 +8,10 @@
 
 #include "base_net.h"
 #include "base_ota.h"
+#include "base_profile.h"
 #include "base_protocol.h"
 #include "base_store.h"
 #include "esp_crt_bundle.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_random.h"
@@ -28,15 +28,15 @@
 #define DEFERRED_FALLBACK_MS 3000u      /* 等应答发出的最长时间 */
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
 #define MESSAGE_MAX_BYTES 1536u
-#define STATUS_BYTES 1280
+#define STATUS_BYTES 2560 /* 状态文档带 Profile 后最长约 2.2 KiB */
 
 typedef enum {
     EV_NET_UP, EV_NET_DOWN, EV_NET_TIME,
     EV_MQTT_CONNECTED, EV_MQTT_DISCONNECTED, EV_MQTT_MESSAGE, EV_MQTT_PUBLISHED,
-    EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE,
+    EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE, EV_NET_IP6, EV_PROFILE_READY,
 } event_kind_t;
 typedef enum { TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED, TIMER_BUSINESS, TIMER_COUNT } timer_id_t;
-typedef enum { DEFER_NONE, DEFER_RESTART, DEFER_APPLY_CONFIG } deferred_t;
+typedef enum { DEFER_NONE, DEFER_RESTART, DEFER_APPLY_CONFIG, DEFER_RECONNECT } deferred_t;
 
 typedef struct {
     uint8_t kind;
@@ -51,7 +51,7 @@ static QueueHandle_t s_events;
 static esp_timer_handle_t s_timers[TIMER_COUNT];
 static char s_device_id[BASE_UUID_BYTES], s_boot_id[BASE_UUID_BYTES];
 static char s_topics[5][BASE_TOPIC_BYTES];
-static char s_will[384];
+static char s_will[640];
 static const char *s_reset_reason = "other";
 static base_config_t s_config, s_trial;
 static bool s_trial_active;
@@ -84,7 +84,7 @@ static void timer_start(timer_id_t id, uint32_t delay_ms)
 
 static void net_event(base_net_event_t event)
 {
-    static const uint8_t kinds[] = {EV_NET_UP, EV_NET_DOWN, EV_NET_TIME};
+    static const uint8_t kinds[] = {EV_NET_UP, EV_NET_DOWN, EV_NET_TIME, EV_NET_IP6};
     post(&(event_t){.kind = kinds[event]}, 0);
 }
 
@@ -152,51 +152,33 @@ static const char *reset_reason(void)
     }
 }
 
-/* 状态文档：固件、启动 ID、堆和各任务栈余量、Wi-Fi 信号与配置。 */
-static int status_encode(char *out, size_t size)
+/* 把控制任务持有的设置交给 Profile；状态文档与遗嘱只按 Profile 编码。 */
+static void profile_sync(void)
 {
-    int n = snprintf(out, size,
-        "{\"online\":true,\"device_id\":\"%s\",\"boot_id\":\"%s\",\"uptime_s\":%" PRIu32 ",\"reset\":\"%s\","
-        "\"fw\":{\"version\":\"%s\",\"sha256\":\"%s\",\"target\":\"%s\",\"slot\":\"%s\"},"
-        "\"heap\":{\"free\":%" PRIu32 ",\"min\":%u,\"largest\":%u},\"stack\":{",
-        s_device_id, s_boot_id, (uint32_t)(esp_timer_get_time() / 1000000), s_reset_reason,
-        s_ota.running.version, s_ota.running.sha256, s_ota.running.target, s_ota.running.slot,
-        esp_get_free_heap_size(), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
-        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
-    if (n <= 0 || (size_t)n >= size) return -1;
-    const UBaseType_t capacity = uxTaskGetNumberOfTasks() + 2;
-    TaskStatus_t *tasks = malloc(capacity * sizeof *tasks);
-    const UBaseType_t count = tasks ? uxTaskGetSystemState(tasks, capacity, NULL) : 0;
-    for (UBaseType_t i = 0; i < count; ++i) {
-        char name[configMAX_TASK_NAME_LEN + 1] = {0};
-        for (size_t c = 0; c < configMAX_TASK_NAME_LEN && tasks[i].pcTaskName[c]; ++c) {
-            const char ch = tasks[i].pcTaskName[c];
-            name[c] = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ? ch : '_';
-        }
-        /* 同名任务（如系统与业务两条 MQTT 连接的 mqtt_task）加序号，避免状态文档里出现重复的键。 */
-        unsigned same = 0;
-        for (UBaseType_t j = 0; j < i; ++j)
-            same += !strncmp(tasks[j].pcTaskName, tasks[i].pcTaskName, configMAX_TASK_NAME_LEN);
-        char suffix[8] = "";
-        if (same) snprintf(suffix, sizeof suffix, "_%u", same + 1);
-        const int m = snprintf(out + n, size - (size_t)n, "%s\"%s%s\":%u", i ? "," : "", name, suffix,
-                               (unsigned)tasks[i].usStackHighWaterMark);
-        if (m <= 0 || (size_t)m >= size - (size_t)n) { free(tasks); return -1; }
-        n += m;
-    }
-    free(tasks);
-    char error[BASE_ERROR_BYTES + 2] = "null";
-    if (s_config_error) snprintf(error, sizeof error, "\"%s\"", s_config_error);
-    const int m = snprintf(out + n, size - (size_t)n,
-        "},\"wifi\":{\"rssi\":%d},\"config\":{\"revision\":%" PRIu32 ",\"error\":%s},\"wakeups\":%" PRIu32 "}",
-        base_net_rssi(), s_config.revision, error, s_wakeups);
-    return m > 0 && (size_t)m < size - (size_t)n ? n + m : -1;
+    base_profile_set(&(base_profile_settings_t){
+        .name = s_config.name, .group = s_config.group, .mqtt_uri = s_config.mqtt_uri,
+        .business_mqtt_uri = s_config.business_mqtt.uri, .config_revision = s_config.revision,
+        .config_error = s_config_error, .wakeups = s_wakeups,
+    });
 }
 
+/* 请求异步采样，采完（EV_PROFILE_READY）再发布状态文档。 */
 static void publish_status(void)
 {
+    profile_sync();
+    base_profile_request();
+}
+
+static void profile_ready(void)
+{
+    post(&(event_t){.kind = EV_PROFILE_READY}, pdMS_TO_TICKS(100));
+}
+
+static void publish_profile(void)
+{
     char *json = malloc(STATUS_BYTES);
-    if (json && status_encode(json, STATUS_BYTES) > 0) publish(BASE_TOPIC_STATUS, json, true);
+    if (json && base_profile_status(json, STATUS_BYTES) > 0) publish(BASE_TOPIC_STATUS, json, true);
+    else ESP_LOGW(TAG, "status document not encoded");
     free(json);
 }
 
@@ -212,6 +194,9 @@ static void mqtt_stop(void)
 static void mqtt_start(const base_config_t *config)
 {
     if (s_mqtt) return;
+    /* 遗嘱带名称和 Group：每次建立连接都按当前设置重写。 */
+    profile_sync();
+    if (base_profile_will(s_will, sizeof s_will) < 0) s_will[0] = '\0';
 #if CONFIG_ESP_BASE_TEST_NO_BROKER
     ESP_LOGW(TAG, "test build: broker connection disabled, rollback expected");
     return;
@@ -228,7 +213,7 @@ static void mqtt_start(const base_config_t *config)
         .network.reconnect_timeout_ms = 5000,
         .network.timeout_ms = 15000,
         .buffer.size = 2048,
-        .buffer.out_size = 2048,
+        .buffer.out_size = 3072, /* 一次发布要放下整个状态文档 */
     };
     s_mqtt = esp_mqtt_client_init(&mqtt);
     if (!s_mqtt || esp_mqtt_client_register_event(s_mqtt, MQTT_EVENT_ANY, mqtt_event, NULL) != ESP_OK ||
@@ -255,6 +240,10 @@ static void run_deferred(void)
     if (action == DEFER_RESTART) {
         ESP_LOGI(TAG, "restarting");
         esp_restart();
+    } else if (action == DEFER_RECONNECT) {
+        /* 名称或 Group 变了：断开（正常断开不触发遗嘱）再连，让 Broker 记住新的遗嘱。 */
+        mqtt_stop();
+        mqtt_start(&s_config);
     } else if (action == DEFER_APPLY_CONFIG) {
         /* 试用新 Wi-Fi：连上 Broker 才保存，超时恢复旧配置。 */
         mqtt_stop();
@@ -337,11 +326,15 @@ static void handle_command(const char *name, const char *payload, size_t length)
         case BASE_CMD_CONFIG:
             if (s_deferred != DEFER_NONE || s_trial_active) { error = "busy"; break; }
             s_config_error = NULL;
-            if (command.config.has_business_mqtt) {
-                /* 业务 MQTT 由业务层另开连接使用，esp-base 不连接它、无从试用：收到即保存。 */
-                s_config.business_mqtt = command.config.business_mqtt;
+            if (command.config.has_business_mqtt || command.config.has_name || command.config.has_group) {
+                /* 业务 MQTT 由业务层另开连接使用，esp-base 不连接它、无从试用；名称和 Group 只是资料。都收到即保存。 */
+                if (command.config.has_business_mqtt) s_config.business_mqtt = command.config.business_mqtt;
+                if (command.config.has_name) strcpy(s_config.name, command.config.name);
+                if (command.config.has_group) strcpy(s_config.group, command.config.group);
                 if (base_store_save_config(&s_config) != ESP_OK) s_config_error = "not_saved";
-                reconnect_business = true;
+                reconnect_business = command.config.has_business_mqtt;
+                /* 遗嘱里也有名称和 Group：应答发出后重建系统 MQTT 连接。同时改 Wi-Fi 时试用本身就会重连。 */
+                if (command.config.has_name || command.config.has_group) after = DEFER_RECONNECT;
             }
             if (command.config.has_wifi) {
                 s_trial = s_config;
@@ -445,6 +438,8 @@ static void handle(const event_t *event)
         break;
     }
     case EV_TIMER: on_timer((timer_id_t)event->value); break;
+    case EV_NET_IP6: if (s_mqtt_connected) publish_status(); break; /* SLAAC 地址常在连上 Broker 之后才到 */
+    case EV_PROFILE_READY: publish_profile(); break;
     case EV_OTA_PROGRESS: ota_apply(base_ota_on_progress(&s_ota, (uint32_t)event->value)); break;
     case EV_OTA_VERIFYING: ota_apply(base_ota_on_verifying(&s_ota)); break;
     case EV_OTA_DONE:
@@ -490,10 +485,8 @@ void base_app_run(const base_business_t *business)
     } else {
         random_uuid(s_boot_id);
         for (int topic = 0; topic < 5; ++topic) base_topic(s_topics[topic], s_device_id, (base_topic_t)topic);
-        snprintf(s_will, sizeof s_will,
-                 "{\"online\":false,\"device_id\":\"%s\",\"boot_id\":\"%s\","
-                 "\"fw\":{\"version\":\"%s\",\"sha256\":\"%s\",\"target\":\"%s\",\"slot\":\"%s\"}}",
-                 s_device_id, s_boot_id, running.version, running.sha256, running.target, running.slot);
+        const esp_err_t profiled = base_profile_start(s_device_id, s_boot_id, s_reset_reason, &running, profile_ready);
+        if (profiled != ESP_OK) ESP_LOGE(TAG, "profile unavailable: %s", esp_err_to_name(profiled));
         static base_ota_record_t stored;
         const bool have_record = base_store_load_ota(&stored) == ESP_OK;
         ota_apply(base_ota_boot(&s_ota, have_record ? &stored : NULL, &running, slot_bytes, !s_pending_verify) &

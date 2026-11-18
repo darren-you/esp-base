@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// 持久数据：设备 UUID、Wi-Fi／MQTT 配置和 OTA 记录在默认 NVS 分区的 base 命名空间，业务参数在 business 命名空间。
+// 持久数据：设备 UUID、Wi-Fi／MQTT 配置、名称与 Group 和 OTA 记录在默认 NVS 分区的 base 命名空间，业务参数在 business 命名空间。
 // 出厂数据由主机工具生成 NVS 镜像随固件刷入；任何错误都不擦除分区。
 #pragma once
 #include <stdbool.h>
@@ -18,6 +18,9 @@ typedef struct {
     char mqtt_password[129];
     /* 业务 MQTT：经 config 命令下发，留给业务层另开一条连接；esp-base 自己不连接。未配置时各字段为空。 */
     base_mqtt_t business_mqtt;
+    /* 设备名称与所属 Group：经 config 命令下发，名称也可由出厂资料写入。为空表示没有设置（名称上报默认值）。 */
+    char name[BASE_NAME_BYTES];
+    char group[BASE_UUID_BYTES];
     uint32_t revision;
 } base_config_t;
 

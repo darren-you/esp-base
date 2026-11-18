@@ -7,11 +7,12 @@
 | 路径 | 内容 |
 | --- | --- |
 | `apps/esp_base/main` | 基座固件入口：只调用 `base_app_run(NULL)` |
-| `components/base_app` | 主程序：控制任务、系统 MQTT、状态文档、命令执行、配置试用与 OTA 编排，以及业务层回调 |
-| `components/base_protocol` | 主题、命令解码、应答与去重；纯逻辑，不依赖 ESP-IDF |
+| `components/base_app` | 主程序：控制任务、系统 MQTT、状态文档发布、命令执行、配置试用与 OTA 编排，以及业务层回调 |
+| `components/base_profile` | 设备 Profile 的唯一来源：启动时采集芯片、MAC、IDF 版本，低优先级任务异步采样堆、栈、Wi-Fi 与 IPv4／IPv6；`base_profile_get` 是唯一读取方式，状态文档与遗嘱都按它的快照编码 |
+| `components/base_protocol` | 主题、命令解码、应答与去重，Profile 结构及状态文档／遗嘱的编码；纯逻辑，不依赖 ESP-IDF |
 | `components/base_ota` | OTA 状态机（纯逻辑）和基于 `esp_https_ota` 的下载任务 |
-| `components/base_store` | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置和 OTA 记录 |
-| `components/base_net` | Wi-Fi STA 与 SNTP |
+| `components/base_store` | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置、设备名称与所属 Group 和 OTA 记录 |
+| `components/base_net` | Wi-Fi STA、IPv6（链路本地与 SLAAC）与 SNTP |
 | `partitions/partitions.csv` | 两个目标共用的 4 MiB 分区表 |
 | `tests` | host 测试 |
 
@@ -63,4 +64,4 @@ coredump  0x3e0000  64 KiB
 bash tests/run_host_tests.sh
 ```
 
-覆盖协议编解码、命令去重，以及 OTA 状态机的断电与停滞续传、重试退避、拒绝、回滚计数、取消和换任务，并用[合同样例](../docs/design/device-protocol-samples.json)核对与 Server 一致。host 测试不写设备；实板验证见仓库 README 的三层验证。
+覆盖协议编解码、命令去重、Profile 编码（名称规则、默认名称、JSON 转义与最长文档），以及 OTA 状态机的断电与停滞续传、重试退避、拒绝、回滚计数、取消和换任务，并用[合同样例](../docs/design/device-protocol-samples.json)核对与 Server 一致。host 测试不写设备；实板验证见仓库 README 的三层验证。

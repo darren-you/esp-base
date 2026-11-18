@@ -24,7 +24,7 @@ static esp_err_t get_string(nvs_handle_t handle, const char *key, char *out, siz
     return result;
 }
 
-/* 出厂资料里没有的键（业务 MQTT）缺失时为空串，不算错误。 */
+/* 出厂资料里可以没有的键（业务 MQTT、名称、Group）缺失时为空串，不算错误。 */
 static esp_err_t get_optional_string(nvs_handle_t handle, const char *key, char *out, size_t size)
 {
     const esp_err_t result = get_string(handle, key, out, size);
@@ -67,6 +67,11 @@ esp_err_t base_store_load_config(base_config_t *config)
     if (result == ESP_OK) result = get_optional_string(handle, "biz_mqtt_uri", business->uri, sizeof business->uri);
     if (result == ESP_OK) result = get_optional_string(handle, "biz_mqtt_user", business->username, sizeof business->username);
     if (result == ESP_OK) result = get_optional_string(handle, "biz_mqtt_pass", business->password, sizeof business->password);
+    if (result == ESP_OK) result = get_optional_string(handle, "name", config->name, sizeof config->name);
+    if (result == ESP_OK) result = get_optional_string(handle, "group", config->group, sizeof config->group);
+    /* 不合法的值当作没有设置，不阻止设备启动。 */
+    if (!base_is_device_name(config->name)) config->name[0] = '\0';
+    if (!base_is_uuid(config->group)) config->group[0] = '\0';
     if (result == ESP_OK && nvs_get_u32(handle, "cfg_rev", &config->revision) != ESP_OK) config->revision = 0;
     nvs_close(handle);
     return result;
@@ -85,6 +90,8 @@ esp_err_t base_store_save_config(base_config_t *config)
     if (result == ESP_OK) result = nvs_set_str(handle, "biz_mqtt_uri", config->business_mqtt.uri);
     if (result == ESP_OK) result = nvs_set_str(handle, "biz_mqtt_user", config->business_mqtt.username);
     if (result == ESP_OK) result = nvs_set_str(handle, "biz_mqtt_pass", config->business_mqtt.password);
+    if (result == ESP_OK) result = nvs_set_str(handle, "name", config->name);
+    if (result == ESP_OK) result = nvs_set_str(handle, "group", config->group);
     if (result == ESP_OK) result = nvs_set_u32(handle, "cfg_rev", config->revision + 1);
     if (result == ESP_OK) result = nvs_commit(handle);
     if (result == ESP_OK) ++config->revision;

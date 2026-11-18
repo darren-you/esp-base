@@ -18,17 +18,30 @@ ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `s
 
 ## 状态文档
 
-设备在连上 Broker、执行命令之后和每 15 分钟各发布一次。遗嘱是同一主题上的 `{"online":false,…}`，只带 `device_id`、`boot_id` 和 `fw`。Server 重启后读 retained 消息即可得到最近状态。
+状态文档就是设备的 Profile：设备能报告的全部信息。设备在连上 Broker、执行命令之后、取得 IPv6 地址时和每 15 分钟各发布一次。遗嘱是同一主题上的 `{"online":false,…}`，只带 `device_id`、`boot_id`、`name`、`group` 和 `fw`；名称或 Group 改了之后设备会重建连接，让 Broker 记住新的遗嘱。Server 重启后读 retained 消息即可得到最近状态。
 
 ```jsonc
 {"online":true,"device_id":"<uuid>","boot_id":"<每次启动新生成的 uuid>","uptime_s":3600,"reset":"power_on",
+ "name":"实验板 C3",                                       // 没设置时为「型号-MAC 后 3 字节」，例如 ESP32-C3-4A1B2C
+ "group":"<uuid>",                                         // 所属 Group；没有归属时为 null
  "fw":{"version":"1.0.0+68","sha256":"<完整 signed bin 的 SHA-256>","target":"esp32c3/esp_base","slot":"ota_0"},
- "heap":{"free":178148,"min":160696,"largest":110592},   // 字节；min 是本次启动以来的最小空闲堆
- "stack":{"main":4200,"mqtt_task":2900},                 // 各任务栈的历史最小余量，字节
- "wifi":{"rssi":-52},
- "config":{"revision":3,"error":null},                   // error：最近一次配置失败的原因，trial_failed 或 not_saved
- "wakeups":57}                                           // 控制任务处理过的事件数
+ "chip":{"model":"esp32c3","revision":"v0.4","cores":1,"cpu_mhz":160,"features":["wifi","ble"],"flash":4194304,"psram":0},
+ "idf":"v6.1",                                             // 构建固件的 ESP-IDF 版本
+ "heap":{"free":178148,"min":160696,"largest":110592},     // 字节；min 是本次启动以来的最小空闲堆
+ "stack":{"main":4200,"mqtt_task":2900,"mqtt_task_2":3100}, // 各任务栈的历史最小余量，字节；同名任务加序号
+ "wifi":{"rssi":-52,"ssid":"<SSID>","bssid":"aa:bb:cc:dd:ee:ff","channel":6},
+ "net":{"mac":"aa:bb:cc:dd:ee:01","hostname":"espressif",
+        "ipv4":{"address":"192.0.2.20","netmask":"255.255.255.0","gateway":"192.0.2.1"},  // 没有地址时为 null
+        "ipv6":["fe80::…","2001:db8::…"]},                 // 链路本地与 SLAAC 地址，最多 3 个
+ "mqtt":{"uri":"mqtts://<Broker 域名>:8883"},              // 系统 MQTT；只报地址，不报账户和密码
+ "business_mqtt":{"uri":"mqtts://…"},                      // 业务 MQTT；没有配置时为 null，同样不报账户和密码
+ "config":{"revision":3,"error":null},                     // error：最近一次配置失败的原因，trial_failed 或 not_saved
+ "wakeups":57}                                             // 控制任务处理过的事件数
 ```
+
+`chip.features` 取值：`wifi`、`ble`、`bt`、`ieee802154`、`emb_flash`、`emb_psram`。`name`、`group`、`chip`、`idf`、`net`、`mqtt`、`business_mqtt` 和 `wifi` 的 `ssid`／`bssid`／`channel` 是带 Profile 的固件新增的，Server 对旧固件的状态文档继续接受（样例 `online_legacy`、`offline_will_legacy`）。Server 严格解析状态文档，所以加字段时先发布认识新字段的 Server，再升级固件；删字段顺序相反。
+
+设备端由 `base_profile` 组件持有 Profile：芯片、MAC 和 IDF 版本启动时采集一次，名称、Group、MQTT 地址与配置版本由控制任务写入，堆、栈、Wi-Fi 和 IPv4／IPv6 由一个低优先级任务按请求异步采样，采完再由控制任务发布。状态文档和遗嘱只从 Profile 快照编码（`base_status_encode`、`base_will_encode`），不在别处另行采集。
 
 ## 命令
 
@@ -38,7 +51,7 @@ ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `s
 | --- | --- | --- |
 | `status` | 无 | 立即重新发布状态文档 |
 | `restart` | 无 | 应答发出后重启 |
-| `config` | `wifi`:{`ssid`,`password`} 和 `business_mqtt`:{`uri`,`username`,`password`}，至少一项；`uri` 必须是 `mqtts://`；其他字段（包括改系统 MQTT 的 `mqtt`）一律 `invalid_args` | `business_mqtt`：业务层另开连接用的 Broker，esp-base 不连接它，收到即保存并把 `config.revision` 加一，保存失败时 `config.error` 为 `not_saved`。`wifi`：应答发出后试用新网络，连上 Broker 才保存并把 `config.revision` 加一；120 秒内连不上则恢复旧配置，`config.error` 为 `trial_failed` |
+| `config` | `wifi`:{`ssid`,`password`}、`business_mqtt`:{`uri`,`username`,`password`}、`name` 和 `group`，至少一项；`uri` 必须是 `mqtts://`；`name` 是 1–32 字节 UTF-8，不含控制字符，首尾不是空格；`group` 是小写 UUID，`null` 表示移出 Group；其他字段（包括改系统 MQTT 的 `mqtt`）一律 `invalid_args`，不部分执行 | `business_mqtt`：业务层另开连接用的 Broker，esp-base 不连接它。`name`、`group`：设备资料，Group 本身只在 Server／网页里管理，设备只存 ID。这三项收到即保存并把 `config.revision` 加一，保存失败时 `config.error` 为 `not_saved`；改了 `name` 或 `group` 时应答发出后重建系统 MQTT 连接，更新遗嘱。`wifi`：应答发出后试用新网络，连上 Broker 才保存并把 `config.revision` 加一；120 秒内连不上则恢复旧配置，`config.error` 为 `trial_failed` |
 
 应答：
 

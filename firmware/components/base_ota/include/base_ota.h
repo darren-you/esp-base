@@ -39,13 +39,6 @@ typedef struct {
 } base_ota_record_t;
 #define BASE_OTA_RECORD_VERSION 1
 
-typedef struct {
-    char version[32];
-    char sha256[BASE_SHA256_HEX_BYTES]; /* 运行槽内完整 signed bin 的摘要 */
-    char target[48];
-    char slot[17];
-} base_fw_t;
-
 typedef enum {
     BASE_OTA_RESULT_SWITCHED, /* 镜像校验通过，启动槽已切换 */
     BASE_OTA_RESULT_RETRY,    /* 网络类错误或停滞：退避后续传 */
