@@ -11,7 +11,7 @@
 需要 [rustup](https://rustup.rs)。工具链版本和编译目标 `wasm32v1-none` 由 `rust-toolchain.toml` 固定，第一次构建时自动安装。下面的 `esp_base.py` 是本仓的 `tools/esp_base.py`，应用工程可以放在任何地方（别的仓库里也行）：
 
 ```bash
-python3 tools/esp_base.py app new ../my-app        # 新建工程：一个能跑的最小应用，约 0.6 KB
+python3 tools/esp_base.py app new ../my-app        # 新建工程：一个能跑的最小应用，约 0.4 KB
 python3 tools/esp_base.py app test ../my-app       # 本机跑单元测试
 python3 tools/esp_base.py app run ../my-app        # 本机运行：模拟定时器、业务 MQTT 和引脚
 python3 tools/esp_base.py app build ../my-app      # 构建、检查并封装成未签名的应用包（.ebapp）
@@ -61,7 +61,7 @@ esp_base_app::app!(Blink);
 | `mqtt` | 业务 MQTT：连接与遗嘱、订阅、发布，消息以 `Event::MqttMessage` 送达 |
 | `param` | 业务参数：出厂资料里 `business` 对象的字符串值，按键读取 |
 | `device` | 设备 UUID、芯片型号 |
-| `gpio` | 数字引脚：读、写 |
+| `gpio` | 数字引脚：读、写、有时限的输出 |
 | `pwm` | PWM 输出：频率、分辨率、占空比 |
 
 业务 MQTT 的地址和账户由系统保存，应用拿不到；连接、重连和重新订阅都由宿主完成。
@@ -80,12 +80,15 @@ esp_base_app::app!(Blink);
 
 ```rust
 gpio::write(4, true)?;                 // out0、out1 能写，也能读回实际电平
+gpio::pulse(4, true, 2000)?;           // 有时限的输出：2 秒后宿主把它置回安全电平
 let pressed = !gpio::read(6)?;         // 输入脚只能读
 pwm::config(7, 50, 14)?;               // 50 Hz、14 位：舵机
 pwm::write(7, 1228)?;                  // 占空比 0 到 2^14-1
 ```
 
 输出脚后面的数字是安全电平：设备启动后、应用的代码运行之前，应用停止、出故障、被替换之后，宿主都把引脚保持在这个电平，`pwm` 引脚保持低电平。应用不用自己在 `init` 里「先把输出关掉」，也不用担心出故障时输出停在半途。每种芯片能用哪些引脚见[应用包](../../docs/design/app-package.md#引脚)。
+
+**接了执行机构的输出用 `gpio::pulse`。** 「按住才动、松开两秒内必须停」这类要求不能靠应用自己的定时器去关输出：应用只有一个任务，它在发布消息时可能要等一次卡住的网络操作（最长十几秒），这期间定时器事件送不到应用手里。`gpio::pulse` 的时限由宿主自己的定时器执行，到时直接把引脚置回安全电平，不经过应用；应用随后收到 `Event::PinExpired`，用来更新自己的状态。再次调用是续期，`gpio::write` 取消时限。
 
 ## 本机测试和运行
 
@@ -97,7 +100,7 @@ pwm::write(7, 1228)?;                  // 占空比 0 到 2^14-1
 
 ```console
 $ python3 tools/esp_base.py app run ../my-app --param site=lab
-my_app 0.1.0+0：wasm 629 字节，内存上限 12288 字节，芯片 esp32c3
+my_app 0.1.0+0：wasm 431 字节，内存上限 12288 字节，芯片 esp32c3
 [       0 ms] log info: my-app: init
 [       0 ms] connect keepalive_s=30, will=null
 [       0 ms] timer id=0, delay_ms=1000, period_ms=1000
@@ -131,6 +134,8 @@ with Simulator("target/esp-base/hxh_lift.ebapp", params={"hxh_site": "lab"}) as 
 - **没有堆。** 状态放在应用结构体里，缓冲用定长数组。
 - **每次调用有指令预算。** 死循环或算得太久的调用会被宿主停掉，应用随后被重启。长时间的事拆成定时器事件。
 - **睡眠是短的。** 应用睡着时事件都在排队，所以一次调用（`init` 或一个事件）里累计最多睡 1000 毫秒，超出的那次返回 `Error::TooLarge`、不睡。换向前停 200 毫秒这样的事可以睡，更长的等待用定时器。
+- **事件会迟到，不会乱序。** 定时器事件不保证准点：应用正在处理别的事件、或卡在一次网络操作里时，它会晚到；同一个定时器在应用来得及处理之前多次到期只算一次。业务 MQTT 的消息在应用处理不过来时会被丢弃（宿主只为它排队有限的几条）。
+- **`match` 里留一个 `_`。** 以后的固件会有新的事件和错误码，`Event` 和 `Error` 都不能穷举匹配。
 - **出错即陷阱。** `panic`、越界、把线性内存之外的指针交给宿主接口，都会让应用停止并重启；系统层不受影响。
 - **清单写在 `Cargo.toml` 里。** `[package.metadata.esp-base]` 的 `memory` 是应用的内存上限（运行时内存池，字节），`stack` 是操作数栈；可选的 `chips` 限定能装的芯片，`[package.metadata.esp-base.pins]` 声明引脚。
 - **链接参数不能改。** `.cargo/config.toml` 把栈设为 4 KiB 并导出 `__heap_base`、`__data_end`，宿主据此把线性内存收缩到实际用量；没有收缩的应用会被拒绝。

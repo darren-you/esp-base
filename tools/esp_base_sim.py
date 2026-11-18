@@ -17,6 +17,9 @@ MQTT、引脚、PWM、业务参数）换成模拟实现。应用包按设备的�
         sim.advance(2000)            # 没有续租：推杆自己停下
         assert sim.gpio[21] == 0
 
+有时限的输出（gpio::pulse）到期时，引脚在到期的那一刻回到安全电平（事件 pulse_expired，带到期的时刻 at_ms），
+与设备一样不等应用；应用随后才收到到期事件。
+
 与设备的差别：
 - 不验签。
 - 本机的指针是 64 位，运行时自己的结构比设备上大，所以内存池按清单 memory 的 1.5 倍给；stats() 报的是本机的用量，
@@ -232,7 +235,7 @@ class Simulator:
             self.connect_wanted = False
         elif kind == "subscribe":
             self.subscriptions.append(event["filter"])
-        elif kind == "gpio":
+        elif kind in ("gpio", "pulse", "pulse_expired"):
             self.gpio[event["pin"]] = event["level"]
         elif kind == "safe":
             self.pwm.pop(event["pin"], None)

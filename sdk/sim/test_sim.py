@@ -45,7 +45,7 @@ def io(sim, operation, a=0, b=0, c=0):
 class HelloTest(unittest.TestCase):
     def test_lifecycle(self):
         with Simulator(APPS / "hello.ebapp") as sim:
-            self.assertEqual((sim.info["name"], sim.info["version"], sim.info["wasm_bytes"]), ("hello", "0.1.0+0", 1550))
+            self.assertEqual((sim.info["name"], sim.info["version"], sim.info["wasm_bytes"]), ("hello", "0.1.0+0", (APPS / "hello.wasm").stat().st_size))
             sim.start()
             self.assertTrue(sim.running)
             self.assertEqual(sim.logs, ["hello: init"])
@@ -142,6 +142,43 @@ class IoTest(unittest.TestCase):
         sim.stop()
         self.assertEqual((sim.gpio, sim.pwm), ({4: 0, 5: 1, 7: 0, 8: 0}, {}))
 
+    def test_pulse_returns_to_the_safe_level_without_the_app(self):
+        sim = self.sim
+        self.assertEqual((io(sim, 11, 4, 1, 2000), sim.gpio[4]), (0, 1))
+        self.assertEqual((sim.advance(1999), sim.gpio[4]), ([], 1))
+        # 到期：引脚先回到安全电平，应用随后才收到事件（夹具把引脚号发布到 io/expired）。
+        events = sim.advance(1)
+        self.assertEqual([event["event"] for event in events], ["pulse_expired", "publish"])
+        self.assertEqual((events[0]["pin"], events[0]["level"], events[0]["at_ms"], sim.gpio[4]), (4, 0, 2000, 0))
+        self.assertEqual((sim.published[-1].topic, sim.published[-1].text), ("io/expired", "4"))
+        # 续期：时限从最后一次算起，中间电平不变。
+        io(sim, 11, 4, 1, 2000)
+        sim.advance(1500)
+        io(sim, 11, 4, 1, 2000)
+        self.assertEqual((sim.advance(1999), sim.gpio[4]), ([], 1))
+        sim.advance(1)
+        self.assertEqual(sim.gpio[4], 0)
+        # 普通的写取消时限。
+        io(sim, 11, 4, 1, 1000)
+        io(sim, 1, 4, 1)
+        self.assertEqual((sim.advance(5000), sim.gpio[4]), ([], 1))
+        # 安全电平是高的输出脚：到期回到高。
+        self.assertEqual((io(sim, 11, 5, 0, 300), sim.gpio[5]), (0, 0))
+        sim.advance(300)
+        self.assertEqual(sim.gpio[5], 1)
+        # 只有输出脚可以，时限 1 毫秒到 10 分钟。
+        self.assertEqual([io(sim, 11, 6, 1, 100), io(sim, 11, 7, 1, 100), io(sim, 11, 9, 1, 100)], [DENIED] * 3)
+        self.assertEqual([io(sim, 11, 5, 1, 0), io(sim, 11, 5, 1, 600001), io(sim, 11, 5, 1, 600000)], [INVALID, INVALID, 0])
+
+    def test_pulse_expires_while_the_app_sleeps(self):
+        sim = self.sim
+        io(sim, 11, 4, 1, 200)
+        # 应用在一次调用里睡 250 毫秒：时限在它睡着的时候到期，引脚照样按时回到安全电平。
+        events = sim.message("io/cmd", struct.pack("<BIII", 9, 250, 1, 0))
+        kinds = [(event["event"], event.get("topic")) for event in events]
+        self.assertEqual(kinds, [("sleep", None), ("pulse_expired", None), ("publish", "io/result"), ("publish", "io/expired")])
+        self.assertEqual((events[1]["at_ms"], sim.gpio[4], sim.uptime_ms), (200, 0, 250))
+
     def test_param_and_device(self):
         sim = self.sim
         self.assertEqual(io(sim, 7, 0), "11111111-2222-4333-8444-555555555555")
@@ -200,7 +237,7 @@ class FaultTest(unittest.TestCase):
         with Simulator(APPS / "init_fail.wasm") as sim:
             sim.start()
             self.assertFalse(sim.running)
-            self.assertIn("app_init: returned 1", sim.start_error)
+            self.assertIn("app_init: returned -1", sim.start_error)   # init 返回的错误码：Error::Invalid
         with Simulator(APPS / "hello.wasm", memory=4096) as sim:
             sim.start()
             self.assertFalse(sim.running)
@@ -226,7 +263,11 @@ class PackageTest(unittest.TestCase):
                 line = dict(pair.split("=") for pair in sim.logs[-1].removeprefix("pins: ").split())
                 self.assertEqual(line, {"safe0": "0", "safe1": "1", "out": "0", "high": "1", "low": "0", "in": "1",
                                         "config": "0", "write": "0", "duty": "1228", "again": "0", "second": "0",
-                                        "denied": "-2"})
+                                        "denied": "-2", "pulse": "0"})
+                # 300 毫秒的时限到期：引脚回到低电平，应用收到事件后读回来的也是低。
+                self.assertEqual(sim.gpio[4], 1)
+                sim.advance(300)
+                self.assertEqual((sim.gpio[4], sim.logs[-1]), (0, "pins: expired=4 level=0"))
             cases = [
                 ("pin_denied", {"pins": {"12": "out0"}}, "esp32c3"),      # Flash 的引脚
                 ("pin_denied", {"pins": {"18": "in"}}, "esp32c3"),        # USB

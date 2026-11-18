@@ -1,5 +1,6 @@
 //! 夹具：设备级测试用。启动时把清单里声明的引脚走一遍，每一步的返回值写成一行日志（`pins: out=0 high=1 …`），
-//! 之后什么也不做。引脚按芯片取：两种芯片上都避开 Flash、USB、串口和启动时要采样的引脚。
+//! 最后给一个输出脚 300 毫秒的时限；到期时再写一行（`pins: expired=4 level=0`）。引脚按芯片取：两种芯片上都避开
+//! Flash、USB、串口和启动时要采样的引脚。
 #![no_std]
 use esp_base_app::{device, log, sys, App, Error, Event};
 
@@ -55,12 +56,22 @@ impl App for Pins {
             append(&mut line, &mut at, "again", sys::pwm_config(pwm_a, 1000, 10));
             append(&mut line, &mut at, "second", sys::pwm_config(pwm_b, 1000, 10));
             append(&mut line, &mut at, "denied", sys::gpio_write(undeclared, 1));
+            append(&mut line, &mut at, "pulse", sys::gpio_pulse(out0, 1, 300));
         }
         log::info(unsafe { core::str::from_utf8_unchecked(&line[..at]) });
         Ok(Pins)
     }
 
-    fn event(&mut self, _: Event) {}
+    fn event(&mut self, event: Event) {
+        if let Event::PinExpired(pin) = event {
+            let mut line = [0u8; 128];
+            line[..5].copy_from_slice(b"pins:");
+            let mut at = 5;
+            append(&mut line, &mut at, "expired", pin as i32);
+            append(&mut line, &mut at, "level", unsafe { sys::gpio_read(pin as u32) });
+            log::info(unsafe { core::str::from_utf8_unchecked(&line[..at]) });
+        }
+    }
 }
 
 esp_base_app::app!(Pins);

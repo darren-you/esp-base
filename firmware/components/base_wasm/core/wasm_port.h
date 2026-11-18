@@ -24,6 +24,7 @@ typedef enum {
 #define WASM_PAYLOAD_BYTES 1024 /* 单条消息载荷的最大长度 */
 #define WASM_SLEEP_MAX_MS 1000   /* 应用的一次调用（app_init 或一个事件）里累计能睡的时间 */
 #define WASM_PARAM_KEY_BYTES 15  /* 业务参数的键：与出厂资料里 business 对象的键相同 */
+#define WASM_PULSE_MAX_MS 600000u /* 有时限的输出最长 10 分钟 */
 #define WASM_PWM_BITS_MAX 14     /* PWM 分辨率的上限：占空比是 0 到 2^位数-1 */
 #define WASM_PWM_HZ_MAX 40000u
 
@@ -62,6 +63,10 @@ int wasm_port_info(wasm_info_t what, char *out, size_t capacity);
  * pwm_config 之后占空比是 0；这个频率配不出这样的分辨率时返回 WASM_E_INVALID。 */
 int wasm_port_gpio_write(unsigned pin, int level);
 int wasm_port_gpio_read(unsigned pin);
+/* 有时限的输出：把引脚置为 level，ms 毫秒后平台把它置回安全电平。到期由平台自己的定时器直接执行，不经过应用，
+ * 所以应用任务卡在一次网络操作里、事件来不及处理，都不影响输出按时回到安全电平；随后应用收到
+ * WASM_EVENT_PIN_EXPIRED。gpio_write 和再次 gpio_pulse 都取代之前的时限。 */
+int wasm_port_gpio_pulse(unsigned pin, int level, uint32_t ms);
 int wasm_port_pwm_config(unsigned pin, uint32_t frequency_hz, unsigned resolution_bits);
 int wasm_port_pwm_write(unsigned pin, uint32_t duty);
 int wasm_port_pwm_read(unsigned pin);

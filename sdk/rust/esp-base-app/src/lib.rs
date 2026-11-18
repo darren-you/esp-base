@@ -51,56 +51,44 @@ pub mod sys {
         fn info(what: u32, buffer: *mut u8, capacity: u32) -> i32;
         fn gpio_write(pin: u32, level: u32) -> i32;
         fn gpio_read(pin: u32) -> i32;
+        fn gpio_pulse(pin: u32, level: u32, ms: u32) -> i32;
         fn pwm_config(pin: u32, frequency_hz: u32, resolution_bits: u32) -> i32;
         fn pwm_write(pin: u32, duty: u32) -> i32;
         fn pwm_read(pin: u32) -> i32;
     }
 }
 
-/// 宿主接口的错误。
+/// 宿主接口的错误：宿主返回的负数错误码。用 `Error::Denied` 这样的名字比较和匹配（`match` 里留一个 `_`：
+/// 以后的固件可能有这个 SDK 还不认识的错误码），或用 [`Error::code`] 取原始值写进日志。
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Error {
-    /// 参数不合法。
-    Invalid,
-    /// 清单没有声明，或属于系统。
-    Denied,
-    /// 还没连上、还没对时。
-    NotReady,
-    /// 内存或队列不够。
-    NoMemory,
-    /// 超出长度上限，或缓冲太小。
-    TooLarge,
-    /// 没有这个键。
-    NotFound,
-    /// 这个 SDK 不认识的错误码（固件比 SDK 新）。
-    Other(i32),
-}
+pub struct Error(i32);
 
+#[allow(non_upper_case_globals)]
 impl Error {
-    /// 宿主接口的原始错误码（负数），写日志时用。
-    pub fn code(self) -> i32 {
-        match self {
-            Error::Invalid => -1,
-            Error::Denied => -2,
-            Error::NotReady => -3,
-            Error::NoMemory => -4,
-            Error::TooLarge => -5,
-            Error::NotFound => -6,
-            Error::Other(code) => code,
-        }
+    /// 参数不合法。
+    pub const Invalid: Error = Error(-1);
+    /// 清单没有声明，或属于系统。
+    pub const Denied: Error = Error(-2);
+    /// 还没连上、还没对时、还没配置。
+    pub const NotReady: Error = Error(-3);
+    /// 内存、队列或定时器不够。
+    pub const NoMemory: Error = Error(-4);
+    /// 超出长度上限，或缓冲太小。
+    pub const TooLarge: Error = Error(-5);
+    /// 没有这个键。
+    pub const NotFound: Error = Error(-6);
+
+    /// 宿主接口的原始错误码（负数）。
+    pub const fn code(self) -> i32 {
+        self.0
     }
 }
 
 fn check(code: i32) -> Result<usize, Error> {
-    match code {
-        0.. => Ok(code as usize),
-        -1 => Err(Error::Invalid),
-        -2 => Err(Error::Denied),
-        -3 => Err(Error::NotReady),
-        -4 => Err(Error::NoMemory),
-        -5 => Err(Error::TooLarge),
-        -6 => Err(Error::NotFound),
-        other => Err(Error::Other(other)),
+    if code >= 0 {
+        Ok(code as usize)
+    } else {
+        Err(Error(code))
     }
 }
 
@@ -179,6 +167,14 @@ pub mod gpio {
     /// 引脚的实际电平。
     pub fn read(pin: u8) -> Result<bool, Error> {
         check(unsafe { sys::gpio_read(pin as u32) }).map(|level| level != 0)
+    }
+
+    /// 有时限的输出：把输出脚置为 `high`，`ms` 毫秒（最长 10 分钟）后宿主把它置回安全电平，随后应用收到
+    /// [`super::Event::PinExpired`]。到期由宿主自己的定时器直接执行，不经过应用：应用的事件会因为网络卡住而
+    /// 迟到十几秒，接了执行机构、必须按时断开的输出要用它，不要靠应用自己的定时器去关。
+    /// 再次调用是续期；[`write`] 取消时限。
+    pub fn pulse(pin: u8, high: bool, ms: u32) -> Result<(), Error> {
+        check(unsafe { sys::gpio_pulse(pin as u32, high as u32, ms) }).map(|_| ())
     }
 }
 
@@ -267,7 +263,8 @@ pub mod mqtt {
     }
 }
 
-/// 宿主交给应用的事件。
+/// 宿主交给应用的事件。以后的固件会有新的事件：`match` 里留一个 `_ => {}`，不认识的忽略即可。
+#[non_exhaustive]
 pub enum Event {
     /// 定时器到期。
     Timer(u8),
@@ -277,6 +274,8 @@ pub enum Event {
     MqttDown,
     /// 收到一条消息；主题和载荷用 [`Message`] 读取。
     MqttMessage(Message),
+    /// 有时限的输出（[`gpio::pulse`]）到期了：这个引脚已经回到安全电平。
+    PinExpired(u8),
     /// 这个 SDK 不认识的事件（固件比 SDK 新），忽略即可。
     Unknown(u32),
 }
@@ -317,6 +316,7 @@ impl Event {
             2 => Event::MqttUp,
             3 => Event::MqttDown,
             4 => Event::MqttMessage(Message { topic_length: a, payload_length: b }),
+            5 => Event::PinExpired(a as u8),
             other => Event::Unknown(other),
         }
     }
@@ -324,7 +324,8 @@ impl Event {
 
 /// 一个业务应用。
 pub trait App: Sized {
-    /// 应用启动时调用一次：建立初始状态、要求连接、设置定时器。返回 `Err` 表示启动失败，宿主会回退到上一版。
+    /// 应用启动时调用一次：建立初始状态、要求连接、设置定时器。返回 `Err` 表示启动失败：新部署的应用会回退到
+    /// 上一版，错误码记在部署状态里（`app_init: returned -6` 是 [`Error::NotFound`]）。
     fn init() -> Result<Self, Error>;
     /// 每个事件调用一次。
     fn event(&mut self, event: Event);
@@ -343,7 +344,8 @@ macro_rules! app {
                     unsafe { *::core::ptr::addr_of_mut!(__ESP_BASE_APP) = ::core::option::Option::Some(app) };
                     0
                 }
-                ::core::result::Result::Err(_) => 1,
+                // 返回宿主接口的错误码（负数）：宿主把它记在启动失败的原因里，远程能看到是哪一类错误。
+                ::core::result::Result::Err(error) => error.code(),
             }
         }
 

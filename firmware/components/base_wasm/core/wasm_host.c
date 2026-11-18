@@ -174,6 +174,14 @@ static int32_t n_gpio_write(wasm_exec_env_t env, uint32_t pin, int32_t level)
     return pin_index(pin, true, false) < 0 ? WASM_E_DENIED : wasm_port_gpio_write(pin, level != 0);
 }
 
+static int32_t n_gpio_pulse(wasm_exec_env_t env, uint32_t pin, int32_t level, uint32_t ms)
+{
+    (void)env;
+    if (pin_index(pin, true, false) < 0) return WASM_E_DENIED;
+    if (ms == 0 || ms > WASM_PULSE_MAX_MS) return WASM_E_INVALID;
+    return wasm_port_gpio_pulse(pin, level != 0, ms);
+}
+
 static int32_t n_gpio_read(wasm_exec_env_t env, uint32_t pin)
 {
     (void)env;
@@ -228,6 +236,7 @@ static NativeSymbol s_natives[] = {
     {"info", n_info, "(i*~)i", NULL},
     {"gpio_write", n_gpio_write, "(ii)i", NULL},
     {"gpio_read", n_gpio_read, "(i)i", NULL},
+    {"gpio_pulse", n_gpio_pulse, "(iii)i", NULL},
     {"pwm_config", n_pwm_config, "(iii)i", NULL},
     {"pwm_write", n_pwm_write, "(ii)i", NULL},
     {"pwm_read", n_pwm_read, "(i)i", NULL},

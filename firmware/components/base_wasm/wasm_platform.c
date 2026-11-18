@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // 宿主接口背后的平台服务在设备上的实现（core/wasm_port.h）：日志、时间、业务参数、引脚、定时器和业务 MQTT。
 //
-// 定时器回调和业务连接的回调只向应用任务的队列投递事件；连接的状态只在应用任务里访问，所以不需要锁
-// （定时器的几个字段除外，用临界区）。
+// 业务连接的回调只向应用任务的队列投递事件，连接的状态只在应用任务里访问，所以不需要锁。应用的定时器和有时限的
+// 输出到期时在定时器任务里记进位图（用临界区保护），再叫醒应用任务；有时限的输出还在那里直接把引脚置回安全电平，
+// 这是唯一不经过应用任务就操作硬件的地方。
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +31,7 @@
 
 typedef struct {
     esp_timer_handle_t handle;
-    uint32_t period_ms, epoch;
+    uint32_t period_ms;
     int64_t due_us; /* 这一次设置最早的到期时刻：早于它的回调属于上一次设置 */
     bool periodic;  /* 首次到期后已经转为周期运行 */
 } app_timer_t;
@@ -39,6 +40,9 @@ static const char *TAG = "base_wasm";
 static portMUX_TYPE s_timer_lock = portMUX_INITIALIZER_UNLOCKED;
 static app_timer_t s_timers[WASM_TIMERS];
 static atomic_uint s_pending_bytes, s_dropped;
+/* 到期的定时器和时限到了的输出脚（s_timer_lock 保护）：定时器回调里置位，应用任务取走。用位图而不是往队列里
+ * 放事件：不占队列，也就不会被挤掉；同一个定时器在应用来得及处理之前多次到期只算一次。 */
+static unsigned s_fired_timers, s_expired_pins;
 
 /* 业务连接：只在应用任务里访问。 */
 static struct {
@@ -67,6 +71,9 @@ static struct {
     uint32_t frequency_hz;
     uint8_t resolution_bits; /* 0：空闲 */
 } s_pwm_timers[PWM_TIMERS];
+/* 有时限的输出：每个引脚一个定时器（用到时才建），以及这一次的到期时刻（0：没有时限在跑；s_timer_lock 保护）。 */
+static esp_timer_handle_t s_pulse_timers[WASM_PACKAGE_PINS];
+static int64_t s_pulse_due_us[WASM_PACKAGE_PINS];
 
 /* WAMR 取当前线程标识的入口，链接时取代它的 ESP-IDF 端口里基于 pthread_self() 的实现（见 CMakeLists.txt）。 */
 unsigned int __wrap_os_self_thread(void)
@@ -178,11 +185,40 @@ static void pwm_stop(unsigned index)
     pwm_timer_release(timer);
 }
 
+/* 取消一个引脚上的时限；已经到期、应用还没取走的那一次也作废。 */
+static void pulse_cancel(unsigned index)
+{
+    if (s_pulse_timers[index]) esp_timer_stop(s_pulse_timers[index]);
+    taskENTER_CRITICAL(&s_timer_lock);
+    s_pulse_due_us[index] = 0;
+    s_expired_pins &= ~(1u << index);
+    taskEXIT_CRITICAL(&s_timer_lock);
+}
+
+/* 有时限的输出到期（定时器任务里）：直接把引脚置回安全电平，再叫醒应用任务去告诉应用。切断输出不能等应用任务：
+ * 它可能正卡在一次网络操作里（等 esp-mqtt 的锁，最长一个网络超时）。 */
+static void pulse_expired(void *argument)
+{
+    const unsigned index = (unsigned)(uintptr_t)argument;
+    const int64_t now_us = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_timer_lock);
+    const int64_t due_us = s_pulse_due_us[index];
+    const bool current = due_us && now_us + 500 >= due_us; /* 否则是被取消或续期之前的那一次 */
+    if (current) {
+        gpio_set_level((gpio_num_t)s_pins[index].pin, s_pins[index].mode == WASM_PIN_OUT1);
+        s_pulse_due_us[index] = 0;
+        s_expired_pins |= 1u << index;
+    }
+    taskEXIT_CRITICAL(&s_timer_lock);
+    if (current) base_wasm_wake();
+}
+
 /* 把一个引脚置到清单声明的安全状态。 */
 static void pin_safe(unsigned index)
 {
     const gpio_num_t pin = (gpio_num_t)s_pins[index].pin;
     const wasm_pin_mode_t mode = (wasm_pin_mode_t)s_pins[index].mode;
+    pulse_cancel(index);
     pwm_stop(index);
     if (mode == WASM_PIN_OUT0 || mode == WASM_PIN_OUT1 || mode == WASM_PIN_PWM) {
         /* 先写电平再打开输出：引脚不会在切换的瞬间跳到相反的电平。输入也开着，读回的是引脚的实际电平。 */
@@ -202,6 +238,7 @@ void wasm_platform_pins(const wasm_pin_t *pins, unsigned count)
     if (count > WASM_PACKAGE_PINS) count = WASM_PACKAGE_PINS;
     /* 先收回所有 PWM（通道是按清单里的先后分的，换了清单要重新分）；这一组里不再声明的引脚还给系统：高阻，不带上下拉。 */
     for (unsigned index = 0; index < s_pin_count; ++index) {
+        pulse_cancel(index); /* 之后定时器回调不会再碰这张引脚表 */
         pwm_stop(index);
         if (wasm_pin_mode(pins, count, s_pins[index].pin) >= 0) continue;
         gpio_set_direction((gpio_num_t)s_pins[index].pin, GPIO_MODE_DISABLE);
@@ -215,7 +252,30 @@ void wasm_platform_pins(const wasm_pin_t *pins, unsigned count)
 
 int wasm_port_gpio_write(unsigned pin, int level)
 {
-    return pin_slot(pin) >= 0 && gpio_set_level((gpio_num_t)pin, level != 0) == ESP_OK ? WASM_OK : WASM_E_INVALID;
+    const int index = pin_slot(pin);
+    if (index < 0) return WASM_E_INVALID;
+    pulse_cancel((unsigned)index); /* 应用自己接管了这个引脚 */
+    return gpio_set_level((gpio_num_t)pin, level != 0) == ESP_OK ? WASM_OK : WASM_E_INVALID;
+}
+
+int wasm_port_gpio_pulse(unsigned pin, int level, uint32_t ms)
+{
+    const int index = pin_slot(pin);
+    if (index < 0) return WASM_E_INVALID;
+    if (!s_pulse_timers[index]) {
+        const esp_timer_create_args_t timer = {.callback = pulse_expired, .arg = (void *)(uintptr_t)index, .name = "app_pulse"};
+        if (esp_timer_create(&timer, &s_pulse_timers[index]) != ESP_OK) return WASM_E_NO_MEMORY;
+    }
+    pulse_cancel((unsigned)index);
+    taskENTER_CRITICAL(&s_timer_lock);
+    s_pulse_due_us[index] = esp_timer_get_time() + (int64_t)ms * 1000;
+    taskEXIT_CRITICAL(&s_timer_lock);
+    /* 先上好定时器再给电平：定时器起不来就不动输出。续期时引脚的电平不变，中间没有间隙。 */
+    if (esp_timer_start_once(s_pulse_timers[index], (uint64_t)ms * 1000u) != ESP_OK) {
+        pulse_cancel((unsigned)index);
+        return WASM_E_NO_MEMORY;
+    }
+    return gpio_set_level((gpio_num_t)pin, level != 0) == ESP_OK ? WASM_OK : WASM_E_INVALID;
 }
 
 int wasm_port_gpio_read(unsigned pin)
@@ -282,14 +342,15 @@ static void timer_fired(void *argument)
     app_timer_t *timer = argument;
     const int64_t now_us = esp_timer_get_time();
     taskENTER_CRITICAL(&s_timer_lock);
-    const uint32_t epoch = timer->epoch, period_ms = timer->period_ms;
+    const uint32_t period_ms = timer->period_ms;
     const bool stale = now_us + 500 < timer->due_us; /* 应用在回调执行前重设了这个定时器 */
     const bool start_periodic = !stale && period_ms && !timer->periodic;
     if (start_periodic) timer->periodic = true;
+    if (!stale) s_fired_timers |= 1u << (timer - s_timers);
     taskEXIT_CRITICAL(&s_timer_lock);
     if (stale) return;
     if (start_periodic) esp_timer_start_periodic(timer->handle, (uint64_t)period_ms * 1000u);
-    base_wasm_post(&(base_wasm_event_t){.kind = EV_TIMER, .timer = (uint8_t)(timer - s_timers), .epoch = epoch});
+    base_wasm_wake();
 }
 
 int wasm_port_timer_cancel(unsigned id)
@@ -297,7 +358,7 @@ int wasm_port_timer_cancel(unsigned id)
     app_timer_t *timer = &s_timers[id];
     esp_timer_stop(timer->handle);
     taskENTER_CRITICAL(&s_timer_lock);
-    ++timer->epoch; /* 已经排在队列里的到期事件作废 */
+    s_fired_timers &= ~(1u << id); /* 已经到期、应用还没取走的那一次作废 */
     timer->period_ms = 0;
     timer->periodic = false;
     taskEXIT_CRITICAL(&s_timer_lock);
@@ -315,12 +376,18 @@ int wasm_port_timer_set(unsigned id, uint32_t delay_ms, uint32_t period_ms)
     return esp_timer_start_once(timer->handle, (uint64_t)delay_ms * 1000u) == ESP_OK ? WASM_OK : WASM_E_NO_MEMORY;
 }
 
-bool wasm_platform_timer_current(uint8_t id, uint32_t epoch)
+void wasm_platform_take(unsigned *timers, unsigned *pins)
 {
     taskENTER_CRITICAL(&s_timer_lock);
-    const bool current = id < WASM_TIMERS && epoch == s_timers[id].epoch;
+    *timers = s_fired_timers;
+    *pins = s_expired_pins;
+    s_fired_timers = s_expired_pins = 0;
     taskEXIT_CRITICAL(&s_timer_lock);
-    return current;
+}
+
+unsigned wasm_platform_pin(unsigned index)
+{
+    return index < s_pin_count ? s_pins[index].pin : 0;
 }
 
 /* ---------- 业务 MQTT ---------- */
@@ -416,6 +483,11 @@ void wasm_platform_connect_allowed(void)
 {
     s_link.allowed = true;
     if (s_link.wanted) link_open();
+}
+
+bool wasm_platform_link_connected(void)
+{
+    return s_link.client && s_link.connected;
 }
 
 bool wasm_platform_link_current(void *client)

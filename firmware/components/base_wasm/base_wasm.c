@@ -5,6 +5,7 @@
 // 都只向队列投递事件；部署的决定由纯逻辑的状态机（core/wasm_deploy.c）做出，这里负责执行它给出的动作。
 #include "base_wasm.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@
 #define FEED_MS 10000
 #define WATCHDOG_MS 60000
 #define QUEUE_LENGTH 16
+#define QUEUE_RESERVED 6 /* 应用的消息最多占用 QUEUE_LENGTH - QUEUE_RESERVED 个位置，其余留给不能丢的事件 */
 #define RESTART_MIN_MS 5000
 #define RESTART_MAX_MS 300000
 #define LINEAR_MAX_BYTES (16 * 1024) /* 线性内存（栈加静态数据）的上限；超过说明模块没有收缩 */
@@ -44,6 +46,7 @@
 
 static const char *TAG = "base_wasm";
 static QueueHandle_t s_queue;
+static atomic_bool s_wake_posted; /* 队列里已经有一个 EV_WAKE */
 static esp_timer_handle_t s_restart_timer, s_trial_timer, s_retry_timer, s_stable_timer;
 static uint32_t s_restart_ms = RESTART_MIN_MS;
 static bool s_store_ready;
@@ -67,10 +70,21 @@ static void apply(unsigned actions);
 
 void base_wasm_post(const base_wasm_event_t *event)
 {
-    if (s_queue && xQueueSend(s_queue, event, 0) == pdTRUE) return;
+    /* 应用处理不过来时丢的是它自己的消息：部署、连接状态这些事件要有位置。 */
+    const bool room = s_queue && (event->kind != EV_LINK_MESSAGE || uxQueueSpacesAvailable(s_queue) > QUEUE_RESERVED);
+    if (room && xQueueSend(s_queue, event, 0) == pdTRUE) return;
     if (event->kind == EV_LINK_MESSAGE) wasm_platform_message_done(event);
     else free(event->data);
     wasm_platform_count_drop();
+}
+
+void base_wasm_wake(void)
+{
+    /* 应用任务处理完每个事件都会去取到期的定时器和引脚，所以队列里有一个叫醒就够了（应用任务取走它时清标记）；
+     * 队列满时不用叫：应用任务本来就有事件要处理。 */
+    if (!s_queue || atomic_exchange(&s_wake_posted, true)) return;
+    const base_wasm_event_t event = {.kind = EV_WAKE};
+    if (xQueueSend(s_queue, &event, 0) != pdTRUE) atomic_store(&s_wake_posted, false);
 }
 
 #if CONFIG_ESP_BASE_TEST_WASM_BENCH || CONFIG_ESP_BASE_TEST_WASM_DEPLOY
@@ -279,7 +293,13 @@ static void on_fetch_done(void)
 static void handle(const base_wasm_event_t *event)
 {
     switch ((base_wasm_event_kind_t)event->kind) {
-    case EV_SYSTEM_CONNECT: wasm_platform_connect_allowed(); break;
+    case EV_WAKE: atomic_store(&s_wake_posted, false); break; /* 只用来叫醒任务：到期的定时器和引脚在 drain 里取 */
+    case EV_SYSTEM_CONNECT:
+        /* 业务 MQTT 的配置变了要重连：先告诉应用连接断了（它可以先把执行机构停下），再去做可能要等网络超时的
+         * 关闭和重连。 */
+        if (wasm_platform_link_connected()) dispatch(WASM_EVENT_MQTT_DOWN, 0, 0);
+        wasm_platform_connect_allowed();
+        break;
     case EV_LINK_UP:
         if (wasm_platform_link_up(event->client)) dispatch(WASM_EVENT_MQTT_UP, 0, 0);
         break;
@@ -292,9 +312,6 @@ static void handle(const base_wasm_event_t *event)
             dispatch(WASM_EVENT_MQTT_MESSAGE, event->topic_length, event->payload_length);
         }
         wasm_platform_message_done(event);
-        break;
-    case EV_TIMER:
-        if (wasm_platform_timer_current(event->timer, event->epoch)) dispatch(WASM_EVENT_TIMER, event->timer, 0);
         break;
     case EV_RESTART:
         if (!wasm_host_running() && s_deploy.running < WASM_SLOTS) {
@@ -320,12 +337,24 @@ static void handle(const base_wasm_event_t *event)
     }
 }
 
+/* 把到期的定时器和时限到了的输出脚交给应用。先报引脚：它关系到执行机构的状态。 */
+static void drain(void)
+{
+    unsigned timers, pins;
+    wasm_platform_take(&timers, &pins);
+    for (unsigned index = 0; pins; ++index, pins >>= 1)
+        if (pins & 1u) dispatch(WASM_EVENT_PIN_EXPIRED, wasm_platform_pin(index), 0);
+    for (unsigned id = 0; timers; ++id, timers >>= 1)
+        if (timers & 1u) dispatch(WASM_EVENT_TIMER, id, 0);
+}
+
 static void app_task(void *argument)
 {
     (void)argument;
     apply(s_boot_actions | WASM_ACT_PUBLISH);
     for (base_wasm_event_t event;;) {
         if (xQueueReceive(s_queue, &event, pdMS_TO_TICKS(FEED_MS)) == pdTRUE) handle(&event);
+        drain();
         base_runtime_feed();
     }
 }

@@ -8,9 +8,10 @@
 #include "wasm_deploy.h"
 #include "wasm_package.h"
 
-/* 应用任务的事件。定时器回调、业务连接的回调、下载任务和系统层都只向应用任务的队列投递事件。 */
+/* 应用任务的事件。业务连接的回调、下载任务和系统层都只向应用任务的队列投递事件；应用的定时器和有时限的输出
+ * 到期时不占队列，记在位图里（wasm_platform_take），再用一个 EV_WAKE 叫醒应用任务。 */
 typedef enum {
-    EV_TIMER,          /* 应用的定时器到期 */
+    EV_WAKE,           /* 有到期的定时器或引脚要取 */
     EV_LINK_UP,        /* 业务连接连上／断开／收到消息 */
     EV_LINK_DOWN,
     EV_LINK_MESSAGE,
@@ -26,15 +27,16 @@ typedef enum {
 
 typedef struct {
     uint8_t kind;
-    uint8_t timer;                         /* EV_TIMER：定时器编号 */
     uint16_t topic_length, payload_length; /* EV_LINK_MESSAGE；EV_DESIRED 只用 payload_length */
-    uint32_t epoch;                        /* EV_TIMER：设置时的代，对不上说明它后来被重设或取消了 */
     void *client;                          /* EV_LINK_*：产生事件的连接，与当前连接不同的丢弃 */
     char *data;                            /* EV_LINK_MESSAGE：主题紧跟载荷；EV_DESIRED：载荷。处理后释放 */
 } base_wasm_event_t;
 
-/* 投递事件；队列满时丢弃并计数（附带的数据一并释放）。可以在任意任务和定时器回调里调用。 */
+/* 投递事件；队列满时丢弃并计数（附带的数据一并释放）。可以在任意任务和定时器回调里调用。
+ * 应用的消息（EV_LINK_MESSAGE）只用队列的一部分，留出的位置给部署、连接状态这些不能丢的事件。 */
 void base_wasm_post(const base_wasm_event_t *event);
+/* 叫醒应用任务去取到期的定时器和引脚。队列里最多放一个叫醒；可以在定时器回调里调用。 */
+void base_wasm_wake(void);
 /* 建一个记在业务名下的任务；系统层没有启动时（测试固件）退回普通任务。 */
 bool base_wasm_task(const char *name, void (*entry)(void *), uint32_t stack_bytes, uint32_t watchdog_ms);
 
@@ -42,13 +44,17 @@ bool base_wasm_task(const char *name, void (*entry)(void *), uint32_t stack_byte
 bool wasm_platform_init(const char *device_id);
 /* 系统通知可以建立业务连接：应用要求过连接就按当前的业务 MQTT 配置（重新）建立。 */
 void wasm_platform_connect_allowed(void);
+/* 业务连接此刻是不是通的。 */
+bool wasm_platform_link_connected(void);
 /* 连接事件是否来自当前连接；连上时顺带重新订阅。 */
 bool wasm_platform_link_up(void *client);
 bool wasm_platform_link_down(void *client);
 bool wasm_platform_link_current(void *client);
 /* 消息事件处理完：释放数据，归还排队额度。 */
 void wasm_platform_message_done(const base_wasm_event_t *event);
-bool wasm_platform_timer_current(uint8_t id, uint32_t epoch);
+/* 取走到期的定时器（位 n 是编号 n）和时限到了的输出脚（位 n 是引脚表的第 n 项，引脚号用 wasm_platform_pin 查）。 */
+void wasm_platform_take(unsigned *timers, unsigned *pins);
+unsigned wasm_platform_pin(unsigned index);
 /* 把应用声明的引脚置到安全状态并记下来：开机时、应用启动前调用；应用停止时平台按记下的这一组再置一次。
  * 上一组里有、这一组里没有的引脚还给系统（高阻输入）。 */
 void wasm_platform_pins(const wasm_pin_t *pins, unsigned count);

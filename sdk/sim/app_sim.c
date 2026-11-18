@@ -61,6 +61,11 @@ static struct {
         uint32_t hz, duty;
         unsigned bits; /* 0：还没配置 */
     } pwm[WASM_PACKAGE_PINS];
+    struct {
+        bool active;
+        uint64_t due_ms;
+    } pulses[WASM_PACKAGE_PINS]; /* 有时限的输出 */
+    unsigned expired_pins;       /* 时限到了、还没告诉应用的引脚（位 n 是引脚表的第 n 项） */
 } sim;
 
 /* ---------- 输出 ---------- */
@@ -164,10 +169,25 @@ int wasm_port_timer_cancel(unsigned id)
     return WASM_OK;
 }
 
+/* 时限到了的输出回到安全电平。设备上这一步由宿主的定时器直接做，不等应用：应用正在睡眠或处理别的事件时也照常
+ * 发生，所以时钟每次前进都要查。应用稍后才收到到期事件（deliver_expired）。 */
+static void expire_pulses(void)
+{
+    for (int index = 0; index < sim.package.pin_count; ++index) {
+        if (!sim.pulses[index].active || sim.pulses[index].due_ms > sim.now_ms) continue;
+        sim.pulses[index].active = false;
+        sim.levels[index] = sim.package.pins[index].mode == WASM_PIN_OUT1;
+        sim.expired_pins |= 1u << index;
+        emit("{\"event\":\"pulse_expired\",\"pin\":%u,\"level\":%d,\"at_ms\":%llu}", (unsigned)sim.package.pins[index].pin,
+             sim.levels[index], (unsigned long long)sim.pulses[index].due_ms);
+    }
+}
+
 void wasm_port_sleep_ms(uint32_t ms)
 {
-    sim.now_ms += ms;
     emit("{\"event\":\"sleep\",\"ms\":%u}", (unsigned)ms);
+    sim.now_ms += ms;
+    expire_pulses();
 }
 
 static void put_publish(const char *topic, size_t topic_length, const void *payload, size_t payload_length, int qos, bool retain,
@@ -270,8 +290,22 @@ int wasm_port_gpio_write(unsigned pin, int level)
 {
     const int index = pin_slot(pin);
     if (index < 0) return WASM_E_INVALID;
+    sim.pulses[index].active = false; /* 应用自己接管了这个引脚：之前的时限作废 */
+    sim.expired_pins &= ~(1u << index);
     sim.levels[index] = level != 0;
     emit("{\"event\":\"gpio\",\"pin\":%u,\"level\":%d}", pin, sim.levels[index]);
+    return WASM_OK;
+}
+
+int wasm_port_gpio_pulse(unsigned pin, int level, uint32_t ms)
+{
+    const int index = pin_slot(pin);
+    if (index < 0) return WASM_E_INVALID;
+    sim.pulses[index].active = true;
+    sim.pulses[index].due_ms = sim.now_ms + ms;
+    sim.expired_pins &= ~(1u << index);
+    sim.levels[index] = level != 0;
+    emit("{\"event\":\"pulse\",\"pin\":%u,\"level\":%d,\"ms\":%u}", pin, sim.levels[index], (unsigned)ms);
     return WASM_OK;
 }
 
@@ -346,6 +380,8 @@ static void pins_safe(void)
     for (int index = 0; index < sim.package.pin_count; ++index) {
         const unsigned mode = sim.package.pins[index].mode;
         memset(&sim.pwm[index], 0, sizeof sim.pwm[index]);
+        sim.pulses[index].active = false;
+        sim.expired_pins &= ~(1u << index);
         if (mode == WASM_PIN_OUT0 || mode == WASM_PIN_OUT1 || mode == WASM_PIN_PWM) sim.levels[index] = mode == WASM_PIN_OUT1;
         emit("{\"event\":\"safe\",\"pin\":%u,\"mode\":\"%s\",\"level\":%d}", (unsigned)sim.package.pins[index].pin,
              mode_name(mode), sim.levels[index]);
@@ -428,6 +464,16 @@ static void dispatch(wasm_event_kind_t kind, uint32_t a, uint32_t b)
     stop();
 }
 
+/* 把时限到了的引脚告诉应用。只在两次调用之间做：应用一次只处理一个事件。 */
+static void deliver_expired(void)
+{
+    for (int index = 0; index < sim.package.pin_count && sim.expired_pins; ++index) {
+        if (!(sim.expired_pins & 1u << index)) continue;
+        sim.expired_pins &= ~(1u << index);
+        dispatch(WASM_EVENT_PIN_EXPIRED, sim.package.pins[index].pin, 0);
+    }
+}
+
 static bool topic_matches(const char *filter, const char *topic)
 {
     while (*filter) {
@@ -486,24 +532,34 @@ static void message(const cJSON *json)
     dispatch(WASM_EVENT_MQTT_MESSAGE, (uint32_t)topic_length, (uint32_t)payload_length);
 }
 
-/* 把时钟推进 ms 毫秒，期间到期的定时器按到期的先后交给应用。 */
+/* 把时钟推进 ms 毫秒，期间到期的定时器和有时限的输出按到期的先后处理。 */
 static void advance(uint64_t ms)
 {
     uint64_t target = sim.now_ms + ms;
-    for (int events = 0; wasm_host_running(); ++events) {
-        int next = -1;
-        for (int id = 0; id < WASM_TIMERS; ++id)
-            if (sim.timers[id].active && sim.timers[id].due_ms <= target && (next < 0 || sim.timers[id].due_ms < sim.timers[next].due_ms))
-                next = id;
-        if (next < 0) break;
+    for (int events = 0;; ++events) {
+        /* 下一个到期的：定时器（只有应用在运行时才有意义）或有时限的输出；同时到期时先处理输出。 */
+        int timer = -1, pulse = -1;
+        for (int id = 0; id < WASM_TIMERS && wasm_host_running(); ++id)
+            if (sim.timers[id].active && sim.timers[id].due_ms <= target && (timer < 0 || sim.timers[id].due_ms < sim.timers[timer].due_ms))
+                timer = id;
+        for (int index = 0; index < sim.package.pin_count; ++index)
+            if (sim.pulses[index].active && sim.pulses[index].due_ms <= target && (pulse < 0 || sim.pulses[index].due_ms < sim.pulses[pulse].due_ms))
+                pulse = index;
+        if (timer < 0 && pulse < 0) break;
         if (events >= ADVANCE_EVENTS_MAX) {
             emit_error("too many timer events in one advance");
             break;
         }
-        if (sim.timers[next].due_ms > sim.now_ms) sim.now_ms = sim.timers[next].due_ms;
-        if (sim.timers[next].period_ms) sim.timers[next].due_ms += sim.timers[next].period_ms;
-        else sim.timers[next].active = false;
-        dispatch(WASM_EVENT_TIMER, (uint32_t)next, 0);
+        if (pulse >= 0 && (timer < 0 || sim.pulses[pulse].due_ms <= sim.timers[timer].due_ms)) {
+            if (sim.pulses[pulse].due_ms > sim.now_ms) sim.now_ms = sim.pulses[pulse].due_ms;
+            expire_pulses();
+        } else {
+            if (sim.timers[timer].due_ms > sim.now_ms) sim.now_ms = sim.timers[timer].due_ms;
+            if (sim.timers[timer].period_ms) sim.timers[timer].due_ms += sim.timers[timer].period_ms;
+            else sim.timers[timer].active = false;
+            dispatch(WASM_EVENT_TIMER, (uint32_t)timer, 0);
+        }
+        deliver_expired();
         if (sim.now_ms > target) target = sim.now_ms; /* 应用在处理里睡过了头 */
     }
     if (target > sim.now_ms) sim.now_ms = target;
@@ -683,6 +739,7 @@ int main(int argc, char **argv)
         if (cJSON_IsObject(json)) command(json);
         else emit_error("a command is one JSON object per line");
         cJSON_Delete(json);
+        deliver_expired(); /* 应用在这条命令里睡过去的时间里到期的输出 */
         emit("{\"event\":\"idle\",\"running\":%s,\"uptime_ms\":%llu}", wasm_host_running() ? "true" : "false",
              (unsigned long long)sim.now_ms);
     }

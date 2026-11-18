@@ -53,6 +53,8 @@ fn wrappers() -> i32 {
     failures += pwm::write(7, 1228).is_err() as i32;
     failures += sleep_ms(40).is_err() as i32;
     failures += (pwm::read(7) != Ok(1228)) as i32;
+    failures += gpio::pulse(4, true, 2000).is_err() as i32;
+    failures += (gpio::pulse(6, true, 2000) != Err(Error::Denied)) as i32;
     failures
 }
 
@@ -64,6 +66,9 @@ impl App for Io {
     }
 
     fn event(&mut self, event: Event) {
+        if let Event::PinExpired(pin) = event {
+            let _ = mqtt::publish("io/expired", &[b'0' + pin], mqtt::Qos::AtMostOnce, false);
+        }
         let Event::MqttMessage(message) = event else { return };
         let mut buffer = [0u8; 64];
         let Ok(data) = message.payload(&mut buffer) else { return };
@@ -99,6 +104,7 @@ impl App for Io {
                 report(result);
             }
             10 => report(wrappers()),
+            11 => report(unsafe { sys::gpio_pulse(a, b, c) }),
             _ => {}
         }
     }

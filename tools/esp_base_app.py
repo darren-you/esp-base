@@ -30,7 +30,7 @@ PINS_MAX = 8
 IMPORTS = {name: 1 for name in (
     "log", "uptime_ms", "unix_ms", "timer_set", "timer_cancel", "sleep_ms", "mqtt_connect", "mqtt_disconnect",
     "mqtt_subscribe", "mqtt_publish", "event_topic", "event_payload", "param", "info", "gpio_write", "gpio_read",
-    "pwm_config", "pwm_write", "pwm_read")}
+    "gpio_pulse", "pwm_config", "pwm_write", "pwm_read")}
 
 
 class AppError(Exception):

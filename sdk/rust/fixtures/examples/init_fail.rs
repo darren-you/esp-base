@@ -1,4 +1,4 @@
-//! 夹具：启动失败。
+//! 夹具：启动失败。宿主把 init 返回的错误码记在启动失败的原因里。
 #![no_std]
 use esp_base_app::{App, Error, Event};
 

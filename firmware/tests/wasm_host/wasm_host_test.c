@@ -40,6 +40,7 @@ static struct {
     struct { bool active; uint32_t delay_ms, period_ms; } timers[WASM_TIMERS];
     uint64_t uptime_ms, unix_ms;
     int levels[MOCK_PINS], gpio_writes, pwm_configs;
+    uint32_t pulse_ms[MOCK_PINS]; /* 有时限的输出：最近一次的时限 */
     struct { uint32_t hz, duty; unsigned bits; } pwm[MOCK_PINS];
 } m;
 
@@ -155,6 +156,14 @@ int wasm_port_gpio_write(unsigned pin, int level)
 }
 
 int wasm_port_gpio_read(unsigned pin) { return m.levels[declared(pin)]; }
+
+int wasm_port_gpio_pulse(unsigned pin, int level, uint32_t ms)
+{
+    m.levels[declared(pin)] = level;
+    m.pulse_ms[pin] = ms;
+    ++m.gpio_writes;
+    return WASM_OK;
+}
 
 int wasm_port_pwm_config(unsigned pin, uint32_t frequency_hz, unsigned resolution_bits)
 {
@@ -382,7 +391,7 @@ static void expect_start_failure(const char *name, const wasm_host_limits_t *lim
 
 static void test_start_failures(void)
 {
-    expect_start_failure("init_fail", &LIMITS, "app_init: returned 1");
+    expect_start_failure("init_fail", &LIMITS, "app_init: returned -1"); /* init 返回的错误码：Error::Invalid */
     expect_start_failure("unknown_import", &LIMITS, "base.not_in_this_firmware is not provided by this firmware");
     expect_start_failure("no_event", &LIMITS, "app_init or app_event is not exported");
     /* 没有导出 __heap_base、__data_end：线性内存是整页 64 KiB，超过上限。 */
@@ -437,7 +446,7 @@ static void test_malformed_images(void)
 /* ---------- 引脚、PWM、业务参数、设备信息、睡眠：用 io 夹具逐个接口核对 ---------- */
 
 enum { IO_GPIO_WRITE = 1, IO_GPIO_READ, IO_PWM_CONFIG, IO_PWM_WRITE, IO_PWM_READ, IO_PARAM, IO_INFO, IO_INFO_NO_BUFFER,
-       IO_SLEEP, IO_WRAPPERS };
+       IO_SLEEP, IO_WRAPPERS, IO_GPIO_PULSE };
 #define IO_TEXT INT_MAX /* 夹具发布的是文本，在 s_text 里 */
 #define IO_NONE INT_MIN /* 夹具没有发布，或者出了故障 */
 static char s_text[64];
@@ -504,6 +513,18 @@ static void test_io(void)
     CHECK(io(IO_GPIO_WRITE, 7, 1, 0) == WASM_E_DENIED && io(IO_GPIO_READ, 7, 0, 0) == WASM_E_DENIED);
     CHECK(io(IO_GPIO_WRITE, 260, 1, 0) == WASM_E_DENIED && io(IO_GPIO_WRITE, 0xFFFFFFFFu, 1, 0) == WASM_E_DENIED);
     CHECK(io(IO_GPIO_READ, 0x80000004u, 0, 0) == WASM_E_DENIED && m.gpio_writes == writes);
+
+    /* 有时限的输出：只有输出脚可以；时限 1 毫秒到 10 分钟。 */
+    CHECK(io(IO_GPIO_PULSE, 4, 1, 2000) == 0 && m.levels[4] == 1 && m.pulse_ms[4] == 2000);
+    CHECK(io(IO_GPIO_PULSE, 5, 0, 600000) == 0 && m.levels[5] == 0 && m.pulse_ms[5] == 600000);
+    const int pulses = m.gpio_writes;
+    CHECK(io(IO_GPIO_PULSE, 4, 1, 0) == WASM_E_INVALID && io(IO_GPIO_PULSE, 4, 1, 600001) == WASM_E_INVALID);
+    CHECK(io(IO_GPIO_PULSE, 6, 1, 100) == WASM_E_DENIED && io(IO_GPIO_PULSE, 7, 1, 100) == WASM_E_DENIED);
+    CHECK(io(IO_GPIO_PULSE, 9, 1, 100) == WASM_E_DENIED && m.gpio_writes == pulses && m.pulse_ms[4] == 2000);
+    /* 到期事件带着引脚号送到应用。 */
+    const int before_expiry = m.published;
+    CHECK(wasm_host_event(WASM_EVENT_PIN_EXPIRED, 4, 0) && m.published == before_expiry + 1);
+    CHECK(!strcmp(m.last.topic, "io/expired") && m.last.payload_length == 1 && m.last.payload[0] == '4');
 
     /* PWM：先配置再写；占空比不能超出分辨率。 */
     CHECK(io(IO_PWM_WRITE, 7, 100, 0) == WASM_E_NOT_READY && io(IO_PWM_READ, 7, 0, 0) == WASM_E_NOT_READY);

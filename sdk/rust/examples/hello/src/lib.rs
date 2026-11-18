@@ -53,7 +53,7 @@ impl App for Hello {
                     let _ = mqtt::publish("hello/echo", data, mqtt::Qos::AtMostOnce, false);
                 }
             }
-            Event::Unknown(_) => {}
+            _ => {}
         }
     }
 }

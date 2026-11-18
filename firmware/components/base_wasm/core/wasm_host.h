@@ -16,6 +16,7 @@ typedef enum {
     WASM_EVENT_MQTT_UP = 2,      /* 业务 MQTT 连上了 */
     WASM_EVENT_MQTT_DOWN = 3,    /* 业务 MQTT 断开了 */
     WASM_EVENT_MQTT_MESSAGE = 4, /* a：主题长度，b：载荷长度；数据用 event_topic、event_payload 读取 */
+    WASM_EVENT_PIN_EXPIRED = 5,  /* a：引脚号。有时限的输出到期了，引脚已经回到安全电平 */
 } wasm_event_kind_t;
 
 typedef struct {

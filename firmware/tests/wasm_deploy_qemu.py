@@ -166,13 +166,17 @@ def check(log):
     # 操作引脚的应用：装进槽 0；重启后在联网之前引脚就回到安全状态，应用再跑一遍。
     after(7, "succeeded", None, "0.1.0+1", "pins")
     expect(log.count("ESP_BASE_APP_STARTED pins 0.1.0+1 slot=0") == 2, "步骤 8：重启后从槽 0 恢复运行 pins 0.1.0+1")
-    runs = [dict(pair.split("=") for pair in line.split()) for line in re.findall(r"app: pins:((?: \w+=-?\d+)+)", log)]
+    lines = [dict(pair.split("=") for pair in line.split()) for line in re.findall(r"app: pins:((?: \w+=-?\d+)+)", log)]
+    runs, expired = [line for line in lines if "out" in line], [line for line in lines if "expired" in line]
     for index, run in enumerate(runs):
         print(f"  pins 第 {index + 1} 次启动：{run}")
     # 返回值两种芯片、模拟器和实板都一样；读回的电平和占空比取决于硬件（模拟器不模拟引脚电平），只打印。
     expect(len(runs) == 2 and all(run.get("out") == "0" and run.get("config") == "0" and run.get("write") == "0" and
-                                  run.get("again") == "0" and run.get("second") == "0" and run.get("denied") == "-2"
-                                  for run in runs), "pins：写输出、配置和改配 PWM 都成功，没有声明的引脚被拒绝（两次启动）")
+                                  run.get("again") == "0" and run.get("second") == "0" and run.get("denied") == "-2" and
+                                  run.get("pulse") == "0" for run in runs),
+           "pins：写输出、配置和改配 PWM、有时限的输出都成功，没有声明的引脚被拒绝（两次启动）")
+    expect(len(expired) == 2 and all(line.get("expired") == "4" for line in expired),
+           "pins：有时限的输出到期后应用收到事件（两次启动）")
     after(9, "succeeded", None, "0.1.0+5")
     expect("ESP_BASE_APP_STARTED hello 0.1.0+5 slot=1" in log, "步骤 9：换回不用引脚的应用，装进槽 1")
     doc = json.loads(final.group(1)) if final else {}

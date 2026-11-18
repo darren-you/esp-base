@@ -339,8 +339,8 @@ crate-type = ["cdylib"]
 [dependencies]
 esp-base-app = { path = "$sdk" }
 
-# 应用清单。memory 是应用的内存上限（运行时内存池，字节）：大约是 .wasm 的字节数加线性内存（4 KiB 栈加静态数据）
-# 再加 2 KB，留一些余量；设备上的实际用量看 app/state 里的 pool_peak。stack 是操作数栈。
+# 应用清单。memory 是应用的内存上限（运行时内存池，字节）：大约是 .wasm 的 1.5 倍加线性内存（4 KiB 栈加静态数据）
+# 再加 1 KB，app build 会给出估计值，在它上面留一些余量；设备上的实际用量看 app/state 里的 pool_peak。stack 是操作数栈。
 [package.metadata.esp-base]
 memory = 12288
 stack = 2048
@@ -482,8 +482,9 @@ def build_app(project, build_number):
     output = Path(metadata["target_directory"]) / "esp-base" / (fields["name"] + ".ebapp")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(package)
-    # 内存池的用量大约是 .wasm 加线性内存再加 2 KB 的运行时开销（ESP32-C3 实测）：清单给得比这还小，设备上多半装不下。
-    estimate = len(wasm) + checked["linear_bytes"] + 2048
+    # 内存池的用量大约是 .wasm 的 1.5 倍加线性内存再加 1 KB（ESP32-C3 上几个应用实测，误差在 300 字节以内）：
+    # 清单给得比这还小，设备上多半装不下。
+    estimate = len(wasm) * 3 // 2 + checked["linear_bytes"] + 1024
     if fields["memory"] < estimate:
         print(f"esp_base: 清单的 memory 是 {fields['memory']} 字节，这个应用估计要用 {estimate} 字节左右；"
               "装到设备上可能启动失败", file=sys.stderr)
