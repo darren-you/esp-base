@@ -34,11 +34,13 @@
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
 #define MESSAGE_MAX_BYTES 1536u
 #define STATUS_BYTES 3072 /* 状态文档最长约 2.7 KiB（系统任务、业务连接和业务任务都写满时），与发送缓冲相同 */
+#define APP_STATE_BYTES 640
 
 typedef enum {
     EV_NET_UP, EV_NET_DOWN, EV_NET_TIME,
     EV_MQTT_CONNECTED, EV_MQTT_DISCONNECTED, EV_MQTT_MESSAGE, EV_MQTT_PUBLISHED,
     EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE, EV_NET_IP6, EV_PROFILE_READY, EV_BUSINESS_CHANGED,
+    EV_APP_CHANGED,
 } event_kind_t;
 typedef enum {
     TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED,
@@ -58,7 +60,7 @@ static const char *TAG = "esp_base";
 static QueueHandle_t s_events;
 static esp_timer_handle_t s_timers[TIMER_COUNT];
 static char s_device_id[BASE_UUID_BYTES], s_boot_id[BASE_UUID_BYTES];
-static char s_topics[5][BASE_TOPIC_BYTES];
+static char s_topics[BASE_TOPIC_COUNT][BASE_TOPIC_BYTES];
 static char s_will[640];
 static const char *s_reset_reason = "other";
 static base_config_t s_config, s_trial;
@@ -196,6 +198,19 @@ static void business_changed(void)
     post(&(event_t){.kind = EV_BUSINESS_CHANGED}, 0);
 }
 
+/* 应用的部署和运行状态变了：在业务的任务里调用，只投递事件。 */
+static void app_changed(void)
+{
+    post(&(event_t){.kind = EV_APP_CHANGED}, 0);
+}
+
+/* app/state 的内容由业务（WASM 宿主）给出，系统只负责发布。 */
+static void publish_app_state(void)
+{
+    char state[APP_STATE_BYTES];
+    if (s_mqtt_connected && base_runtime_app_state(state, sizeof state) > 0) publish(BASE_TOPIC_APP_STATE, state, true);
+}
+
 static void publish_profile(void)
 {
     char *json = malloc(STATUS_BYTES);
@@ -296,9 +311,10 @@ static void ota_apply(unsigned actions)
     if (actions & BASE_OTA_ACT_REBOOT) defer(DEFER_RESTART, message_id);
     if (actions & BASE_OTA_ACT_START) {
         if (base_ota_worker_start(s_ota.desired.url, s_ota.record.sha256, s_ota.record.size,
-                                  s_ota.record.offset, ota_worker_event))
+                                  s_ota.record.offset, ota_worker_event)) {
             base_net_set_power_save(false); /* 下载期间关闭省电：省电时每个下行包都要等 DTIM，经高延迟链路吞吐减半 */
-        else
+            base_runtime_set_updating(true); /* 固件下载期间业务不开始自己的下载 */
+        } else
             ota_apply(base_ota_on_worker_done(&s_ota, BASE_OTA_RESULT_RETRY, "start"));
     }
 }
@@ -405,7 +421,9 @@ static void on_mqtt_connected(void)
     }
     esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_CMD_FILTER], 1);
     esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_OTA_DESIRED], 1);
+    if (base_runtime_active()) esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_APP_DESIRED], 1);
     publish_status();
+    publish_app_state();
     if (!s_pending_verify) ota_apply(base_ota_on_confirmed(&s_ota));
     business_connect(false);
 }
@@ -466,6 +484,7 @@ static void handle(const event_t *event)
         const char *payload = event->message + event->topic_len + 1;
         char name[BASE_CMD_NAME_BYTES];
         if (!strcmp(event->message, s_topics[BASE_TOPIC_OTA_DESIRED])) handle_desired(payload, event->payload_len);
+        else if (!strcmp(event->message, s_topics[BASE_TOPIC_APP_DESIRED])) base_runtime_deploy(payload, event->payload_len);
         else if (base_topic_command(event->message, event->topic_len, s_device_id, name))
             handle_command(name, payload, event->payload_len);
         break;
@@ -481,8 +500,10 @@ static void handle(const event_t *event)
         break;
     case EV_OTA_PROGRESS: ota_apply(base_ota_on_progress(&s_ota, (uint32_t)event->value)); break;
     case EV_OTA_VERIFYING: ota_apply(base_ota_on_verifying(&s_ota)); break;
+    case EV_APP_CHANGED: publish_app_state(); break;
     case EV_OTA_DONE:
         base_net_set_power_save(true);
+        base_runtime_set_updating(false);
         ota_apply(base_ota_on_worker_done(&s_ota, (base_ota_result_t)event->value,
                                           event->error[0] ? event->error : NULL));
         break;
@@ -503,7 +524,8 @@ static void business_boot(const base_business_t *business, const char *fw_sha256
         }
         if (s_guard.strikes) ESP_LOGW(TAG, "business guard: %u abnormal restart(s) in a row", (unsigned)s_guard.strikes);
     }
-    base_runtime_boot(business, s_device_id, &s_config.business_mqtt, enabled, BASE_GUARD_ERROR, business_changed);
+    base_runtime_boot(business, s_device_id, &s_config.business_mqtt, enabled, BASE_GUARD_ERROR, abnormal, business_changed,
+                      app_changed);
     if (base_runtime_active() && s_guard.strikes) timer_start(TIMER_BUSINESS_STABLE, BASE_GUARD_STABLE_MS);
 }
 
@@ -541,7 +563,7 @@ void base_system_run(const base_business_t *business)
         uint8_t random[16];
         esp_fill_random(random, sizeof random);
         base_uuid_format(s_boot_id, random);
-        for (int topic = 0; topic < 5; ++topic) base_topic(s_topics[topic], s_device_id, (base_topic_t)topic);
+        for (int topic = 0; topic < BASE_TOPIC_COUNT; ++topic) base_topic(s_topics[topic], s_device_id, (base_topic_t)topic);
         const esp_err_t profiled = base_profile_start(s_device_id, s_boot_id, s_reset_reason, &running, profile_ready);
         if (profiled != ESP_OK) ESP_LOGE(TAG, "profile unavailable: %s", esp_err_to_name(profiled));
         static base_ota_record_t stored;

@@ -14,9 +14,11 @@ bool base_runtime_take_fault(void);
 
 /* 登记业务并启动。business 为空表示固件没有业务层；mqtt 是已保存的业务 MQTT 配置。
  * enabled 为假时进入安全模式：不调用任何业务代码，状态文档里 business.state 为 disabled、error 为给出的原因。
- * enabled 为真时调用 business->init。 */
+ * enabled 为真时调用 business->init。abnormal：这次启动之前是同一个固件的异常重启（业务经
+ * base_runtime_abnormal_restart 读取）。 */
 void base_runtime_boot(const base_business_t *business, const char *device_id, const base_mqtt_t *mqtt, bool enabled,
-                       const char *error, base_runtime_changed_cb_t changed);
+                       const char *error, bool abnormal, base_runtime_changed_cb_t changed,
+                       base_runtime_changed_cb_t app_changed);
 /* 有业务层且在运行。 */
 bool base_runtime_active(void);
 /* 业务 MQTT 配置经远程配置更新后由系统写入。 */
@@ -27,3 +29,9 @@ void base_runtime_connect(void);
 bool base_runtime_owns_task(TaskHandle_t task);
 /* 业务在 Profile 里的部分。 */
 void base_runtime_snapshot(base_business_profile_t *out);
+/* 应用部署通道：把 app/desired 的载荷交给业务；业务没有这条通道或没在运行时什么也不做。 */
+void base_runtime_deploy(const char *payload, size_t length);
+/* 读取要发布到 app/state 的内容；返回长度，没有可报的返回 0。 */
+int base_runtime_app_state(char *out, size_t size);
+/* 系统开始或结束固件下载时写入。 */
+void base_runtime_set_updating(bool updating);

@@ -29,7 +29,21 @@ typedef struct {
     /* 该（重新）建立业务连接了：系统 MQTT 首次连上后调用一次（60 秒内连不上则不再等），
      * 业务 MQTT 配置经远程配置更新后再调用一次。在系统的控制任务里调用，不要阻塞。 */
     void (*connect)(void);
+    /* 可选：应用部署通道。系统在自己的主题 app/desired 上收到消息时调用，payload 是原文，长度 0 表示取消；
+     * 返回后 payload 失效。在系统的控制任务里调用，不要阻塞。 */
+    void (*deploy)(const char *payload, size_t length);
+    /* 可选：把要发布到 app/state 的内容写进 out，返回长度；没有可报的返回 0。在系统的控制任务里调用。 */
+    int (*state)(char *out, size_t size);
 } base_business_t;
+
+/* app/state 的内容变了，请系统重新发布。在任意任务里调用。 */
+void base_runtime_app_changed(void);
+/* 系统正在下载或校验固件：这时业务不要开始自己的下载。 */
+bool base_runtime_system_updating(void);
+
+/* 这次启动之前设备是不是异常重启的（panic、各类看门狗，或业务看门狗超时），而且重启前运行的就是这个固件。
+ * 系统的业务守卫按它计数；业务也可以据此判断是不是自己把设备拖垮了。 */
+bool base_runtime_abnormal_restart(void);
 
 /* 设备 UUID；业务连接的客户端 ID 不能直接用它（系统 MQTT 在用）。 */
 const char *base_runtime_device_id(void);

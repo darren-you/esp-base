@@ -15,13 +15,15 @@
 #define WASM_SLOT_NONE 0xFFu
 #define WASM_TRIAL_MS 30000u /* 新应用稳定运行这么久才提交 */
 #define WASM_TRIAL_BOOTS 2u  /* 试运行期间设备第二次重启：认定是新应用拖垮了设备，回退 */
+#define WASM_CRASH_LIMIT 2u  /* 已提交的应用运行时设备连续异常重启这么多次：停用应用，宿主照常在线等新的部署 */
+#define WASM_STABLE_MS 300000u /* 应用连续运行这么久算稳定：异常重启的计数清零 */
 #define WASM_DEPLOY_RETRY_MIN_MS 5000u
 #define WASM_DEPLOY_RETRY_MAX_MS 300000u
 #define WASM_UUID_BYTES 37
 #define WASM_SHA256_HEX_BYTES 65
 #define WASM_ERROR_BYTES 24
 #define WASM_URL_BYTES 512
-#define WASM_DEPLOY_STATE_BYTES 384
+#define WASM_DEPLOY_STATE_BYTES 512
 
 typedef enum {
     WASM_DEPLOY_IDLE,
@@ -41,6 +43,7 @@ typedef struct {
     uint8_t trial_boots;
     uint8_t phase; /* 最近一次任务的阶段 */
     uint8_t attempt;
+    uint8_t crashes; /* 已提交的应用运行时，设备连续异常重启的次数 */
     char job[WASM_UUID_BYTES];
     char sha256[WASM_SHA256_HEX_BYTES]; /* 任务期望的应用包 */
     char error[WASM_ERROR_BYTES];
@@ -94,11 +97,16 @@ typedef struct {
     bool retry_pending;  /* 重试定时器在跑 */
     uint8_t fail_streak; /* 连续失败的下载次数，决定退避时长 */
     uint8_t running;     /* 应当运行的槽；WASM_SLOT_NONE：没有应用 */
+    bool disabled;       /* 已提交的应用连续把设备拖到异常重启，这次启动不运行它 */
     wasm_slot_t slots[WASM_SLOTS];
 } wasm_deploy_t;
 
-/* 启动时调用一次。stored 为 NULL 表示没有持久记录；slots 是两个槽当前的内容。 */
-unsigned wasm_deploy_boot(wasm_deploy_t *deploy, const wasm_deploy_record_t *stored, const wasm_slot_t slots[WASM_SLOTS]);
+/* 启动时调用一次。stored 为 NULL 表示没有持久记录；slots 是两个槽当前的内容；
+ * abnormal 表示这次启动之前是异常复位（panic、各类看门狗）。 */
+unsigned wasm_deploy_boot(wasm_deploy_t *deploy, const wasm_deploy_record_t *stored, const wasm_slot_t slots[WASM_SLOTS],
+                          bool abnormal);
+/* 应用连续运行满 WASM_STABLE_MS。 */
+unsigned wasm_deploy_on_stable(wasm_deploy_t *deploy);
 unsigned wasm_deploy_on_desired(wasm_deploy_t *deploy, const wasm_desired_t *desired);
 /* 期望应用可识别任务但字段无效。 */
 unsigned wasm_deploy_on_invalid_desired(wasm_deploy_t *deploy, const char *job, const char *error);
@@ -123,5 +131,13 @@ const char *wasm_deploy_phase_name(wasm_deploy_phase_t phase);
 /* 解码 app/desired。成功返回 NULL；失败返回原因（invalid_desired、invalid_url、package_too_large），
  * 这时 out->job 里如果有任务号，调用方用 wasm_deploy_on_invalid_desired 上报，否则丢弃。 */
 const char *wasm_desired_decode(const char *payload, size_t length, uint32_t slot_bytes, wasm_desired_t *out);
+/* 应用此刻的运行情况，由平台给出。 */
+typedef struct {
+    const char *state; /* running、stopped（没有应用）、crashed（出了故障，等着重启）、disabled（连续拖垮设备，已停用） */
+    const char *fault; /* 最近一次故障的原因；NULL：没有 */
+    uint32_t restarts; /* 本次启动以来因故障重启应用的次数 */
+    uint32_t pool_used, pool_peak, linear_bytes;
+} wasm_app_status_t;
+
 /* 编码 app/state；返回长度，缓冲不足返回 -1。 */
-int wasm_deploy_state_encode(const wasm_deploy_t *deploy, char *out, size_t size);
+int wasm_deploy_state_encode(const wasm_deploy_t *deploy, const wasm_app_status_t *app, char *out, size_t size);

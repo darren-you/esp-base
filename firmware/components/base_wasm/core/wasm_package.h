@@ -34,6 +34,22 @@
 #define WASM_PACKAGE_MEMORY_MAX 65536u
 #define WASM_PACKAGE_STACK_MIN 1024u
 #define WASM_PACKAGE_STACK_MAX 8192u
+#define WASM_PACKAGE_PINS 8
+
+/* 应用声明的引脚用途。没有声明的引脚应用碰不到；输出脚带安全电平：应用启动前、停止后都保持在这个电平。 */
+typedef enum {
+    WASM_PIN_IN,          /* in：输入 */
+    WASM_PIN_IN_PULLUP,   /* in_pullup */
+    WASM_PIN_IN_PULLDOWN, /* in_pulldown */
+    WASM_PIN_OUT0,        /* out0：输出，安全电平为低 */
+    WASM_PIN_OUT1,        /* out1：输出，安全电平为高 */
+    WASM_PIN_PWM,         /* pwm：PWM 输出，停止时为低 */
+} wasm_pin_mode_t;
+
+typedef struct {
+    uint8_t pin;
+    uint8_t mode; /* wasm_pin_mode_t */
+} wasm_pin_t;
 
 typedef struct {
     char name[WASM_PACKAGE_NAME_BYTES];
@@ -43,6 +59,8 @@ typedef struct {
     uint32_t stack_bytes;  /* 应用的操作数栈 */
     uint8_t chip_count;    /* 0：不限芯片 */
     char chips[WASM_PACKAGE_CHIPS][WASM_PACKAGE_CHIP_BYTES];
+    uint8_t pin_count;
+    wasm_pin_t pins[WASM_PACKAGE_PINS];
     uint32_t wasm_offset, wasm_bytes; /* wasm 模块在包里的位置 */
     uint32_t signed_bytes;            /* 签名覆盖的长度：包头、清单、wasm 补齐到 4 KiB */
     uint32_t total_bytes;             /* 整个文件：signed_bytes 加一个签名扇区 */
@@ -53,5 +71,10 @@ typedef struct {
 const char *wasm_package_parse(const uint8_t *data, size_t available, size_t slot_bytes, wasm_package_t *out);
 
 /* 这个固件能不能运行它。chip 是芯片型号（esp32c3、esp32）；memory_max 是这个芯片允许的内存池上限。
- * 可以返回 NULL，或 abi_mismatch、chip_mismatch、memory_too_large。 */
+ * 可以返回 NULL，或 abi_mismatch、chip_mismatch、memory_too_large、pin_denied（引脚这个芯片上不能这样用，
+ * 或 PWM 引脚比芯片的 LEDC 通道多）。 */
 const char *wasm_package_accept(const wasm_package_t *package, const char *chip, uint32_t memory_max);
+/* 这个芯片上应用能不能按 mode 使用这个引脚：Flash、USB 和下载串口的引脚始终不行；ESP32 的 34–39 只能作不带上下拉的输入。 */
+bool wasm_pin_allowed(const char *chip, unsigned pin, wasm_pin_mode_t mode);
+/* 应用声明过的引脚：返回它的用途；没有声明返回 -1。 */
+int wasm_pin_mode(const wasm_pin_t *pins, unsigned count, unsigned pin);

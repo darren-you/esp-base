@@ -2,6 +2,7 @@
 // 业务运行时：登记业务的任务和连接，把它们与系统层分开；业务的状态由系统层随 Profile 上报。
 #include "base_runtime.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -40,11 +41,12 @@ static const char *TAG = "base_runtime";
 static RTC_NOINIT_ATTR uint32_t s_fault;
 static SemaphoreHandle_t s_lock;
 static const base_business_t *s_business;
-static bool s_running;
+static bool s_running, s_abnormal;
 static char s_error[BASE_ERROR_BYTES];
 static char s_device_id[BASE_UUID_BYTES];
 static base_mqtt_t s_mqtt;
-static base_runtime_changed_cb_t s_changed;
+static base_runtime_changed_cb_t s_changed, s_app_changed;
+static atomic_bool s_updating;
 static task_slot_t s_tasks[TASK_SLOTS];
 static link_slot_t s_links[BASE_LINK_SLOTS];
 
@@ -61,13 +63,16 @@ bool base_runtime_take_fault(void)
 }
 
 void base_runtime_boot(const base_business_t *business, const char *device_id, const base_mqtt_t *mqtt, bool enabled,
-                       const char *error, base_runtime_changed_cb_t changed)
+                       const char *error, bool abnormal, base_runtime_changed_cb_t changed,
+                       base_runtime_changed_cb_t app_changed)
 {
     if (s_lock) return;
     s_lock = xSemaphoreCreateMutex();
+    s_abnormal = abnormal;
     snprintf(s_device_id, sizeof s_device_id, "%s", device_id ? device_id : "");
     if (mqtt) s_mqtt = *mqtt;
     s_changed = changed;
+    s_app_changed = app_changed;
     if (!s_lock || !business) return;
     s_business = business;
     if (!base_is_identifier(business->name, BASE_BUSINESS_NAME_BYTES)) {
@@ -101,6 +106,21 @@ void base_runtime_set_mqtt(const base_mqtt_t *mqtt)
 void base_runtime_connect(void)
 {
     if (s_running && s_business->connect) s_business->connect();
+}
+
+void base_runtime_deploy(const char *payload, size_t length)
+{
+    if (s_running && s_business->deploy) s_business->deploy(payload, length);
+}
+
+int base_runtime_app_state(char *out, size_t size)
+{
+    return s_running && s_business->state ? s_business->state(out, size) : 0;
+}
+
+void base_runtime_set_updating(bool updating)
+{
+    atomic_store(&s_updating, updating);
 }
 
 bool base_runtime_owns_task(TaskHandle_t task)
@@ -144,6 +164,21 @@ void base_runtime_snapshot(base_business_profile_t *out)
 }
 
 /* ---------- 业务接口 ---------- */
+
+void base_runtime_app_changed(void)
+{
+    if (s_app_changed) s_app_changed();
+}
+
+bool base_runtime_system_updating(void)
+{
+    return atomic_load(&s_updating);
+}
+
+bool base_runtime_abnormal_restart(void)
+{
+    return s_abnormal;
+}
 
 const char *base_runtime_device_id(void)
 {

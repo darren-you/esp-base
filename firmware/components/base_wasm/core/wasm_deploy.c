@@ -68,7 +68,8 @@ static unsigned rollback(wasm_deploy_t *deploy, const char *error)
     return settle(deploy, WASM_ACT_PERSIST | WASM_ACT_PUBLISH | WASM_ACT_RUN | WASM_ACT_STOP_TRIAL);
 }
 
-unsigned wasm_deploy_boot(wasm_deploy_t *deploy, const wasm_deploy_record_t *stored, const wasm_slot_t slots[WASM_SLOTS])
+unsigned wasm_deploy_boot(wasm_deploy_t *deploy, const wasm_deploy_record_t *stored, const wasm_slot_t slots[WASM_SLOTS],
+                          bool abnormal)
 {
     memset(deploy, 0, sizeof *deploy);
     memcpy(deploy->slots, slots, sizeof deploy->slots);
@@ -113,7 +114,16 @@ unsigned wasm_deploy_boot(wasm_deploy_t *deploy, const wasm_deploy_record_t *sto
     if (record->phase == WASM_DEPLOY_DOWNLOADING || record->phase == WASM_DEPLOY_VERIFYING)
         record->phase = WASM_DEPLOY_IDLE;
 
-    deploy->running = slot_ok(record->trial) ? record->trial : record->active;
+    if (slot_ok(record->trial)) {
+        deploy->running = record->trial;
+    } else {
+        /* 已提交的应用：上次是异常复位就记一次，连续到上限这次就不运行它，宿主照常在线等新的部署。
+         * 正常重启（上电、远程重启、刷写）重新计数。 */
+        if (!slot_ok(record->active) || !abnormal) record->crashes = 0;
+        else if (record->crashes < WASM_CRASH_LIMIT) ++record->crashes;
+        deploy->disabled = record->crashes >= WASM_CRASH_LIMIT;
+        deploy->running = deploy->disabled ? WASM_SLOT_NONE : record->active;
+    }
     unsigned actions = slot_ok(deploy->running) ? WASM_ACT_RUN : 0;
     /* 没有记录、也没有东西要记时不写 NVS：没装过应用的设备不产生写入。 */
     if (memcmp(&before, record, sizeof before) != 0 || (stored && !usable)) actions |= WASM_ACT_PERSIST;
@@ -211,6 +221,8 @@ unsigned wasm_deploy_on_worker_done(wasm_deploy_t *deploy, wasm_worker_result_t 
         if (!deploy->slots[target].valid) return rollback(deploy, "package_invalid");
         record->trial = target;
         record->trial_boots = 0;
+        record->crashes = 0;
+        deploy->disabled = false;
         record->phase = WASM_DEPLOY_STARTING;
         set_error(deploy, NULL);
         deploy->fail_streak = 0;
@@ -268,6 +280,13 @@ unsigned wasm_deploy_on_trial_timer(wasm_deploy_t *deploy)
     record->phase = WASM_DEPLOY_SUCCEEDED;
     set_error(deploy, NULL);
     return settle(deploy, WASM_ACT_PERSIST | WASM_ACT_PUBLISH);
+}
+
+unsigned wasm_deploy_on_stable(wasm_deploy_t *deploy)
+{
+    if (deploy->record.crashes == 0 || deploy->disabled) return 0;
+    deploy->record.crashes = 0;
+    return WASM_ACT_PERSIST;
 }
 
 uint32_t wasm_deploy_retry_delay_ms(const wasm_deploy_t *deploy, uint32_t random)
@@ -342,10 +361,26 @@ const char *wasm_desired_decode(const char *payload, size_t length, uint32_t slo
     return error;
 }
 
-int wasm_deploy_state_encode(const wasm_deploy_t *deploy, char *out, size_t size)
+/* 故障原因来自运行时的异常文本：只留可打印的 ASCII，去掉引号和反斜杠，免得破坏 JSON。 */
+static void quote_fault(char *out, size_t size, const char *fault)
+{
+    size_t at = 0;
+    if (!fault || !fault[0] || size < 8) {
+        snprintf(out, size, "null");
+        return;
+    }
+    out[at++] = '"';
+    for (; *fault && at + 2 < size; ++fault)
+        if (*fault >= 0x20 && *fault < 0x7f && *fault != '"' && *fault != '\\') out[at++] = *fault;
+    out[at++] = '"';
+    out[at] = '\0';
+}
+
+int wasm_deploy_state_encode(const wasm_deploy_t *deploy, const wasm_app_status_t *app, char *out, size_t size)
 {
     const wasm_deploy_record_t *record = &deploy->record;
-    char job[WASM_UUID_BYTES + 2] = "null", error[WASM_ERROR_BYTES + 2] = "null", running[224] = "null";
+    char job[WASM_UUID_BYTES + 2] = "null", error[WASM_ERROR_BYTES + 2] = "null", running[224] = "null", fault[72];
+    quote_fault(fault, sizeof fault, app->fault);
     if (record->job[0]) snprintf(job, sizeof job, "\"%s\"", record->job);
     if (record->error[0]) snprintf(error, sizeof error, "\"%s\"", record->error);
     if (slot_ok(deploy->running) && deploy->slots[deploy->running].valid) {
@@ -353,8 +388,12 @@ int wasm_deploy_state_encode(const wasm_deploy_t *deploy, char *out, size_t size
         snprintf(running, sizeof running, "{\"name\":\"%s\",\"version\":\"%s\",\"sha256\":\"%s\",\"abi\":%u}", slot->name,
                  slot->version, slot->sha256, (unsigned)slot->abi);
     }
-    const int length = snprintf(out, size, "{\"job\":%s,\"state\":\"%s\",\"attempt\":%u,\"error\":%s,\"running\":%s}", job,
-                                wasm_deploy_phase_name((wasm_deploy_phase_t)record->phase), (unsigned)record->attempt,
-                                error, running);
+    const int length = snprintf(out, size,
+                                "{\"job\":%s,\"state\":\"%s\",\"attempt\":%u,\"error\":%s,\"running\":%s,"
+                                "\"app\":{\"state\":\"%s\",\"restarts\":%u,\"fault\":%s,\"pool_used\":%u,\"pool_peak\":%u,"
+                                "\"linear\":%u},\"abi\":%u}",
+                                job, wasm_deploy_phase_name((wasm_deploy_phase_t)record->phase), (unsigned)record->attempt,
+                                error, running, app->state, (unsigned)app->restarts, fault, (unsigned)app->pool_used,
+                                (unsigned)app->pool_peak, (unsigned)app->linear_bytes, (unsigned)WASM_ABI);
     return length > 0 && (size_t)length < size ? length : -1;
 }

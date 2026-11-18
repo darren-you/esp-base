@@ -13,8 +13,10 @@
 | `rsp` | 设备 → Server | 否 | 命令应答 |
 | `ota/desired` | Server → 设备 | 是 | 期望固件；空载荷表示取消 |
 | `ota/state` | 设备 → Server | 是 | OTA 状态 |
+| `app/desired` | Server → 设备 | 是 | 期望应用；空载荷表示取消 |
+| `app/state` | 设备 → Server | 是 | 应用的部署与运行状态 |
 
-ACL：设备只能读自己的 `cmd/+` 和 `ota/desired`，只能写自己的 `status`、`rsp` 和 `ota/state`。
+ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只能写自己的 `status`、`rsp`、`ota/state` 和 `app/state`。
 
 ## 状态文档
 
@@ -99,3 +101,38 @@ Server 把「这台设备应运行哪个固件」发布为 retained 的 `ota/des
 - 收到空载荷或新 `job` 时，如果还没切换启动槽，就中止当前下载。
 
 成功的唯一判据是新启动上报的 `running.sha256` 等于期望值。
+
+## 应用部署
+
+业务是编译成 WASM 的应用，装在设备的应用槽里，与固件分开部署。做法与固件 OTA 相同：Server 把「这台设备应运行哪个应用」发布为 retained 的 `app/desired`，设备每次上线都自行收敛；不同的是换应用不重启设备。应用包的格式见[应用包](app-package.md)。
+
+```jsonc
+// app/desired
+{"job":"<uuid>","name":"hxh_lift","version":"1.0.0+12","abi":1,"size":12288,
+ "sha256":"<完整应用包的 SHA-256>","url":"https://<下载域名>/app/<sha256>.ebapp?<期限与签名>"}
+// app/state
+{"job":"<uuid 或 null>","state":"succeeded","attempt":1,"error":null,       // 最近一次部署任务
+ "running":{"name":"hxh_lift","version":"1.0.0+12","sha256":"<…>","abi":1},  // 应当运行的应用；没有时为 null
+ "app":{"state":"running","restarts":0,"fault":null,                        // 应用此刻的运行情况
+        "pool_used":9216,"pool_peak":9480,"linear":4296},                   // 运行时内存池与线性内存，字节
+ "abi":1}                                                                   // 这个固件提供的宿主接口版本
+```
+
+`app/desired` 的七个键都必须给出，多余的键整条拒绝；`size` 是整个应用包的字节数（4 KiB 的整数倍，不超过 32,768），`url` 必须是 `https://`。`name`、`version`、`abi` 只供人看，设备以包里的清单为准。
+
+`state` 取值：`idle`、`downloading`、`verifying`、`starting`（新应用在试运行）、`succeeded`、`failed`、`rejected`。`app.state` 取值：`running`、`stopped`（没有应用）、`crashed`（出了故障，等着重启）、`disabled`（连续把设备拖到异常重启，已停用）。
+
+设备规则：
+
+- 设备有两个应用槽。新应用总是下载到没在用的那个槽，旧应用在下载和校验期间照常运行。
+- `sha256` 等于已提交的应用：回报 `succeeded`，不下载。
+- 下载完先读回 Flash 核对整包的 SHA-256，再核对包头与清单、签名（信任根与固件 OTA 相同）、宿主接口版本、芯片、内存上限和引脚，都通过才停旧启新。
+- 新应用启动成功并稳定运行 30 秒才提交并回报 `succeeded`。期间启动失败（`error` 为 `start_failed`）、出故障（`fault`），或设备第二次重启（`rollback`），都回到原来的槽并回报 `failed`。
+- 网络类错误退避后重试（5 秒起，每次翻倍，上限 5 分钟，带抖动），不设总期限；固件正在下载时应用的下载让路。任务期限由 Server 判定，到期后发布空载荷取消。
+- 不可恢复的错误立即 `rejected`，原来的应用不受影响：`invalid_desired`、`invalid_url`、`package_too_large`、`size_mismatch`、`sha256_mismatch`、`package_invalid`、`manifest_invalid`、`signature_invalid`、`abi_mismatch`、`chip_mismatch`、`memory_too_large`、`pin_denied`、`http_<4xx>`。
+- 同一 `job` 已是 `failed` 或 `rejected`：只回报原结果。重试由 Server 创建新 `job`。
+- 收到空载荷或新 `job` 时，还在下载或校验的任务被中止；已经在试运行的等它出结果，再处理新任务。
+- 提交之后应用再出故障不回退：宿主停掉它，退避后重启（5 秒起，每次翻倍，上限 5 分钟；稳定运行 5 分钟后从头算），`app.restarts` 加一，`app.fault` 是原因。
+- 已提交的应用运行时设备连续两次异常重启（panic、各类看门狗）：下一次启动不再运行它，`app.state` 为 `disabled`，宿主照常在线等新的部署；正常重启或部署新应用后解除。
+
+成功的唯一判据是设备上报的 `running.sha256` 等于期望值且 `state` 为 `succeeded`。固件进了安全模式（状态文档里 `business.state` 为 `disabled`）时宿主不运行，`app/desired` 不被处理。

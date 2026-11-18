@@ -40,6 +40,8 @@ void app_main(void)
 {
 #if CONFIG_ESP_BASE_TEST_WASM_BENCH
     base_wasm_bench(); /* 测试固件：只做 WASM 内存实测，不启动系统层 */
+#elif CONFIG_ESP_BASE_TEST_WASM_DEPLOY
+    base_wasm_deploy_test(); /* 测试固件：按脚本部署预置的应用包，不启动系统层 */
 #else
     base_system_run(BUSINESS);
 #endif

@@ -26,4 +26,4 @@ trap 'rm -rf -- "$OUT"' EXIT
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$CJSON" -I "$ROOT/components/base_wasm/core" \
   "$ROOT/components/base_wasm/core/wasm_deploy.c" "$ROOT/tests/wasm_deploy_test.c" "$OUT/cJSON.o" -o "$OUT/wasm_deploy_test"
-"$OUT/wasm_deploy_test"
+"$OUT/wasm_deploy_test" "$ROOT/../docs/design/device-protocol-samples.json"

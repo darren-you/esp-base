@@ -27,7 +27,7 @@
 一个 JSON 对象。键是固定的，多余、重复或缺少的键都会让整个包被拒绝。
 
 ```json
-{"name":"hello","version":"0.1.0+7","abi":1,"memory":8192,"stack":2048,"chips":["esp32c3","esp32"]}
+{"name":"hxh_lift","version":"1.0.0+12","abi":1,"memory":12288,"stack":2048,"chips":["esp32c3"],"pins":{"4":"out0","5":"out0"}}
 ```
 
 | 键 | 取值 | 含义 |
@@ -38,6 +38,31 @@
 | `memory` | 4096–65536 | 运行时内存池的字节数，也就是应用的内存上限：模块、实例和执行环境都在里面。超过芯片允许的上限时拒绝（`memory_too_large`） |
 | `stack` | 1024–8192 | 应用的操作数栈，字节 |
 | `chips` | 可选；1–4 个芯片型号（状态文档里的 `chip.model`） | 只允许装到这些芯片上；不写表示不限。不在列表里时拒绝（`chip_mismatch`） |
+| `pins` | 可选；1–8 项「引脚号: 用途」的对象 | 应用要用的引脚，见下节。不写表示不用引脚。芯片上不能这样用时拒绝（`pin_denied`） |
+
+## 引脚
+
+应用只能碰清单里声明过的引脚，而且只能按声明的用途用；没有声明的引脚，宿主接口一律返回「拒绝」。键是十进制的 GPIO 号（不带前导零），值是用途：
+
+| 用途 | 应用能做的 | 应用没在运行时 |
+| --- | --- | --- |
+| `in`、`in_pullup`、`in_pulldown` | 读电平 | 保持输入（带声明的上拉或下拉） |
+| `out0` | 写电平、读回实际电平 | 输出低电平 |
+| `out1` | 写电平、读回实际电平 | 输出高电平 |
+| `pwm` | 设定频率和分辨率、写占空比、读回占空比 | 输出低电平 |
+
+「应用没在运行时」的状态就是安全状态：设备启动后、联网之前，应用的代码运行之前，应用停止、出故障、被替换或回退之后，以及应用因为连续拖垮设备被停用期间，宿主都把这些引脚保持在安全状态。所以接了执行机构的引脚，要按「断电时该是什么电平」来选 `out0` 还是 `out1`。应用被换成不再声明某个引脚的版本、或设备上不再有应用时，这个引脚回到高阻。
+
+设备没有应用、或进入安全模式（业务层不运行）时，所有引脚都是芯片复位后的状态：硬件要保证这时也是安全的。
+
+哪些引脚能用由固件按芯片判定，有一个不行整个包就不装：
+
+| 芯片 | 能用的 GPIO | 不能用的 |
+| --- | --- | --- |
+| ESP32-C3 | 0–10、20、21 | 11–17 接内置 Flash；18、19 是 USB Serial/JTAG |
+| ESP32 | 0、2、4、5、12–19、21–23、25–27、32–39 | 6–11 接 Flash；1、3 是下载和日志用的 UART0；34–39 只能作不带上下拉的输入 |
+
+每个 `pwm` 引脚占一个 LEDC 通道：ESP32-C3 最多 6 个，ESP32 最多 8 个。启动时要采样的引脚（ESP32-C3 的 2、8、9，ESP32 的 0、2、5、12、15）可以声明，但外接电路不能在复位时把它们拉到会改变启动方式的电平。
 
 ## 对 wasm 模块的要求
 
@@ -59,4 +84,15 @@ python3 tools/esp_base.py app sign <.ebapp> --key-file /absolute/path/signing-ke
 python3 tools/esp_base.py app inspect <.ebapp 或 .wasm>                 # 清单、体积、用到的宿主接口、线性内存
 ```
 
-`app build` 的清单取自应用工程的 `Cargo.toml`：`name`、`version` 来自 `[package]`（包名里的连字符换成下划线），`memory`、`stack` 和可选的 `chips` 来自 `[package.metadata.esp-base]`，`abi` 按模块实际导入的宿主接口算出，构建号用 `--build-number` 给出。
+`app build` 的清单取自应用工程的 `Cargo.toml`：`name`、`version` 来自 `[package]`（包名里的连字符换成下划线），`memory`、`stack` 和可选的 `chips` 来自 `[package.metadata.esp-base]`，可选的 `pins` 来自 `[package.metadata.esp-base.pins]`，`abi` 按模块实际导入的宿主接口算出，构建号用 `--build-number` 给出。工具只核对 `pins` 的写法；某个引脚在某种芯片上能不能用由设备在安装时判定。
+
+```toml
+[package.metadata.esp-base]
+memory = 12288
+stack = 2048
+chips = ["esp32c3"]
+
+[package.metadata.esp-base.pins]
+4 = "out0"
+5 = "out0"
+```

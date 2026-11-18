@@ -4,7 +4,7 @@
 
 - `esp-base-app`：SDK。`no_std`，不依赖 `core::fmt`，出错直接陷阱。
 - `examples/hello`：最小样例。每秒计数一次，业务 MQTT 连上后发布计数，收到消息原样回显。
-- `fixtures`：宿主测试用的应用，每个故意触发一种故障。
+- `fixtures`：测试用的应用：故意触发各种故障的，把宿主接口逐个走一遍的（`io`），在设备上操作引脚的（`pins`）。
 
 ## 快速开始
 
@@ -53,15 +53,50 @@ impl App for Blink {
 esp_base_app::app!(Blink);
 ```
 
-应用能用的设备能力只有 SDK 里的这些：日志、时间、定时器、睡眠和业务 MQTT。业务 MQTT 的地址和账户由系统保存，应用拿不到；连接、重连和重新订阅都由宿主完成。
+应用能用的设备能力只有 SDK 里的这些：
+
+| 模块 | 能力 |
+| --- | --- |
+| `log` | 日志，出现在设备的串口日志里 |
+| `uptime_ms`、`unix_ms`、`sleep_ms` | 单调时间、UTC 时间（没对时为 `None`）、短暂睡眠 |
+| `timer` | 4 个定时器，到期时应用收到 `Event::Timer` |
+| `mqtt` | 业务 MQTT：连接与遗嘱、订阅、发布，消息以 `Event::MqttMessage` 送达 |
+| `param` | 业务参数：出厂资料里 `business` 对象的字符串值，按键读取 |
+| `device` | 设备 UUID、芯片型号 |
+| `gpio` | 数字引脚：读、写 |
+| `pwm` | PWM 输出：频率、分辨率、占空比 |
+
+业务 MQTT 的地址和账户由系统保存，应用拿不到；连接、重连和重新订阅都由宿主完成。
+
+## 引脚
+
+引脚要先在 `Cargo.toml` 里声明用途，没有声明的引脚应用碰不到（`Error::Denied`）：
+
+```toml
+[package.metadata.esp-base.pins]
+4 = "out0"       # 输出，安全电平低
+5 = "out1"       # 输出，安全电平高
+6 = "in_pullup"  # 输入：in、in_pullup、in_pulldown
+7 = "pwm"        # PWM 输出，没在输出时为低
+```
+
+```rust
+gpio::write(4, true)?;                 // out0、out1 能写，也能读回实际电平
+let pressed = !gpio::read(6)?;         // 输入脚只能读
+pwm::config(7, 50, 14)?;               // 50 Hz、14 位：舵机
+pwm::write(7, 1228)?;                  // 占空比 0 到 2^14-1
+```
+
+输出脚后面的数字是安全电平：设备启动后、应用的代码运行之前，应用停止、出故障、被替换之后，宿主都把引脚保持在这个电平，`pwm` 引脚保持低电平。应用不用自己在 `init` 里「先把输出关掉」，也不用担心出故障时输出停在半途。每种芯片能用哪些引脚见[应用包](../../docs/design/app-package.md#引脚)。
 
 ## 约束
 
 - **体积就是内存。** ESP32-C3 上应用整体载入内存，每大 1 KB 就多占 1 KB。不要用 `format!`、`core::fmt` 和带格式的 `panic!`；数字转字符串自己写（见样例）。
 - **没有堆。** 状态放在应用结构体里，缓冲用定长数组。
 - **每次调用有指令预算。** 死循环或算得太久的调用会被宿主停掉，应用随后被重启。长时间的事拆成定时器事件。
+- **睡眠是短的。** 应用睡着时事件都在排队，所以一次调用（`init` 或一个事件）里累计最多睡 1000 毫秒，超出的那次返回 `Error::TooLarge`、不睡。换向前停 200 毫秒这样的事可以睡，更长的等待用定时器。
 - **出错即陷阱。** `panic`、越界、把线性内存之外的指针交给宿主接口，都会让应用停止并重启；系统层不受影响。
-- **清单写在 `Cargo.toml` 里。** `[package.metadata.esp-base]` 的 `memory` 是应用的内存上限（运行时内存池，字节），`stack` 是操作数栈；可选的 `chips` 限定能装的芯片。
+- **清单写在 `Cargo.toml` 里。** `[package.metadata.esp-base]` 的 `memory` 是应用的内存上限（运行时内存池，字节），`stack` 是操作数栈；可选的 `chips` 限定能装的芯片，`[package.metadata.esp-base.pins]` 声明引脚。
 - **链接参数不能改。** `.cargo/config.toml` 把栈设为 4 KiB 并导出 `__heap_base`、`__data_end`，宿主据此把线性内存收缩到实际用量；没有收缩的应用会被拒绝。
 
 ## 测试夹具

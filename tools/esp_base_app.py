@@ -23,10 +23,14 @@ STACK_RANGE = (1024, 8192)
 NAME = re.compile(r"[a-z][a-z0-9_]{0,22}\Z")
 VERSION = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
 CHIP = re.compile(r"[a-z0-9]{1,15}\Z")
+PIN = re.compile(r"(0|[1-9]\d?)\Z")
+PIN_MODES = ("in", "in_pullup", "in_pulldown", "out0", "out1", "pwm")
+PINS_MAX = 8
 # 宿主接口：导入模块 base 里的函数，以及它们从哪个接口版本开始提供。
 IMPORTS = {name: 1 for name in (
     "log", "uptime_ms", "unix_ms", "timer_set", "timer_cancel", "sleep_ms", "mqtt_connect", "mqtt_disconnect",
-    "mqtt_subscribe", "mqtt_publish", "event_topic", "event_payload")}
+    "mqtt_subscribe", "mqtt_publish", "event_topic", "event_payload", "param", "info", "gpio_write", "gpio_read",
+    "pwm_config", "pwm_write", "pwm_read")}
 
 
 class AppError(Exception):
@@ -195,7 +199,7 @@ def manifest(project, build_number, required_abi):
     cargo = tomllib.loads((Path(project) / "Cargo.toml").read_text())
     package = cargo.get("package") or {}
     settings = (package.get("metadata") or {}).get("esp-base") or {}
-    unknown = set(settings) - {"memory", "stack", "chips"}
+    unknown = set(settings) - {"memory", "stack", "chips", "pins"}
     if unknown:
         raise AppError("[package.metadata.esp-base] 里有不认识的键：" + "、".join(sorted(unknown)))
     name = str(package.get("name", "")).replace("-", "_")
@@ -215,6 +219,14 @@ def manifest(project, build_number, required_abi):
         if not isinstance(chips, list) or not 1 <= len(chips) <= 4 or not all(isinstance(c, str) and CHIP.match(c) for c in chips):
             raise AppError("[package.metadata.esp-base] 的 chips 必须是 1–4 个芯片型号，例如 [\"esp32c3\"]")
         result["chips"] = chips
+    pins = settings.get("pins")
+    if pins is not None:
+        # 哪些引脚在哪种芯片上能这样用由设备判定（安装时不符合的报 pin_denied）；这里只核对写法。
+        if (not isinstance(pins, dict) or not 1 <= len(pins) <= PINS_MAX or
+                not all(PIN.match(pin) and mode in PIN_MODES for pin, mode in pins.items())):
+            raise AppError(f"[package.metadata.esp-base.pins] 必须是 1–{PINS_MAX} 项「引脚号 = 用途」，用途是 "
+                           + "、".join(PIN_MODES) + "，例如 4 = \"out0\"")
+        result["pins"] = dict(pins)
     return result
 
 

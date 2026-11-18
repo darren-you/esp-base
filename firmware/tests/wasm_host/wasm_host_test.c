@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // host 测试：宿主核心加载真实的应用（tests/apps/*.wasm，源码在 sdk/rust），核对宿主接口、事件分发，
 // 以及每一类应用故障都只停掉应用：陷阱、死循环、栈耗尽、越界指针、缺少的宿主接口、没有收缩的线性内存。
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,8 @@ static int s_failures, s_checks;
 /* ---------- 平台服务的桩：只记录调用 ---------- */
 
 #define RECORDS 16
+#define MOCK_PINS 48
+#define DEVICE_ID "00000000-0000-4000-8000-000000000001"
 typedef struct {
     char topic[WASM_TOPIC_BYTES + 1];
     char payload[256];
@@ -27,7 +30,7 @@ static struct {
     int logs, releases, sleeps;
     char log[128];
     int published;
-    publish_t publishes[RECORDS];
+    publish_t publishes[RECORDS], last;
     bool connect_wanted, connected;
     publish_t will;
     bool will_set;
@@ -36,6 +39,8 @@ static struct {
     char filters[4][WASM_TOPIC_BYTES + 1];
     struct { bool active; uint32_t delay_ms, period_ms; } timers[WASM_TIMERS];
     uint64_t uptime_ms, unix_ms;
+    int levels[MOCK_PINS], gpio_writes, pwm_configs;
+    struct { uint32_t hz, duty; unsigned bits; } pwm[MOCK_PINS];
 } m;
 
 void wasm_port_log(int level, const char *text, size_t length)
@@ -107,9 +112,67 @@ int wasm_port_mqtt_publish(const char *topic, size_t topic_length, const void *p
 {
     if (!m.connected) return WASM_E_NOT_READY;
     if (m.published < RECORDS) record(&m.publishes[m.published], topic, topic_length, payload, payload_length, qos, retain);
+    record(&m.last, topic, topic_length, payload, payload_length, qos, retain);
     ++m.published;
     return WASM_OK;
 }
+
+static int copy_text(const char *text, char *out, size_t capacity)
+{
+    const size_t length = strlen(text);
+    if (length > capacity) return WASM_E_TOO_LARGE;
+    memcpy(out, text, length);
+    return (int)length;
+}
+
+int wasm_port_param(const char *key, char *out, size_t capacity)
+{
+    if (!strcmp(key, "hxh_site")) return copy_text("lab", out, capacity);
+    if (!strcmp(key, "long_value")) return copy_text("0123456789abcdefg", out, capacity); /* 比夹具的缓冲多一个字节 */
+    return WASM_E_NOT_FOUND;
+}
+
+int wasm_port_info(wasm_info_t what, char *out, size_t capacity)
+{
+    return copy_text(what == WASM_INFO_DEVICE_ID ? DEVICE_ID : "esp32c3", out, capacity);
+}
+
+/* 宿主核心只该把清单里声明过的引脚交给平台。 */
+static unsigned declared(unsigned pin)
+{
+    if (pin >= MOCK_PINS) {
+        fprintf(stderr, "the port was handed pin %u\n", pin);
+        abort();
+    }
+    return pin;
+}
+
+int wasm_port_gpio_write(unsigned pin, int level)
+{
+    m.levels[declared(pin)] = level;
+    ++m.gpio_writes;
+    return WASM_OK;
+}
+
+int wasm_port_gpio_read(unsigned pin) { return m.levels[declared(pin)]; }
+
+int wasm_port_pwm_config(unsigned pin, uint32_t frequency_hz, unsigned resolution_bits)
+{
+    if (frequency_hz == 39999) return WASM_E_INVALID; /* 桩：这个频率配不出来 */
+    m.pwm[declared(pin)].hz = frequency_hz;
+    m.pwm[pin].bits = resolution_bits;
+    m.pwm[pin].duty = 0;
+    ++m.pwm_configs;
+    return WASM_OK;
+}
+
+int wasm_port_pwm_write(unsigned pin, uint32_t duty)
+{
+    m.pwm[declared(pin)].duty = duty;
+    return WASM_OK;
+}
+
+int wasm_port_pwm_read(unsigned pin) { return (int)m.pwm[declared(pin)].duty; }
 
 void wasm_port_release(void)
 {
@@ -144,18 +207,42 @@ static uint8_t *load(const char *name, uint32_t *bytes)
     return image;
 }
 
+/* 宿主核心读入镜像的回调：从文件内容拷进它在内存池里分配的缓冲。 */
+static bool copy_image(void *context, uint8_t *out, uint32_t bytes)
+{
+    memcpy(out, context, bytes);
+    return true;
+}
+
+static bool unreadable(void *context, uint8_t *out, uint32_t bytes)
+{
+    (void)context;
+    (void)out;
+    (void)bytes;
+    return false;
+}
+
 static bool start(const char *name, const wasm_host_limits_t *limits, uint8_t **image, char *error, size_t error_size)
 {
     uint32_t bytes;
     memset(&m, 0, sizeof m);
     *image = load(name, &bytes);
-    return wasm_host_start(*image, bytes, limits, error, error_size);
+    return wasm_host_start(copy_image, *image, bytes, limits, error, error_size);
 }
 
 static void stop(uint8_t *image)
 {
     wasm_host_stop();
     free(image);
+}
+
+/* 应用启动后的内存用量：给清单里的 memory 取值作参考。 */
+static void usage(const char *name)
+{
+    wasm_host_stats_t stats;
+    wasm_host_stats(&stats);
+    printf("  %s: pool used %u, peak %u, linear %u\n", name, (unsigned)stats.pool_used, (unsigned)stats.pool_peak,
+           (unsigned)stats.linear_bytes);
 }
 
 static bool published(int index, const char *topic, const char *payload)
@@ -172,6 +259,7 @@ static void test_hello(void)
     char error[128] = "";
     CHECK(start("hello", &LIMITS, &image, error, sizeof error));
     CHECK(wasm_host_running() && !error[0]);
+    usage("hello");
     /* app_init：一行日志，要求连接（带遗嘱），订阅，周期定时器。 */
     CHECK(m.logs == 1 && !strcmp(m.log, "hello: init"));
     CHECK(m.connect_wanted && m.keepalive_s == 30 && m.will_set);
@@ -315,9 +403,10 @@ static void test_malformed_images(void)
     /* 截断、改坏的镜像都只是加载失败。 */
     for (uint32_t cut = 0; cut < bytes; cut += 37) {
         uint8_t *image = malloc(cut ? cut : 1);
+        image[0] = 0;
         memcpy(image, hello, cut);
         memset(&m, 0, sizeof m);
-        CHECK(!wasm_host_start(image, cut, &LIMITS, error, sizeof error));
+        CHECK(!wasm_host_start(copy_image, image, cut ? cut : 1, &LIMITS, error, sizeof error));
         free(image);
     }
     for (uint32_t index = 8; index < bytes; index += 11) {
@@ -326,7 +415,7 @@ static void test_malformed_images(void)
         image[index] ^= 0xA5;
         memset(&m, 0, sizeof m);
         /* 改坏一个字节：可能加载失败、启动失败，也可能还能跑；都不许越界或崩溃（ASan 把关）。 */
-        if (wasm_host_start(image, bytes, &LIMITS, error, sizeof error)) {
+        if (wasm_host_start(copy_image, image, bytes, &LIMITS, error, sizeof error)) {
             m.connected = true;
             wasm_host_event(WASM_EVENT_MQTT_UP, 0, 0);
             wasm_host_event(WASM_EVENT_TIMER, 0, 0);
@@ -334,8 +423,149 @@ static void test_malformed_images(void)
         wasm_host_stop();
         free(image);
     }
+    CHECK(!wasm_host_start(NULL, NULL, 0, &LIMITS, error, sizeof error));
+    /* 镜像读不出来（Flash 读失败）：干净地失败。 */
+    CHECK(!wasm_host_start(unreadable, NULL, bytes, &LIMITS, error, sizeof error) && strstr(error, "image unreadable"));
+    /* 镜像比内存上限还大：放不进内存池。 */
+    const wasm_host_limits_t small = {.pool_bytes = 4096, .stack_bytes = 1024, .linear_max_bytes = 16 * 1024, .budget = 1000};
+    static uint8_t big[8192];
+    CHECK(!wasm_host_start(copy_image, big, sizeof big, &small, error, sizeof error) &&
+          strstr(error, "image does not fit the memory limit"));
     free(hello);
-    CHECK(!wasm_host_start(NULL, 0, &LIMITS, error, sizeof error));
+}
+
+/* ---------- 引脚、PWM、业务参数、设备信息、睡眠：用 io 夹具逐个接口核对 ---------- */
+
+enum { IO_GPIO_WRITE = 1, IO_GPIO_READ, IO_PWM_CONFIG, IO_PWM_WRITE, IO_PWM_READ, IO_PARAM, IO_INFO, IO_INFO_NO_BUFFER,
+       IO_SLEEP, IO_WRAPPERS };
+#define IO_TEXT INT_MAX /* 夹具发布的是文本，在 s_text 里 */
+#define IO_NONE INT_MIN /* 夹具没有发布，或者出了故障 */
+static char s_text[64];
+
+static int io_send(const void *command, size_t length)
+{
+    const int before = m.published;
+    wasm_host_event_data("io/cmd", 6, command, length);
+    if (!wasm_host_event(WASM_EVENT_MQTT_MESSAGE, 6, (uint32_t)length) || m.published != before + 1) return IO_NONE;
+    if (!strcmp(m.last.topic, "io/text")) {
+        snprintf(s_text, sizeof s_text, "%.*s", (int)m.last.payload_length, m.last.payload);
+        return IO_TEXT;
+    }
+    return atoi(m.last.payload);
+}
+
+static int io(uint8_t operation, uint32_t a, uint32_t b, uint32_t c)
+{
+    uint8_t command[13] = {operation};
+    const uint32_t words[3] = {a, b, c};
+    for (int word = 0; word < 3; ++word)
+        for (int byte = 0; byte < 4; ++byte) command[1 + 4 * word + byte] = (uint8_t)(words[word] >> (8 * byte));
+    return io_send(command, sizeof command);
+}
+
+static int io_param(const char *key)
+{
+    char command[40];
+    const int length = snprintf(command, sizeof command, "%c%s", IO_PARAM, key);
+    return io_send(command, (size_t)length);
+}
+
+static const wasm_pin_t IO_PINS[] = {{4, WASM_PIN_OUT0}, {5, WASM_PIN_OUT1}, {6, WASM_PIN_IN_PULLUP}, {7, WASM_PIN_PWM},
+                                     {8, WASM_PIN_PWM}};
+
+static void test_io(void)
+{
+    /* 夹具比样例大（2.8 KB），快速解释器还要再占一份预编译的代码：内存池给到 32 KiB，两种解释器都放得下。 */
+    wasm_host_limits_t limits = LIMITS;
+    limits.pool_bytes = 32 * 1024;
+    limits.pins = IO_PINS;
+    limits.pin_count = sizeof IO_PINS / sizeof IO_PINS[0];
+    const wasm_host_limits_t no_pins = {.pool_bytes = limits.pool_bytes, .stack_bytes = limits.stack_bytes,
+                                        .linear_max_bytes = limits.linear_max_bytes, .budget = limits.budget};
+    uint8_t *image;
+    char error[128] = "";
+    CHECK(start("io", &limits, &image, error, sizeof error));
+    if (error[0]) fprintf(stderr, "io start: %s\n", error);
+    usage("io");
+    /* 夹具不设遗嘱：空指针、长度 0 的参数原样通过。 */
+    CHECK(m.connect_wanted && !m.will_set);
+    m.connected = true;
+
+    /* 输出脚：能写，也能读回。 */
+    CHECK(io(IO_GPIO_WRITE, 4, 1, 0) == 0 && m.levels[4] == 1 && io(IO_GPIO_READ, 4, 0, 0) == 1);
+    CHECK(io(IO_GPIO_WRITE, 4, 0, 0) == 0 && m.levels[4] == 0 && io(IO_GPIO_READ, 4, 0, 0) == 0);
+    CHECK(io(IO_GPIO_WRITE, 5, 7, 0) == 0 && m.levels[5] == 1); /* 非 0 都是高电平 */
+    /* 输入脚：只能读。 */
+    m.levels[6] = 1;
+    CHECK(io(IO_GPIO_READ, 6, 0, 0) == 1 && io(IO_GPIO_WRITE, 6, 0, 0) == WASM_E_DENIED && m.levels[6] == 1);
+    /* 没有声明的引脚、PWM 引脚、不存在的引脚号：一律碰不到，平台不会被调用。 */
+    const int writes = m.gpio_writes;
+    CHECK(io(IO_GPIO_WRITE, 9, 1, 0) == WASM_E_DENIED && io(IO_GPIO_READ, 9, 0, 0) == WASM_E_DENIED);
+    CHECK(io(IO_GPIO_WRITE, 7, 1, 0) == WASM_E_DENIED && io(IO_GPIO_READ, 7, 0, 0) == WASM_E_DENIED);
+    CHECK(io(IO_GPIO_WRITE, 260, 1, 0) == WASM_E_DENIED && io(IO_GPIO_WRITE, 0xFFFFFFFFu, 1, 0) == WASM_E_DENIED);
+    CHECK(io(IO_GPIO_READ, 0x80000004u, 0, 0) == WASM_E_DENIED && m.gpio_writes == writes);
+
+    /* PWM：先配置再写；占空比不能超出分辨率。 */
+    CHECK(io(IO_PWM_WRITE, 7, 100, 0) == WASM_E_NOT_READY && io(IO_PWM_READ, 7, 0, 0) == WASM_E_NOT_READY);
+    CHECK(io(IO_PWM_CONFIG, 7, 50, 14) == 0 && m.pwm[7].hz == 50 && m.pwm[7].bits == 14 && m.pwm[7].duty == 0);
+    CHECK(io(IO_PWM_WRITE, 7, 819, 0) == 0 && m.pwm[7].duty == 819 && io(IO_PWM_READ, 7, 0, 0) == 819);
+    CHECK(io(IO_PWM_WRITE, 7, 16383, 0) == 0 && io(IO_PWM_WRITE, 7, 16384, 0) == WASM_E_INVALID && m.pwm[7].duty == 16383);
+    /* 频率和分辨率的范围。 */
+    const int configs = m.pwm_configs;
+    CHECK(io(IO_PWM_CONFIG, 7, 0, 14) == WASM_E_INVALID && io(IO_PWM_CONFIG, 7, 40001, 14) == WASM_E_INVALID);
+    CHECK(io(IO_PWM_CONFIG, 7, 50, 0) == WASM_E_INVALID && io(IO_PWM_CONFIG, 7, 50, 15) == WASM_E_INVALID);
+    /* 不是 PWM 引脚的、没有声明的。 */
+    CHECK(io(IO_PWM_CONFIG, 4, 50, 14) == WASM_E_DENIED && io(IO_PWM_WRITE, 4, 1, 0) == WASM_E_DENIED);
+    CHECK(io(IO_PWM_READ, 6, 0, 0) == WASM_E_DENIED && io(IO_PWM_CONFIG, 9, 50, 14) == WASM_E_DENIED);
+    CHECK(m.pwm_configs == configs && m.pwm[7].duty == 16383);
+    /* 两个 PWM 引脚各管各的。 */
+    CHECK(io(IO_PWM_WRITE, 8, 1, 0) == WASM_E_NOT_READY);
+    CHECK(io(IO_PWM_CONFIG, 8, 40000, 10) == 0 && io(IO_PWM_WRITE, 8, 1023, 0) == 0);
+    CHECK(io(IO_PWM_WRITE, 8, 1024, 0) == WASM_E_INVALID && m.pwm[8].duty == 1023 && m.pwm[7].duty == 16383);
+    /* 平台配不出来：引脚回到未配置。 */
+    CHECK(io(IO_PWM_CONFIG, 8, 39999, 10) == WASM_E_INVALID && io(IO_PWM_WRITE, 8, 1, 0) == WASM_E_NOT_READY);
+
+    /* 业务参数：键是最多 15 个字符的小写字母、数字、下划线。 */
+    CHECK(io_param("hxh_site") == IO_TEXT && !strcmp(s_text, "lab"));
+    CHECK(io_param("missing") == WASM_E_NOT_FOUND && io_param("abcdefghijklmno") == WASM_E_NOT_FOUND);
+    CHECK(io_param("long_value") == WASM_E_TOO_LARGE); /* 值比应用的缓冲长 */
+    CHECK(io_param("") == WASM_E_INVALID && io_param("Site") == WASM_E_INVALID && io_param("a-b") == WASM_E_INVALID);
+    CHECK(io_param("abcdefghijklmnop") == WASM_E_INVALID);
+    /* 设备信息。 */
+    CHECK(io(IO_INFO, 0, 0, 0) == IO_TEXT && !strcmp(s_text, DEVICE_ID));
+    CHECK(io(IO_INFO, 1, 0, 0) == IO_TEXT && !strcmp(s_text, "esp32c3"));
+    CHECK(io(IO_INFO_NO_BUFFER, 2, 0, 0) == WASM_E_INVALID && io(IO_INFO_NO_BUFFER, 0, 0, 0) == WASM_E_TOO_LARGE);
+
+    /* 睡眠：一次调用里累计最多 1000 毫秒，超出的那次不睡；下一次调用重新计。 */
+    m.sleeps = 0;
+    CHECK(io(IO_SLEEP, 300, 5, 0) == WASM_E_TOO_LARGE && m.sleeps == 3);
+    CHECK(io(IO_SLEEP, 1000, 1, 0) == 0 && io(IO_SLEEP, 1001, 1, 0) == WASM_E_TOO_LARGE && m.sleeps == 4);
+    CHECK(io(IO_SLEEP, 250, 4, 0) == 0 && m.sleeps == 8);
+
+    /* SDK 的封装：返回出错的步数。 */
+    CHECK(io(IO_WRAPPERS, 0, 0, 0) == 0 && m.pwm[7].duty == 1228);
+    wasm_host_stats_t stats;
+    wasm_host_stats(&stats);
+    CHECK(stats.faults == 0);
+    stop(image);
+    CHECK(m.releases == 1);
+
+    /* 清单没有声明引脚的应用：一个引脚也碰不到。 */
+    CHECK(start("io", &no_pins, &image, error, sizeof error));
+    m.connected = true;
+    CHECK(io(IO_GPIO_WRITE, 4, 1, 0) == WASM_E_DENIED && io(IO_GPIO_READ, 4, 0, 0) == WASM_E_DENIED);
+    CHECK(io(IO_PWM_CONFIG, 7, 50, 14) == WASM_E_DENIED && m.gpio_writes == 0 && m.pwm_configs == 0);
+    CHECK(io(IO_WRAPPERS, 0, 0, 0) > 0);
+    stop(image);
+
+    /* 引脚表不合法：不启动。 */
+    limits.pin_count = WASM_PACKAGE_PINS + 1;
+    CHECK(!start("io", &limits, &image, error, sizeof error) && strstr(error, "invalid arguments"));
+    free(image);
+    limits.pin_count = 1;
+    limits.pins = NULL;
+    CHECK(!start("io", &limits, &image, error, sizeof error) && strstr(error, "invalid arguments"));
+    free(image);
 }
 
 int main(int argc, char **argv)
@@ -343,6 +573,7 @@ int main(int argc, char **argv)
     if (argc < 2) return fprintf(stderr, "usage: %s <tests/apps> [label]\n", argv[0]), 2;
     s_apps = argv[1];
     test_hello();
+    test_io();
     test_restart_does_not_leak();
     test_faults();
     test_trap_keeps_other_events();

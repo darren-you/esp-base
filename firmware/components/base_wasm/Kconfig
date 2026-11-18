@@ -9,4 +9,14 @@ menu "ESP Base WASM"
             measure the runtime on a board or in QEMU; release packaging refuses images built
             with it.
 
+    config ESP_BASE_TEST_WASM_DEPLOY
+        bool "Test build only: run the scripted application deployment test instead of the system"
+        default n
+        help
+            The firmware never starts the system layer (no Wi-Fi, no broker). It deploys the
+            application packages that the test script placed in flash, one after another, through
+            the regular slots, signature checks, trial, commit and rollback; only the download is
+            replaced by a copy from flash. Used by tests/wasm_deploy_qemu.py; release packaging
+            refuses images built with it.
+
 endmenu

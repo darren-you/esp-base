@@ -28,6 +28,13 @@ pub mod sys {
                             retain: u32) -> i32;
         pub fn event_topic(buffer: *mut u8, capacity: u32) -> i32;
         pub fn event_payload(buffer: *mut u8, capacity: u32) -> i32;
+        pub fn param(key: *const u8, key_length: u32, buffer: *mut u8, capacity: u32) -> i32;
+        pub fn info(what: u32, buffer: *mut u8, capacity: u32) -> i32;
+        pub fn gpio_write(pin: u32, level: u32) -> i32;
+        pub fn gpio_read(pin: u32) -> i32;
+        pub fn pwm_config(pin: u32, frequency_hz: u32, resolution_bits: u32) -> i32;
+        pub fn pwm_write(pin: u32, duty: u32) -> i32;
+        pub fn pwm_read(pin: u32) -> i32;
     }
 }
 
@@ -48,6 +55,21 @@ pub enum Error {
     NotFound,
     /// 这个 SDK 不认识的错误码（固件比 SDK 新）。
     Other(i32),
+}
+
+impl Error {
+    /// 宿主接口的原始错误码（负数），写日志时用。
+    pub fn code(self) -> i32 {
+        match self {
+            Error::Invalid => -1,
+            Error::Denied => -2,
+            Error::NotReady => -3,
+            Error::NoMemory => -4,
+            Error::TooLarge => -5,
+            Error::NotFound => -6,
+            Error::Other(code) => code,
+        }
+    }
 }
 
 fn check(code: i32) -> Result<usize, Error> {
@@ -91,9 +113,75 @@ pub fn unix_ms() -> Option<u64> {
     }
 }
 
-/// 让应用任务睡一会儿，最多 1000 毫秒；期间到来的事件排队等候。
-pub fn sleep_ms(ms: u32) {
-    unsafe { sys::sleep_ms(ms) };
+/// 让应用任务睡一会儿；期间到来的事件排队等候。一次调用（`init` 或一个事件）里累计最多睡 1000 毫秒，
+/// 超出时返回 [`Error::TooLarge`]、不睡：更长的等待用定时器。
+pub fn sleep_ms(ms: u32) -> Result<(), Error> {
+    check(unsafe { sys::sleep_ms(ms) }).map(|_| ())
+}
+
+/// 业务参数：出厂资料里 `business` 对象的字符串值（最长 255 字节），按键读进 `buffer`。键是最多 15 个字符的
+/// 小写字母、数字、下划线。没有这个键时返回 [`Error::NotFound`]，缓冲太小时返回 [`Error::TooLarge`]。
+pub fn param<'a>(key: &str, buffer: &'a mut [u8]) -> Result<&'a [u8], Error> {
+    let length =
+        check(unsafe { sys::param(key.as_ptr(), key.len() as u32, buffer.as_mut_ptr(), buffer.len() as u32) })?;
+    Ok(&buffer[..length])
+}
+
+/// 设备信息。
+pub mod device {
+    use super::{check, sys, Error};
+
+    fn read(what: u32, buffer: &mut [u8]) -> Result<&[u8], Error> {
+        let length = check(unsafe { sys::info(what, buffer.as_mut_ptr(), buffer.len() as u32) })?;
+        Ok(&buffer[..length])
+    }
+
+    /// 设备 UUID（36 字节的小写文本）。
+    pub fn id(buffer: &mut [u8]) -> Result<&[u8], Error> {
+        read(0, buffer)
+    }
+
+    /// 芯片型号：`esp32c3`、`esp32`。
+    pub fn chip(buffer: &mut [u8]) -> Result<&[u8], Error> {
+        read(1, buffer)
+    }
+}
+
+/// 数字引脚。引脚要先在应用清单的 `pins` 里声明用途：`in`、`in_pullup`、`in_pulldown` 只能读；`out0`、`out1`
+/// 能写也能读回，后面的数字是安全电平——应用启动前、停止后、出故障时，宿主都把引脚保持在这个电平。
+/// 没有声明的引脚一律返回 [`Error::Denied`]。
+pub mod gpio {
+    use super::{check, sys, Error};
+
+    pub fn write(pin: u8, high: bool) -> Result<(), Error> {
+        check(unsafe { sys::gpio_write(pin as u32, high as u32) }).map(|_| ())
+    }
+
+    /// 引脚的实际电平。
+    pub fn read(pin: u8) -> Result<bool, Error> {
+        check(unsafe { sys::gpio_read(pin as u32) }).map(|level| level != 0)
+    }
+}
+
+/// PWM 输出。引脚要先在应用清单的 `pins` 里声明为 `pwm`；应用没在运行时这些引脚保持低电平。
+pub mod pwm {
+    use super::{check, sys, Error};
+
+    /// 设定频率（1—40000 Hz）和分辨率（1—14 位），占空比从 0 开始。频率和分辨率相同的引脚共用一个定时器，
+    /// 一个应用最多用 4 种不同的组合。这个频率配不出这样的分辨率时返回 [`Error::Invalid`]。
+    pub fn config(pin: u8, frequency_hz: u32, resolution_bits: u8) -> Result<(), Error> {
+        check(unsafe { sys::pwm_config(pin as u32, frequency_hz, resolution_bits as u32) }).map(|_| ())
+    }
+
+    /// 占空比：0 到 2^分辨率-1，从下一个周期起生效。还没 `config` 时返回 [`Error::NotReady`]。
+    pub fn write(pin: u8, duty: u32) -> Result<(), Error> {
+        check(unsafe { sys::pwm_write(pin as u32, duty) }).map(|_| ())
+    }
+
+    /// 硬件当前输出的占空比。
+    pub fn read(pin: u8) -> Result<u32, Error> {
+        check(unsafe { sys::pwm_read(pin as u32) }).map(|duty| duty as u32)
+    }
 }
 
 /// 定时器：编号 0—3，到期时应用收到 [`Event::Timer`]。

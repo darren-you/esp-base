@@ -74,6 +74,33 @@ static bool read_chips(wasm_package_t *out, const cJSON *item)
     return true;
 }
 
+static bool read_pins(wasm_package_t *out, const cJSON *item)
+{
+    static const char *const modes[] = {"in", "in_pullup", "in_pulldown", "out0", "out1", "pwm"};
+    if (!item) return true; /* 不用引脚 */
+    if (!cJSON_IsObject(item)) return false;
+    const int count = cJSON_GetArraySize(item);
+    if (count < 1 || count > WASM_PACKAGE_PINS) return false;
+    const cJSON *entry;
+    cJSON_ArrayForEach(entry, item) {
+        /* 键是引脚号：十进制，不带前导零。 */
+        const char *key = entry->string;
+        const size_t digits = key ? strlen(key) : 0;
+        if (digits < 1 || digits > 2 || (digits == 2 && key[0] == '0') || !cJSON_IsString(entry)) return false;
+        unsigned pin = 0;
+        for (size_t at = 0; at < digits; ++at) {
+            if (key[at] < '0' || key[at] > '9') return false;
+            pin = pin * 10 + (unsigned)(key[at] - '0');
+        }
+        int mode = -1;
+        for (int index = 0; index < 6 && mode < 0; ++index)
+            if (!strcmp(entry->valuestring, modes[index])) mode = index;
+        if (mode < 0 || wasm_pin_mode(out->pins, out->pin_count, pin) >= 0) return false; /* 不认识的用途，或重复的引脚 */
+        out->pins[out->pin_count++] = (wasm_pin_t){.pin = (uint8_t)pin, .mode = (uint8_t)mode};
+    }
+    return true;
+}
+
 static bool parse_manifest(const char *text, size_t length, wasm_package_t *out)
 {
     cJSON *root = cJSON_ParseWithLength(text, length);
@@ -81,6 +108,7 @@ static bool parse_manifest(const char *text, size_t length, wasm_package_t *out)
     int known = 0;
     if (ok) {
         const cJSON *chips = cJSON_GetObjectItemCaseSensitive(root, "chips");
+        const cJSON *pins = cJSON_GetObjectItemCaseSensitive(root, "pins");
         ok = copy_name(out->name, sizeof out->name, cJSON_GetObjectItemCaseSensitive(root, "name")) &&
              copy_version(out->version, sizeof out->version, cJSON_GetObjectItemCaseSensitive(root, "version")) &&
              read_uint(&out->abi, cJSON_GetObjectItemCaseSensitive(root, "abi"), 1, 65535) &&
@@ -88,8 +116,8 @@ static bool parse_manifest(const char *text, size_t length, wasm_package_t *out)
                        WASM_PACKAGE_MEMORY_MAX) &&
              read_uint(&out->stack_bytes, cJSON_GetObjectItemCaseSensitive(root, "stack"), WASM_PACKAGE_STACK_MIN,
                        WASM_PACKAGE_STACK_MAX) &&
-             read_chips(out, chips);
-        known = 5 + (chips ? 1 : 0);
+             read_chips(out, chips) && read_pins(out, pins);
+        known = 5 + (chips ? 1 : 0) + (pins ? 1 : 0);
     }
     /* 不认识的键、重复的键都不接受：清单是合同，不是备注栏。 */
     ok = ok && cJSON_GetArraySize(root) == known;
@@ -134,5 +162,36 @@ const char *wasm_package_accept(const wasm_package_t *package, const char *chip,
         if (!listed) return "chip_mismatch";
     }
     if (package->memory_bytes > memory_max) return "memory_too_large";
+    unsigned pwm = 0;
+    for (int index = 0; index < package->pin_count; ++index) {
+        const wasm_pin_mode_t mode = (wasm_pin_mode_t)package->pins[index].mode;
+        if (!wasm_pin_allowed(chip, package->pins[index].pin, mode)) return "pin_denied";
+        pwm += mode == WASM_PIN_PWM;
+    }
+    /* 每个 PWM 引脚占一个 LEDC 通道：ESP32-C3 有 6 个，ESP32 的低速组有 8 个。 */
+    if (pwm > (!strcmp(chip, "esp32c3") ? 6u : 8u)) return "pin_denied";
     return NULL;
+}
+
+int wasm_pin_mode(const wasm_pin_t *pins, unsigned count, unsigned pin)
+{
+    for (unsigned index = 0; index < count; ++index)
+        if (pins[index].pin == pin) return pins[index].mode;
+    return -1;
+}
+
+bool wasm_pin_allowed(const char *chip, unsigned pin, wasm_pin_mode_t mode)
+{
+    if (!strcmp(chip, "esp32c3")) {
+        /* GPIO0–21。11–17 接内置 Flash，18／19 是 USB Serial/JTAG：占用后设备就不能再经 USB 刷写和看日志。 */
+        return pin <= 21 && !(pin >= 11 && pin <= 19);
+    }
+    if (!strcmp(chip, "esp32")) {
+        /* 没有的引脚：20、24、28–31。6–11 接 Flash，1／3 是下载和日志用的 UART0。 */
+        if (pin > 39 || pin == 20 || pin == 24 || (pin >= 28 && pin <= 31)) return false;
+        if ((pin >= 6 && pin <= 11) || pin == 1 || pin == 3) return false;
+        /* 34–39 只能输入，也没有内部上下拉。 */
+        return pin < 34 || mode == WASM_PIN_IN;
+    }
+    return false; /* 不认识的芯片：不放行任何引脚 */
 }

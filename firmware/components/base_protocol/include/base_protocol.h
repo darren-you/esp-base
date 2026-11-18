@@ -24,6 +24,9 @@ typedef enum {
     BASE_TOPIC_CMD_FILTER,  /* Server → 设备，订阅过滤器 cmd/+ */
     BASE_TOPIC_OTA_DESIRED, /* Server → 设备，retained 期望固件 */
     BASE_TOPIC_OTA_STATE,   /* 设备 → Server，retained OTA 状态 */
+    BASE_TOPIC_APP_DESIRED, /* Server → 设备，retained 期望应用 */
+    BASE_TOPIC_APP_STATE,   /* 设备 → Server，retained 应用状态 */
+    BASE_TOPIC_COUNT,
 } base_topic_t;
 
 bool base_is_uuid(const char *text);

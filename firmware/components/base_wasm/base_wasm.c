@@ -1,442 +1,321 @@
 // SPDX-License-Identifier: Apache-2.0
-// WASM 宿主在设备上的部分：作为一个业务跑在 base_runtime 上，实现宿主接口背后的平台服务（wasm_port.h），
-// 并用一个任务把定时器、业务 MQTT 和系统通知排成事件，逐个交给应用。
+// WASM 宿主在设备上的主程序：作为一个业务跑在 base_runtime 上，一个应用任务独占应用实例和部署状态。
 //
-// 一个应用任务独占应用实例、连接和定时器的状态；定时器回调、MQTT 回调和系统的 connect 回调只向它的队列
-// 投递事件，所以没有共享的可变状态要加锁（定时器的两个字段除外，用临界区）。
+// 应用任务阻塞在事件队列上。应用的定时器、业务连接、下载任务，以及系统转来的期望应用和 connect 通知，
+// 都只向队列投递事件；部署的决定由纯逻辑的状态机（core/wasm_deploy.c）做出，这里负责执行它给出的动作。
 #include "base_wasm.h"
 
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 
 #include "base_runtime.h"
-#include "esp_crt_bundle.h"
+#include "base_wasm_internal.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include "wasm_host.h"
 #include "wasm_port.h"
 
-#define TASK_STACK_BYTES 5120 /* 实测最多用到约 2 KB（加载样例应用时） */
+#define TASK_STACK_BYTES 5120 /* 实测最多用到约 2 KB（加载应用时） */
 #define TASK_PRIORITY 3
+/* 应用任务的看门狗：任务最迟每 10 秒醒一次报到；60 秒没有报到（卡在某次处理里）时运行时重启设备，输出回到安全状态。
+ * 60 秒大于一次处理的最长耗时：应用的一次调用受指令预算和睡眠上限约束（几秒），关闭业务连接时代发遗嘱和
+ * 等连接任务退出，各自最多等一个网络超时（15 秒）。 */
+#define FEED_MS 10000
+#define WATCHDOG_MS 60000
 #define QUEUE_LENGTH 16
-#define PENDING_BYTES_MAX 4096 /* 排队等应用处理的消息数据上限；超出的消息丢弃并计数 */
-#define SUBSCRIPTIONS 4
-#define RECONNECT_MS 10000 /* 与系统 MQTT 的 5 秒错开，避免两条连接同时做 TLS 握手 */
 #define RESTART_MIN_MS 5000
 #define RESTART_MAX_MS 300000
-#define STABLE_MS 300000 /* 应用连续运行这么久算稳定：之后再出故障，重启间隔从头算 */
-#define UNIX_MS_2020 1577836800000ull
-
-/* 可行性阶段的固定限额；应用清单（T4）落地后改由清单给出。 */
-#define POOL_BYTES (8 * 1024)
-#define STACK_BYTES 2048
-#define LINEAR_MAX_BYTES (16 * 1024)
-#define BUDGET 2000000
-
-typedef enum { EV_TIMER, EV_LINK_UP, EV_LINK_DOWN, EV_LINK_MESSAGE, EV_SYSTEM_CONNECT, EV_RESTART } kind_t;
-
-typedef struct {
-    uint8_t kind;
-    uint8_t timer;
-    uint16_t topic_length, payload_length;
-    uint32_t epoch;                  /* EV_TIMER：定时器设置时的代，对不上说明它后来被重设或取消了 */
-    esp_mqtt_client_handle_t client; /* 产生事件的连接；与当前连接不同的事件来自已关闭的连接，丢弃 */
-    char *data;                      /* EV_LINK_MESSAGE：主题紧跟载荷，处理后释放 */
-} event_t;
-
-typedef struct {
-    esp_timer_handle_t handle;
-    uint32_t period_ms, epoch;
-    int64_t due_us; /* 这一次设置最早的到期时刻：早于它的回调属于上一次设置 */
-    bool periodic;  /* 首次到期后已经转为周期运行 */
-} app_timer_t;
+#define LINEAR_MAX_BYTES (16 * 1024) /* 线性内存（栈加静态数据）的上限；超过说明模块没有收缩 */
+#define BUDGET 2000000               /* 每次调用的指令预算 */
+#define DESIRED_MAX_BYTES 1536
+#if CONFIG_ESP_BASE_TEST_WASM_DEPLOY
+#define TRIAL_MS 3000u /* 测试固件：缩短试运行 */
+#else
+#define TRIAL_MS WASM_TRIAL_MS
+#endif
 
 static const char *TAG = "base_wasm";
 static QueueHandle_t s_queue;
-static portMUX_TYPE s_timer_lock = portMUX_INITIALIZER_UNLOCKED;
-static app_timer_t s_timers[WASM_TIMERS];
-static esp_timer_handle_t s_restart;
+static esp_timer_handle_t s_restart_timer, s_trial_timer, s_retry_timer, s_stable_timer;
 static uint32_t s_restart_ms = RESTART_MIN_MS;
-static int64_t s_started_us;
-static atomic_uint s_pending_bytes, s_dropped;
-static uint8_t *s_image;
+static bool s_store_ready;
+static unsigned s_boot_actions;
 
-/* 业务连接：只在应用任务里访问。 */
+/* 部署状态与应用的运行情况：只在应用任务里读写（启动时由建它的任务初始化，那时应用任务还没建）。 */
+static wasm_deploy_t s_deploy;
+static wasm_package_t s_packages[WASM_SLOTS];
 static struct {
-    bool wanted;  /* 应用要求过连接 */
-    bool allowed; /* 系统已经通知可以建立业务连接（系统 MQTT 先连上，两次握手错开） */
-    bool connected;
-    esp_mqtt_client_handle_t client;
-    char *will_topic;
-    uint8_t *will_payload;
-    size_t will_payload_length;
-    int will_qos;
-    bool will_retain;
-    unsigned keepalive_s;
-    struct {
-        char *filter;
-        int qos;
-    } subscriptions[SUBSCRIPTIONS];
-    char client_id[48];
-} s_link;
+    const char *state;
+    char fault[64];
+    uint32_t restarts;
+} s_app = {.state = "stopped"};
 
-extern const uint8_t hello_start[] asm("_binary_hello_wasm_start");
-extern const uint8_t hello_end[] asm("_binary_hello_wasm_end");
+/* 最近一次编码好的 app/state：应用任务写，系统的控制任务读。 */
+static SemaphoreHandle_t s_state_lock;
+static char s_state[WASM_DEPLOY_STATE_BYTES];
+static int s_state_length;
 
-static void post(const event_t *event)
+static void apply(unsigned actions);
+
+void base_wasm_post(const base_wasm_event_t *event)
 {
-    if (xQueueSend(s_queue, event, 0) == pdTRUE) return;
-    if (event->data) {
-        atomic_fetch_sub(&s_pending_bytes, (unsigned)(event->topic_length + event->payload_length));
-        free(event->data);
+    if (s_queue && xQueueSend(s_queue, event, 0) == pdTRUE) return;
+    if (event->kind == EV_LINK_MESSAGE) wasm_platform_message_done(event);
+    else free(event->data);
+    wasm_platform_count_drop();
+}
+
+#if CONFIG_ESP_BASE_TEST_WASM_BENCH || CONFIG_ESP_BASE_TEST_WASM_DEPLOY
+/* 普通 FreeRTOS 任务的入口不能返回：跑完后自己删除。 */
+static void plain_task(void *argument)
+{
+    ((void (*)(void *))argument)(NULL);
+    vTaskDelete(NULL);
+}
+#endif
+
+bool base_wasm_task(const char *name, void (*entry)(void *), uint32_t stack_bytes, uint32_t watchdog_ms)
+{
+    const esp_err_t result = base_runtime_task(name, entry, NULL, stack_bytes, TASK_PRIORITY, watchdog_ms);
+#if CONFIG_ESP_BASE_TEST_WASM_BENCH || CONFIG_ESP_BASE_TEST_WASM_DEPLOY
+    /* 测试固件不启动系统层，业务运行时没有在运行：退回普通任务。 */
+    if (result == ESP_ERR_INVALID_STATE)
+        return xTaskCreate(plain_task, name, stack_bytes, (void *)entry, TASK_PRIORITY, NULL) == pdPASS;
+#endif
+    return result == ESP_OK;
+}
+
+static void timer_start(esp_timer_handle_t timer, uint32_t delay_ms)
+{
+    esp_timer_stop(timer);
+    esp_timer_start_once(timer, (uint64_t)delay_ms * 1000u);
+}
+
+static void event_timer_fired(void *argument)
+{
+    base_wasm_post(&(base_wasm_event_t){.kind = (uint8_t)(uintptr_t)argument});
+}
+
+/* ---------- app/state ---------- */
+
+static void publish_state(void)
+{
+    wasm_host_stats_t stats;
+    wasm_host_stats(&stats);
+    const wasm_app_status_t app = {.state = s_app.state, .fault = s_app.fault[0] ? s_app.fault : NULL,
+                                   .restarts = s_app.restarts, .pool_used = stats.pool_used, .pool_peak = stats.pool_peak,
+                                   .linear_bytes = stats.linear_bytes};
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    s_state_length = wasm_deploy_state_encode(&s_deploy, &app, s_state, sizeof s_state);
+    xSemaphoreGive(s_state_lock);
+    ESP_LOGI(TAG, "ESP_BASE_APP job=%s state=%s error=%s app=%s restarts=%u", s_deploy.record.job[0] ? s_deploy.record.job : "-",
+             wasm_deploy_phase_name((wasm_deploy_phase_t)s_deploy.record.phase), s_deploy.record.error, s_app.state,
+             (unsigned)s_app.restarts);
+    base_runtime_app_changed();
+}
+
+static int business_state(char *out, size_t size)
+{
+    int length = 0;
+    if (!s_state_lock) return 0;
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    if (s_state_length > 0 && (size_t)s_state_length < size) {
+        memcpy(out, s_state, (size_t)s_state_length + 1);
+        length = s_state_length;
     }
-    atomic_fetch_add(&s_dropped, 1);
+    xSemaphoreGive(s_state_lock);
+    return length;
 }
 
-/* WAMR 取当前线程标识的入口，链接时取代它的 ESP-IDF 端口里基于 pthread_self() 的实现（见 CMakeLists.txt）。 */
-unsigned int __wrap_os_self_thread(void)
+/* ---------- 应用的启动与停止 ---------- */
+
+static bool read_slot(void *context, uint8_t *out, uint32_t bytes)
 {
-    return (unsigned int)(uintptr_t)xTaskGetCurrentTaskHandle();
+    const uint8_t slot = (uint8_t)(uintptr_t)context;
+    return wasm_store_read(slot, s_packages[slot].wasm_offset, out, bytes);
 }
 
-/* ---------- 平台服务：时间与定时器 ---------- */
-
-void wasm_port_log(int level, const char *text, size_t length)
+static void stop_app(void)
 {
-    const esp_log_level_t mapped = level <= 1 ? ESP_LOG_ERROR : level == 2 ? ESP_LOG_WARN : ESP_LOG_INFO;
-    ESP_LOG_LEVEL(mapped, "app", "%.*s", (int)(length > 200 ? 200 : length), text);
+    esp_timer_stop(s_restart_timer);
+    esp_timer_stop(s_stable_timer);
+    wasm_host_stop(); /* 取消应用的定时器，代发遗嘱并断开连接 */
 }
 
-uint64_t wasm_port_uptime_ms(void)
+/* 启动 s_deploy.running 那个槽里的应用。 */
+static bool start_app(void)
 {
-    return (uint64_t)(esp_timer_get_time() / 1000);
-}
-
-uint64_t wasm_port_unix_ms(void)
-{
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    const uint64_t ms = (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_usec / 1000u;
-    return ms >= UNIX_MS_2020 ? ms : 0;
-}
-
-void wasm_port_sleep_ms(uint32_t ms)
-{
-    if (ms) vTaskDelay(pdMS_TO_TICKS(ms) ? pdMS_TO_TICKS(ms) : 1);
-}
-
-static void timer_fired(void *argument)
-{
-    app_timer_t *timer = argument;
-    const int64_t now_us = esp_timer_get_time();
-    taskENTER_CRITICAL(&s_timer_lock);
-    const uint32_t epoch = timer->epoch, period_ms = timer->period_ms;
-    const bool stale = now_us + 500 < timer->due_us; /* 应用在回调执行前重设了这个定时器 */
-    const bool start_periodic = !stale && period_ms && !timer->periodic;
-    if (start_periodic) timer->periodic = true;
-    taskEXIT_CRITICAL(&s_timer_lock);
-    if (stale) return;
-    if (start_periodic) esp_timer_start_periodic(timer->handle, (uint64_t)period_ms * 1000u);
-    post(&(event_t){.kind = EV_TIMER, .timer = (uint8_t)(timer - s_timers), .epoch = epoch});
-}
-
-int wasm_port_timer_cancel(unsigned id)
-{
-    app_timer_t *timer = &s_timers[id];
-    esp_timer_stop(timer->handle);
-    taskENTER_CRITICAL(&s_timer_lock);
-    ++timer->epoch; /* 已经排在队列里的到期事件作废 */
-    timer->period_ms = 0;
-    timer->periodic = false;
-    taskEXIT_CRITICAL(&s_timer_lock);
-    return WASM_OK;
-}
-
-int wasm_port_timer_set(unsigned id, uint32_t delay_ms, uint32_t period_ms)
-{
-    app_timer_t *timer = &s_timers[id];
-    wasm_port_timer_cancel(id);
-    taskENTER_CRITICAL(&s_timer_lock);
-    timer->period_ms = period_ms;
-    timer->due_us = esp_timer_get_time() + (int64_t)delay_ms * 1000;
-    taskEXIT_CRITICAL(&s_timer_lock);
-    return esp_timer_start_once(timer->handle, (uint64_t)delay_ms * 1000u) == ESP_OK ? WASM_OK : WASM_E_NO_MEMORY;
-}
-
-/* ---------- 平台服务：业务 MQTT ---------- */
-
-static void link_event(void *argument, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)argument;
-    (void)base;
-    const esp_mqtt_event_handle_t event = data;
-    event_t posted = {.client = event->client};
-    switch ((esp_mqtt_event_id_t)id) {
-    case MQTT_EVENT_CONNECTED: posted.kind = EV_LINK_UP; break;
-    case MQTT_EVENT_DISCONNECTED: posted.kind = EV_LINK_DOWN; break;
-    case MQTT_EVENT_DATA: {
-        /* 只收一次到齐的小消息：分片的、超长的丢弃并计数。 */
-        if (event->current_data_offset != 0 || event->data_len != event->total_data_len || event->topic_len <= 0 ||
-            event->topic_len > WASM_TOPIC_BYTES || event->data_len > WASM_PAYLOAD_BYTES) {
-            atomic_fetch_add(&s_dropped, 1);
-            return;
-        }
-        /* 排队等应用处理的数据有上限：应用处理不过来时丢新消息，不让队列吃掉系统的内存。 */
-        const unsigned bytes = (unsigned)event->topic_len + (unsigned)event->data_len;
-        if (atomic_fetch_add(&s_pending_bytes, bytes) + bytes > PENDING_BYTES_MAX || !(posted.data = malloc(bytes))) {
-            atomic_fetch_sub(&s_pending_bytes, bytes);
-            atomic_fetch_add(&s_dropped, 1);
-            return;
-        }
-        memcpy(posted.data, event->topic, (size_t)event->topic_len);
-        memcpy(posted.data + event->topic_len, event->data, (size_t)event->data_len);
-        posted.kind = EV_LINK_MESSAGE;
-        posted.topic_length = (uint16_t)event->topic_len;
-        posted.payload_length = (uint16_t)event->data_len;
-        break;
+    char error[128] = "";
+    const uint8_t slot = s_deploy.running;
+    const wasm_package_t *package = &s_packages[slot];
+    const wasm_host_limits_t limits = {.pool_bytes = package->memory_bytes, .stack_bytes = package->stack_bytes,
+                                       .linear_max_bytes = LINEAR_MAX_BYTES, .budget = BUDGET, .pins = package->pins,
+                                       .pin_count = package->pin_count};
+    /* 应用代码运行之前，它声明的输出先到安全电平。 */
+    wasm_platform_pins(package->pins, package->pin_count);
+    if (!wasm_host_start(read_slot, (void *)(uintptr_t)slot, package->wasm_bytes, &limits, error, sizeof error)) {
+        ESP_LOGE(TAG, "ESP_BASE_APP_START_FAILED %s %s: %s", package->name, package->version, error);
+        strlcpy(s_app.fault, error, sizeof s_app.fault);
+        s_app.state = "crashed";
+        return false;
     }
-    default: return;
-    }
-    post(&posted);
-}
-
-static void link_close(void)
-{
-    if (!s_link.client) return;
-    /* 主动断开不会触发遗嘱：先替应用把它发出去，订阅方不会看到过期的在线状态。 */
-    if (s_link.connected && s_link.will_topic)
-        esp_mqtt_client_publish(s_link.client, s_link.will_topic, (const char *)s_link.will_payload,
-                                (int)s_link.will_payload_length, s_link.will_qos, s_link.will_retain);
-    base_runtime_mqtt_close(s_link.client);
-    s_link.client = NULL;
-    s_link.connected = false;
-}
-
-static void link_open(void)
-{
-    link_close();
-    static base_runtime_mqtt_t config; /* 含密码：用完清零 */
-    if (!base_runtime_mqtt_config(&config)) {
-        ESP_LOGW(TAG, "ESP_BASE_APP_LINK_IDLE business mqtt is not configured");
-        return;
-    }
-    const esp_mqtt_client_config_t mqtt = {
-        .broker.address.uri = config.uri,
-        .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
-        .credentials.username = config.username,
-        .credentials.client_id = s_link.client_id,
-        .credentials.authentication.password = config.password,
-        .session.keepalive = (int)s_link.keepalive_s,
-        .session.last_will = {.topic = s_link.will_topic, .msg = (const char *)s_link.will_payload,
-                              .msg_len = (int)s_link.will_payload_length, .qos = s_link.will_qos,
-                              .retain = s_link.will_retain},
-        .network.reconnect_timeout_ms = RECONNECT_MS,
-        .network.timeout_ms = 15000,
-        .buffer.size = WASM_PAYLOAD_BYTES + WASM_TOPIC_BYTES + 128,
-        .buffer.out_size = 1024,
-    };
-    s_link.client = base_runtime_mqtt_open("mqtt", &mqtt);
-    memset(&config, 0, sizeof config);
-    if (!s_link.client) return;
-    if (esp_mqtt_client_register_event(s_link.client, MQTT_EVENT_ANY, link_event, NULL) != ESP_OK ||
-        esp_mqtt_client_start(s_link.client) != ESP_OK) {
-        ESP_LOGE(TAG, "business mqtt client unavailable");
-        base_runtime_mqtt_close(s_link.client);
-        s_link.client = NULL;
-    }
-}
-
-static void link_forget(void)
-{
-    link_close();
-    free(s_link.will_topic);
-    free(s_link.will_payload);
-    for (int index = 0; index < SUBSCRIPTIONS; ++index) free(s_link.subscriptions[index].filter);
-    const bool allowed = s_link.allowed;
-    char client_id[sizeof s_link.client_id];
-    memcpy(client_id, s_link.client_id, sizeof client_id);
-    memset(&s_link, 0, sizeof s_link);
-    s_link.allowed = allowed;
-    memcpy(s_link.client_id, client_id, sizeof client_id);
-}
-
-static char *copy_string(const char *text, size_t length)
-{
-    char *copy = malloc(length + 1);
-    if (!copy) return NULL;
-    memcpy(copy, text, length);
-    copy[length] = '\0';
-    return copy;
-}
-
-int wasm_port_mqtt_connect(const wasm_port_will_t *will, unsigned keepalive_s)
-{
-    char *topic = NULL;
-    uint8_t *payload = NULL;
-    if (will->topic) {
-        topic = copy_string(will->topic, will->topic_length);
-        payload = malloc(will->payload_length ? will->payload_length : 1);
-        if (!topic || !payload) {
-            free(topic);
-            free(payload);
-            return WASM_E_NO_MEMORY;
-        }
-        if (will->payload_length) memcpy(payload, will->payload, will->payload_length);
-    }
-    link_close();
-    free(s_link.will_topic);
-    free(s_link.will_payload);
-    s_link.will_topic = topic;
-    s_link.will_payload = payload;
-    s_link.will_payload_length = will->topic ? will->payload_length : 0;
-    s_link.will_qos = will->qos;
-    s_link.will_retain = will->retain;
-    s_link.keepalive_s = keepalive_s;
-    s_link.wanted = true;
-    if (s_link.allowed) link_open();
-    return WASM_OK;
-}
-
-int wasm_port_mqtt_disconnect(void)
-{
-    s_link.wanted = false;
-    link_close();
-    return WASM_OK;
-}
-
-int wasm_port_mqtt_subscribe(const char *filter, size_t length, int qos)
-{
-    for (int index = 0; index < SUBSCRIPTIONS; ++index) {
-        const char *known = s_link.subscriptions[index].filter;
-        if (known && strlen(known) == length && !memcmp(known, filter, length)) return WASM_OK;
-    }
-    for (int index = 0; index < SUBSCRIPTIONS; ++index) {
-        if (s_link.subscriptions[index].filter) continue;
-        char *copy = copy_string(filter, length);
-        if (!copy) return WASM_E_NO_MEMORY;
-        s_link.subscriptions[index].filter = copy;
-        s_link.subscriptions[index].qos = qos;
-        if (s_link.connected) esp_mqtt_client_subscribe(s_link.client, copy, qos);
-        return WASM_OK;
-    }
-    return WASM_E_NO_MEMORY; /* 订阅槽用完了 */
-}
-
-int wasm_port_mqtt_publish(const char *topic, size_t topic_length, const void *payload, size_t payload_length, int qos,
-                           bool retain)
-{
-    if (!s_link.connected) return WASM_E_NOT_READY;
-    char name[WASM_TOPIC_BYTES + 1];
-    memcpy(name, topic, topic_length);
-    name[topic_length] = '\0';
-    /* 入队即返回，不在应用任务里等网络。 */
-    return esp_mqtt_client_enqueue(s_link.client, name, payload, (int)payload_length, qos, retain, true) >= 0
-               ? WASM_OK
-               : WASM_E_NO_MEMORY;
-}
-
-void wasm_port_release(void)
-{
-    for (unsigned id = 0; id < WASM_TIMERS; ++id) wasm_port_timer_cancel(id);
-    link_forget();
-}
-
-/* ---------- 应用任务 ---------- */
-
-static void restart_fired(void *argument)
-{
-    (void)argument;
-    post(&(event_t){.kind = EV_RESTART});
+    wasm_host_stats_t stats;
+    wasm_host_stats(&stats);
+    ESP_LOGI(TAG, "ESP_BASE_APP_STARTED %s %s slot=%u wasm=%u pool=%u/%u peak=%u linear=%u", package->name, package->version,
+             (unsigned)slot, (unsigned)package->wasm_bytes, (unsigned)stats.pool_used, (unsigned)package->memory_bytes,
+             (unsigned)stats.pool_peak, (unsigned)stats.linear_bytes);
+    s_app.state = "running";
+    timer_start(s_stable_timer, WASM_STABLE_MS);
+    return true;
 }
 
 static void restart_later(void)
 {
-    if (s_started_us && esp_timer_get_time() - s_started_us >= (int64_t)STABLE_MS * 1000) s_restart_ms = RESTART_MIN_MS;
-    s_started_us = 0;
     ESP_LOGW(TAG, "ESP_BASE_APP_RESTART in %u ms", (unsigned)s_restart_ms);
-    esp_timer_stop(s_restart);
-    esp_timer_start_once(s_restart, (uint64_t)s_restart_ms * 1000u);
+    timer_start(s_restart_timer, s_restart_ms);
     s_restart_ms = s_restart_ms * 2 > RESTART_MAX_MS ? RESTART_MAX_MS : s_restart_ms * 2;
 }
 
-static void start_app(void)
+/* 执行状态机的 RUN：停掉当前应用，启动应当运行的那个。 */
+static void run_app(void)
 {
-    char error[128] = "";
-    const uint32_t bytes = (uint32_t)(hello_end - hello_start);
-    /* 经典解释器的加载器会原地改写字节码：镜像放在可写的内存里，应用停止前一直保留。 */
-    free(s_image);
-    if ((s_image = malloc(bytes))) memcpy(s_image, hello_start, bytes);
-    const wasm_host_limits_t limits = {.pool_bytes = POOL_BYTES, .stack_bytes = STACK_BYTES,
-                                       .linear_max_bytes = LINEAR_MAX_BYTES, .budget = BUDGET};
-    if (!s_image || !wasm_host_start(s_image, bytes, &limits, error, sizeof error)) {
-        ESP_LOGE(TAG, "ESP_BASE_APP_START_FAILED %s", s_image ? error : "no memory for the image");
-        free(s_image);
-        s_image = NULL;
-        restart_later();
+    stop_app();
+    s_restart_ms = RESTART_MIN_MS;
+    if (s_deploy.running >= WASM_SLOTS) {
+        s_app.state = s_deploy.disabled ? "disabled" : "stopped";
+        if (s_deploy.disabled) snprintf(s_app.fault, sizeof s_app.fault, "crash_loop");
+        /* 没有应用了：引脚还给系统。被停用的应用还装在设备上，它的输出继续保持在安全电平。 */
+        else wasm_platform_pins(NULL, 0);
         return;
     }
-    s_started_us = esp_timer_get_time();
-    wasm_host_stats_t stats;
-    wasm_host_stats(&stats);
-    ESP_LOGI(TAG, "ESP_BASE_APP_STARTED image=%u pool=%u/%u peak=%u linear=%u", (unsigned)bytes,
-             (unsigned)stats.pool_used, (unsigned)POOL_BYTES, (unsigned)stats.pool_peak, (unsigned)stats.linear_bytes);
+    const uint8_t slot = s_deploy.running;
+    const bool ok = start_app();
+    /* 试运行的应用启动失败：状态机回退到原来的槽（又是一次 RUN）。 */
+    apply(wasm_deploy_on_started(&s_deploy, ok, ok ? NULL : "start_failed"));
+    /* 已提交的应用启动失败：退避后再试。 */
+    if (!ok && s_deploy.running == slot && !wasm_host_running()) restart_later();
 }
 
+/* 把一个事件交给应用；应用出了故障就停掉它，试运行期间回退，否则退避后重启。 */
 static void dispatch(wasm_event_kind_t kind, uint32_t a, uint32_t b)
 {
     if (!wasm_host_running() || wasm_host_event(kind, a, b)) return;
-    ESP_LOGE(TAG, "ESP_BASE_APP_FAULT %s", wasm_host_fault());
-    wasm_host_stop();
-    free(s_image);
-    s_image = NULL;
-    restart_later();
+    strlcpy(s_app.fault, wasm_host_fault(), sizeof s_app.fault);
+    ESP_LOGE(TAG, "ESP_BASE_APP_FAULT %s", s_app.fault);
+    ++s_app.restarts;
+    s_app.state = "crashed";
+    stop_app();
+    const unsigned actions = wasm_deploy_on_fault(&s_deploy, "fault");
+    if (actions) {
+        apply(actions);
+    } else {
+        restart_later();
+        publish_state();
+    }
 }
 
-static void handle(const event_t *event)
+/* ---------- 部署 ---------- */
+
+static void apply(unsigned actions)
 {
-    switch ((kind_t)event->kind) {
-    case EV_SYSTEM_CONNECT:
-        s_link.allowed = true;
-        if (s_link.wanted) link_open();
-        break;
+    if (actions & WASM_ACT_PERSIST) wasm_store_save_record(&s_deploy.record);
+    if (actions & WASM_ACT_CANCEL) wasm_fetch_cancel();
+    if (actions & WASM_ACT_STOP_TIMER) esp_timer_stop(s_retry_timer);
+    if (actions & WASM_ACT_STOP_TRIAL) esp_timer_stop(s_trial_timer);
+    if (actions & WASM_ACT_RUN) run_app();
+    if (actions & WASM_ACT_TRIAL_TIMER) timer_start(s_trial_timer, TRIAL_MS);
+    if (actions & WASM_ACT_RETRY_TIMER) timer_start(s_retry_timer, wasm_deploy_retry_delay_ms(&s_deploy, esp_random()));
+    if (actions & WASM_ACT_DOWNLOAD) {
+        /* 固件正在下载时不开始应用的下载：内存留给固件，验签也不会撞在一起。 */
+        if (base_runtime_system_updating() || !wasm_fetch_start(&s_deploy.desired, wasm_deploy_target(&s_deploy)))
+            apply(wasm_deploy_on_worker_done(&s_deploy, WASM_WORKER_RETRY, "busy", NULL));
+    }
+    if (actions & WASM_ACT_PUBLISH) publish_state();
+}
+
+static void on_desired(const char *payload, size_t length)
+{
+    if (!s_store_ready) return;
+    if (length == 0) {
+        apply(wasm_deploy_on_cancel(&s_deploy));
+        return;
+    }
+    /* 解码用的缓冲 600 多字节：不占应用任务的栈，也不常驻。 */
+    wasm_desired_t *desired = malloc(sizeof *desired);
+    if (!desired) {
+        ESP_LOGE(TAG, "no memory to read app/desired"); /* retained：下次连上会再收到 */
+        return;
+    }
+    unsigned actions = 0;
+    const char *error = wasm_desired_decode(payload, length, WASM_SLOT_BYTES, desired);
+    if (!error) actions = wasm_deploy_on_desired(&s_deploy, desired);
+    else if (desired->job[0]) actions = wasm_deploy_on_invalid_desired(&s_deploy, desired->job, error);
+    else ESP_LOGW(TAG, "unreadable app/desired ignored");
+    free(desired);
+    apply(actions);
+}
+
+static void on_fetch_done(void)
+{
+    const wasm_fetch_result_t *result = wasm_fetch_result();
+    /* 目标槽被擦过、写过：先让它的旧清单作废，装好了再换成新的。 */
+    const uint8_t target = wasm_deploy_target(&s_deploy);
+    memset(&s_packages[target], 0, sizeof s_packages[target]);
+    if (result->result == WASM_WORKER_INSTALLED) s_packages[target] = result->package;
+    apply(wasm_deploy_on_worker_done(&s_deploy, result->result, result->error[0] ? result->error : NULL,
+                                     result->result == WASM_WORKER_INSTALLED ? &result->installed : NULL));
+}
+
+/* ---------- 应用任务 ---------- */
+
+static void handle(const base_wasm_event_t *event)
+{
+    switch ((base_wasm_event_kind_t)event->kind) {
+    case EV_SYSTEM_CONNECT: wasm_platform_connect_allowed(); break;
     case EV_LINK_UP:
-        if (event->client != s_link.client) break;
-        s_link.connected = true;
-        for (int index = 0; index < SUBSCRIPTIONS; ++index)
-            if (s_link.subscriptions[index].filter)
-                esp_mqtt_client_subscribe(s_link.client, s_link.subscriptions[index].filter,
-                                          s_link.subscriptions[index].qos);
-        dispatch(WASM_EVENT_MQTT_UP, 0, 0);
+        if (wasm_platform_link_up(event->client)) dispatch(WASM_EVENT_MQTT_UP, 0, 0);
         break;
     case EV_LINK_DOWN:
-        if (event->client != s_link.client) break;
-        s_link.connected = false;
-        dispatch(WASM_EVENT_MQTT_DOWN, 0, 0);
+        if (wasm_platform_link_down(event->client)) dispatch(WASM_EVENT_MQTT_DOWN, 0, 0);
         break;
     case EV_LINK_MESSAGE:
-        if (event->client == s_link.client) {
-            wasm_host_event_data(event->data, event->topic_length, event->data + event->topic_length,
-                                 event->payload_length);
+        if (wasm_platform_link_current(event->client)) {
+            wasm_host_event_data(event->data, event->topic_length, event->data + event->topic_length, event->payload_length);
             dispatch(WASM_EVENT_MQTT_MESSAGE, event->topic_length, event->payload_length);
         }
-        atomic_fetch_sub(&s_pending_bytes, (unsigned)(event->topic_length + event->payload_length));
+        wasm_platform_message_done(event);
+        break;
+    case EV_TIMER:
+        if (wasm_platform_timer_current(event->timer, event->epoch)) dispatch(WASM_EVENT_TIMER, event->timer, 0);
+        break;
+    case EV_RESTART:
+        if (!wasm_host_running() && s_deploy.running < WASM_SLOTS) {
+            if (!start_app()) restart_later();
+            publish_state();
+        }
+        break;
+    case EV_DESIRED:
+        on_desired(event->data, event->payload_length);
         free(event->data);
         break;
-    case EV_TIMER: {
-        taskENTER_CRITICAL(&s_timer_lock);
-        const bool current = event->epoch == s_timers[event->timer].epoch;
-        taskEXIT_CRITICAL(&s_timer_lock);
-        if (current) dispatch(WASM_EVENT_TIMER, event->timer, 0);
-        break;
-    }
-    case EV_RESTART:
-        if (!wasm_host_running()) start_app();
+    case EV_FETCH_VERIFYING: apply(wasm_deploy_on_verifying(&s_deploy)); break;
+    case EV_FETCH_DONE: on_fetch_done(); break;
+    case EV_TRIAL_TIMER: apply(wasm_deploy_on_trial_timer(&s_deploy)); break;
+    case EV_RETRY_TIMER: apply(wasm_deploy_on_retry_timer(&s_deploy)); break;
+    case EV_STABLE_TIMER:
+        /* 应用稳定运行了一段时间：异常重启的计数清零，故障后的重启间隔从头算。 */
+        if (wasm_host_running()) {
+            s_restart_ms = RESTART_MIN_MS;
+            apply(wasm_deploy_on_stable(&s_deploy));
+        }
         break;
     }
 }
@@ -444,57 +323,120 @@ static void handle(const event_t *event)
 static void app_task(void *argument)
 {
     (void)argument;
-    start_app();
-    for (event_t event;;) {
-        if (xQueueReceive(s_queue, &event, portMAX_DELAY) == pdTRUE) handle(&event);
+    apply(s_boot_actions | WASM_ACT_PUBLISH);
+    for (base_wasm_event_t event;;) {
+        if (xQueueReceive(s_queue, &event, pdMS_TO_TICKS(FEED_MS)) == pdTRUE) handle(&event);
+        base_runtime_feed();
     }
 }
 
-/* 事件队列和定时器：应用启动之前建好，之后一直留着。 */
-static bool platform_init(void)
+/* 队列、定时器、应用槽和部署记录：在建应用任务之前、由启动它的任务完成。 */
+static bool prepare(const char *device_id)
 {
-    s_queue = xQueueCreate(QUEUE_LENGTH, sizeof(event_t));
-    bool ready = s_queue != NULL;
-    for (unsigned id = 0; ready && id < WASM_TIMERS; ++id) {
-        const esp_timer_create_args_t timer = {.callback = timer_fired, .arg = &s_timers[id], .name = "app_timer"};
-        ready = esp_timer_create(&timer, &s_timers[id].handle) == ESP_OK;
+    static const struct {
+        esp_timer_handle_t *timer;
+        base_wasm_event_kind_t kind;
+        const char *name;
+    } timers[] = {{&s_restart_timer, EV_RESTART, "app_restart"}, {&s_trial_timer, EV_TRIAL_TIMER, "app_trial"},
+                  {&s_retry_timer, EV_RETRY_TIMER, "app_retry"}, {&s_stable_timer, EV_STABLE_TIMER, "app_stable"}};
+    s_queue = xQueueCreate(QUEUE_LENGTH, sizeof(base_wasm_event_t));
+    s_state_lock = xSemaphoreCreateMutex();
+    bool ready = s_queue && s_state_lock && wasm_platform_init(device_id);
+    for (size_t index = 0; ready && index < sizeof timers / sizeof timers[0]; ++index) {
+        const esp_timer_create_args_t timer = {.callback = event_timer_fired, .arg = (void *)(uintptr_t)timers[index].kind,
+                                               .name = timers[index].name};
+        ready = esp_timer_create(&timer, timers[index].timer) == ESP_OK;
     }
-    const esp_timer_create_args_t restart = {.callback = restart_fired, .name = "app_restart"};
-    return ready && esp_timer_create(&restart, &s_restart) == ESP_OK;
+    if (!ready) return false;
+
+    /* 读两个槽并验签。这一步在系统的控制任务里做，排在系统自己校验运行固件之后：官方的验签入口不可重入。 */
+    wasm_slot_t slots[WASM_SLOTS] = {0};
+    s_store_ready = wasm_store_init();
+    for (uint8_t slot = 0; s_store_ready && slot < WASM_SLOTS; ++slot) {
+        const char *error = NULL;
+        if (wasm_store_inspect(slot, &slots[slot], &s_packages[slot], &error))
+            ESP_LOGI(TAG, "ESP_BASE_APP_SLOT %u %s %s sha256=%s", (unsigned)slot, slots[slot].name, slots[slot].version,
+                     slots[slot].sha256);
+        else
+            ESP_LOGI(TAG, "ESP_BASE_APP_SLOT %u empty (%s)", (unsigned)slot, error);
+    }
+    static wasm_deploy_record_t stored;
+    const bool have_record = s_store_ready && wasm_store_load_record(&stored);
+#if CONFIG_ESP_BASE_TEST_WASM_BENCH || CONFIG_ESP_BASE_TEST_WASM_DEPLOY
+    /* 测试固件不启动系统层：自己看复位原因。 */
+    const esp_reset_reason_t reset = esp_reset_reason();
+    const bool abnormal = reset == ESP_RST_PANIC || reset == ESP_RST_INT_WDT || reset == ESP_RST_TASK_WDT || reset == ESP_RST_WDT;
+#else
+    /* 与系统的业务守卫用同一个判定：panic、各类看门狗，以及应用任务的看门狗超时。 */
+    const bool abnormal = base_runtime_abnormal_restart();
+#endif
+    s_boot_actions = wasm_deploy_boot(&s_deploy, have_record ? &stored : NULL, slots, abnormal);
+    /* 联网之前就把要运行的应用声明的输出置到安全电平；应用被停用时同样如此。 */
+    const uint8_t owner = s_deploy.running < WASM_SLOTS ? s_deploy.running : s_deploy.record.active;
+    if (owner < WASM_SLOTS) wasm_platform_pins(s_packages[owner].pins, s_packages[owner].pin_count);
+    if (s_deploy.disabled)
+        ESP_LOGE(TAG, "ESP_BASE_APP_DISABLED the device restarted abnormally %u times in a row with this app",
+                 (unsigned)s_deploy.record.crashes);
+    return true;
 }
 
 static void business_init(void)
 {
-    /* 业务连接的客户端 ID 不能用设备 UUID：系统 MQTT 已经在用，同一 Broker 上会互相挤下线。 */
-    snprintf(s_link.client_id, sizeof s_link.client_id, "app-%s", base_runtime_device_id());
-    if (!platform_init() || base_runtime_task("wasm_app", app_task, NULL, TASK_STACK_BYTES, TASK_PRIORITY, 0) != ESP_OK)
+    if (!prepare(base_runtime_device_id()) || !base_wasm_task("wasm_app", app_task, TASK_STACK_BYTES, WATCHDOG_MS))
         ESP_LOGE(TAG, "ESP_BASE_APP_UNAVAILABLE resources for the WASM host could not be created");
 }
 
 static void business_connect(void)
 {
-    if (s_queue) post(&(event_t){.kind = EV_SYSTEM_CONNECT});
+    if (s_queue) base_wasm_post(&(base_wasm_event_t){.kind = EV_SYSTEM_CONNECT});
 }
 
-const base_business_t base_wasm_business = {.name = "wasm", .init = business_init, .connect = business_connect};
+/* 系统转来的 app/desired：在控制任务里调用，只拷贝并投递。 */
+static void business_deploy(const char *payload, size_t length)
+{
+    if (!s_queue || length > DESIRED_MAX_BYTES) return;
+    base_wasm_event_t event = {.kind = EV_DESIRED, .payload_length = (uint16_t)length};
+    if (length) {
+        if (!(event.data = malloc(length))) return;
+        memcpy(event.data, payload, length);
+    }
+    base_wasm_post(&event);
+}
 
-/* ---------- 可行性实测（darren-space#113 T3） ---------- */
-#if CONFIG_ESP_BASE_TEST_WASM_BENCH
+const base_business_t base_wasm_business = {.name = "wasm", .init = business_init, .connect = business_connect,
+                                            .deploy = business_deploy, .state = business_state};
+
+/* ---------- 测试固件 ---------- */
+#if CONFIG_ESP_BASE_TEST_WASM_BENCH || CONFIG_ESP_BASE_TEST_WASM_DEPLOY
 #include "esp_heap_caps.h"
 
-#define BENCH_CALLS 1000
-#define BENCH_ROUNDS 3
-
-static void bench_report(const char *phase)
+static void report(const char *tag, const char *phase)
 {
     wasm_host_stats_t stats;
     wasm_host_stats(&stats);
-    printf("WASM_BENCH phase=%s heap_free=%u heap_min=%u heap_largest=%u pool_used=%u pool_peak=%u linear=%u "
-           "stack_min_free=%u\n",
-           phase, (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+    printf("%s phase=%s heap_free=%u heap_min=%u heap_largest=%u pool_used=%u pool_peak=%u linear=%u stack_min_free=%u\n",
+           tag, phase, (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT), (unsigned)stats.pool_used,
            (unsigned)stats.pool_peak, (unsigned)stats.linear_bytes, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+#endif
+
+#if CONFIG_ESP_BASE_TEST_WASM_BENCH
+/* 内存实测（darren-space#113 T3）：不启动系统层，反复启动、运行、停止内嵌的样例应用。 */
+#define BENCH_CALLS 1000
+#define BENCH_ROUNDS 3
+#define BENCH_POOL_BYTES (10 * 1024)
+#define BENCH_STACK_BYTES 2048
+
+extern const uint8_t hello_start[] asm("_binary_hello_wasm_start");
+extern const uint8_t hello_end[] asm("_binary_hello_wasm_end");
+
+static bool read_embedded(void *context, uint8_t *out, uint32_t bytes)
+{
+    (void)context;
+    memcpy(out, hello_start, bytes);
+    return true;
 }
 
 static void bench_task(void *argument)
@@ -502,20 +444,24 @@ static void bench_task(void *argument)
     (void)argument;
     static const char topic[] = "hello/in", payload[] = "{\"ping\":1}";
     const uint32_t bytes = (uint32_t)(hello_end - hello_start);
+    const wasm_host_limits_t limits = {.pool_bytes = BENCH_POOL_BYTES, .stack_bytes = BENCH_STACK_BYTES,
+                                       .linear_max_bytes = LINEAR_MAX_BYTES, .budget = BUDGET};
 #if CONFIG_WAMR_INTERP_FAST
     const char *interp = "fast";
 #else
     const char *interp = "classic";
 #endif
     printf("WASM_BENCH begin target=%s interp=%s image_bytes=%u pool_bytes=%u wasm_stack=%u task_stack=%u\n",
-           CONFIG_IDF_TARGET, interp, (unsigned)bytes, (unsigned)POOL_BYTES, (unsigned)STACK_BYTES,
+           CONFIG_IDF_TARGET, interp, (unsigned)bytes, (unsigned)BENCH_POOL_BYTES, (unsigned)BENCH_STACK_BYTES,
            (unsigned)TASK_STACK_BYTES);
-    bool ok = platform_init();
-    bench_report("idle");
+    s_queue = xQueueCreate(QUEUE_LENGTH, sizeof(base_wasm_event_t));
+    bool ok = s_queue && wasm_platform_init("bench");
+    report("WASM_BENCH", "idle");
     for (int round = 0; ok && round < BENCH_ROUNDS; ++round) {
-        start_app();
-        ok = wasm_host_running();
-        bench_report("started");
+        char error[128] = "";
+        ok = wasm_host_start(read_embedded, NULL, bytes, &limits, error, sizeof error);
+        if (!ok) printf("WASM_BENCH failed=%s\n", error);
+        report("WASM_BENCH", "started");
         const int64_t begin = esp_timer_get_time();
         ok = ok && wasm_host_event(WASM_EVENT_MQTT_UP, 0, 0);
         for (int index = 0; ok && index < BENCH_CALLS; ++index) ok = wasm_host_event(WASM_EVENT_TIMER, 0, 0);
@@ -526,19 +472,126 @@ static void bench_task(void *argument)
         wasm_host_stats(&stats);
         printf("WASM_BENCH round=%d ok=%d calls=%u faults=%u per_call_us=%d\n", round, ok, (unsigned)stats.calls,
                (unsigned)stats.faults, (int)(elapsed / BENCH_CALLS));
-        bench_report("events");
+        report("WASM_BENCH", "events");
         wasm_host_stop();
-        free(s_image);
-        s_image = NULL;
-        bench_report("stopped"); /* 与 idle 相同才说明没有泄漏 */
+        report("WASM_BENCH", "stopped"); /* 与 idle 相同才说明没有泄漏 */
     }
-    printf("WASM_BENCH done ok=%d dropped=%u\n", ok, (unsigned)atomic_load(&s_dropped));
+    printf("WASM_BENCH done ok=%d dropped=%u\n", ok, wasm_platform_dropped());
     vTaskDelete(NULL);
 }
 
 void base_wasm_bench(void)
 {
     xTaskCreate(bench_task, "wasm_app", TASK_STACK_BYTES, NULL, TASK_PRIORITY, NULL);
+    for (;;) vTaskDelay(portMAX_DELAY);
+}
+#endif
+
+#if CONFIG_ESP_BASE_TEST_WASM_DEPLOY
+/* 部署的设备级测试：不启动系统层，没有网络。待部署的应用包由测试脚本预先放进 Flash（ota_1 的位置，每个占
+ * 一个槽的大小），期望应用按脚本给的顺序逐个下发；应用槽、验签、试运行、提交、回退和部署记录走的都是正式的
+ * 代码，只有「下载」换成了从 Flash 里拷贝（wasm_store.c）。步骤记在 NVS 里，中途的重启不打断脚本。 */
+#include "esp_flash.h"
+#include "esp_rom_sys.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "psa/crypto.h"
+
+#define STAGED_OFFSET 0x200000u
+
+static uint32_t script_step(void)
+{
+    nvs_handle_t handle;
+    uint32_t step = 0;
+    if (nvs_open("app_test", NVS_READONLY, &handle) == ESP_OK) {
+        nvs_get_u32(handle, "step", &step);
+        nvs_close(handle);
+    }
+    return step;
+}
+
+static void script_save(uint32_t step)
+{
+    nvs_handle_t handle;
+    if (nvs_open("app_test", NVS_READWRITE, &handle) != ESP_OK) return;
+    nvs_set_u32(handle, "step", step);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
+
+/* 把预置的第 index 个包作为期望应用下发：任务号按步骤生成，摘要和大小取自包本身。 */
+static bool stage(unsigned step, unsigned index)
+{
+    static uint8_t head[WASM_PACKAGE_HEADER_BYTES + WASM_PACKAGE_MANIFEST_MAX];
+    static char payload[512];
+    wasm_package_t package;
+    uint8_t digest[32];
+    size_t digest_length = 0;
+    char sha256[65] = "";
+    const uint32_t source = STAGED_OFFSET + index * WASM_SLOT_BYTES;
+    if (esp_flash_read(NULL, head, source, sizeof head) != ESP_OK) return false;
+    /* 包头读不出来的（故意放的坏包）按最小的整包下发，让正式的校验去拒绝它。 */
+    const uint32_t size = wasm_package_parse(head, sizeof head, WASM_SLOT_BYTES, &package) ? 2 * WASM_PACKAGE_SECTOR_BYTES
+                                                                                         : package.total_bytes;
+    uint8_t *content = malloc(size);
+    const bool hashed = content && esp_flash_read(NULL, content, source, size) == ESP_OK && psa_crypto_init() == PSA_SUCCESS &&
+                        psa_hash_compute(PSA_ALG_SHA_256, content, size, digest, sizeof digest, &digest_length) == PSA_SUCCESS;
+    free(content);
+    if (!hashed) return false;
+    for (int at = 0; at < 32; ++at) snprintf(sha256 + at * 2, 3, "%02x", digest[at]);
+    const int length = snprintf(payload, sizeof payload,
+                                "{\"job\":\"00000000-0000-4000-8000-%012u\",\"name\":\"staged\",\"version\":\"0.0.0+%u\","
+                                "\"abi\":1,\"size\":%u,\"sha256\":\"%s\",\"url\":\"https://staged.test/%u\"}",
+                                step, index, (unsigned)size, sha256, index);
+    printf("WASM_DEPLOY_TEST step=%u deploy package=%u size=%u\n", step, index, (unsigned)size);
+    business_deploy(payload, (size_t)length);
+    return true;
+}
+
+static void script_task(void *argument)
+{
+    (void)argument;
+    /* 每一步：下发哪个包（-1 表示只重启设备），等多久看结果。包的内容和顺序见 tests/wasm_deploy_qemu.py。 */
+    static const struct {
+        int package;
+        uint32_t wait_ms;
+    } steps[] = {{0, 6000}, {-1, 0}, {1, 6000}, {2, 6000}, {3, 3000}, {4, 3000}, {5, 8000}, {6, 6000}, {-1, 0}, {7, 6000}, {-1, 0}};
+    vTaskDelay(pdMS_TO_TICKS(1500)); /* 等应用任务按部署记录把该运行的应用拉起来 */
+    for (unsigned step = script_step(); step < sizeof steps / sizeof steps[0]; ++step) {
+        script_save(step + 1);
+        printf("WASM_DEPLOY_TEST step=%u before=%s\n", step, s_state);
+        if (steps[step].package < 0) {
+            printf("WASM_DEPLOY_TEST step=%u restart\n", step);
+            vTaskDelay(pdMS_TO_TICKS(200));
+#if CONFIG_IDF_TARGET_ESP32
+            /* QEMU 的 ESP32 在只复位 CPU 的重启（esp_restart）之后不复位定时器组，遗留的中断让 ESP-IDF 在启动时崩溃；
+             * 这里改用整个系统的软件复位。实板不受影响，正式代码仍用 esp_restart。 */
+            esp_rom_software_reset_system();
+#else
+            esp_restart();
+#endif
+        }
+        if (!stage(step, (unsigned)steps[step].package)) printf("WASM_DEPLOY_TEST step=%u stage_failed\n", step);
+        vTaskDelay(pdMS_TO_TICKS(steps[step].wait_ms));
+        printf("WASM_DEPLOY_TEST step=%u after=%s\n", step, s_state);
+    }
+    report("WASM_DEPLOY_TEST", "final");
+    printf("WASM_DEPLOY_TEST done final=%s\n", s_state);
+    vTaskDelete(NULL);
+}
+
+void base_wasm_deploy_test(void)
+{
+    esp_err_t result = nvs_flash_init();
+    if (result == ESP_ERR_NVS_NO_FREE_PAGES || result == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        result = nvs_flash_init();
+    }
+    printf("WASM_DEPLOY_TEST begin target=%s step=%u nvs=%s\n", CONFIG_IDF_TARGET, (unsigned)script_step(),
+           esp_err_to_name(result));
+    if (!prepare("deploy-test") || !base_wasm_task("wasm_app", app_task, TASK_STACK_BYTES, 0)) printf("WASM_DEPLOY_TEST failed=prepare\n");
+    report("WASM_DEPLOY_TEST", "prepared");
+    xTaskCreate(script_task, "script", 6144, NULL, TASK_PRIORITY, NULL);
     for (;;) vTaskDelay(portMAX_DELAY);
 }
 #endif

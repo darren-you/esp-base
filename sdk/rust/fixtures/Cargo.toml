@@ -1,4 +1,4 @@
-# 宿主测试用的夹具应用：每个都故意触发一种故障。构建产物由 build_fixtures.sh 拷到 firmware/tests/apps/。
+# 测试用的夹具应用：故意触发各种故障的，把宿主接口逐个走一遍的（io，host 测试），在设备上操作引脚的（pins）。构建产物由 build_fixtures.sh 拷到 firmware/tests/apps/。
 [package]
 name = "fixtures"
 version = "0.1.0"
@@ -34,4 +34,16 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "deep"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "trial_fault"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "io"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "pins"
 crate-type = ["cdylib"]

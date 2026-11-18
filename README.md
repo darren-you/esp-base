@@ -5,6 +5,7 @@ ESP32-C3 与 ESP32 的业务基座固件：设备身份、Wi-Fi、TLS MQTT 管�
 固件分两层：**系统层**负责联网、系统 MQTT、命令、远程配置、OTA 和设备 Profile；**业务层**只实现自己的功能，通过业务运行时（`base_runtime`）这一个接口取得设备身份、业务参数和业务 MQTT 配置，创建任务、打开自己的连接。业务看不到系统的 Wi-Fi、系统 MQTT 账户和 NVS，系统的升级与管理也不经过业务代码。这是代码上的解耦，不是内存隔离：两层在同一个镜像里（C3 这类芯片没有条件做真正的隔离）。
 
 - **管理**：一份 retained 状态文档（即设备 Profile：名称、所属 Group、芯片、固件、MAC、IPv4／IPv6、Wi-Fi、MQTT 地址与运行状况），命令走 `cmd/<名称>` 并按 `request_id` 应答去重，遗嘱消息表示离线。这条系统 MQTT 连接只由出厂资料配置；远程配置改 Wi-Fi、业务 MQTT（留给业务层另开连接）、设备名称和所属 Group。
+- **应用**：业务以签名的 WASM 应用包独立部署，装在两个应用槽里，试运行通过才提交，失败自动回退；应用出故障只停应用。
 - **OTA**：Server 经 MQTT 发布期望固件，设备用官方 `esp_https_ota` 通过 HTTPS 拉取，断线或断电后按 Range 续传；镜像用 RSA-3072 签名，新固件连上 Broker 才确认有效，否则由 bootloader 回滚。
 - **事件驱动**：一个控制任务阻塞在事件队列上，空闲时不轮询；Wi-Fi 使用默认省电模式，只在 OTA 下载期间关闭。
 - **安全模式**：业务任务的优先级低于系统任务；同一个固件连续 3 次异常重启就不再拉起业务，系统照常在线，可以远程升级修复。
@@ -68,7 +69,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 ## 业务应用（WASM）
 
-业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)。目前应用还是随固件内嵌的样例，独立部署尚未实现。
+业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。应用封装成签名的[应用包](docs/design/app-package.md)，经 `app/desired` 部署到设备的应用槽里：换应用不重启设备，新应用启动失败或试运行期间出故障时自动回到上一版。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)，部署合同见[设备—云协议](docs/design/device-protocol.md#应用部署)。
 
 ## 业务固件
 

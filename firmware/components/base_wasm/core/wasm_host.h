@@ -8,6 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "wasm_package.h"
+
 /* 事件种类：app_event 的第一个参数。只增不改。 */
 typedef enum {
     WASM_EVENT_TIMER = 1,        /* a：定时器编号 */
@@ -17,10 +19,12 @@ typedef enum {
 } wasm_event_kind_t;
 
 typedef struct {
-    uint32_t pool_bytes;        /* 运行时内存池：镜像之外，模块、实例和执行环境都在里面，也就是应用的内存上限 */
+    uint32_t pool_bytes;        /* 运行时内存池：镜像、模块、实例和执行环境都在里面，也就是应用的内存上限 */
     uint32_t stack_bytes;       /* 应用的操作数栈 */
     uint32_t linear_max_bytes;  /* 线性内存上限：超过说明模块没有按要求链接（没有收缩） */
     uint32_t budget;            /* 每次调用的指令预算 */
+    const wasm_pin_t *pins;     /* 清单里声明的引脚：应用只能按声明的用途使用它们；在应用停止之前保持有效 */
+    uint8_t pin_count;
 } wasm_host_limits_t;
 
 typedef struct {
@@ -29,10 +33,13 @@ typedef struct {
     uint32_t calls, faults;
 } wasm_host_stats_t;
 
-/* 启动应用：初始化运行时、加载、实例化并调用 app_init。image 必须可写（加载器会原地改写字节码），
- * 在 wasm_host_stop 之前保持有效。失败时 error 里是原因，运行时已经清理干净。 */
-bool wasm_host_start(uint8_t *image, uint32_t image_bytes, const wasm_host_limits_t *limits, char *error,
-                     size_t error_size);
+/* 把应用镜像（wasm 模块）的 bytes 字节读进 out。 */
+typedef bool (*wasm_host_read_t)(void *context, uint8_t *out, uint32_t bytes);
+
+/* 启动应用：初始化运行时、读入镜像、加载、实例化并调用 app_init。镜像读进内存池里的缓冲（加载器会原地改写
+ * 字节码，所以不能直接用 Flash 里的那份），计入应用的内存上限。失败时 error 里是原因，运行时已经清理干净。 */
+bool wasm_host_start(wasm_host_read_t read, void *context, uint32_t image_bytes, const wasm_host_limits_t *limits,
+                     char *error, size_t error_size);
 /* 把一个事件交给应用。返回假表示应用出了故障（陷阱、超预算），原因见 wasm_host_fault；之后只能 stop。 */
 bool wasm_host_event(wasm_event_kind_t kind, uint32_t a, uint32_t b);
 /* MQTT 消息事件期间可读的数据：调用 wasm_host_event(WASM_EVENT_MQTT_MESSAGE, …) 之前设置，返回后失效。 */

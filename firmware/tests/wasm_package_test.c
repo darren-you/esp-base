@@ -159,6 +159,74 @@ static void test_accept(void)
     CHECK(wasm_package_accept(&package, "esp32", 32768) == NULL); /* 没有 chips：不限芯片 */
 }
 
+#define WITH_PINS(pins) "{\"name\":\"hello\",\"version\":\"0.1.0+7\",\"abi\":1,\"memory\":16384,\"stack\":2048,\"pins\":" pins "}"
+
+static const char *accept_pins(const char *manifest, const char *chip)
+{
+    wasm_package_t package;
+    if (parse_manifest(manifest, &package)) return "unparsed";
+    const char *error = wasm_package_accept(&package, chip, 32768);
+    return error ? error : "ok";
+}
+
+static void test_pins(void)
+{
+    wasm_package_t package;
+    CHECK(parse_manifest(WITH_PINS("{\"4\":\"out0\",\"5\":\"out1\",\"0\":\"in\",\"10\":\"in_pullup\",\"21\":\"in_pulldown\","
+                                   "\"7\":\"pwm\"}"), &package) == NULL);
+    CHECK(package.pin_count == 6 && package.pins[0].pin == 4 && package.pins[0].mode == WASM_PIN_OUT0);
+    CHECK(package.pins[1].pin == 5 && package.pins[1].mode == WASM_PIN_OUT1 && package.pins[2].mode == WASM_PIN_IN);
+    CHECK(package.pins[3].pin == 10 && package.pins[3].mode == WASM_PIN_IN_PULLUP);
+    CHECK(package.pins[4].pin == 21 && package.pins[4].mode == WASM_PIN_IN_PULLDOWN && package.pins[5].mode == WASM_PIN_PWM);
+    CHECK(wasm_pin_mode(package.pins, package.pin_count, 7) == WASM_PIN_PWM && wasm_pin_mode(package.pins, package.pin_count, 8) < 0);
+    CHECK(wasm_package_accept(&package, "esp32c3", 32768) == NULL);
+    CHECK(parse_manifest(MANIFEST, &package) == NULL && package.pin_count == 0); /* 没有 pins：不用引脚 */
+
+    /* 写法：对象；键是不带前导零的十进制引脚号；值是认识的用途；不重复；最多 8 个。 */
+    CHECK(rejected(WITH_PINS("{}")) && rejected(WITH_PINS("[4]")) && rejected(WITH_PINS("\"4\"")));
+    CHECK(rejected(WITH_PINS("{\"04\":\"out0\"}")) && rejected(WITH_PINS("{\"4a\":\"out0\"}")));
+    CHECK(rejected(WITH_PINS("{\"100\":\"out0\"}")) && rejected(WITH_PINS("{\"\":\"out0\"}")));
+    CHECK(rejected(WITH_PINS("{\"-1\":\"out0\"}")) && rejected(WITH_PINS("{\"4\":\"out\"}")));
+    CHECK(rejected(WITH_PINS("{\"4\":1}")) && rejected(WITH_PINS("{\"4\":\"OUT0\"}")));
+    CHECK(rejected(WITH_PINS("{\"4\":\"out0\",\"4\":\"out1\"}")));
+    CHECK(rejected(WITH_PINS("{\"0\":\"in\",\"1\":\"in\",\"2\":\"in\",\"3\":\"in\",\"4\":\"in\",\"5\":\"in\",\"6\":\"in\","
+                             "\"7\":\"in\",\"8\":\"in\"}")));
+
+    /* ESP32-C3：GPIO0–10、20、21 可用；11–17 接 Flash，18／19 是 USB。 */
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"0\":\"out0\",\"10\":\"pwm\",\"20\":\"in\",\"21\":\"out1\"}"), "esp32c3"), "ok"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"11\":\"in\"}"), "esp32c3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"17\":\"out0\"}"), "esp32c3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"18\":\"in\"}"), "esp32c3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"19\":\"out0\"}"), "esp32c3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"22\":\"out0\"}"), "esp32c3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"4\":\"out0\",\"12\":\"out0\"}"), "esp32c3"), "pin_denied")); /* 有一个不行就不装 */
+    /* ESP32：6–11 接 Flash，1／3 是 UART0，20、24、28–31 不存在；34–39 只能作不带上下拉的输入。 */
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"0\":\"in\",\"2\":\"out0\",\"4\":\"pwm\",\"33\":\"out1\",\"34\":\"in\",\"39\":\"in\"}"), "esp32"), "ok"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"6\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"11\":\"out0\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"1\":\"out0\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"3\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"20\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"24\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"28\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"31\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"40\":\"in\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"34\":\"out0\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"35\":\"pwm\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"36\":\"in_pullup\"}"), "esp32"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"39\":\"in_pulldown\"}"), "esp32"), "pin_denied"));
+    /* 每个 PWM 引脚占一个 LEDC 通道：ESP32-C3 有 6 个，ESP32 有 8 个。 */
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"0\":\"pwm\",\"1\":\"pwm\",\"2\":\"pwm\",\"3\":\"pwm\",\"4\":\"pwm\",\"5\":\"pwm\",\"6\":\"out0\","
+                                        "\"7\":\"in\"}"), "esp32c3"), "ok"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"0\":\"pwm\",\"1\":\"pwm\",\"2\":\"pwm\",\"3\":\"pwm\",\"4\":\"pwm\",\"5\":\"pwm\",\"6\":\"pwm\"}"),
+                              "esp32c3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"2\":\"pwm\",\"4\":\"pwm\",\"5\":\"pwm\",\"12\":\"pwm\",\"13\":\"pwm\",\"14\":\"pwm\",\"15\":\"pwm\","
+                                        "\"16\":\"pwm\"}"), "esp32"), "ok"));
+    /* 不认识的芯片：有引脚的应用不装，不用引脚的照常。 */
+    CHECK(!strcmp(accept_pins(WITH_PINS("{\"4\":\"in\"}"), "esp32s3"), "pin_denied"));
+    CHECK(!strcmp(accept_pins(MANIFEST, "esp32s3"), "ok"));
+}
+
 /* 打包工具（tools/esp_base.py app）产出的样例包：工具与设备对格式的理解一致。 */
 static void test_sample(const char *path)
 {
@@ -187,6 +255,7 @@ int main(int argc, char **argv)
     test_size();
     test_manifest();
     test_accept();
+    test_pins();
     if (argc > 1) test_sample(argv[1]);
     printf("wasm package tests: %d checks, %d failures\n", s_checks, s_failures);
     return s_failures ? 1 : 0;
