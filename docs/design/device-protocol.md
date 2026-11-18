@@ -47,7 +47,7 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
  "wakeups":57}                                             // 控制任务处理过的事件数
 ```
 
-`chip.features` 取值：`wifi`、`ble`、`bt`、`ieee802154`、`emb_flash`、`emb_psram`。`reset` 取值：`power_on`、`external_pin`、`software`、`panic`、`interrupt_watchdog`、`task_watchdog`、`watchdog`、`brownout`、`usb`、`business_watchdog`（业务任务没有按期报到，运行时重启了设备）和 `other`。
+`chip.features` 取值：`wifi`、`ble`、`bt`、`ieee802154`、`emb_flash`、`emb_psram`。`reset` 取值：`power_on`、`external_pin`、`software`、`panic`、`interrupt_watchdog`、`task_watchdog`、`watchdog`、`brownout`、`usb`、`business_watchdog`（业务任务没有按期报到，或业务的回调没有按时返回，运行时重启了设备）和 `other`。
 
 **安全模式**：同一个固件连续 3 次异常重启（`panic`、各类看门狗、`business_watchdog`），下一次启动就不再拉起业务，`business.state` 为 `disabled`、`error` 为 `crash_loop`；系统层照常在线，可以远程配置和 OTA。正常重启（上电、`restart` 命令、有线刷写）或换了固件后重新计数，业务连续运行 5 分钟后也清零。异常复位只记在出事的那个固件头上：新固件崩溃后回滚回来的旧固件不计这一次。
 

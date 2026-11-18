@@ -13,8 +13,8 @@ menu "ESP Base"
         default ESP_BASE_TEST_BUSINESS_NONE
         help
             Makes the base firmware (apps/esp_base) carry a business layer named test_fault that
-            misbehaves 20 s after every boot. Used only to verify the business watchdog and safe
-            mode on a real board; release packaging refuses images built with it.
+            misbehaves on every boot. Used only to verify the business watchdog and safe mode on
+            a real board; release packaging refuses images built with it.
 
         config ESP_BASE_TEST_BUSINESS_NONE
             bool "none"
@@ -22,6 +22,8 @@ menu "ESP Base"
             bool "abort() 20 s after boot"
         config ESP_BASE_TEST_BUSINESS_HANG
             bool "stop feeding the business watchdog 20 s after boot"
+        config ESP_BASE_TEST_BUSINESS_INIT_HANG
+            bool "never return from the business init callback"
     endchoice
 
 endmenu

@@ -35,6 +35,10 @@ CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
 CONFIG_LWIP_TCP_SACK_OUT=y
 CONFIG_MQTT_PROTOCOL_311=y
 CONFIG_MQTT_TRANSPORT_WEBSOCKET=n
+# 经 enqueue 排队的消息（命令应答、状态文档、业务状态）要等 esp-mqtt 的任务下一轮才发出，它每轮最多等这么久：
+# 默认 1000 ms 时，每条应答都晚将近 1 秒。打开自定义配置只改这一项，其余各项的默认值与不打开时相同。
+CONFIG_MQTT_USE_CUSTOM_CONFIG=y
+CONFIG_MQTT_POLL_READ_TIMEOUT_MS=100
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 
 # WASM 宿主：WAMR 只留解释器，不要 AOT、WASI、线程和内置 libc（应用是 no_std 的 Rust）。
