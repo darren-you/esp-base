@@ -45,6 +45,8 @@ python3 tools/esp_base.py sign <target> --key-file /absolute/path/signing-key.pe
 }
 ```
 
+出厂资料还可以带业务固件需要的内容：业务 MQTT 的 `business_mqtt_uri`（`mqtts://`）、`business_mqtt_username`、`business_mqtt_password` 三项同时给出；`business` 对象写业务参数，键是最多 15 个字符的小写字母、数字、下划线，值是字符串，固件里用 `base_store_business_string` 读取。
+
 **4. 刷写**。首次刷写先整片擦除，再写入 bootloader、分区表、固件和出厂资料：
 
 ```bash
@@ -60,6 +62,10 @@ python3 tools/esp_base.py control status --device <UUID> --uri mqtts://<Broker �
   --username <账户> --password-file /absolute/path/password
 python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --username ... --password-file ...
 ```
+
+## 业务固件
+
+业务以独立的 ESP-IDF 工程在本仓之上开发：引用本仓的组件、配置和分区表，在 `app_main` 里调用 `base_app_run` 并传入业务回调，另开自己的业务连接。做法见[固件说明](firmware/README.md#业务固件)；本仓的工具以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根即可构建、签名、刷写和正式打包。
 
 ## 正式包
 

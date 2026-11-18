@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// 持久数据：设备 UUID、Wi-Fi／MQTT 配置和 OTA 记录，都在默认 NVS 分区的 base 命名空间。
+// 持久数据：设备 UUID、Wi-Fi／MQTT 配置和 OTA 记录在默认 NVS 分区的 base 命名空间，业务参数在 business 命名空间。
 // 出厂数据由主机工具生成 NVS 镜像随固件刷入；任何错误都不擦除分区。
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "base_ota.h"
@@ -27,5 +28,8 @@ esp_err_t base_store_device_id(char out[BASE_UUID_BYTES]);
 esp_err_t base_store_load_config(base_config_t *config);
 /* 保存配置，revision 加一。 */
 esp_err_t base_store_save_config(base_config_t *config);
+/* 业务参数：出厂资料里 business 对象写进 NVS 的 business 命名空间，全是字符串，由业务层自己解释。
+ * 没有这个键时返回 ESP_ERR_NVS_NOT_FOUND，out 为空串。 */
+esp_err_t base_store_business_string(const char *key, char *out, size_t size);
 esp_err_t base_store_load_ota(base_ota_record_t *record);
 esp_err_t base_store_save_ota(const base_ota_record_t *record);

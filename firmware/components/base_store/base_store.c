@@ -92,6 +92,17 @@ esp_err_t base_store_save_config(base_config_t *config)
     return result;
 }
 
+esp_err_t base_store_business_string(const char *key, char *out, size_t size)
+{
+    out[0] = '\0';
+    nvs_handle_t handle;
+    esp_err_t result = nvs_open("business", NVS_READONLY, &handle);
+    if (result != ESP_OK) return result;
+    result = get_string(handle, key, out, size);
+    nvs_close(handle);
+    return result;
+}
+
 esp_err_t base_store_load_ota(base_ota_record_t *record)
 {
     nvs_handle_t handle;

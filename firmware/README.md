@@ -6,7 +6,8 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `apps/esp_base/main` | 主程序：控制任务、MQTT 客户端、状态文档、命令执行 |
+| `apps/esp_base/main` | 基座固件入口：只调用 `base_app_run(NULL)` |
+| `components/base_app` | 主程序：控制任务、系统 MQTT、状态文档、命令执行、配置试用与 OTA 编排，以及业务层回调 |
 | `components/base_protocol` | 主题、命令解码、应答与去重；纯逻辑，不依赖 ESP-IDF |
 | `components/base_ota` | OTA 状态机（纯逻辑）和基于 `esp_https_ota` 的下载任务 |
 | `components/base_store` | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置和 OTA 记录 |
@@ -32,6 +33,17 @@ coredump  0x3e0000  64 KiB
 ```
 
 设备 UUID、Wi-Fi 和系统 MQTT 配置在 NVS 的 `base` 命名空间，由 `tools/esp_base.py flash --provision` 生成 NVS 镜像写入；固件出错时不擦除 NVS。系统 MQTT 是 esp-base 连管理 Broker 的那条连接，只能经出厂资料修改。经 `cmd/config` 下发的新 Wi-Fi 先试用，连上 Broker 才保存，120 秒内连不上就恢复旧配置。`cmd/config` 下发的业务 MQTT（`biz_mqtt_uri`、`biz_mqtt_user`、`biz_mqtt_pass`）收到即保存，留给业务层另开连接，由 `base_store_load_config()` 读取；esp-base 自己不连接它。
+
+## 业务固件
+
+业务固件是一个独立的 ESP-IDF 工程，按精确提交引用本仓：把 `firmware/components` 加进 `EXTRA_COMPONENT_DIRS`，`SDKCONFIG_DEFAULTS` 先列本仓的 `sdkconfig.defaults`（目标专属的 `.<target>` 会一并加载）再列自己的，分区表与本仓逐字节相同（正式打包时核对）。它的 `app_main` 调用 `base_app_run(&业务回调)`：
+
+- `init(device_id, config)`：控制任务启动时、联网之前调用一次，用来把输出脚置到安全状态、读取业务参数（`base_store_business_string`，NVS 的 `business` 命名空间）。
+- `connect(business_mqtt)`：时间同步后调用一次，业务 MQTT 经 `cmd/config` 更新后再调用一次；业务层据此（重新）建立自己的连接。
+
+业务连接的客户端 ID 不能用设备 UUID（系统 MQTT 在用，同一 Broker 上会互相挤下线），也不能用系统 MQTT 的账户和主题。基座的状态文档、命令、OTA 与业务层无关，target 是 `<芯片>/<业务工程名>`，OTA 只在同一 target 之间进行。
+
+构建、签名、刷写和正式打包用本仓的 `tools/`，以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根；正式打包另设 `ESP_BASE_APPLICATION_ID` 为 Fast Deploy 身份里的应用 ID。
 
 ## 公网下载
 

@@ -3,6 +3,7 @@
 
 在已导出官方 ESP-IDF 环境（IDF_PATH、idf.py、esptool、espsecure）的 macOS／Linux 上运行。
 私钥、Wi-Fi 与 MQTT 凭据只从仓外文件读取，不打印、不写入仓库。
+基于 esp-base 的业务固件用 ESP_BASE_FIRMWARE_ROOT 指向自己的固件根，工程名（决定 target 后半段）取自其 CMakeLists.txt。
 """
 import argparse
 import contextlib
@@ -21,12 +22,24 @@ import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-FIRMWARE = ROOT / "firmware"
+BASE_FIRMWARE = ROOT / "firmware"
+FIRMWARE = Path(os.environ.get("ESP_BASE_FIRMWARE_ROOT") or BASE_FIRMWARE).resolve()
 TARGETS = ("esp32c3", "esp32")
 NVS_OFFSET, NVS_BYTES = 0x9000, 0x10000
 SLOT_BYTES = 0x1E0000
 PROVISION_KEYS = ("device_id", "wifi_ssid", "wifi_password", "mqtt_uri", "mqtt_username", "mqtt_password")
+BUSINESS_MQTT_KEYS = {"business_mqtt_uri": "biz_mqtt_uri", "business_mqtt_username": "biz_mqtt_user",
+                      "business_mqtt_password": "biz_mqtt_pass"}
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+NVS_KEY = re.compile(r"[a-z0-9_]{1,15}\Z")
+
+
+def app_name():
+    """固件根 CMakeLists.txt 里 project() 的名字：构建产物叫 <名字>.bin，target 是 <芯片>/<名字>。"""
+    match = re.search(r"^project\((\w+)\)", (FIRMWARE / "CMakeLists.txt").read_text(), re.M)
+    if not match:
+        fail(f"{FIRMWARE / 'CMakeLists.txt'} 里没有 project(<名字>)")
+    return match.group(1)
 
 
 def fail(message):
@@ -61,7 +74,7 @@ def build_firmware(target, build_number, **kwargs):
     run([sys.executable, idf_path() / "tools/idf.py", "-C", FIRMWARE, "-B", directory,
          "-DIDF_TARGET=" + target, "-DSDKCONFIG=" + str(directory / "sdkconfig"),
          "-DESP_BASE_BUILD_NUMBER=" + str(build_number), "build"], **kwargs)
-    return directory / "esp_base.bin"
+    return directory / f"{app_name()}.bin"
 
 
 def build(args):
@@ -107,12 +120,12 @@ def require_rsa3072(key):
 
 
 def signed_path(target):
-    return build_dir(target) / "esp_base-signed.bin"
+    return build_dir(target) / f"{app_name()}-signed.bin"
 
 
 def verify_signed(target, key):
     """signed bin = 未签名镜像（已补齐到 4 KiB）+ 一个扇区的 RSA-3072 签名块，并通过官方验签。"""
-    unsigned, signed = (build_dir(target) / "esp_base.bin").read_bytes(), signed_path(target).read_bytes()
+    unsigned, signed = (build_dir(target) / f"{app_name()}.bin").read_bytes(), signed_path(target).read_bytes()
     padded = unsigned + b"\xff" * (-len(unsigned) % 4096)
     if signed[:len(padded)] != padded or len(signed) != len(padded) + 4096 or len(signed) > SLOT_BYTES:
         fail("签名镜像不是本次构建的字节，或超过 app 槽")
@@ -121,7 +134,7 @@ def verify_signed(target, key):
 
 
 def sign_firmware(target, args):
-    unsigned = build_dir(target) / "esp_base.bin"
+    unsigned = build_dir(target) / f"{app_name()}.bin"
     if not unsigned.is_file():
         fail("没有构建产物，先运行 build")
     with signing_key(args) as key:
@@ -149,19 +162,36 @@ def sign(args):
 
 # ---- flash ----
 def nvs_image(provision, directory):
-    """用官方 NVS 分区生成器把出厂资料做成镜像。"""
+    """用官方 NVS 分区生成器把出厂资料做成镜像。
+
+    必填设备 UUID、Wi-Fi 和系统 MQTT；可选业务 MQTT（三项同时给出）和 business 对象（业务参数，
+    键是最多 15 个字符的小写字母、数字、下划线，值是非空字符串），写进 business 命名空间。"""
     values = json.loads(Path(provision).read_text())
-    if set(values) != set(PROVISION_KEYS) or not all(isinstance(values[k], str) and values[k] for k in PROVISION_KEYS):
-        fail("出厂资料必须恰好包含：" + "、".join(PROVISION_KEYS))
-    if not UUID.fullmatch(values["device_id"]) or not values["mqtt_uri"].startswith("mqtts://"):
-        fail("device_id 必须是小写 UUID，mqtt_uri 必须是 mqtts://")
+    business = values.pop("business", {})
+    optional = set(values) - set(PROVISION_KEYS)
+    if not set(PROVISION_KEYS) <= set(values) or optional not in (set(), set(BUSINESS_MQTT_KEYS)) or \
+            not all(isinstance(v, str) and v for v in values.values()):
+        fail("出厂资料必须包含：" + "、".join(PROVISION_KEYS) + "；业务 MQTT 的三项要么都给要么都不给")
+    if not UUID.fullmatch(values["device_id"]) or not values["mqtt_uri"].startswith("mqtts://") or \
+            not values.get("business_mqtt_uri", "mqtts://").startswith("mqtts://"):
+        fail("device_id 必须是小写 UUID，mqtt_uri 和 business_mqtt_uri 必须是 mqtts://")
+    if not isinstance(business, dict) or not all(NVS_KEY.fullmatch(k) and isinstance(v, str) and v
+                                                 for k, v in business.items()):
+        fail("business 的键必须是最多 15 个字符的小写字母、数字、下划线，值必须是非空字符串")
     names = {"device_id": "device_id", "wifi_ssid": "wifi_ssid", "wifi_password": "wifi_pass",
-             "mqtt_uri": "mqtt_uri", "mqtt_username": "mqtt_user", "mqtt_password": "mqtt_pass"}
+             "mqtt_uri": "mqtt_uri", "mqtt_username": "mqtt_user", "mqtt_password": "mqtt_pass", **BUSINESS_MQTT_KEYS}
     rows = ["key,type,encoding,value", "base,namespace,,"]
-    for key in PROVISION_KEYS:
-        if any(c in values[key] for c in ',"\n\r'):
+    entries = [(names[key], value) for key, value in values.items()]
+    if business:
+        entries.append(("business", None))
+        entries += sorted(business.items())
+    for key, value in entries:
+        if value is None:
+            rows.append("business,namespace,,")
+            continue
+        if any(c in value for c in ',"\n\r'):
             fail(key + " 含有 NVS CSV 不支持的字符")
-        rows.append(f"{names[key]},data,string,{values[key]}")
+        rows.append(f"{key},data,string,{value}")
     csv, image = Path(directory) / "nvs.csv", Path(directory) / "nvs.bin"
     csv.write_text("\n".join(rows) + "\n")
     generator = idf_path() / "components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
@@ -177,9 +207,9 @@ def build_files(target, app_only):
     files = []
     for line in (directory / "flash_args").read_text().splitlines()[1:]:
         offset, name = line.split()
-        if app_only and name != "esp_base.bin":
+        if app_only and name != f"{app_name()}.bin":
             continue
-        files += [offset, signed_path(target) if name == "esp_base.bin" else directory / name]
+        files += [offset, signed_path(target) if name == f"{app_name()}.bin" else directory / name]
     return files, sha256(signed_path(target))
 
 
@@ -187,8 +217,8 @@ def package_files(path, target, app_only, directory):
     """正式包：偏移取自包内 manifest.json，每个文件先核对摘要再写入。"""
     with zipfile.ZipFile(path) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("kind") != "esp-base-firmware" or manifest.get("target") != target + "/esp_base":
-            fail("正式包不是 " + target + " 的 esp-base 固件")
+        if manifest.get("kind") != "esp-base-firmware" or not str(manifest.get("target")).startswith(target + "/"):
+            fail("正式包不是 " + target + " 上基于 esp-base 的固件")
         files = []
         for name, offset in sorted(manifest["flash"].items(), key=lambda item: int(item[1], 16)):
             if app_only and name != "firmware.bin":
@@ -216,7 +246,7 @@ def flash(args):
                 fail("整片擦除会清掉设备 UUID 和配置，必须同时给出 --provision")
             run([*esptool, "erase-flash"])
         run([*esptool, "write-flash", "--flash-mode", "dio", "--flash-size", "4MB", *files])
-    print(json.dumps({"target": args.target, "port": args.port, "app_sha256": app_sha256,
+    print(json.dumps({"target": args.target, "port": args.port, "package": bool(args.package), "app_sha256": app_sha256,
                       "erased": bool(args.erase), "provisioned": bool(args.provision)}, ensure_ascii=False))
 
 
@@ -296,7 +326,7 @@ def main():
     command.add_argument("target", choices=TARGETS)
     command.add_argument("--port", required=True)
     command.add_argument("--package", help="正式构建的 ZIP；缺省刷本地 build 与 sign 的结果")
-    command.add_argument("--provision", help="仓外的出厂资料 JSON（设备 UUID、Wi-Fi、MQTT），写入 NVS 分区")
+    command.add_argument("--provision", help="仓外的出厂资料 JSON（设备 UUID、Wi-Fi、系统 MQTT，可选业务 MQTT 与业务参数），写入 NVS 分区")
     command.add_argument("--erase", action="store_true", help="先整片擦除；必须同时给出 --provision")
     command.add_argument("--app-only", action="store_true", help="只写 app，不动 bootloader、分区表和 otadata")
     command.add_argument("--baud", type=int, default=460800, help="刷写波特率；USB 转串口不稳时降到 230400 或 115200")

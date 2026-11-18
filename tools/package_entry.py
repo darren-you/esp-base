@@ -4,6 +4,8 @@
 环境变量：
   ESP_BASE_SIGNING_KEY_FILE 或 ESP_BASE_SIGNING_KEY_ENV（FILE:VAR）  仓外的 RSA-3072 签名键
   ESP_BASE_SIGNING_TRUST    release 或 software-test；后者不得用于正式设备
+  ESP_BASE_FIRMWARE_ROOT    基于 esp-base 的业务固件根；缺省是 esp-base 自己的固件
+  ESP_BASE_APPLICATION_ID   Fast Deploy 身份里的应用 ID；缺省 esp-base
 版本和构建号由 Fast Deploy 分配并写进 FAST_DEPLOY_IDENTITY_FILE，本入口不分配编号，也不连接设备。
 """
 import argparse
@@ -22,6 +24,28 @@ ARCHITECTURES = {"esp32c3": "riscv32", "esp32": "xtensa"}
 IDF_DEFAULT = Path.home() / ".espressif/frameworks/esp-idf-v6.1"
 SOURCES = ("sdkconfig.defaults", "sdkconfig.defaults.{target}", "dependencies.lock.{target}",
            "partitions/partitions.csv")
+APPLICATION_ID = os.environ.get("ESP_BASE_APPLICATION_ID") or "esp-base"
+
+
+def sources(target):
+    """构建输入的摘要。业务固件在自己的配置之外叠加 esp-base 的配置，两边都记；缺少的目标专属配置不记。"""
+    roots = [("", esp_base.FIRMWARE)]
+    if esp_base.FIRMWARE != esp_base.BASE_FIRMWARE:
+        roots.append(("esp-base/", esp_base.BASE_FIRMWARE))
+    result = {}
+    for prefix, root in roots:
+        for name in SOURCES:
+            path = root / name.format(target=target)
+            if path.is_file():
+                result[prefix + name.format(target=target)] = esp_base.sha256(path)
+    return result
+
+
+def require_base_partitions():
+    """业务固件必须沿用 esp-base 的分区表：OTA 槽、NVS 和 otadata 的位置决定了能否互相升级。"""
+    product, base = esp_base.FIRMWARE / "partitions/partitions.csv", esp_base.BASE_FIRMWARE / "partitions/partitions.csv"
+    if product.read_bytes() != base.read_bytes():
+        esp_base.fail("业务固件的分区表必须与 esp-base 逐字节相同")
 
 
 def encoded(value):
@@ -53,8 +77,7 @@ def toolchain(target):
                 "describe": subprocess.check_output(["git", "-C", str(idf), "describe", "--tags", "--dirty"],
                                                     text=True).strip()},
         "tools": {name: tool_version(name) for name in ("cmake", "ninja", compiler)},
-        "sources": {name.format(target=target): esp_base.sha256(esp_base.FIRMWARE / name.format(target=target))
-                    for name in SOURCES},
+        "sources": sources(target),
     }
 
 
@@ -72,10 +95,10 @@ def formal_identity():
         esp_base.fail("本入口只能由 Fast Deploy 的 package Job 调用（缺少 FAST_DEPLOY_IDENTITY_FILE）")
     expected = json.loads(Path(path).read_bytes())
     target = expected.get("variant")
-    if (target not in ARCHITECTURES or expected.get("platform") != "firmware" or expected.get("application_id") != "esp-base"
+    if (target not in ARCHITECTURES or expected.get("platform") != "firmware" or expected.get("application_id") != APPLICATION_ID
             or expected.get("architecture") != ARCHITECTURES[target] or expected.get("local_validation") is not False
             or type(expected.get("build_number")) is not int or expected["build_number"] < 1):
-        esp_base.fail("本次身份不是 esp-base 固件的正式身份")
+        esp_base.fail(f"本次身份不是 {APPLICATION_ID} 固件的正式身份")
     return target, expected
 
 
@@ -120,7 +143,9 @@ def package(artifact):
     run_directory = artifact.parent
     target, expected = formal_identity()
     key, trust = signing_arguments()
+    require_base_partitions()
     frozen = inputs(target)
+    app = esp_base.app_name()
 
     # 构建目录放在本次 run 的收据目录里，不改动源码树。
     esp_base.BUILD_ROOT = run_directory / "firmware-build"
@@ -140,15 +165,15 @@ def package(artifact):
     stage.mkdir()
     files = {"firmware.bin": signed, "bootloader.bin": directory / "bootloader/bootloader.bin",
              "partition-table.bin": directory / "partition_table/partition-table.bin",
-             "ota_data_initial.bin": directory / "ota_data_initial.bin", "esp_base.elf": directory / "esp_base.elf",
+             "ota_data_initial.bin": directory / "ota_data_initial.bin", f"{app}.elf": directory / f"{app}.elf",
              "sdkconfig": directory / "sdkconfig", "LICENSE": esp_base.ROOT / "LICENSE",
              "dependencies.lock": esp_base.FIRMWARE / f"dependencies.lock.{target}"}
     for name, source in files.items():
         shutil.copyfile(source, stage / name)
     flash = {"bootloader/bootloader.bin": "bootloader.bin", "partition_table/partition-table.bin": "partition-table.bin",
-             "ota_data_initial.bin": "ota_data_initial.bin", "esp_base.bin": "firmware.bin"}
+             "ota_data_initial.bin": "ota_data_initial.bin", f"{app}.bin": "firmware.bin"}
     offsets = dict(reversed(line.split()) for line in (directory / "flash_args").read_text().splitlines()[1:])
-    manifest = {"schema_version": 3, "kind": "esp-base-firmware", "target": f"{target}/esp_base", "version": version,
+    manifest = {"schema_version": 3, "kind": "esp-base-firmware", "target": f"{target}/{app}", "version": version,
                 "inputs": frozen,
                 "flash": {flash[name]: offset for name, offset in offsets.items()},
                 "files": {name: {"bytes": (stage / name).stat().st_size, "sha256": esp_base.sha256(stage / name)}
