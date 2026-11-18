@@ -106,7 +106,17 @@ coredump  0x3e0000  64 KiB
 | 用 `pthread_self()` 取当前线程，在普通 FreeRTOS 任务里断言失败 | 链接时把 `os_self_thread` 换成按任务句柄实现的版本 | `components/base_wasm/CMakeLists.txt` |
 | `os_realloc` 在内存块被挪动后可能把数据错位 4 字节 | 运行时用 WAMR 自带的池分配器，不经过它 | `core/wasm_host.c` |
 
-ESP32-C3 上 WAMR 占 Flash 约 57 KB，宿主约 7 KB。QEMU 里的实测（样例应用 1,550 字节）：内存池实际用掉 5,832 字节，线性内存 4,176 字节，应用任务的栈最多用到约 2 KB；应用停止后堆回到启动前的水平。
+ESP32-C3 上 WAMR 占 Flash 约 57 KB，宿主约 7 KB。样例应用（1,550 字节）在 QEMU 和实板上的占用相同：内存池用掉 5,832 字节，线性内存 4,176 字节，应用任务的栈最多用到约 2 KB；应用停止后堆回到启动前的水平。
+
+ESP32-C3 实板上系统 MQTT 和业务 MQTT 两条 TLS 连接在线、样例应用运行时的空闲堆（字节，2026-11-18）：
+
+| 配置 | 稳态空闲 | 固件 OTA 下载期间的最低值 |
+| --- | --- | --- |
+| 内存池 16 KiB、应用任务栈 8 KiB，TLS 固定缓冲 | 92,340 | 25,376 |
+| 内存池 8 KiB、应用任务栈 5 KiB，TLS 固定缓冲 | 102,204 | 没量 |
+| 同上，加 `CONFIG_MBEDTLS_DYNAMIC_BUFFER`（现行配置） | 147,548 | 79,600 |
+
+固件 OTA 下载本身最多占约 68 KB（HTTPS 会话、23 KB 的 TCP 接收窗口和下载任务）。固定缓冲下每条 TLS 连接常驻约 20 KiB，两条 MQTT 长连接绝大部分时间空闲，所以 `sdkconfig.defaults` 打开了 TLS 动态缓冲：收发缓冲按需分配、用完即还。
 
 ## 公网下载
 

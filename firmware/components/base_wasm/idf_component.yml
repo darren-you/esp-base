@@ -1,5 +1,7 @@
 dependencies:
   idf: ">=6.1"
+  # 应用清单和期望应用是 JSON：与 base_protocol 用同一个锁定版本。
+  espressif/cjson: "1.7.19~2"
   # WAMR 官方上游发行版 2.4.6，按精确提交原样引用（darren-space#113 D3）：不派生、不打补丁。
   wasm-micro-runtime:
     git: https://github.com/wasm-micro-runtime/wasm-micro-runtime.git

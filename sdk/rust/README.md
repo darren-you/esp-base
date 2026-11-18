@@ -15,6 +15,13 @@ cargo build --release -p hello
 ls -l target/wasm32v1-none/release/hello.wasm   # 约 1.5 KB
 ```
 
+把应用封装成可以部署的[应用包](../../docs/design/app-package.md)（在仓根执行，签名需要已导出的官方 ESP-IDF 环境）：
+
+```bash
+python3 tools/esp_base.py app build sdk/rust/examples/hello
+python3 tools/esp_base.py app sign sdk/rust/target/esp-base/hello.ebapp --key-file /absolute/path/signing-key.pem
+```
+
 ## 写一个应用
 
 应用是事件驱动的：宿主调用一次 `init`，之后每个事件调用一次 `event`，同一时刻只有一次调用在执行，所以应用里没有线程，也不需要锁。
@@ -54,6 +61,7 @@ esp_base_app::app!(Blink);
 - **没有堆。** 状态放在应用结构体里，缓冲用定长数组。
 - **每次调用有指令预算。** 死循环或算得太久的调用会被宿主停掉，应用随后被重启。长时间的事拆成定时器事件。
 - **出错即陷阱。** `panic`、越界、把线性内存之外的指针交给宿主接口，都会让应用停止并重启；系统层不受影响。
+- **清单写在 `Cargo.toml` 里。** `[package.metadata.esp-base]` 的 `memory` 是应用的内存上限（运行时内存池，字节），`stack` 是操作数栈；可选的 `chips` 限定能装的芯片。
 - **链接参数不能改。** `.cargo/config.toml` 把栈设为 4 KiB 并导出 `__heap_base`、`__data_end`，宿主据此把线性内存收缩到实际用量；没有收缩的应用会被拒绝。
 
 ## 测试夹具

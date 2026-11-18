@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 重新生成宿主测试用的应用（firmware/tests/apps/*.wasm）。改了 SDK、样例或夹具后运行，产物随源码一起提交。
+# 重新生成 host 测试用的应用和样例应用包（firmware/tests/apps/）。改了 SDK、样例或夹具后运行，产物随源码一起提交。
+# 需要 rustup，以及已导出的官方 ESP-IDF 环境（给样例应用包签名用 espsecure）。
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$ROOT/../../firmware/tests/apps"
@@ -14,4 +15,12 @@ done
 # 没有按要求链接的版本：不导出 __heap_base、__data_end，线性内存无法收缩（整页 64 KiB），宿主应当拒绝。
 RUSTFLAGS="-C link-arg=-zstack-size=4096" cargo build --release -p hello --target-dir target/unshrunk
 cp target/unshrunk/wasm32v1-none/release/hello.wasm "$OUT/hello_unshrunk.wasm"
+# 签过名的样例应用包：打包工具与设备、Server 对格式的理解靠它对齐。签名用一把用完即弃的键，只为让布局完整
+# （设备只认自己固件的那把键）；需要先导出官方 ESP-IDF 环境（espsecure）。
+KEY_DIR="$(mktemp -d)"
+trap 'rm -rf -- "$KEY_DIR"' EXIT
+python3 -m espsecure generate-signing-key --version 2 --scheme rsa3072 "$KEY_DIR/key.pem" >/dev/null
+python3 "$ROOT/../../tools/esp_base.py" app build "$ROOT/examples/hello" >/dev/null
+python3 "$ROOT/../../tools/esp_base.py" app sign "$ROOT/target/esp-base/hello.ebapp" --key-file "$KEY_DIR/key.pem" >/dev/null
+cp "$ROOT/target/esp-base/hello-signed.ebapp" "$OUT/hello.ebapp"
 ls -l "$OUT"

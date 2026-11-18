@@ -18,6 +18,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y
+# TLS 收发缓冲按需分配、用完即还。固定缓冲下每条 TLS 连接常驻约 20 KiB（收 16 KiB、发 4 KiB），系统 MQTT 和
+# 业务 MQTT 两条长连接绝大部分时间空闲；ESP32-C3 上 WASM 应用运行并与固件 OTA 下载重叠时，实测历史最低堆只剩
+# 25 KiB（darren-space#113 T3）。
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 # 状态文档上报 IPv6 地址：连上 Wi-Fi 后建链路本地地址，路由器发布前缀时按 SLAAC 生成全局地址。
 # DNS 仍优先 IPv4，连接 Broker 与下载固件的路径不变。

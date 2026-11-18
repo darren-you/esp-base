@@ -82,6 +82,8 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 - [设备—云协议](docs/design/device-protocol.md)：主题、状态文档、命令和 OTA 合同；[样例](docs/design/device-protocol-samples.json)同时用于设备和 Server 的解码测试。
 - [固件说明](firmware/README.md)：目录、分区、配置项和测试。
+- [应用包](docs/design/app-package.md)：业务应用的包格式、清单和签名。
+- [业务应用 SDK](sdk/rust/README.md)：用 Rust 写业务应用。
 
 ## 开发
 

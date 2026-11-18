@@ -22,7 +22,7 @@
 #include "wasm_host.h"
 #include "wasm_port.h"
 
-#define TASK_STACK_BYTES 8192
+#define TASK_STACK_BYTES 5120 /* 实测最多用到约 2 KB（加载样例应用时） */
 #define TASK_PRIORITY 3
 #define QUEUE_LENGTH 16
 #define PENDING_BYTES_MAX 4096 /* 排队等应用处理的消息数据上限；超出的消息丢弃并计数 */
@@ -30,10 +30,11 @@
 #define RECONNECT_MS 10000 /* 与系统 MQTT 的 5 秒错开，避免两条连接同时做 TLS 握手 */
 #define RESTART_MIN_MS 5000
 #define RESTART_MAX_MS 300000
+#define STABLE_MS 300000 /* 应用连续运行这么久算稳定：之后再出故障，重启间隔从头算 */
 #define UNIX_MS_2020 1577836800000ull
 
 /* 可行性阶段的固定限额；应用清单（T4）落地后改由清单给出。 */
-#define POOL_BYTES (16 * 1024)
+#define POOL_BYTES (8 * 1024)
 #define STACK_BYTES 2048
 #define LINEAR_MAX_BYTES (16 * 1024)
 #define BUDGET 2000000
@@ -52,7 +53,8 @@ typedef struct {
 typedef struct {
     esp_timer_handle_t handle;
     uint32_t period_ms, epoch;
-    bool periodic; /* 首次到期后已经转为周期运行 */
+    int64_t due_us; /* 这一次设置最早的到期时刻：早于它的回调属于上一次设置 */
+    bool periodic;  /* 首次到期后已经转为周期运行 */
 } app_timer_t;
 
 static const char *TAG = "base_wasm";
@@ -61,6 +63,7 @@ static portMUX_TYPE s_timer_lock = portMUX_INITIALIZER_UNLOCKED;
 static app_timer_t s_timers[WASM_TIMERS];
 static esp_timer_handle_t s_restart;
 static uint32_t s_restart_ms = RESTART_MIN_MS;
+static int64_t s_started_us;
 static atomic_uint s_pending_bytes, s_dropped;
 static uint8_t *s_image;
 
@@ -131,11 +134,14 @@ void wasm_port_sleep_ms(uint32_t ms)
 static void timer_fired(void *argument)
 {
     app_timer_t *timer = argument;
+    const int64_t now_us = esp_timer_get_time();
     taskENTER_CRITICAL(&s_timer_lock);
     const uint32_t epoch = timer->epoch, period_ms = timer->period_ms;
-    const bool start_periodic = period_ms && !timer->periodic;
+    const bool stale = now_us + 500 < timer->due_us; /* 应用在回调执行前重设了这个定时器 */
+    const bool start_periodic = !stale && period_ms && !timer->periodic;
     if (start_periodic) timer->periodic = true;
     taskEXIT_CRITICAL(&s_timer_lock);
+    if (stale) return;
     if (start_periodic) esp_timer_start_periodic(timer->handle, (uint64_t)period_ms * 1000u);
     post(&(event_t){.kind = EV_TIMER, .timer = (uint8_t)(timer - s_timers), .epoch = epoch});
 }
@@ -158,6 +164,7 @@ int wasm_port_timer_set(unsigned id, uint32_t delay_ms, uint32_t period_ms)
     wasm_port_timer_cancel(id);
     taskENTER_CRITICAL(&s_timer_lock);
     timer->period_ms = period_ms;
+    timer->due_us = esp_timer_get_time() + (int64_t)delay_ms * 1000;
     taskEXIT_CRITICAL(&s_timer_lock);
     return esp_timer_start_once(timer->handle, (uint64_t)delay_ms * 1000u) == ESP_OK ? WASM_OK : WASM_E_NO_MEMORY;
 }
@@ -174,19 +181,16 @@ static void link_event(void *argument, esp_event_base_t base, int32_t id, void *
     case MQTT_EVENT_CONNECTED: posted.kind = EV_LINK_UP; break;
     case MQTT_EVENT_DISCONNECTED: posted.kind = EV_LINK_DOWN; break;
     case MQTT_EVENT_DATA: {
-        /* 只收一次到齐的小消息；分片、超长或排队数据已满的丢弃并计数。 */
-        const size_t bytes = (size_t)event->topic_len + (size_t)event->data_len;
+        /* 只收一次到齐的小消息：分片的、超长的丢弃并计数。 */
         if (event->current_data_offset != 0 || event->data_len != event->total_data_len || event->topic_len <= 0 ||
-            event->topic_len > WASM_TOPIC_BYTES || event->data_len > WASM_PAYLOAD_BYTES ||
-            atomic_fetch_add(&s_pending_bytes, (unsigned)bytes) + bytes > PENDING_BYTES_MAX) {
-            if (event->current_data_offset == 0 && event->data_len == event->total_data_len && event->topic_len > 0 &&
-                event->topic_len <= WASM_TOPIC_BYTES && event->data_len <= WASM_PAYLOAD_BYTES)
-                atomic_fetch_sub(&s_pending_bytes, (unsigned)bytes); /* 只有通过了前面几项才加过 */
+            event->topic_len > WASM_TOPIC_BYTES || event->data_len > WASM_PAYLOAD_BYTES) {
             atomic_fetch_add(&s_dropped, 1);
             return;
         }
-        if (!(posted.data = malloc(bytes))) {
-            atomic_fetch_sub(&s_pending_bytes, (unsigned)bytes);
+        /* 排队等应用处理的数据有上限：应用处理不过来时丢新消息，不让队列吃掉系统的内存。 */
+        const unsigned bytes = (unsigned)event->topic_len + (unsigned)event->data_len;
+        if (atomic_fetch_add(&s_pending_bytes, bytes) + bytes > PENDING_BYTES_MAX || !(posted.data = malloc(bytes))) {
+            atomic_fetch_sub(&s_pending_bytes, bytes);
             atomic_fetch_add(&s_dropped, 1);
             return;
         }
@@ -353,6 +357,8 @@ static void restart_fired(void *argument)
 
 static void restart_later(void)
 {
+    if (s_started_us && esp_timer_get_time() - s_started_us >= (int64_t)STABLE_MS * 1000) s_restart_ms = RESTART_MIN_MS;
+    s_started_us = 0;
     ESP_LOGW(TAG, "ESP_BASE_APP_RESTART in %u ms", (unsigned)s_restart_ms);
     esp_timer_stop(s_restart);
     esp_timer_start_once(s_restart, (uint64_t)s_restart_ms * 1000u);
@@ -375,6 +381,7 @@ static void start_app(void)
         restart_later();
         return;
     }
+    s_started_us = esp_timer_get_time();
     wasm_host_stats_t stats;
     wasm_host_stats(&stats);
     ESP_LOGI(TAG, "ESP_BASE_APP_STARTED image=%u pool=%u/%u peak=%u linear=%u", (unsigned)bytes,

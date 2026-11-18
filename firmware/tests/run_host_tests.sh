@@ -17,3 +17,13 @@ trap 'rm -rf -- "$OUT"' EXIT
   "$ROOT/components/base_runtime/base_guard.c" \
   "$ROOT/tests/host_test.c" "$OUT/cJSON.o" -o "$OUT/host_test"
 "$OUT/host_test" "$ROOT/../docs/design/device-protocol-samples.json"
+# 应用包的包头与清单解析（WASM 宿主的纯逻辑）。
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$CJSON" -I "$ROOT/components/base_wasm/core" \
+  "$ROOT/components/base_wasm/core/wasm_package.c" "$ROOT/tests/wasm_package_test.c" "$OUT/cJSON.o" -o "$OUT/wasm_package_test"
+"$OUT/wasm_package_test" "$ROOT/tests/apps/hello.ebapp"
+# 应用部署的状态机。
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$CJSON" -I "$ROOT/components/base_wasm/core" \
+  "$ROOT/components/base_wasm/core/wasm_deploy.c" "$ROOT/tests/wasm_deploy_test.c" "$OUT/cJSON.o" -o "$OUT/wasm_deploy_test"
+"$OUT/wasm_deploy_test"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ESP Base 固件维护入口：build、sign、flash、control。
+"""ESP Base 固件维护入口：build、sign、flash、control，以及业务应用的 app build、app sign、app inspect。
 
 在已导出官方 ESP-IDF 环境（IDF_PATH、idf.py、esptool、espsecure）的 macOS／Linux 上运行。
 私钥、Wi-Fi 与 MQTT 凭据只从仓外文件读取，不打印、不写入仓库。
@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import ssl
 import subprocess
 import sys
@@ -20,6 +21,8 @@ import tempfile
 import time
 import uuid
 import zipfile
+
+import esp_base_app
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_FIRMWARE = ROOT / "firmware"
@@ -314,6 +317,83 @@ def control(args):
     sys.exit(done[0])
 
 
+# ---- app：业务应用（WASM） ----
+def cargo():
+    path = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
+    if not Path(path).is_file():
+        fail("没有找到 cargo：先安装 rustup（https://rustup.rs）")
+    return path
+
+
+def app_build(args):
+    """构建应用并封装成未签名的应用包：<cargo 的 target 目录>/esp-base/<应用名>.ebapp。"""
+    project = Path(args.project).resolve()
+    if not (project / "Cargo.toml").is_file():
+        fail(f"{project} 里没有 Cargo.toml")
+    run([cargo(), "build", "--release"], cwd=project, stdout=sys.stderr)
+    metadata = json.loads(subprocess.run([cargo(), "metadata", "--format-version", "1", "--no-deps"], cwd=project,
+                                         check=True, capture_output=True).stdout)
+    try:
+        crate = json.loads(subprocess.run([cargo(), "read-manifest"], cwd=project, check=True, capture_output=True).stdout)
+        wasm_path = Path(metadata["target_directory"]) / "wasm32v1-none/release" / (crate["name"].replace("-", "_") + ".wasm")
+        if not wasm_path.is_file():
+            fail(f"没有找到 {wasm_path}：应用要用 SDK 的 .cargo/config.toml 编译到 wasm32v1-none，crate-type 是 cdylib")
+        wasm = wasm_path.read_bytes()
+        checked = esp_base_app.inspect(wasm)
+        fields = esp_base_app.manifest(project, args.build_number, checked["abi"])
+        package = esp_base_app.pack(wasm, fields)
+    except esp_base_app.AppError as error:
+        fail(str(error))
+    output = Path(metadata["target_directory"]) / "esp-base" / (fields["name"] + ".ebapp")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(package)
+    print(json.dumps({**fields, "package": str(output), "package_bytes": len(package), "wasm_bytes": len(wasm),
+                      "linear_bytes": checked["linear_bytes"], "imports": checked["imports"]}, ensure_ascii=False))
+
+
+def app_signed_path(package):
+    return package.with_name(package.stem.removesuffix("-signed") + "-signed.ebapp")
+
+
+def app_sign(args):
+    """用固件的同一把 RSA-3072 键、同一个官方入口签名：补齐到 4 KiB，再附一个扇区的 Secure Boot V2 签名块。"""
+    package = Path(args.package).resolve()
+    try:
+        described = esp_base_app.describe(package.read_bytes())
+    except (OSError, ValueError, esp_base_app.AppError) as error:
+        fail(str(error))
+    if described["signed"]:
+        fail("这个应用包已经签过名")
+    signed = app_signed_path(package)
+    with signing_key(args) as key:
+        require_rsa3072(key)
+        run([sys.executable, "-m", "espsecure", "sign-data", "--version", "2", "--keyfile", key, "--output", signed,
+             package], stdout=subprocess.DEVNULL)
+        run([sys.executable, "-m", "espsecure", "verify-signature", "--version", "2", "--keyfile", key, signed],
+            stdout=subprocess.DEVNULL)
+    data, unsigned = signed.read_bytes(), package.read_bytes()
+    padded = unsigned + b"\xff" * (-len(unsigned) % esp_base_app.SECTOR_BYTES)
+    if data[:len(padded)] != padded or len(data) != len(padded) + esp_base_app.SECTOR_BYTES or len(data) > esp_base_app.SLOT_BYTES:
+        fail("签名后的应用包不是原包的字节，或超过应用槽")
+    print(json.dumps({"name": described["manifest"]["name"], "version": described["manifest"]["version"],
+                      "signed": str(signed), "bytes": len(data), "sha256": sha256(signed)}, ensure_ascii=False))
+
+
+def app_inspect(args):
+    """查看应用包或 .wasm：清单、体积、用到的宿主接口和线性内存。"""
+    data = Path(args.file).read_bytes()
+    try:
+        if data[:4] == esp_base_app.MAGIC:
+            described = esp_base_app.describe(data)
+            wasm = described.pop("wasm")
+            result = {**described, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), **esp_base_app.inspect(wasm)}
+        else:
+            result = {"wasm_bytes": len(data), **esp_base_app.inspect(data)}
+    except (ValueError, esp_base_app.AppError) as error:
+        fail(str(error))
+    print(json.dumps(result, ensure_ascii=False))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -350,6 +430,22 @@ def main():
     command.add_argument("--password-file", required=True)
     command.add_argument("--timeout", type=float, default=30)
     command.set_defaults(run=control)
+
+    command = commands.add_parser("app", help="业务应用（WASM）：构建、签名、查看")
+    actions = command.add_subparsers(dest="action", required=True)
+    action = actions.add_parser("build", help="用 cargo 构建应用，检查模块并封装成未签名的应用包")
+    action.add_argument("project", help="应用工程目录（含 Cargo.toml）")
+    action.add_argument("--build-number", type=int, default=0, help="正式构建号；本地构建为 0")
+    action.set_defaults(run=app_build)
+    action = actions.add_parser("sign", help="用 RSA-3072 键给应用包签名并用官方 espsecure 验签")
+    action.add_argument("package", help="app build 产出的 .ebapp")
+    key = action.add_mutually_exclusive_group(required=True)
+    key.add_argument("--key-file", help="仓外的 PEM 私钥文件")
+    key.add_argument("--key-env", help="FILE:VAR，从 shell env 文件读取 PEM 私钥")
+    action.set_defaults(run=app_sign)
+    action = actions.add_parser("inspect", help="查看应用包或 .wasm 的清单、体积、宿主接口和线性内存")
+    action.add_argument("file")
+    action.set_defaults(run=app_inspect)
 
     args = parser.parse_args()
     if args.command == "control" and args.action == "cmd" and not args.name:

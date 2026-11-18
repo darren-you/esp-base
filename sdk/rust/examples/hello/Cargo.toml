@@ -9,3 +9,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 esp-base-app = { path = "../../esp-base-app" }
+
+# 应用清单：内存上限（运行时内存池）和操作数栈，字节。名称和版本取自上面的 [package]。
+[package.metadata.esp-base]
+memory = 8192
+stack = 2048
