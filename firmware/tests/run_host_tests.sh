@@ -12,6 +12,8 @@ trap 'rm -rf -- "$OUT"' EXIT
 "${CC:-cc}" -std=c11 -fsanitize=address,undefined -Wno-deprecated-declarations -I "$CJSON" -c "$CJSON/cJSON.c" -o "$OUT/cJSON.o"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$CJSON" -I "$ROOT/components/base_protocol/include" -I "$ROOT/components/base_ota/include" \
+  -I "$ROOT/components/base_runtime/system" \
   "$ROOT/components/base_protocol/base_protocol.c" "$ROOT/components/base_ota/ota_logic.c" \
+  "$ROOT/components/base_runtime/base_guard.c" \
   "$ROOT/tests/host_test.c" "$OUT/cJSON.o" -o "$OUT/host_test"
 "$OUT/host_test" "$ROOT/../docs/design/device-protocol-samples.json"

@@ -25,6 +25,16 @@ bool base_is_uuid(const char *text)
     return true;
 }
 
+void base_uuid_format(char out[BASE_UUID_BYTES], const uint8_t random[16])
+{
+    uint8_t b[16];
+    memcpy(b, random, sizeof b);
+    b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
+    b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
+    snprintf(out, BASE_UUID_BYTES, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+}
+
 bool base_is_sha256_hex(const char *text)
 {
     if (!text || strlen(text) != BASE_SHA256_HEX_BYTES - 1) return false;
@@ -69,6 +79,62 @@ static bool copy_string(const cJSON *object, const char *key, char *out, size_t 
     const size_t length = strlen(item->valuestring);
     if ((!allow_empty && length == 0) || length >= size) return false;
     memcpy(out, item->valuestring, length + 1);
+    return true;
+}
+
+bool base_task_stack_add(base_task_stack_t *list, uint8_t *count, unsigned slots, const char *task_name, uint32_t bytes)
+{
+    if (!list || !count || !task_name || *count >= slots) return false;
+    char name[BASE_TASK_NAME_BYTES - 4]; /* 留出序号的位置 */
+    size_t length = 0;
+    for (; task_name[length] && length + 1 < sizeof name; ++length) {
+        const char c = task_name[length];
+        name[length] = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ? c : '_';
+    }
+    name[length] = '\0';
+    unsigned same = 0;
+    for (unsigned i = 0; i < *count; ++i) {
+        const char *other = list[i].name;
+        if (strncmp(other, name, length) != 0) continue;
+        const char *suffix = other + length;
+        if (!*suffix) { ++same; continue; }
+        if (*suffix++ != '_' || !*suffix) continue;
+        while (*suffix >= '0' && *suffix <= '9') ++suffix;
+        same += !*suffix;
+    }
+    if (same) snprintf(list[*count].name, BASE_TASK_NAME_BYTES, "%s_%u", name, (same + 1) % 1000);
+    else snprintf(list[*count].name, BASE_TASK_NAME_BYTES, "%s", name);
+    list[*count].bytes = bytes;
+    ++*count;
+    return true;
+}
+
+bool base_is_identifier(const char *text, size_t size)
+{
+    if (!text || !text[0]) return false;
+    size_t length = 0;
+    for (; text[length]; ++length) {
+        const char c = text[length];
+        if (length + 1 >= size || !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+    }
+    return true;
+}
+
+bool base_public_uri(char out[BASE_URI_BYTES], const char *uri)
+{
+    out[0] = '\0';
+    const char *authority = uri ? strstr(uri, "://") : NULL;
+    if (!authority || authority == uri) return false;
+    authority += 3;
+    const size_t tail = strcspn(authority, "?#");               /* 查询串和片段可能带令牌 */
+    const size_t host_end = strcspn(authority, "/?#");
+    const char *at = memchr(authority, '@', host_end);          /* userinfo 只在 authority 里 */
+    const char *host = at ? at + 1 : authority;
+    const size_t scheme = (size_t)(authority - uri), rest = tail - (size_t)(host - authority);
+    if (rest == 0 || scheme + rest >= BASE_URI_BYTES) return false;
+    memcpy(out, uri, scheme);
+    memcpy(out + scheme, host, rest);
+    out[scheme + rest] = '\0';
     return true;
 }
 
@@ -321,6 +387,47 @@ static int finish(writer_t *w)
     return w->overflow ? -1 : (int)w->used;
 }
 
+static void put_stacks(writer_t *w, const base_task_stack_t *stacks, unsigned count)
+{
+    for (unsigned i = 0; i < count; ++i) {
+        if (i) put(w, ",");
+        put_string(w, stacks[i].name);
+        put(w, ":%" PRIu32, stacks[i].bytes);
+    }
+}
+
+/* 业务层：没有业务的固件写 null。 */
+static void put_business(writer_t *w, const base_business_profile_t *b)
+{
+    if (!b->present) {
+        put(w, "null");
+        return;
+    }
+    put(w, "{\"name\":");
+    put_string(w, b->name);
+    put(w, ",\"state\":\"%s\",\"error\":", b->running ? "running" : "disabled");
+    put_nullable_string(w, b->error);
+    put(w, ",\"mqtt\":");
+    if (b->mqtt_uri[0]) {
+        put(w, "{\"uri\":");
+        put_string(w, b->mqtt_uri);
+        put(w, "}");
+    } else {
+        put(w, "null");
+    }
+    put(w, ",\"links\":[");
+    for (unsigned i = 0; i < b->link_count && i < BASE_LINK_SLOTS; ++i) {
+        put(w, "%s{\"name\":", i ? "," : "");
+        put_string(w, b->links[i].name);
+        put(w, ",\"uri\":");
+        put_string(w, b->links[i].uri);
+        put(w, ",\"connected\":%s}", b->links[i].connected ? "true" : "false");
+    }
+    put(w, "],\"tasks\":{");
+    put_stacks(w, b->tasks, b->task_count < BASE_BUSINESS_TASK_SLOTS ? b->task_count : BASE_BUSINESS_TASK_SLOTS);
+    put(w, "}}");
+}
+
 int base_will_encode(const base_profile_t *profile, char *out, size_t size)
 {
     if (!profile || !out || size == 0) return -1;
@@ -354,11 +461,7 @@ int base_status_encode(const base_profile_t *p, char *out, size_t size)
     put_string(&w, p->idf);
     put(&w, ",\"heap\":{\"free\":%" PRIu32 ",\"min\":%" PRIu32 ",\"largest\":%" PRIu32 "},\"stack\":{",
         p->heap_free, p->heap_min, p->heap_largest);
-    for (unsigned i = 0; i < p->stack_count && i < BASE_STACK_SLOTS; ++i) {
-        if (i) put(&w, ",");
-        put_string(&w, p->stack[i].name);
-        put(&w, ":%" PRIu32, p->stack[i].bytes);
-    }
+    put_stacks(&w, p->stack, p->stack_count < BASE_STACK_SLOTS ? p->stack_count : BASE_STACK_SLOTS);
     put(&w, "},\"wifi\":{\"rssi\":%d,\"ssid\":", (int)p->rssi);
     put_string(&w, p->ssid);
     put(&w, ",\"bssid\":");
@@ -386,14 +489,8 @@ int base_status_encode(const base_profile_t *p, char *out, size_t size)
     }
     put(&w, "]},\"mqtt\":{\"uri\":");
     put_string(&w, p->mqtt_uri);
-    put(&w, "},\"business_mqtt\":");
-    if (p->business_mqtt_uri[0]) {
-        put(&w, "{\"uri\":");
-        put_string(&w, p->business_mqtt_uri);
-        put(&w, "}");
-    } else {
-        put(&w, "null");
-    }
+    put(&w, "},\"business\":");
+    put_business(&w, &p->business);
     put(&w, ",\"config\":{\"revision\":%" PRIu32 ",\"error\":", p->config_revision);
     put_nullable_string(&w, p->config_error);
     put(&w, "},\"wakeups\":%" PRIu32 "}", p->wakeups);

@@ -219,7 +219,7 @@ bool base_ota_worker_start(const char *url, const char *sha256, uint32_t size, u
     s_job.size = size;
     s_job.offset = offset;
     s_job.callback = callback;
-    if (xTaskCreate(worker, "ota", WORKER_STACK_BYTES, NULL, tskIDLE_PRIORITY + 3, NULL) != pdPASS) {
+    if (xTaskCreate(worker, "ota", WORKER_STACK_BYTES, NULL, BASE_SYSTEM_TASK_PRIORITY, NULL) != pdPASS) {
         atomic_store(&s_running, false);
         return false;
     }

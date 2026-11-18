@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// ESP Base 固件：只运行基座，没有业务层。业务固件用同样的方式调用 base_app_run 并传入自己的回调。
-#include "base_app.h"
+// ESP Base 固件：只运行系统层，没有业务层。业务固件用同样的方式调用 base_system_run 并交出自己的业务描述。
+#include "base_system.h"
 
 void app_main(void)
 {
-    base_app_run(NULL);
+    base_system_run(NULL);
 }

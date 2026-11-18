@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// host 测试：协议编解码、去重、OTA 状态机，以及与 Server 共用的合同样例。
+// host 测试：协议编解码、去重、Profile 编码、业务守卫、OTA 状态机，以及与 Server 共用的合同样例。
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base_guard.h"
 #include "base_ota.h"
 #include "base_protocol.h"
 #include "cJSON.h"
@@ -368,13 +369,15 @@ static bool same_shape(const cJSON *expected, const cJSON *actual)
     return true;
 }
 
-/* 与样例 online 对应的 Profile；unnamed 为真时对应 online_unnamed。 */
-static void profile_fixture(base_profile_t *p, bool unnamed)
+/* 与同名合同样例对应的 Profile：online 带业务层，online_unnamed 没有业务层，online_safe_mode 业务已停用。 */
+typedef enum { FIXTURE_ONLINE, FIXTURE_UNNAMED, FIXTURE_SAFE_MODE } fixture_t;
+static void profile_fixture(base_profile_t *p, fixture_t fixture)
 {
+    const bool unnamed = fixture == FIXTURE_UNNAMED;
     memset(p, 0, sizeof *p);
     strcpy(p->device_id, DEVICE);
     strcpy(p->boot_id, "7c9e6679-7425-40de-944b-e07fc1f90ae7");
-    strcpy(p->reset, unnamed ? "software" : "power_on");
+    strcpy(p->reset, unnamed ? "software" : fixture == FIXTURE_SAFE_MODE ? "panic" : "power_on");
     p->fw = RUNNING;
     strcpy(p->chip_model, "esp32c3");
     strcpy(p->chip_revision, "v0.4");
@@ -403,14 +406,25 @@ static void profile_fixture(base_profile_t *p, bool unnamed)
     p->uptime_s = 3600;
     strcpy(p->name, "\xe5\xae\x9e\xe9\xaa\x8c\xe6\x9d\xbf \"C3\""); /* 实验板 "C3"：UTF-8 原样，引号转义 */
     strcpy(p->group, "1b4e28ba-2fa1-41d2-883f-0016d3cca427");
-    strcpy(p->business_mqtt_uri, "mqtts://business.example.test:8883");
-    static const struct { const char *name; uint32_t bytes; } stack[] = {
-        {"main", 4200}, {"mqtt_task", 2900}, {"mqtt_task_2", 3100}, {"IDLE", 800}};
-    for (size_t i = 0; i < sizeof stack / sizeof *stack; ++i) {
-        strcpy(p->stack[i].name, stack[i].name);
-        p->stack[i].bytes = stack[i].bytes;
+    /* 系统任务和业务任务分开登记：两边各有一个 mqtt_task，互不加序号。 */
+    base_task_stack_add(p->stack, &p->stack_count, BASE_STACK_SLOTS, "main", 4200);
+    base_task_stack_add(p->stack, &p->stack_count, BASE_STACK_SLOTS, "mqtt_task", 2900);
+    base_task_stack_add(p->stack, &p->stack_count, BASE_STACK_SLOTS, "IDLE", 800);
+    base_business_profile_t *b = &p->business;
+    b->present = true;
+    strcpy(b->name, "example_app");
+    base_public_uri(b->mqtt_uri, "mqtts://user:secret@business.example.test:8883");
+    if (fixture == FIXTURE_SAFE_MODE) {
+        strcpy(b->error, BASE_GUARD_ERROR);
+    } else {
+        b->running = true;
+        strcpy(b->links[0].name, "mqtt");
+        strcpy(b->links[0].uri, "mqtts://business.example.test:8883");
+        b->links[0].connected = true;
+        b->link_count = 1;
+        base_task_stack_add(b->tasks, &b->task_count, BASE_BUSINESS_TASK_SLOTS, "example_app", 2800);
+        base_task_stack_add(b->tasks, &b->task_count, BASE_BUSINESS_TASK_SLOTS, "mqtt_task", 3100);
     }
-    p->stack_count = 4;
     p->rssi = -52;
     p->channel = 6;
     p->has_ipv4 = true;
@@ -439,9 +453,35 @@ static void test_profile(void)
     CHECK(!base_is_device_name("") && !base_is_device_name("lab ") && !base_is_device_name("a\tb"));
     CHECK(base_is_device_name("\xe5\xae\x9e\xe9\xaa\x8c\xe6\x9d\xbf C3"));
 
+    /* 标识、可上报的地址、任务名和 UUID。 */
+    CHECK(base_is_identifier("hxh_studio", BASE_BUSINESS_NAME_BYTES) && base_is_identifier("a1", 3));
+    CHECK(!base_is_identifier("", 8) && !base_is_identifier("Abc", 8) && !base_is_identifier("a-b", 8) &&
+          !base_is_identifier("abc", 3) && !base_is_identifier(NULL, 8));
+    char uri[BASE_URI_BYTES];
+    CHECK(base_public_uri(uri, "mqtts://broker.example.test:8883") && !strcmp(uri, "mqtts://broker.example.test:8883"));
+    CHECK(base_public_uri(uri, "wss://user:p%40ss@broker.example.test/mqtt?token=secret#x") &&
+          !strcmp(uri, "wss://broker.example.test/mqtt"));
+    CHECK(base_public_uri(uri, "mqtt://host/path@not-userinfo") && !strcmp(uri, "mqtt://host/path@not-userinfo"));
+    CHECK(!base_public_uri(uri, "broker.example.test") && !uri[0]);
+    CHECK(!base_public_uri(uri, "mqtts://user@") && !base_public_uri(uri, NULL) && !base_public_uri(uri, "://x"));
+    char long_uri[BASE_URI_BYTES + 16] = "mqtts://";
+    memset(long_uri + 8, 'h', sizeof long_uri - 9);
+    CHECK(!base_public_uri(uri, long_uri) && !uri[0]);
+    base_task_stack_t stacks[4];
+    uint8_t stack_count = 0;
+    CHECK(base_task_stack_add(stacks, &stack_count, 4, "mqtt_task", 1) && !strcmp(stacks[0].name, "mqtt_task"));
+    CHECK(base_task_stack_add(stacks, &stack_count, 4, "mqtt_task", 2) && !strcmp(stacks[1].name, "mqtt_task_2"));
+    CHECK(base_task_stack_add(stacks, &stack_count, 4, "mqtt_task", 3) && !strcmp(stacks[2].name, "mqtt_task_3"));
+    CHECK(base_task_stack_add(stacks, &stack_count, 4, "sys evt\"", 4) && !strcmp(stacks[3].name, "sys_evt_"));
+    CHECK(!base_task_stack_add(stacks, &stack_count, 4, "full", 5) && stack_count == 4);
+    char uuid[BASE_UUID_BYTES];
+    const uint8_t random[16] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    base_uuid_format(uuid, random);
+    CHECK(base_is_uuid(uuid) && !strcmp(uuid, "ffffffff-ffff-4fff-bfff-ffffffffffff"));
+
     static base_profile_t profile;
-    profile_fixture(&profile, false);
-    char small[256], status[2560];
+    profile_fixture(&profile, FIXTURE_ONLINE);
+    char small[256], status[3072]; /* 与固件的 STATUS_BYTES 相同 */
     CHECK(base_status_encode(&profile, small, sizeof small) == -1);
     const int n = base_status_encode(&profile, status, sizeof status);
     CHECK(n > 0 && (size_t)n == strlen(status));
@@ -451,7 +491,7 @@ static void test_profile(void)
     /* 控制字符在 JSON 里转义，不会截断文档。 */
     strcpy(profile.ssid, "a\x01" "b"); /* \x01b 会被当成一个十六进制转义 */
     CHECK(base_status_encode(&profile, status, sizeof status) > 0 && strstr(status, "\"a\\u0001b\""));
-    /* 栈槽位写满、IPv6 写满时仍放得下。 */
+    /* 系统任务、IPv6、业务连接和业务任务全部写满、地址取最长时仍放得下。 */
     for (int i = 0; i < BASE_STACK_SLOTS; ++i) {
         snprintf(profile.stack[i].name, BASE_TASK_NAME_BYTES, "task_name_%02d_x", i);
         profile.stack[i].bytes = 99999;
@@ -459,12 +499,52 @@ static void test_profile(void)
     profile.stack_count = BASE_STACK_SLOTS;
     for (int i = 0; i < BASE_IPV6_SLOTS; ++i) strcpy(profile.ipv6[i], "2001:db8:1234:5678:9abc:def0:1234:5678");
     profile.ipv6_count = BASE_IPV6_SLOTS;
-    memset(profile.business_mqtt_uri, 'b', sizeof profile.business_mqtt_uri - 1);
     memset(profile.mqtt_uri, 'm', sizeof profile.mqtt_uri - 1);
-    CHECK(base_status_encode(&profile, status, sizeof status) > 0);
+    base_business_profile_t *business = &profile.business;
+    memset(business->name, 'n', sizeof business->name - 1);
+    memset(business->mqtt_uri, 'b', sizeof business->mqtt_uri - 1);
+    for (int i = 0; i < BASE_LINK_SLOTS; ++i) {
+        memset(business->links[i].name, 'l', sizeof business->links[i].name - 1);
+        memset(business->links[i].uri, 'u', sizeof business->links[i].uri - 1);
+    }
+    business->link_count = BASE_LINK_SLOTS;
+    for (int i = 0; i < BASE_BUSINESS_TASK_SLOTS; ++i) {
+        snprintf(business->tasks[i].name, BASE_TASK_NAME_BYTES, "business_task_%02d_xxxxx", i);
+        business->tasks[i].bytes = 99999;
+    }
+    business->task_count = BASE_BUSINESS_TASK_SLOTS;
+    const int longest = base_status_encode(&profile, status, sizeof status);
+    CHECK(longest > 0 && longest + 128 < 3072); /* 系统 MQTT 的发送缓冲是 3072 字节，还要放主题和报头 */
     char will[640];
     memset(profile.name, '"', BASE_NAME_BYTES - 1);
     CHECK(base_will_encode(&profile, will, sizeof will) > 0);
+}
+
+/* 业务守卫：连续异常重启到上限就不拉起业务；正常重启、换固件和稳定运行都重新计数。 */
+static void test_guard(void)
+{
+    base_guard_t guard;
+    bool save = true;
+    /* 没有记录、正常启动：拉起业务，不写 NVS。 */
+    CHECK(base_guard_boot(&guard, false, SHA_RUNNING, false, &save) && !save && guard.strikes == 0);
+    /* 连续三次异常重启：前两次仍拉起，第三次进入安全模式，每次都保存。 */
+    CHECK(base_guard_boot(&guard, false, SHA_RUNNING, true, &save) && save && guard.strikes == 1);
+    CHECK(base_guard_boot(&guard, true, SHA_RUNNING, true, &save) && save && guard.strikes == 2);
+    CHECK(!base_guard_boot(&guard, true, SHA_RUNNING, true, &save) && save && guard.strikes == BASE_GUARD_LIMIT);
+    /* 安全模式里再异常重启：仍然停用，计数不再增加，也不用再写。 */
+    CHECK(!base_guard_boot(&guard, true, SHA_RUNNING, true, &save) && !save && guard.strikes == BASE_GUARD_LIMIT);
+    CHECK(!base_guard_stable(&guard)); /* 业务没有运行，谈不上稳定 */
+    /* 正常重启（上电、远程重启）：再给业务一次机会。 */
+    CHECK(base_guard_boot(&guard, true, SHA_RUNNING, false, &save) && save && guard.strikes == 0);
+    CHECK(base_guard_boot(&guard, true, SHA_RUNNING, false, &save) && !save);
+    /* 异常重启一次后稳定运行：清零并保存一次。 */
+    CHECK(base_guard_boot(&guard, true, SHA_RUNNING, true, &save) && guard.strikes == 1);
+    CHECK(base_guard_stable(&guard) && guard.strikes == 0 && !base_guard_stable(&guard));
+    /* 换了固件：旧固件的计数不带过来。 */
+    CHECK(base_guard_boot(&guard, true, SHA_RUNNING, true, &save) && base_guard_boot(&guard, true, SHA_RUNNING, true, &save));
+    CHECK(guard.strikes == 2);
+    CHECK(base_guard_boot(&guard, true, SHA_NEW, true, &save) && save && guard.strikes == 1 && !strcmp(guard.fw, SHA_NEW));
+    CHECK(base_guard_boot(&guard, true, SHA_OTHER, false, &save) && save && guard.strikes == 0 && !strcmp(guard.fw, SHA_OTHER));
 }
 
 static void test_contract_samples(const char *path)
@@ -528,13 +608,15 @@ static void test_contract_samples(const char *path)
     }
     /* 设备按 Profile 编码的状态文档与遗嘱，与样例逐字段相同。 */
     static base_profile_t profile;
-    char document[2560];
+    char document[3072];
+    int encoded_samples = 0;
     cJSON_ArrayForEach(sample, cJSON_GetObjectItem(root, "status")) {
         const char *sample_name = cJSON_GetObjectItem(sample, "name")->valuestring;
         const bool online = !strcmp(sample_name, "online"), unnamed = !strcmp(sample_name, "online_unnamed");
-        const bool will = !strcmp(sample_name, "offline_will");
-        if (!online && !unnamed && !will) continue; /* *_legacy 是旧固件的文档，只由 Server 解码 */
-        profile_fixture(&profile, unnamed);
+        const bool safe_mode = !strcmp(sample_name, "online_safe_mode"), will = !strcmp(sample_name, "offline_will");
+        if (!online && !unnamed && !safe_mode && !will) continue; /* *_legacy 是旧固件的文档，只由 Server 解码 */
+        ++encoded_samples;
+        profile_fixture(&profile, unnamed ? FIXTURE_UNNAMED : safe_mode ? FIXTURE_SAFE_MODE : FIXTURE_ONLINE);
         const int n = will ? base_will_encode(&profile, document, sizeof document)
                            : base_status_encode(&profile, document, sizeof document);
         cJSON *encoded = n > 0 ? cJSON_Parse(document) : NULL;
@@ -543,6 +625,7 @@ static void test_contract_samples(const char *path)
             fprintf(stderr, "  %s: %s\n", sample_name, document);
         cJSON_Delete(encoded);
     }
+    CHECK(encoded_samples == 4);
 
     base_ota_t ota;
     base_ota_boot(&ota, NULL, &RUNNING, SLOT, true);
@@ -573,6 +656,7 @@ int main(int argc, char **argv)
     test_dedupe();
     test_config_decode();
     test_profile();
+    test_guard();
     test_ota_happy_path();
     test_ota_already_running();
     test_ota_resume_after_power_loss();

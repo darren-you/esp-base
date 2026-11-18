@@ -13,7 +13,10 @@
 #define BASE_RSP_BYTES 224
 #define BASE_CMD_NAME_BYTES 16
 #define BASE_NAME_BYTES 33 /* 设备名称：1–32 字节 UTF-8 */
+#define BASE_URI_BYTES 128
 #define BASE_TOPIC_PREFIX "esp-base"
+/* 系统任务（控制、Profile 采样、OTA 下载）的优先级，与 esp-mqtt 任务的默认值相同；业务任务都低于它。 */
+#define BASE_SYSTEM_TASK_PRIORITY 5
 
 typedef enum {
     BASE_TOPIC_STATUS,      /* 设备 → Server，retained 状态文档；遗嘱也发到这里 */
@@ -24,6 +27,8 @@ typedef enum {
 } base_topic_t;
 
 bool base_is_uuid(const char *text);
+/* 用 16 个随机字节写出一个版本 4 的小写 UUID。 */
+void base_uuid_format(char out[BASE_UUID_BYTES], const uint8_t random[16]);
 bool base_is_sha256_hex(const char *text);
 bool base_topic(char out[BASE_TOPIC_BYTES], const char *device_id, base_topic_t topic);
 /* topic 是本设备的 cmd/<name> 时写出 name 并返回 true。topic 不要求以 NUL 结尾。 */
@@ -34,7 +39,7 @@ typedef enum { BASE_CMD_STATUS, BASE_CMD_RESTART, BASE_CMD_CONFIG } base_cmd_kin
 
 /* 一个 MQTT Broker 的连接信息。 */
 typedef struct {
-    char uri[128];
+    char uri[BASE_URI_BYTES];
     char username[65];
     char password[129];
 } base_mqtt_t;
@@ -121,8 +126,39 @@ enum {
 #define BASE_STACK_SLOTS 24
 #define BASE_IPV6_SLOTS 3
 #define BASE_IP_TEXT_BYTES 46
+#define BASE_BUSINESS_NAME_BYTES 24 /* 业务名：1–23 字节的小写字母、数字和下划线 */
+#define BASE_LINK_SLOTS 3           /* 业务经运行时打开的连接数上限 */
+#define BASE_LINK_NAME_BYTES 16
+#define BASE_BUSINESS_TASK_SLOTS 8
 
-/* 设备 Profile：设备能报告的全部信息。由 base_profile 组件采集与持有，这里只定义结构和编码。 */
+/* 一个任务栈的历史最小余量。 */
+typedef struct {
+    char name[BASE_TASK_NAME_BYTES];
+    uint32_t bytes;
+} base_task_stack_t;
+/* 往列表里加一个任务：名称里字母、数字以外的字符换成下划线；与已有任务同名时加序号（mqtt_task、mqtt_task_2），
+ * 避免状态文档里出现重复的键。列表满了返回 false。 */
+bool base_task_stack_add(base_task_stack_t *list, uint8_t *count, unsigned slots, const char *task_name, uint32_t bytes);
+
+/* Profile 里业务层的部分：由业务运行时填写，系统层只负责上报。 */
+typedef struct {
+    bool present;                          /* 固件带业务层；为假时状态文档里 business 为 null */
+    char name[BASE_BUSINESS_NAME_BYTES];
+    bool running;                          /* 为假：业务已停用（安全模式），没有调用任何业务代码 */
+    char error[BASE_ERROR_BYTES];          /* 停用原因，例如 crash_loop；空串：没有 */
+    char mqtt_uri[BASE_URI_BYTES];         /* 经 config 命令下发的业务 MQTT 地址；空串：没有配置 */
+    struct {
+        char name[BASE_LINK_NAME_BYTES];
+        char uri[BASE_URI_BYTES];          /* 不含账户、密码和查询串 */
+        bool connected;
+    } links[BASE_LINK_SLOTS];
+    uint8_t link_count;
+    base_task_stack_t tasks[BASE_BUSINESS_TASK_SLOTS];
+    uint8_t task_count;
+} base_business_profile_t;
+
+/* 设备 Profile：设备能报告的全部信息。由 base_profile 组件采集与持有，这里只定义结构和编码。
+ * 顶层字段都属于系统；业务层的信息集中在 business 里。 */
 typedef struct {
     /* 身份：启动时确定。 */
     char device_id[BASE_UUID_BYTES];
@@ -142,18 +178,14 @@ typedef struct {
     /* 设置：由控制任务写入。name 为空时上报默认名称。 */
     char name[BASE_NAME_BYTES];
     char group[BASE_UUID_BYTES]; /* 空串：未归属 Group */
-    char mqtt_uri[128];
-    char business_mqtt_uri[128];
+    char mqtt_uri[BASE_URI_BYTES]; /* 系统 MQTT */
     uint32_t config_revision;
     char config_error[BASE_ERROR_BYTES]; /* 空串：没有失败 */
     uint32_t wakeups;
     /* 运行采样。 */
     uint32_t uptime_s;
     uint32_t heap_free, heap_min, heap_largest;
-    struct {
-        char name[BASE_TASK_NAME_BYTES];
-        uint32_t bytes;
-    } stack[BASE_STACK_SLOTS];
+    base_task_stack_t stack[BASE_STACK_SLOTS]; /* 系统任务；业务任务在 business.tasks */
     uint8_t stack_count;
     int8_t rssi;
     char ssid[33];
@@ -164,12 +196,19 @@ typedef struct {
     char ipv4[16], netmask[16], gateway[16];
     char ipv6[BASE_IPV6_SLOTS][BASE_IP_TEXT_BYTES];
     uint8_t ipv6_count;
+    /* 业务层：采样时由业务运行时填写。 */
+    base_business_profile_t business;
 } base_profile_t;
 
 /* 默认名称：芯片显示名加 MAC 后 3 字节，例如 ESP32-C3-4A1B2C。mac 为 aa:bb:cc:dd:ee:ff。 */
 void base_default_name(char out[BASE_NAME_BYTES], const char *chip_model, const char *mac);
 /* 设备名称是否合法：1–32 字节，无控制字符，首尾不是空格。 */
 bool base_is_device_name(const char *name);
+/* 业务名、连接名这类标识是否合法：1 到 size-1 字节的小写字母、数字和下划线。 */
+bool base_is_identifier(const char *text, size_t size);
+/* 可以上报的地址：去掉账户、密码（userinfo）、查询串和片段，只留 scheme://host[:port][/path]。
+ * 放不下或不是 scheme://… 时写出空串并返回 false。 */
+bool base_public_uri(char out[BASE_URI_BYTES], const char *uri);
 /* 状态文档。返回写入长度；缓冲不足返回 -1。 */
 int base_status_encode(const base_profile_t *profile, char *out, size_t size);
 /* 遗嘱：{"online":false,…}，只带 device_id、boot_id、name、group 和 fw。 */

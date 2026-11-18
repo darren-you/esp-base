@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// 持久数据：设备 UUID、Wi-Fi／MQTT 配置、名称与 Group 和 OTA 记录在默认 NVS 分区的 base 命名空间，业务参数在 business 命名空间。
-// 出厂数据由主机工具生成 NVS 镜像随固件刷入；任何错误都不擦除分区。
+// 持久数据：设备 UUID、Wi-Fi／MQTT 配置、名称与 Group 和系统记录（OTA、业务守卫）在默认 NVS 分区的 base 命名空间，
+// 业务参数在 business 命名空间。出厂数据由主机工具生成 NVS 镜像随固件刷入；任何错误都不擦除分区。
+// 只给系统层用：业务层经 base_runtime 读自己的参数，看不到这里的配置。
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base_ota.h"
+#include "base_protocol.h"
 #include "esp_err.h"
 
 typedef struct {
@@ -32,7 +33,10 @@ esp_err_t base_store_load_config(base_config_t *config);
 /* 保存配置，revision 加一。 */
 esp_err_t base_store_save_config(base_config_t *config);
 /* 业务参数：出厂资料里 business 对象写进 NVS 的 business 命名空间，全是字符串，由业务层自己解释。
- * 没有这个键时返回 ESP_ERR_NVS_NOT_FOUND，out 为空串。 */
+ * 没有这个键时返回 ESP_ERR_NVS_NOT_FOUND，out 为空串。业务层经 base_runtime_param 读取。 */
 esp_err_t base_store_business_string(const char *key, char *out, size_t size);
-esp_err_t base_store_load_ota(base_ota_record_t *record);
-esp_err_t base_store_save_ota(const base_ota_record_t *record);
+/* 系统记录：布局固定的 blob。长度与 size 不符时返回 ESP_ERR_INVALID_SIZE。 */
+#define BASE_STORE_OTA "ota"         /* base_ota_record_t */
+#define BASE_STORE_GUARD "biz_guard" /* base_guard_t */
+esp_err_t base_store_load_record(const char *key, void *record, size_t size);
+esp_err_t base_store_save_record(const char *key, const void *record, size_t size);

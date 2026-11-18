@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-// ESP Base 主程序：一个控制任务阻塞在事件队列上，Wi-Fi、MQTT、定时器和 OTA 下载任务都只向队列投递事件。
-#include "base_app.h"
+// ESP Base 系统层的主程序：一个控制任务阻塞在事件队列上，Wi-Fi、系统 MQTT、定时器、OTA 下载任务和业务运行时
+// 都只向队列投递事件。业务层由业务运行时（base_runtime）启动，这里不接触业务的连接和数据。
+#include "base_system.h"
 
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "base_guard.h"
 #include "base_net.h"
 #include "base_ota.h"
 #include "base_profile.h"
 #include "base_protocol.h"
+#include "base_runtime_system.h"
 #include "base_store.h"
+#include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -25,17 +29,21 @@
 #define ROLLBACK_WINDOW_MS 300000u      /* 新固件须在此时间内连上 Broker，否则回滚 */
 #define CONFIG_TRIAL_MS 120000u         /* 新 Wi-Fi 须在此时间内连上 Broker，否则恢复旧配置 */
 #define BUSINESS_FALLBACK_MS 60000u     /* 系统 MQTT 迟迟连不上时，业务连接最多等这么久 */
+#define BUSINESS_REPORT_MS 2000u        /* 业务连接状态变化后，合并这么久再发布状态文档 */
 #define DEFERRED_FALLBACK_MS 3000u      /* 等应答发出的最长时间 */
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
 #define MESSAGE_MAX_BYTES 1536u
-#define STATUS_BYTES 2560 /* 状态文档带 Profile 后最长约 2.2 KiB */
+#define STATUS_BYTES 3072 /* 状态文档最长约 2.7 KiB（系统任务、业务连接和业务任务都写满时），与发送缓冲相同 */
 
 typedef enum {
     EV_NET_UP, EV_NET_DOWN, EV_NET_TIME,
     EV_MQTT_CONNECTED, EV_MQTT_DISCONNECTED, EV_MQTT_MESSAGE, EV_MQTT_PUBLISHED,
-    EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE, EV_NET_IP6, EV_PROFILE_READY,
+    EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE, EV_NET_IP6, EV_PROFILE_READY, EV_BUSINESS_CHANGED,
 } event_kind_t;
-typedef enum { TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED, TIMER_BUSINESS, TIMER_COUNT } timer_id_t;
+typedef enum {
+    TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED,
+    TIMER_BUSINESS_CONNECT, TIMER_BUSINESS_REPORT, TIMER_BUSINESS_STABLE, TIMER_COUNT,
+} timer_id_t;
 typedef enum { DEFER_NONE, DEFER_RESTART, DEFER_APPLY_CONFIG, DEFER_RECONNECT } deferred_t;
 
 typedef struct {
@@ -63,8 +71,15 @@ static base_dedupe_t s_dedupe;
 static deferred_t s_deferred;
 static int s_deferred_message_id;
 static uint32_t s_wakeups;
-static const base_business_t *s_business;
-static bool s_business_connected;
+static base_guard_t s_guard;
+/* 上一次运行的固件，留在 RTC 内存里（软件重启、panic 和看门狗复位都不清）：异常复位只记在出事的那个固件头上，
+ * 新固件崩溃后回滚回来的旧固件不背这次复位。 */
+#define LAST_RUN_MAGIC 0x6c617374u
+static RTC_NOINIT_ATTR struct {
+    uint32_t magic;
+    char fw[BASE_SHA256_HEX_BYTES];
+} s_last_run;
+static bool s_business_connected, s_business_report_pending;
 
 static void post(const event_t *event, TickType_t wait)
 {
@@ -138,6 +153,8 @@ static int publish(base_topic_t topic, const char *payload, bool retain)
 
 static const char *reset_reason(void)
 {
+    /* 运行时因业务看门狗超时重启设备：复位原因是软件重启，单独标出来。 */
+    if (base_runtime_take_fault()) return "business_watchdog";
     switch (esp_reset_reason()) {
     case ESP_RST_POWERON: return "power_on";
     case ESP_RST_EXT: return "external_pin";
@@ -157,8 +174,7 @@ static void profile_sync(void)
 {
     base_profile_set(&(base_profile_settings_t){
         .name = s_config.name, .group = s_config.group, .mqtt_uri = s_config.mqtt_uri,
-        .business_mqtt_uri = s_config.business_mqtt.uri, .config_revision = s_config.revision,
-        .config_error = s_config_error, .wakeups = s_wakeups,
+        .config_revision = s_config.revision, .config_error = s_config_error, .wakeups = s_wakeups,
     });
 }
 
@@ -172,6 +188,12 @@ static void publish_status(void)
 static void profile_ready(void)
 {
     post(&(event_t){.kind = EV_PROFILE_READY}, pdMS_TO_TICKS(100));
+}
+
+/* 业务的连接状态变了：在业务的任务里调用，只投递事件。 */
+static void business_changed(void)
+{
+    post(&(event_t){.kind = EV_BUSINESS_CHANGED}, 0);
 }
 
 static void publish_profile(void)
@@ -256,7 +278,7 @@ static void run_deferred(void)
 static void ota_apply(unsigned actions)
 {
     if (actions & BASE_OTA_ACT_PERSIST) {
-        const esp_err_t saved = base_store_save_ota(&s_ota.record);
+        const esp_err_t saved = base_store_save_record(BASE_STORE_OTA, &s_ota.record, sizeof s_ota.record);
         if (saved != ESP_OK) ESP_LOGE(TAG, "ota record not saved: %s", esp_err_to_name(saved));
     }
     if (actions & BASE_OTA_ACT_CANCEL) base_ota_worker_cancel();
@@ -281,14 +303,14 @@ static void ota_apply(unsigned actions)
     }
 }
 
-/* 业务层的连接：时间同步后建立一次，业务 MQTT 配置变更后按新配置重建。 */
+/* 业务层的连接：时间同步后让业务建立一次，业务 MQTT 配置变更后再让它按新配置重建。 */
 static void business_connect(bool changed)
 {
-    if (!s_business || !s_business->connect || !base_net_time_valid()) return;
+    if (!base_runtime_active() || !base_net_time_valid()) return;
     if (s_business_connected && !changed) return;
     s_business_connected = true;
-    esp_timer_stop(s_timers[TIMER_BUSINESS]);
-    s_business->connect(&s_config.business_mqtt);
+    esp_timer_stop(s_timers[TIMER_BUSINESS_CONNECT]);
+    base_runtime_connect();
 }
 
 static void handle_desired(const char *payload, size_t length)
@@ -327,8 +349,11 @@ static void handle_command(const char *name, const char *payload, size_t length)
             if (s_deferred != DEFER_NONE || s_trial_active) { error = "busy"; break; }
             s_config_error = NULL;
             if (command.config.has_business_mqtt || command.config.has_name || command.config.has_group) {
-                /* 业务 MQTT 由业务层另开连接使用，esp-base 不连接它、无从试用；名称和 Group 只是资料。都收到即保存。 */
-                if (command.config.has_business_mqtt) s_config.business_mqtt = command.config.business_mqtt;
+                /* 业务 MQTT 由业务层自己连接，系统不连接它、无从试用；名称和 Group 只是资料。都收到即保存。 */
+                if (command.config.has_business_mqtt) {
+                    s_config.business_mqtt = command.config.business_mqtt;
+                    base_runtime_set_mqtt(&s_config.business_mqtt);
+                }
                 if (command.config.has_name) strcpy(s_config.name, command.config.name);
                 if (command.config.has_group) strcpy(s_config.group, command.config.group);
                 if (base_store_save_config(&s_config) != ESP_OK) s_config_error = "not_saved";
@@ -406,7 +431,15 @@ static void on_timer(timer_id_t id)
         mqtt_start(&s_config);
         break;
     case TIMER_DEFERRED: run_deferred(); break;
-    case TIMER_BUSINESS: business_connect(false); break;
+    case TIMER_BUSINESS_CONNECT: business_connect(false); break;
+    case TIMER_BUSINESS_REPORT:
+        s_business_report_pending = false;
+        if (s_mqtt_connected) publish_status();
+        break;
+    case TIMER_BUSINESS_STABLE:
+        /* 业务稳定运行了一段时间：之前的异常重启不再计数。 */
+        if (base_guard_stable(&s_guard)) base_store_save_record(BASE_STORE_GUARD, &s_guard, sizeof s_guard);
+        break;
     default: break;
     }
 }
@@ -420,7 +453,7 @@ static void handle(const event_t *event)
         if (base_net_time_valid()) {
             mqtt_start(s_trial_active ? &s_trial : &s_config);
             /* 业务连接等系统 MQTT 先连上再建：两次 TLS 握手同时进行会让单核芯片连续数秒占满 CPU。 */
-            if (s_business && !s_business_connected) timer_start(TIMER_BUSINESS, BUSINESS_FALLBACK_MS);
+            if (base_runtime_active() && !s_business_connected) timer_start(TIMER_BUSINESS_CONNECT, BUSINESS_FALLBACK_MS);
         }
         break;
     case EV_NET_DOWN: break;
@@ -440,6 +473,12 @@ static void handle(const event_t *event)
     case EV_TIMER: on_timer((timer_id_t)event->value); break;
     case EV_NET_IP6: if (s_mqtt_connected) publish_status(); break; /* SLAAC 地址常在连上 Broker 之后才到 */
     case EV_PROFILE_READY: publish_profile(); break;
+    case EV_BUSINESS_CHANGED:
+        /* 业务连接抖动时不逐次发布：合并一小段时间。 */
+        if (s_business_report_pending) break;
+        s_business_report_pending = true;
+        timer_start(TIMER_BUSINESS_REPORT, BUSINESS_REPORT_MS);
+        break;
     case EV_OTA_PROGRESS: ota_apply(base_ota_on_progress(&s_ota, (uint32_t)event->value)); break;
     case EV_OTA_VERIFYING: ota_apply(base_ota_on_verifying(&s_ota)); break;
     case EV_OTA_DONE:
@@ -450,20 +489,33 @@ static void handle(const event_t *event)
     }
 }
 
-static void random_uuid(char out[BASE_UUID_BYTES])
+/* 业务守卫：同一个固件连续异常重启到上限就不拉起业务（安全模式），系统照常运行。 */
+static void business_boot(const base_business_t *business, const char *fw_sha256, bool abnormal)
 {
-    uint8_t b[16];
-    esp_fill_random(b, sizeof b);
-    b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
-    b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
-    snprintf(out, BASE_UUID_BYTES, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+    bool enabled = true;
+    if (business) {
+        const bool loaded = base_store_load_record(BASE_STORE_GUARD, &s_guard, sizeof s_guard) == ESP_OK;
+        bool save = false;
+        enabled = base_guard_boot(&s_guard, loaded, fw_sha256, abnormal, &save);
+        if (save) {
+            const esp_err_t saved = base_store_save_record(BASE_STORE_GUARD, &s_guard, sizeof s_guard);
+            if (saved != ESP_OK) ESP_LOGE(TAG, "business guard not saved: %s", esp_err_to_name(saved));
+        }
+        if (s_guard.strikes) ESP_LOGW(TAG, "business guard: %u abnormal restart(s) in a row", (unsigned)s_guard.strikes);
+    }
+    base_runtime_boot(business, s_device_id, &s_config.business_mqtt, enabled, BASE_GUARD_ERROR, business_changed);
+    if (base_runtime_active() && s_guard.strikes) timer_start(TIMER_BUSINESS_STABLE, BASE_GUARD_STABLE_MS);
 }
 
-void base_app_run(const base_business_t *business)
+void base_system_run(const base_business_t *business)
 {
-    s_business = business;
+    /* 系统任务的优先级都高于业务任务：业务占满 CPU 时仍能应答命令和升级。 */
+    vTaskPrioritySet(NULL, BASE_SYSTEM_TASK_PRIORITY);
     s_reset_reason = reset_reason();
+    const esp_reset_reason_t hardware_reset = esp_reset_reason();
+    const bool abnormal_reset = !strcmp(s_reset_reason, "business_watchdog") || hardware_reset == ESP_RST_PANIC ||
+                                hardware_reset == ESP_RST_INT_WDT || hardware_reset == ESP_RST_TASK_WDT ||
+                                hardware_reset == ESP_RST_WDT;
     s_events = xQueueCreate(16, sizeof(event_t));
     for (int id = 0; id < TIMER_COUNT; ++id) {
         const esp_timer_create_args_t timer = {.callback = timer_fired, .arg = (void *)(intptr_t)id, .name = "base"};
@@ -477,25 +529,30 @@ void base_app_run(const base_business_t *business)
     }
     /* D2 的回滚窗口从最早处开始计时，后面任何一步卡住都会回到旧固件。 */
     if (s_pending_verify) timer_start(TIMER_ROLLBACK, ROLLBACK_WINDOW_MS);
+    const bool abnormal = abnormal_reset && s_last_run.magic == LAST_RUN_MAGIC && !strcmp(s_last_run.fw, running.sha256);
+    s_last_run.magic = LAST_RUN_MAGIC;
+    snprintf(s_last_run.fw, sizeof s_last_run.fw, "%s", running.sha256);
 
     esp_err_t result = base_store_init();
     if (result == ESP_OK) result = base_store_device_id(s_device_id);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "storage unavailable: %s", esp_err_to_name(result));
     } else {
-        random_uuid(s_boot_id);
+        uint8_t random[16];
+        esp_fill_random(random, sizeof random);
+        base_uuid_format(s_boot_id, random);
         for (int topic = 0; topic < 5; ++topic) base_topic(s_topics[topic], s_device_id, (base_topic_t)topic);
         const esp_err_t profiled = base_profile_start(s_device_id, s_boot_id, s_reset_reason, &running, profile_ready);
         if (profiled != ESP_OK) ESP_LOGE(TAG, "profile unavailable: %s", esp_err_to_name(profiled));
         static base_ota_record_t stored;
-        const bool have_record = base_store_load_ota(&stored) == ESP_OK;
+        const bool have_record = base_store_load_record(BASE_STORE_OTA, &stored, sizeof stored) == ESP_OK;
         ota_apply(base_ota_boot(&s_ota, have_record ? &stored : NULL, &running, slot_bytes, !s_pending_verify) &
                   BASE_OTA_ACT_PERSIST);
         ESP_LOGI(TAG, "ESP_BASE_BOOT device_id=%s boot_id=%s version=%s target=%s slot=%s sha256=%s reset=%s pending_verify=%d",
                  s_device_id, s_boot_id, running.version, running.target, running.slot, running.sha256,
                  s_reset_reason, (int)s_pending_verify);
         result = base_store_load_config(&s_config);
-        if (s_business && s_business->init) s_business->init(s_device_id, result == ESP_OK ? &s_config : NULL);
+        business_boot(business, running.sha256, abnormal);
         if (result != ESP_OK) {
             ESP_LOGW(TAG, "ESP_BASE_UNPROVISIONED Wi-Fi/MQTT configuration missing (%s)", esp_err_to_name(result));
         } else {

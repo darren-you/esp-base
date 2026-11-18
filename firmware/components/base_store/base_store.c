@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "base_store.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #include "esp_random.h"
@@ -39,12 +38,9 @@ esp_err_t base_store_device_id(char out[BASE_UUID_BYTES])
     result = get_string(handle, "device_id", out, BASE_UUID_BYTES);
     if (result == ESP_OK && !base_is_uuid(out)) result = ESP_ERR_INVALID_STATE;
     if (result == ESP_ERR_NVS_NOT_FOUND) {
-        uint8_t b[16];
-        esp_fill_random(b, sizeof b);
-        b[6] = (uint8_t)((b[6] & 0x0f) | 0x40);
-        b[8] = (uint8_t)((b[8] & 0x3f) | 0x80);
-        snprintf(out, BASE_UUID_BYTES, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-                 b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+        uint8_t random[16];
+        esp_fill_random(random, sizeof random);
+        base_uuid_format(out, random);
         result = nvs_set_str(handle, "device_id", out);
         if (result == ESP_OK) result = nvs_commit(handle);
     }
@@ -110,24 +106,24 @@ esp_err_t base_store_business_string(const char *key, char *out, size_t size)
     return result;
 }
 
-esp_err_t base_store_load_ota(base_ota_record_t *record)
+esp_err_t base_store_load_record(const char *key, void *record, size_t size)
 {
     nvs_handle_t handle;
     esp_err_t result = nvs_open(NAMESPACE, NVS_READONLY, &handle);
     if (result != ESP_OK) return result;
-    size_t length = sizeof *record;
-    result = nvs_get_blob(handle, "ota", record, &length);
-    if (result == ESP_OK && length != sizeof *record) result = ESP_ERR_INVALID_SIZE;
+    size_t length = size;
+    result = nvs_get_blob(handle, key, record, &length);
+    if (result == ESP_OK && length != size) result = ESP_ERR_INVALID_SIZE;
     nvs_close(handle);
     return result;
 }
 
-esp_err_t base_store_save_ota(const base_ota_record_t *record)
+esp_err_t base_store_save_record(const char *key, const void *record, size_t size)
 {
     nvs_handle_t handle;
     esp_err_t result = nvs_open(NAMESPACE, NVS_READWRITE, &handle);
     if (result != ESP_OK) return result;
-    result = nvs_set_blob(handle, "ota", record, sizeof *record);
+    result = nvs_set_blob(handle, key, record, size);
     if (result == ESP_OK) result = nvs_commit(handle);
     nvs_close(handle);
     return result;

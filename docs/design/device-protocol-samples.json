@@ -27,13 +27,16 @@
         "chip": {"model": "esp32c3", "revision": "v0.4", "cores": 1, "cpu_mhz": 160, "features": ["wifi", "ble"], "flash": 4194304, "psram": 0},
         "idf": "v6.1",
         "heap": {"free": 178148, "min": 160696, "largest": 110592},
-        "stack": {"main": 4200, "mqtt_task": 2900, "mqtt_task_2": 3100, "IDLE": 800},
+        "stack": {"main": 4200, "mqtt_task": 2900, "IDLE": 800},
         "wifi": {"rssi": -52, "ssid": "example-ssid", "bssid": "02:00:00:00:00:01", "channel": 6},
         "net": {"mac": "02:00:00:4a:1b:2c", "hostname": "espressif",
                 "ipv4": {"address": "192.0.2.20", "netmask": "255.255.255.0", "gateway": "192.0.2.1"},
                 "ipv6": ["fe80::ff:fe4a:1b2c", "2001:db8::ff:fe4a:1b2c"]},
         "mqtt": {"uri": "mqtts://broker.example.test:8883"},
-        "business_mqtt": {"uri": "mqtts://business.example.test:8883"},
+        "business": {"name": "example_app", "state": "running", "error": null,
+                     "mqtt": {"uri": "mqtts://business.example.test:8883"},
+                     "links": [{"name": "mqtt", "uri": "mqtts://business.example.test:8883", "connected": true}],
+                     "tasks": {"example_app": 2800, "mqtt_task": 3100}},
         "config": {"revision": 3, "error": null},
         "wakeups": 57
       }
@@ -61,9 +64,70 @@
         "wifi": {"rssi": -70, "ssid": "example-ssid", "bssid": "02:00:00:00:00:01", "channel": 11},
         "net": {"mac": "02:00:00:4a:1b:2c", "hostname": "espressif", "ipv4": null, "ipv6": []},
         "mqtt": {"uri": "mqtts://broker.example.test:8883"},
-        "business_mqtt": null,
+        "business": null,
         "config": {"revision": 4, "error": "trial_failed"},
         "wakeups": 9
+      }
+    },
+    {
+      "name": "online_safe_mode",
+      "payload": {
+        "online": true,
+        "device_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "boot_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "uptime_s": 3600,
+        "reset": "panic",
+        "name": "实验板 \"C3\"",
+        "group": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "fw": {
+          "version": "1.0.0+68",
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "target": "esp32c3/esp_base",
+          "slot": "ota_0"
+        },
+        "chip": {"model": "esp32c3", "revision": "v0.4", "cores": 1, "cpu_mhz": 160, "features": ["wifi", "ble"], "flash": 4194304, "psram": 0},
+        "idf": "v6.1",
+        "heap": {"free": 178148, "min": 160696, "largest": 110592},
+        "stack": {"main": 4200, "mqtt_task": 2900, "IDLE": 800},
+        "wifi": {"rssi": -52, "ssid": "example-ssid", "bssid": "02:00:00:00:00:01", "channel": 6},
+        "net": {"mac": "02:00:00:4a:1b:2c", "hostname": "espressif",
+                "ipv4": {"address": "192.0.2.20", "netmask": "255.255.255.0", "gateway": "192.0.2.1"},
+                "ipv6": ["fe80::ff:fe4a:1b2c", "2001:db8::ff:fe4a:1b2c"]},
+        "mqtt": {"uri": "mqtts://broker.example.test:8883"},
+        "business": {"name": "example_app", "state": "disabled", "error": "crash_loop",
+                     "mqtt": {"uri": "mqtts://business.example.test:8883"}, "links": [], "tasks": {}},
+        "config": {"revision": 3, "error": null},
+        "wakeups": 57
+      }
+    },
+    {
+      "name": "online_profile_legacy",
+      "payload": {
+        "online": true,
+        "device_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "boot_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "uptime_s": 3600,
+        "reset": "power_on",
+        "name": "实验板 \"C3\"",
+        "group": "1b4e28ba-2fa1-41d2-883f-0016d3cca427",
+        "fw": {
+          "version": "1.0.0+68",
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "target": "esp32c3/esp_base",
+          "slot": "ota_0"
+        },
+        "chip": {"model": "esp32c3", "revision": "v0.4", "cores": 1, "cpu_mhz": 160, "features": ["wifi", "ble"], "flash": 4194304, "psram": 0},
+        "idf": "v6.1",
+        "heap": {"free": 178148, "min": 160696, "largest": 110592},
+        "stack": {"main": 4200, "mqtt_task": 2900, "mqtt_task_2": 3100, "IDLE": 800},
+        "wifi": {"rssi": -52, "ssid": "example-ssid", "bssid": "02:00:00:00:00:01", "channel": 6},
+        "net": {"mac": "02:00:00:4a:1b:2c", "hostname": "espressif",
+                "ipv4": {"address": "192.0.2.20", "netmask": "255.255.255.0", "gateway": "192.0.2.1"},
+                "ipv6": ["fe80::ff:fe4a:1b2c", "2001:db8::ff:fe4a:1b2c"]},
+        "mqtt": {"uri": "mqtts://broker.example.test:8883"},
+        "business_mqtt": {"uri": "mqtts://business.example.test:8883"},
+        "config": {"revision": 3, "error": null},
+        "wakeups": 57
       }
     },
     {

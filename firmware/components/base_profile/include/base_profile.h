@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// 设备 Profile 的唯一来源：芯片、MAC、IDF 版本在启动时采集一次；名称、Group、MQTT 地址等设置由控制任务写入；
-// 堆、各任务栈、Wi-Fi 与 IPv4／IPv6 由一个低优先级任务按请求异步采样，采完回调通知。
-// 状态文档、遗嘱和业务层要用的设备信息都从这里读取，不在别处另行采集。
+// 设备 Profile 的唯一来源：芯片、MAC、IDF 版本在启动时采集一次；名称、Group、系统 MQTT 地址等设置由控制任务写入；
+// 堆、系统任务栈、Wi-Fi 与 IPv4／IPv6 由采样任务按请求异步采样，业务层的部分（名称、状态、连接、业务任务栈）
+// 在同一次采样里向业务运行时读取，采完回调通知。状态文档和遗嘱都从这里读取，不在别处另行采集。
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -22,7 +22,6 @@ typedef struct {
     const char *name;
     const char *group;
     const char *mqtt_uri;
-    const char *business_mqtt_uri;
     uint32_t config_revision;
     const char *config_error;
     uint32_t wakeups;

@@ -2,9 +2,12 @@
 
 ESP32-C3 与 ESP32 的业务基座固件：设备身份、Wi-Fi、TLS MQTT 管理和公网 OTA。只依赖官方 ESP-IDF 发行版和组件注册表，不维护任何上游派生。
 
+固件分两层：**系统层**负责联网、系统 MQTT、命令、远程配置、OTA 和设备 Profile；**业务层**只实现自己的功能，通过业务运行时（`base_runtime`）这一个接口取得设备身份、业务参数和业务 MQTT 配置，创建任务、打开自己的连接。业务看不到系统的 Wi-Fi、系统 MQTT 账户和 NVS，系统的升级与管理也不经过业务代码。这是代码上的解耦，不是内存隔离：两层在同一个镜像里（C3 这类芯片没有条件做真正的隔离）。
+
 - **管理**：一份 retained 状态文档（即设备 Profile：名称、所属 Group、芯片、固件、MAC、IPv4／IPv6、Wi-Fi、MQTT 地址与运行状况），命令走 `cmd/<名称>` 并按 `request_id` 应答去重，遗嘱消息表示离线。这条系统 MQTT 连接只由出厂资料配置；远程配置改 Wi-Fi、业务 MQTT（留给业务层另开连接）、设备名称和所属 Group。
 - **OTA**：Server 经 MQTT 发布期望固件，设备用官方 `esp_https_ota` 通过 HTTPS 拉取，断线或断电后按 Range 续传；镜像用 RSA-3072 签名，新固件连上 Broker 才确认有效，否则由 bootloader 回滚。
 - **事件驱动**：一个控制任务阻塞在事件队列上，空闲时不轮询；Wi-Fi 使用默认省电模式，只在 OTA 下载期间关闭。
+- **安全模式**：业务任务的优先级低于系统任务；同一个固件连续 3 次异常重启就不再拉起业务，系统照常在线，可以远程升级修复。
 
 支持的硬件：ESP32-C3、ESP32-D0WD-V3（芯片版本 v3.0 及以上），4 MiB Flash。不启用硬件 Secure Boot、Flash 加密，不写 eFuse。
 
@@ -45,7 +48,7 @@ python3 tools/esp_base.py sign <target> --key-file /absolute/path/signing-key.pe
 }
 ```
 
-出厂资料可以带设备名称 `name`（1–32 字节，不含控制字符，首尾不是空格；不给时设备上报「型号-MAC 后 3 字节」，之后也能在网页里改）；所属 Group 只在网页里设置。还可以带业务固件需要的内容：业务 MQTT 的 `business_mqtt_uri`（`mqtts://`）、`business_mqtt_username`、`business_mqtt_password` 三项同时给出；`business` 对象写业务参数，键是最多 15 个字符的小写字母、数字、下划线，值是字符串，固件里用 `base_store_business_string` 读取。
+出厂资料可以带设备名称 `name`（1–32 字节，不含控制字符，首尾不是空格；不给时设备上报「型号-MAC 后 3 字节」，之后也能在网页里改）；所属 Group 只在网页里设置。还可以带业务固件需要的内容：业务 MQTT 的 `business_mqtt_uri`（`mqtts://`）、`business_mqtt_username`、`business_mqtt_password` 三项同时给出；`business` 对象写业务参数，键是最多 15 个字符的小写字母、数字、下划线，值是字符串，业务固件里用 `base_runtime_param` 读取。
 
 **4. 刷写**。首次刷写先整片擦除，再写入 bootloader、分区表、固件和出厂资料：
 
@@ -65,7 +68,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 ## 业务固件
 
-业务以独立的 ESP-IDF 工程在本仓之上开发：引用本仓的组件、配置和分区表，在 `app_main` 里调用 `base_app_run` 并传入业务回调，另开自己的业务连接。做法见[固件说明](firmware/README.md#业务固件)；本仓的工具以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根即可构建、签名、刷写和正式打包。
+业务以独立的 ESP-IDF 工程在本仓之上开发：引用本仓的组件、配置和分区表，在 `app_main` 里调用 `base_system_run` 并交出业务描述（名称和两个回调），业务组件只依赖 `base_runtime`。接口和做法见[固件说明](firmware/README.md#业务固件)；本仓的工具以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根即可构建、签名、刷写和正式打包。
 
 ## 正式包
 

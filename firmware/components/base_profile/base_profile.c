@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "base_profile.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base_runtime_system.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
@@ -22,7 +24,6 @@
 #include "sdkconfig.h"
 
 #define TASK_STACK_BYTES 4096
-#define TASK_PRIORITY 1 /* 只高于空闲任务：采样不和控制、联网、下载抢 CPU */
 
 static const char *TAG = "base_profile";
 static base_profile_t s_profile; /* 受 s_lock 保护 */
@@ -66,27 +67,18 @@ static void collect_static(base_profile_t *p)
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) format_mac(p->mac, mac);
 }
 
-/* 各任务栈的历史最小余量。同名任务（如系统与业务两条 MQTT 连接的 mqtt_task）加序号，避免重复的键。 */
+/* 系统任务栈的历史最小余量；记在业务名下的任务由业务运行时报告（Profile 的 business.tasks）。 */
 static void sample_stacks(base_profile_t *p)
 {
     p->stack_count = 0;
     const UBaseType_t capacity = uxTaskGetNumberOfTasks() + 2;
     TaskStatus_t *tasks = malloc(capacity * sizeof *tasks);
     const UBaseType_t count = tasks ? uxTaskGetSystemState(tasks, capacity, NULL) : 0;
-    for (UBaseType_t i = 0; i < count && p->stack_count < BASE_STACK_SLOTS; ++i) {
+    for (UBaseType_t i = 0; i < count; ++i) {
+        if (base_runtime_owns_task(tasks[i].xHandle)) continue;
         char name[configMAX_TASK_NAME_LEN + 1] = {0};
-        for (size_t c = 0; c < configMAX_TASK_NAME_LEN && tasks[i].pcTaskName[c]; ++c) {
-            const char ch = tasks[i].pcTaskName[c];
-            name[c] = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ? ch : '_';
-        }
-        unsigned same = 0;
-        for (UBaseType_t j = 0; j < i; ++j)
-            same += !strncmp(tasks[j].pcTaskName, tasks[i].pcTaskName, configMAX_TASK_NAME_LEN);
-        char suffix[8] = "";
-        if (same) snprintf(suffix, sizeof suffix, "_%u", same + 1);
-        snprintf(p->stack[p->stack_count].name, BASE_TASK_NAME_BYTES, "%s%s", name, suffix);
-        p->stack[p->stack_count].bytes = (uint32_t)tasks[i].usStackHighWaterMark;
-        ++p->stack_count;
+        memcpy(name, tasks[i].pcTaskName, strnlen(tasks[i].pcTaskName, configMAX_TASK_NAME_LEN));
+        base_task_stack_add(p->stack, &p->stack_count, BASE_STACK_SLOTS, name, (uint32_t)tasks[i].usStackHighWaterMark);
     }
     free(tasks);
 }
@@ -127,8 +119,10 @@ static void sample_netif(base_profile_t *p)
     const int count = esp_netif_get_all_ip6(netif, addresses);
     for (int i = 0; i < count && p->ipv6_count < BASE_IPV6_SLOTS; ++i) {
         /* esp_ip6_addr_t 与 lwIP 的 ip6_addr_t 布局相同；用 lwIP 写出压缩格式。 */
-        if (ip6addr_ntoa_r((const ip6_addr_t *)&addresses[i], p->ipv6[p->ipv6_count], BASE_IP_TEXT_BYTES))
-            ++p->ipv6_count;
+        char *text = p->ipv6[p->ipv6_count];
+        if (!ip6addr_ntoa_r((const ip6_addr_t *)&addresses[i], text, BASE_IP_TEXT_BYTES)) continue;
+        for (; *text; ++text) *text = (char)tolower((unsigned char)*text); /* lwIP 写大写；按 RFC 5952 上报小写 */
+        ++p->ipv6_count;
     }
 #endif
 }
@@ -153,6 +147,7 @@ static void store_runtime(base_profile_t *dst, const base_profile_t *src)
     memcpy(dst->gateway, src->gateway, sizeof dst->gateway);
     memcpy(dst->ipv6, src->ipv6, sizeof dst->ipv6);
     dst->ipv6_count = src->ipv6_count;
+    dst->business = src->business;
 }
 
 static void sampler(void *argument)
@@ -168,6 +163,7 @@ static void sampler(void *argument)
         sample_stacks(p);
         sample_wifi(p);
         sample_netif(p);
+        base_runtime_snapshot(&p->business);
         xSemaphoreTake(s_lock, portMAX_DELAY);
         store_runtime(&s_profile, p);
         xSemaphoreGive(s_lock);
@@ -187,7 +183,7 @@ esp_err_t base_profile_start(const char *device_id, const char *boot_id, const c
     s_profile.fw = *fw;
     collect_static(&s_profile);
     s_ready = ready;
-    if (xTaskCreate(sampler, "profile", TASK_STACK_BYTES, NULL, TASK_PRIORITY, &s_task) != pdPASS) {
+    if (xTaskCreate(sampler, "profile", TASK_STACK_BYTES, NULL, BASE_SYSTEM_TASK_PRIORITY, &s_task) != pdPASS) {
         ESP_LOGE(TAG, "sampler task unavailable");
         return ESP_ERR_NO_MEM;
     }
@@ -203,8 +199,7 @@ void base_profile_set(const base_profile_settings_t *settings)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     copy(s_profile.name, sizeof s_profile.name, settings->name);
     copy(s_profile.group, sizeof s_profile.group, settings->group);
-    copy(s_profile.mqtt_uri, sizeof s_profile.mqtt_uri, settings->mqtt_uri);
-    copy(s_profile.business_mqtt_uri, sizeof s_profile.business_mqtt_uri, settings->business_mqtt_uri);
+    base_public_uri(s_profile.mqtt_uri, settings->mqtt_uri); /* 只报地址，不带账户和密码 */
     s_profile.config_revision = settings->config_revision;
     copy(s_profile.config_error, sizeof s_profile.config_error, settings->config_error);
     s_profile.wakeups = settings->wakeups;
