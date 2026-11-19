@@ -270,19 +270,20 @@ static void run_app(void)
     if (!ok && s_deploy.running == slot && !wasm_host_running()) restart_later();
 }
 
-/* 把一个事件交给应用；应用出了故障就停掉它，试运行期间回退，否则退避后重启。 */
+/* 把一个事件交给应用；应用出了故障就停掉它，试运行期间回退，否则退避后重启。
+ * restarts 只数后一种：试运行的应用出故障是部署失败（任务报 failed），宿主随后启动的是原来的应用，不是重启出故障的那个。 */
 static void dispatch(wasm_event_kind_t kind, uint32_t a, uint32_t b)
 {
     if (!wasm_host_running() || wasm_host_event(kind, a, b)) return;
     strlcpy(s_app.fault, wasm_host_fault(), sizeof s_app.fault);
     ESP_LOGE(TAG, "ESP_BASE_APP_FAULT %s", s_app.fault);
-    ++s_app.restarts;
     s_app.state = "crashed";
     stop_app();
     const unsigned actions = wasm_deploy_on_fault(&s_deploy, "fault");
     if (actions) {
         apply(actions);
     } else {
+        ++s_app.restarts;
         restart_later();
         publish_state();
     }

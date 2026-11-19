@@ -177,6 +177,9 @@ def check(log, board=False, extra=None):
     after(4, "rejected", "signature_invalid", "0.1.0+2")
     after(5, "rejected", "signature_invalid", "0.1.0+2")
     after(6, "failed", "fault", "0.1.0+2")
+    expect(((states.get(6) or {}).get("app") or {}).get("restarts") == 0,
+           "步骤 6：试运行的应用出故障是部署失败，不计入故障重启次数（实际 "
+           f"{((states.get(6) or {}).get('app') or {}).get('restarts')}）")
     expect(log.count("ESP_BASE_APP_STARTED hello 0.1.0+2 slot=1") == 3, "首次启动加两次回退，都在槽 1 运行 hello 0.1.0+2")
     # 操作引脚的应用：装进槽 0；重启后在联网之前引脚就回到安全状态，应用再跑一遍。
     after(7, "succeeded", None, "0.1.0+1", "pins")

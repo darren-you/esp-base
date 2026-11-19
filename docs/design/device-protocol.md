@@ -134,7 +134,7 @@ Server 把「这台设备应运行哪个固件」发布为 retained 的 `ota/des
 - 不可恢复的错误立即 `rejected`，原来的应用不受影响：`invalid_desired`、`invalid_url`、`package_too_large`、`size_mismatch`、`sha256_mismatch`、`package_invalid`、`manifest_invalid`、`signature_invalid`、`abi_mismatch`、`chip_mismatch`、`memory_too_large`、`pin_denied`、`http_<4xx>`。
 - 同一 `job` 已是 `failed` 或 `rejected`：只回报原结果。重试由 Server 创建新 `job`。
 - 收到空载荷或新 `job` 时，还在下载或校验的任务被中止；已经在试运行的等它出结果，再处理新任务。
-- 提交之后应用再出故障不回退：宿主停掉它，退避后重启（5 秒起，每次翻倍，上限 5 分钟；稳定运行 5 分钟后从头算），`app.restarts` 加一，`app.fault` 是原因。
+- 提交之后应用再出故障不回退：宿主停掉它，退避后重启（5 秒起，每次翻倍，上限 5 分钟；稳定运行 5 分钟后从头算），`app.restarts` 加一，`app.fault` 是原因。试运行期间的故障是部署失败，只记在 `app.fault` 里，不计入 `app.restarts`。
 - 已提交的应用运行时设备连续两次异常重启（panic、各类看门狗）：下一次启动不再运行它，`app.state` 为 `disabled`，宿主照常在线等新的部署；正常重启或部署新应用后解除。
 
 成功的唯一判据是设备上报的 `running.sha256` 等于期望值且 `state` 为 `succeeded`。固件进了安全模式（状态文档里 `business.state` 为 `disabled`）时宿主不运行，`app/desired` 不被处理。
