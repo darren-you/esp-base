@@ -14,6 +14,7 @@
 #include "base_protocol.h"
 #include "base_runtime_system.h"
 #include "base_store.h"
+#include "public_ip.h"
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
@@ -32,6 +33,8 @@
 #define BUSINESS_REPORT_MS 2000u        /* 业务连接状态变化后，合并这么久再发布状态文档 */
 #define DEFERRED_FALLBACK_MS 3000u      /* 等应答发出的最长时间 */
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
+#define PUBLIC_IP_DELAY_MS 10000u       /* 连上 Broker 后等业务连接先握手完，再取公网地址 */
+#define PUBLIC_IP_RETRY_MS 60000u       /* 固件下载占着网络时，过一会儿再看 */
 #define MESSAGE_MAX_BYTES 1536u
 #define STATUS_BYTES 3072 /* 状态文档最长约 2.7 KiB（系统任务、业务连接和业务任务都写满时），与发送缓冲相同 */
 #define APP_STATE_BYTES 640
@@ -40,18 +43,18 @@ typedef enum {
     EV_NET_UP, EV_NET_DOWN, EV_NET_TIME,
     EV_MQTT_CONNECTED, EV_MQTT_DISCONNECTED, EV_MQTT_MESSAGE, EV_MQTT_PUBLISHED,
     EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE, EV_NET_IP6, EV_PROFILE_READY, EV_BUSINESS_CHANGED,
-    EV_APP_CHANGED, EV_APP_LOGGED,
+    EV_APP_CHANGED, EV_APP_LOGGED, EV_PUBLIC_IP,
 } event_kind_t;
 typedef enum {
     TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED,
-    TIMER_BUSINESS_CONNECT, TIMER_BUSINESS_REPORT, TIMER_BUSINESS_STABLE, TIMER_COUNT,
+    TIMER_BUSINESS_CONNECT, TIMER_BUSINESS_REPORT, TIMER_BUSINESS_STABLE, TIMER_PUBLIC_IP, TIMER_COUNT,
 } timer_id_t;
 typedef enum { DEFER_NONE, DEFER_RESTART, DEFER_APPLY_CONFIG, DEFER_RECONNECT } deferred_t;
 
 typedef struct {
     uint8_t kind;
     int32_t value;                 /* 定时器编号、消息 ID、偏移或下载结果 */
-    char *message;                 /* EV_MQTT_MESSAGE：topic、NUL、payload、NUL，由控制任务释放 */
+    char *message;                 /* EV_MQTT_MESSAGE：topic、NUL、payload、NUL；EV_PUBLIC_IP：地址或 NULL。由控制任务释放 */
     uint16_t topic_len, payload_len;
     char error[BASE_ERROR_BYTES];  /* EV_OTA_DONE */
 } event_t;
@@ -82,6 +85,7 @@ static RTC_NOINIT_ATTR struct {
     char fw[BASE_SHA256_HEX_BYTES];
 } s_last_run;
 static bool s_business_connected, s_business_report_pending;
+static char s_public_ip[BASE_IP_TEXT_BYTES]; /* 最近取到的公网出口地址；空串表示还没取到 */
 
 static void post(const event_t *event, TickType_t wait)
 {
@@ -419,6 +423,36 @@ static void handle_command(const char *name, const char *payload, size_t length)
     if (after != DEFER_NONE) defer(after, message_id);
 }
 
+/* 公网出口地址取完了：在取地址的任务里调用，只投递事件。 */
+static void public_ip_done(char *ip)
+{
+    post(&(event_t){.kind = EV_PUBLIC_IP, .message = ip}, pdMS_TO_TICKS(100));
+}
+
+/* 取一次公网出口地址。没连上 Broker 就不取（连上后会再来）；固件下载期间让路，避免两条 TLS 连接同时占用内存。 */
+static void public_ip_lookup(void)
+{
+    if (!s_mqtt_connected) return;
+    if (base_runtime_system_updating()) {
+        timer_start(TIMER_PUBLIC_IP, PUBLIC_IP_RETRY_MS);
+        return;
+    }
+    base_public_ip_start(public_ip_done);
+}
+
+static void on_public_ip(const char *ip)
+{
+    if (!ip) {
+        ESP_LOGW(TAG, "public address not obtained; retrying with the next status refresh");
+        return;
+    }
+    if (!strcmp(ip, s_public_ip)) return;
+    snprintf(s_public_ip, sizeof s_public_ip, "%s", ip);
+    base_profile_set_public_ip(s_public_ip);
+    ESP_LOGI(TAG, "public address %s", s_public_ip);
+    if (s_mqtt_connected) publish_status();
+}
+
 static void on_mqtt_connected(void)
 {
     s_mqtt_connected = true;
@@ -447,12 +481,17 @@ static void on_mqtt_connected(void)
     publish_app_state();
     if (!s_pending_verify) ota_apply(base_ota_on_confirmed(&s_ota));
     business_connect(false);
+    timer_start(TIMER_PUBLIC_IP, PUBLIC_IP_DELAY_MS); /* 每次连上都重取：重连往往意味着出口变了 */
 }
 
 static void on_timer(timer_id_t id)
 {
     switch (id) {
-    case TIMER_STATUS: publish_status(); break;
+    case TIMER_STATUS:
+        if (!s_public_ip[0]) public_ip_lookup(); /* 还没取到就随状态刷新再试 */
+        publish_status();
+        break;
+    case TIMER_PUBLIC_IP: public_ip_lookup(); break;
     case TIMER_OTA_RETRY: ota_apply(base_ota_on_retry_timer(&s_ota)); break;
     case TIMER_ROLLBACK:
         if (!s_pending_verify) break;
@@ -495,7 +534,11 @@ static void handle(const event_t *event)
             if (base_runtime_active() && !s_business_connected) timer_start(TIMER_BUSINESS_CONNECT, BUSINESS_FALLBACK_MS);
         }
         break;
-    case EV_NET_DOWN: break;
+    case EV_NET_DOWN:
+        /* 断开 Wi-Fi 后出口可能变了（换网络、路由器重拨）：清掉，重新连上再取。 */
+        s_public_ip[0] = '\0';
+        base_profile_set_public_ip(NULL);
+        break;
     case EV_MQTT_CONNECTED: on_mqtt_connected(); break;
     case EV_MQTT_DISCONNECTED: s_mqtt_connected = false; break;
     case EV_MQTT_PUBLISHED:
@@ -523,6 +566,7 @@ static void handle(const event_t *event)
     case EV_OTA_VERIFYING: ota_apply(base_ota_on_verifying(&s_ota)); break;
     case EV_APP_CHANGED: publish_app_state(); break;
     case EV_APP_LOGGED: publish_app_log(); break;
+    case EV_PUBLIC_IP: on_public_ip(event->message); break;
     case EV_OTA_DONE:
         base_net_set_power_save(true);
         base_runtime_set_updating(false);

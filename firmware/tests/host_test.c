@@ -438,11 +438,35 @@ static void profile_fixture(base_profile_t *p, fixture_t fixture)
     strcpy(p->ipv6[0], "fe80::ff:fe4a:1b2c");
     strcpy(p->ipv6[1], "2001:db8::ff:fe4a:1b2c");
     p->ipv6_count = 2;
+    strcpy(p->public_ip, "203.0.113.7");
     p->config_revision = 3;
     p->wakeups = 57;
 }
 
 /* 名称规则、默认名称和编码缓冲不足。 */
+/* 回显地址的应答体：只认一个地址，首尾空白去掉、写成小写；别的内容一律不要。 */
+static void test_public_ip(void)
+{
+    char ip[BASE_IP_TEXT_BYTES];
+    static const struct { const char *body, *expect; } cases[] = {
+        {"113.92.157.29", "113.92.157.29"}, {"113.92.157.29\n", "113.92.157.29"}, {" 0.0.0.0 ", "0.0.0.0"},
+        {"240E:39B:2BEA:1B31:9238:CFF:FE5B:3D20", "240e:39b:2bea:1b31:9238:cff:fe5b:3d20"}, {"::1", "::1"}, {"1::", "1::"},
+        {"::ffff:113.92.157.29", "::ffff:113.92.157.29"}, {"1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7:8"},
+        {"ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255", "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255"},
+        {"", NULL}, {"   ", NULL}, {"256.1.1.1", NULL}, {"01.2.3.4", NULL}, {"1.2.3", NULL}, {"1.2.3.4.5", NULL}, {"1.2.3.4x", NULL},
+        {"1:2:3:4:5:6:7:8:9", NULL}, {"1::2::3", NULL}, {":1", NULL}, {"1:", NULL}, {"12345::", NULL}, {"1:2", NULL},
+        {"fe80::1%wlan0", NULL}, {"<html>blocked</html>", NULL}, {"::ffff:1.2.3", NULL},
+        {"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", NULL},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; ++i) {
+        const bool ok = base_public_ip_parse(ip, cases[i].body, strlen(cases[i].body));
+        CHECK(cases[i].expect ? ok && !strcmp(ip, cases[i].expect) : !ok && !ip[0]);
+        if (cases[i].expect ? !(ok && !strcmp(ip, cases[i].expect)) : ok) fprintf(stderr, "  public_ip %s -> %s\n", cases[i].body, ip);
+    }
+    CHECK(!base_public_ip_parse(ip, NULL, 0) && !ip[0]);
+    CHECK(!base_public_ip_parse(ip, "1.2.3.4", 3) && !ip[0]); /* 只看给定的长度 */
+}
+
 static void test_profile(void)
 {
     char name[BASE_NAME_BYTES];
@@ -503,6 +527,7 @@ static void test_profile(void)
     profile.stack_count = BASE_STACK_SLOTS;
     for (int i = 0; i < BASE_IPV6_SLOTS; ++i) strcpy(profile.ipv6[i], "2001:db8:1234:5678:9abc:def0:1234:5678");
     profile.ipv6_count = BASE_IPV6_SLOTS;
+    strcpy(profile.public_ip, "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255"); /* 最长的地址文本，45 字节 */
     memset(profile.mqtt_uri, 'm', sizeof profile.mqtt_uri - 1);
     base_business_profile_t *business = &profile.business;
     memset(business->name, 'n', sizeof business->name - 1);
@@ -660,6 +685,7 @@ int main(int argc, char **argv)
     test_topics();
     test_dedupe();
     test_config_decode();
+    test_public_ip();
     test_profile();
     test_guard();
     test_ota_happy_path();

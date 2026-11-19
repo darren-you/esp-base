@@ -200,6 +200,8 @@ typedef struct {
     char ipv4[16], netmask[16], gateway[16];
     char ipv6[BASE_IPV6_SLOTS][BASE_IP_TEXT_BYTES];
     uint8_t ipv6_count;
+    /* 公网出口地址：经回显地址取得，不由采样任务改写；空串表示还没取到。 */
+    char public_ip[BASE_IP_TEXT_BYTES];
     /* 业务层：采样时由业务运行时填写。 */
     base_business_profile_t business;
 } base_profile_t;
@@ -213,6 +215,9 @@ bool base_is_identifier(const char *text, size_t size);
 /* 可以上报的地址：去掉账户、密码（userinfo）、查询串和片段，只留 scheme://host[:port][/path]。
  * 放不下或不是 scheme://… 时写出空串并返回 false。 */
 bool base_public_uri(char out[BASE_URI_BYTES], const char *uri);
+/* 回显地址的应答体：一个 IPv4 或 IPv6 地址的文本，首尾可以有空白。合法时写出小写的地址并返回 true；
+ * 否则（例如运营商注入的网页）写出空串并返回 false。 */
+bool base_public_ip_parse(char out[BASE_IP_TEXT_BYTES], const char *body, size_t length);
 /* 状态文档。返回写入长度；缓冲不足返回 -1。 */
 int base_status_encode(const base_profile_t *profile, char *out, size_t size);
 /* 遗嘱：{"online":false,…}，只带 device_id、boot_id、name、group 和 fw。 */

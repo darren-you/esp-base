@@ -1,5 +1,14 @@
 menu "ESP Base"
 
+    config ESP_BASE_PUBLIC_IP_URL
+        string "URL that echoes the device's public address"
+        default "https://esp.silicicsoft.com/ip"
+        help
+            After each broker connection the device GETs this URL once over HTTPS; the plain-text
+            body is the address the server saw (normally the router's public IPv4). It is reported
+            in the status document as net.public_ip, and the server estimates the device's
+            location from it. Empty disables the lookup and public_ip stays null.
+
     config ESP_BASE_TEST_NO_BROKER
         bool "Test build only: never connect to the MQTT broker"
         default n

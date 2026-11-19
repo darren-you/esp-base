@@ -28,6 +28,9 @@ typedef struct {
 } base_profile_settings_t;
 void base_profile_set(const base_profile_settings_t *settings);
 
+/* 公网出口地址由控制任务写入（取到、或网络断开时清掉）；NULL 或空串表示还没取到。 */
+void base_profile_set_public_ip(const char *ip);
+
 /* 请求一次异步采样；正在采样时合并为一次。完成后调用 base_profile_start 给出的回调。 */
 void base_profile_request(void);
 

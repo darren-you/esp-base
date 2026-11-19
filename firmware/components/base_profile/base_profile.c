@@ -210,6 +210,14 @@ void base_profile_set(const base_profile_settings_t *settings)
     xSemaphoreGive(s_lock);
 }
 
+void base_profile_set_public_ip(const char *ip)
+{
+    if (!s_lock) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    copy(s_profile.public_ip, sizeof s_profile.public_ip, ip);
+    xSemaphoreGive(s_lock);
+}
+
 void base_profile_request(void)
 {
     if (s_task) xTaskNotifyGive(s_task);

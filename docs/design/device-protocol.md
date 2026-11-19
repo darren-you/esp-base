@@ -21,7 +21,7 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
 
 ## 状态文档
 
-状态文档就是设备的 Profile：设备能报告的全部信息。顶层字段都属于系统层；业务层的信息集中在 `business` 里。设备在连上 Broker、执行命令之后、取得 IPv6 地址时、业务连接的状态变化后（合并 2 秒）和每 15 分钟各发布一次。遗嘱是同一主题上的 `{"online":false,…}`，只带 `device_id`、`boot_id`、`name`、`group` 和 `fw`；名称或 Group 改了之后设备会重建连接，让 Broker 记住新的遗嘱。Server 重启后读 retained 消息即可得到最近状态。
+状态文档就是设备的 Profile：设备能报告的全部信息。顶层字段都属于系统层；业务层的信息集中在 `business` 里。设备在连上 Broker、执行命令之后、取得 IPv6 地址时、取得或换了公网出口地址时、业务连接的状态变化后（合并 2 秒）和每 15 分钟各发布一次。遗嘱是同一主题上的 `{"online":false,…}`，只带 `device_id`、`boot_id`、`name`、`group` 和 `fw`；名称或 Group 改了之后设备会重建连接，让 Broker 记住新的遗嘱。Server 重启后读 retained 消息即可得到最近状态。
 
 ```jsonc
 {"online":true,"device_id":"<uuid>","boot_id":"<每次启动新生成的 uuid>","uptime_s":3600,"reset":"power_on",
@@ -35,7 +35,8 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
  "wifi":{"rssi":-52,"ssid":"<SSID>","bssid":"aa:bb:cc:dd:ee:ff","channel":6},
  "net":{"mac":"aa:bb:cc:dd:ee:01","hostname":"espressif",
         "ipv4":{"address":"192.0.2.20","netmask":"255.255.255.0","gateway":"192.0.2.1"},  // 没有地址时为 null
-        "ipv6":["fe80::…","2001:db8::…"]},                 // 链路本地与 SLAAC 地址，最多 3 个，小写
+        "ipv6":["fe80::…","2001:db8::…"],                  // 链路本地与 SLAAC 地址，最多 3 个，小写
+        "public_ip":"203.0.113.7"},                         // 公网出口地址，见下；还没取到时为 null
  "mqtt":{"uri":"mqtts://<Broker 域名>:8883"},              // 系统 MQTT；只报地址，不报账户和密码
  "business":{                                              // 业务层；固件没有业务层时为 null
    "name":"wasm",                                          // 业务名：基座固件的业务层是 WASM 宿主
@@ -50,11 +51,13 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
 
 `chip.features` 取值：`wifi`、`ble`、`bt`、`ieee802154`、`emb_flash`、`emb_psram`。`reset` 取值：`power_on`、`external_pin`、`software`、`panic`、`interrupt_watchdog`、`task_watchdog`、`watchdog`、`brownout`、`usb`、`business_watchdog`（业务任务没有按期报到，或业务的回调没有按时返回，运行时重启了设备）和 `other`。
 
+**公网出口地址**：设备每次连上 Broker 后等 10 秒（让业务连接先握手），经 HTTPS 访问一次回显地址（固件构建选项 `CONFIG_ESP_BASE_PUBLIC_IP_URL`，默认 `https://esp.silicicsoft.com/ip`，由东京 Nginx 直接应答对端看到的来源地址，应答体就是地址文本），合法的 IPv4／IPv6 地址才写进 `net.public_ip`，小写。它通常是路由器的公网 IPv4（回显域名只有 A 记录）；Server 按它推测设备所在的地区。固件下载期间推迟 60 秒再取，避免两条 TLS 连接同时占用内存；没取到时随每 15 分钟的状态刷新再试；Wi-Fi 断开时清空，重新连上再取。回显地址配置为空串时不取，`public_ip` 一直是 `null`。
+
 **安全模式**：同一个固件连续 3 次异常重启（`panic`、各类看门狗、`business_watchdog`），下一次启动就不再拉起业务，`business.state` 为 `disabled`、`error` 为 `crash_loop`；系统层照常在线，可以远程配置和 OTA。正常重启（上电、`restart` 命令、有线刷写）或换了固件后重新计数，业务连续运行 5 分钟后也清零。异常复位只记在出事的那个固件头上：新固件崩溃后回滚回来的旧固件不计这一次。
 
-**严格解析**：Server 只接受这一种形状的状态文档：在线文档带齐上面的全部字段，遗嘱只带那五项；多出、缺少或类型不对的文档被丢弃并记日志。所以协议加字段时先发布认识新字段的 Server 再升级固件，删字段顺序相反，旧固件同时从固件登记库删除。业务运行时之前的固件（顶层 `business_mqtt`、没有 `business`，以及更早没有 Profile 的）已全部退役。
+**严格解析**：Server 只接受这一种形状的状态文档：在线文档带齐上面的全部字段，遗嘱只带那五项；多出、缺少或类型不对的文档被丢弃并记日志。所以协议加字段时先发布认识新字段的 Server 再升级固件，删字段顺序相反，旧固件同时从固件登记库删除。`net.public_ip` 是后加的字段：在旧固件全部升级之前，Server 也接受没有它的文档。业务运行时之前的固件（顶层 `business_mqtt`、没有 `business`，以及更早没有 Profile 的）已全部退役。
 
-设备端由 `base_profile` 组件持有 Profile：芯片、MAC 和 IDF 版本启动时采集一次，名称、Group、系统 MQTT 地址与配置版本由控制任务写入，堆、系统任务栈、Wi-Fi 和 IPv4／IPv6 由采样任务按请求异步采样，同一次采样里向业务运行时读取 `business`，采完再由控制任务发布。状态文档和遗嘱只从 Profile 快照编码（`base_status_encode`、`base_will_encode`），不在别处另行采集。
+设备端由 `base_profile` 组件持有 Profile：芯片、MAC 和 IDF 版本启动时采集一次，名称、Group、系统 MQTT 地址、配置版本与公网出口地址由控制任务写入，堆、系统任务栈、Wi-Fi 和 IPv4／IPv6 由采样任务按请求异步采样，同一次采样里向业务运行时读取 `business`，采完再由控制任务发布。状态文档和遗嘱只从 Profile 快照编码（`base_status_encode`、`base_will_encode`），不在别处另行采集。
 
 ## 命令
 

@@ -340,6 +340,74 @@ static void put_char(writer_t *w, char c)
 }
 
 /* JSON 字符串：转义引号、反斜杠和控制字符；其余 UTF-8 原样写出。 */
+/* 点分十进制的 IPv4：四段 0–255，不带前导零。 */
+static bool is_ipv4(const char *text, size_t length)
+{
+    unsigned parts = 0;
+    for (size_t i = 0; i < length;) {
+        size_t digits = 0;
+        unsigned value = 0;
+        while (i + digits < length && isdigit((unsigned char)text[i + digits]) && digits < 4)
+            value = value * 10u + (unsigned)(text[i + digits++] - '0');
+        if (digits == 0 || digits > 3 || value > 255 || (digits > 1 && text[i] == '0')) return false;
+        i += digits;
+        if (++parts == 4) return i == length;
+        if (i >= length || text[i++] != '.') return false;
+    }
+    return false;
+}
+
+/* IPv6 的文本形式：最多 8 组 1–4 位十六进制，至多一个 ::，末尾可以是嵌入的 IPv4（算两组）。 */
+static bool is_ipv6(const char *text, size_t length)
+{
+    unsigned groups = 0;
+    bool compressed = false;
+    size_t i = 0;
+    if (length >= 2 && text[0] == ':' && text[1] == ':') {
+        compressed = true;
+        i = 2;
+    } else if (length >= 1 && text[0] == ':') {
+        return false;
+    }
+    while (i < length) {
+        size_t digits = 0;
+        while (i + digits < length && isxdigit((unsigned char)text[i + digits])) ++digits;
+        if (i + digits < length && text[i + digits] == '.') {
+            if (!is_ipv4(text + i, length - i)) return false;
+            groups += 2;
+            i = length;
+            break;
+        }
+        if (digits == 0 || digits > 4) return false;
+        ++groups;
+        i += digits;
+        if (i == length) break;
+        if (text[i] != ':') return false;
+        if (i + 1 < length && text[i + 1] == ':') {
+            if (compressed) return false;
+            compressed = true;
+            i += 2;
+        } else if (++i == length) {
+            return false; /* 结尾的单个冒号 */
+        }
+    }
+    return compressed ? groups < 8 : groups == 8;
+}
+
+bool base_public_ip_parse(char out[BASE_IP_TEXT_BYTES], const char *body, size_t length)
+{
+    out[0] = '\0';
+    if (!body) return false;
+    while (length && isspace((unsigned char)body[0])) { ++body; --length; }
+    while (length && isspace((unsigned char)body[length - 1])) --length;
+    if (length == 0 || length >= BASE_IP_TEXT_BYTES) return false;
+    const bool v6 = memchr(body, ':', length) != NULL;
+    if (v6 ? !is_ipv6(body, length) : !is_ipv4(body, length)) return false;
+    for (size_t i = 0; i < length; ++i) out[i] = (char)tolower((unsigned char)body[i]);
+    out[length] = '\0';
+    return true;
+}
+
 static void put_string(writer_t *w, const char *value)
 {
     put_char(w, '"');
@@ -490,7 +558,9 @@ int base_status_encode(const base_profile_t *p, char *out, size_t size)
         if (i) put(&w, ",");
         put_string(&w, p->ipv6[i]);
     }
-    put(&w, "]},\"mqtt\":{\"uri\":");
+    put(&w, "],\"public_ip\":");
+    put_nullable_string(&w, p->public_ip);
+    put(&w, "},\"mqtt\":{\"uri\":");
     put_string(&w, p->mqtt_uri);
     put(&w, "},\"business\":");
     put_business(&w, &p->business);
