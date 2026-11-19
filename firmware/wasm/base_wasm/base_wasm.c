@@ -653,7 +653,7 @@ static bool stage(unsigned step, unsigned index)
 static void script_task(void *argument)
 {
     (void)argument;
-    /* 每一步：下发哪个包（-1 表示只重启设备），等多久看结果。包的内容和顺序见 tests/wasm_deploy_qemu.py。 */
+    /* 每一步：下发哪个包（-1 表示只重启设备），等多久看结果。包的内容和顺序见 tools/wasm_deploy_qemu.py。 */
     static const struct {
         int package;
         uint32_t wait_ms;

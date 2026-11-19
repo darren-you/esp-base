@@ -5,10 +5,11 @@
 ota_1 的位置，固件按固定的顺序把它们当作期望应用下发，「下载」是从 Flash 里拷贝，其余走的都是正式的代码。
 固件和应用包用临时生成、用完即弃的键签名；其中一个包故意用另一把键签名。
 
-需要已导出的官方 ESP-IDF 环境（idf.py、esptool、espsecure 和 Espressif 的 QEMU）。在 firmware 目录的上一级或任意
-位置执行：
+需要已导出的官方 ESP-IDF 环境（idf.py、esptool、espsecure 和 Espressif 的 QEMU）。在任意位置执行：
 
-    python3 firmware/tests/wasm_deploy_qemu.py [esp32c3|esp32] [--no-build]
+    python3 tools/wasm_deploy_qemu.py [esp32c3|esp32] [--no-build]
+
+主机侧的脚本不放在固件根里（工程标准），所以在 tools/；测试固件的 sdkconfig 片段和测试用的应用仍在 firmware/tests。
 """
 import argparse
 import json
@@ -21,8 +22,8 @@ import tempfile
 import time
 from pathlib import Path
 
-FIRMWARE = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(FIRMWARE.parent / "tools"))
+FIRMWARE = Path(__file__).resolve().parents[1] / "firmware"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import esp_base_app  # noqa: E402
 
 APPS = FIRMWARE / "tests/apps"

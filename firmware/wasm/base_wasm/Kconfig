@@ -16,7 +16,7 @@ menu "ESP Base WASM"
             The firmware never starts the system layer (no Wi-Fi, no broker). It deploys the
             application packages that the test script placed in flash, one after another, through
             the regular slots, signature checks, trial, commit and rollback; only the download is
-            replaced by a copy from flash. Used by tests/wasm_deploy_qemu.py; release packaging
+            replaced by a copy from flash. Used by tools/wasm_deploy_qemu.py; release packaging
             refuses images built with it.
 
 endmenu

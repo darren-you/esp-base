@@ -16,7 +16,7 @@
 | `components/base_runtime` | 运行时 | 业务层唯一能依赖的组件：公开目录里只有 `base_runtime.h`；`system/` 是留给系统层的接口和业务守卫的纯逻辑 |
 | `wasm/base_wasm` | 业务 | WASM 宿主：不在 `components/` 里——业务固件引用的是 `components/`，宿主和它引用的 WAMR 只进要它的工程。以一个业务的身份跑在 `base_runtime` 上，用 WAMR 解释器运行编译成 WASM 的业务应用，并负责应用的部署。`core/` 是不依赖 ESP-IDF 的纯逻辑（宿主接口与事件分发、应用包解析、部署状态机）；`base_wasm.c` 是应用任务，`wasm_platform.c` 是定时器与业务 MQTT，`wasm_store.c` 是应用槽、部署记录和下载 |
 | `partitions/partitions.csv` | | 两个目标共用的 4 MiB 分区表 |
-| `tests` | | host 测试、QEMU 里的部署测试、测试用的应用（`apps/`，源码在 [`../sdk/rust`](../sdk/rust/README.md)）和测试固件的 sdkconfig 片段 |
+| `tests` | | host 测试、测试用的应用（`apps/`，源码在 [`../sdk/rust`](../sdk/rust/README.md)）和测试固件的 sdkconfig 片段；QEMU 里的部署测试由 `../tools/wasm_deploy_qemu.py` 驱动（主机侧的脚本不放在固件根里） |
 
 ## 分层
 
@@ -158,7 +158,7 @@ python3 ../sdk/sim/test_sim.py      # 本机运行（模拟器）和应用的命
 设备上的部署用 QEMU 测（需要已导出的 ESP-IDF 环境和 Espressif 的 QEMU）：
 
 ```bash
-python3 tests/wasm_deploy_qemu.py esp32c3   # 或 esp32
+python3 ../tools/wasm_deploy_qemu.py esp32c3   # 或 esp32
 ```
 
 它构建一个不启动系统层的测试固件（`CONFIG_ESP_BASE_TEST_WASM_DEPLOY`），把八个应用包放进 Flash 镜像，让固件逐个部署：首次部署、重启后恢复、替换成新版本、启动失败回退、签名后被改动的包和别的键签名的包被拒绝、试运行期间出故障回退、部署一个操作引脚和 PWM 的应用并重启、换回不用引脚的应用、再次重启后仍是最后提交的版本。「下载」换成从 Flash 里拷贝，应用槽、验签、试运行、提交、回退、部署记录和引脚走的都是正式的代码。QEMU 不模拟引脚电平：这里核对的是 GPIO、LEDC 驱动的调用都成功、没有报错，读回的电平和占空比要在实板上看。ESP32 的模拟器默认是 v0.0 的芯片，脚本给它一份烧了芯片版本位的 eFuse；它在 `esp_restart` 之后不复位定时器组，测试固件在 ESP32 上改用系统级的软件复位。
@@ -166,8 +166,8 @@ python3 tests/wasm_deploy_qemu.py esp32c3   # 或 esp32
 同一个测试固件也能上实板，核对 QEMU 模拟不了的部分（真实的 Flash、验签、引脚电平、LEDC 和定时器）：
 
 ```bash
-python3 tests/wasm_deploy_qemu.py esp32c3 --image-dir <目录> [--extra <未签名的应用包>]   # 构建并产出要写入的文件
-python3 tests/wasm_deploy_qemu.py esp32c3 --check-log <串口日志> [--extra <同一个应用包>]  # 核对实板的串口日志
+python3 ../tools/wasm_deploy_qemu.py esp32c3 --image-dir <目录> [--extra <未签名的应用包>]   # 构建并产出要写入的文件
+python3 ../tools/wasm_deploy_qemu.py esp32c3 --check-log <串口日志> [--extra <同一个应用包>]  # 核对实板的串口日志
 ```
 
 `--image-dir` 产出 `app-signed.bin`（写到 0x20000）和 `staged.bin`（写到 0x200000），连同构建目录里的 `ota_data_initial.bin`（写到 0x19000）经 USB 写入；bootloader 和分区表不动。测试固件会写 NVS 和 Flash 末尾的应用槽，所以先整片备份（`esptool read-flash 0 0x400000`，再 `verify-flash` 核对），测完把 0x9000 之后的内容从备份写回并整片校验。`--extra` 另放一个真实业务的应用包，最后部署它，用来量它在实板上的内存占用。实板上除了 QEMU 的那些项，还核对读回的安全电平、输出电平、上拉输入、PWM 占空比，以及时限到期时引脚回到安全电平。
