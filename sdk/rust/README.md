@@ -16,7 +16,11 @@ python3 tools/esp_base.py app test ../my-app       # 本机跑单元测试
 python3 tools/esp_base.py app run ../my-app        # 本机运行：模拟定时器、业务 MQTT 和引脚
 python3 tools/esp_base.py app build ../my-app      # 构建、检查并封装成未签名的应用包（.ebapp）
 python3 tools/esp_base.py app sign ../my-app/target/esp-base/my_app.ebapp --key-file /absolute/path/signing-key.pem
+python3 tools/esp_base.py app deploy ../my-app/target/esp-base/my_app-signed.ebapp --device <设备 UUID> \
+    --server https://<管理入口> --username <账户> --password-file /absolute/path/password   # 登记并部署，等设备报告结果
 ```
+
+`app deploy` 经 [ESP Tool Server](https://github.com/darren-you/esp-tool) 的管理接口工作：给的是文件时先登记（同一份字节登记过就不重复），再创建部署任务，然后每秒读一次任务直到设备报告结果，状态每变一次打印一行。设备不重启；新应用启动失败或试运行期间出故障时设备回到原来的应用，命令以退出码 1 结束并写出设备给的原因。退出码 2 表示等满了 `--timeout`（默认 120 秒）任务还没结束——任务仍然有效，离线的设备上线后会继续。只登记不部署用 `app push`；已登记的应用包可以直接用它的 SHA-256 部署。密码只从仓外的文件读取。
 
 `app run` 和 `app sign` 用到固件那一侧的东西：前者要 cmake、C 编译器，以及组件管理器给固件取回的 WAMR 和 cJSON（先在已导出 ESP-IDF 环境的终端里构建过一次固件）；后者要官方的 `espsecure`。[应用包](../../docs/design/app-package.md)的格式、清单和引脚规则见设计文档。
 

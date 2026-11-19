@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ESP Base 固件维护入口：build、sign、flash、control，以及业务应用的 app new、build、test、run、sign、inspect。
+"""ESP Base 固件维护入口：build、sign、flash、control，以及业务应用的 app new、build、test、run、sign、inspect、push、deploy。
 
 在已导出官方 ESP-IDF 环境（IDF_PATH、idf.py、esptool、espsecure）的 macOS／Linux 上运行。
 私钥、Wi-Fi 与 MQTT 凭据只从仓外文件读取，不打印、不写入仓库。
@@ -24,6 +24,7 @@ import uuid
 import zipfile
 
 import esp_base_app
+import esp_base_server
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_FIRMWARE = ROOT / "firmware"
@@ -599,6 +600,80 @@ def app_inspect(args):
     print(json.dumps(result, ensure_ascii=False))
 
 
+# ---- app push／deploy：经 ESP Tool Server 登记应用包、部署到设备 ----
+def app_server(args):
+    try:
+        password = Path(args.password_file).read_text().strip()
+        return esp_base_server.Server(args.server, args.username, password)
+    except OSError as error:
+        fail(f"读不到密码文件：{error.strerror}")
+    except esp_base_server.ServerError as error:
+        fail(str(error))
+
+
+def register_app(server, path):
+    """登记一个签名的应用包，返回 Server 的登记记录。没签名的包在本机就拦下。"""
+    try:
+        data = Path(path).read_bytes()
+        described = esp_base_app.describe(data)
+    except (OSError, ValueError, esp_base_app.AppError) as error:
+        fail(str(error))
+    if not described["signed"]:
+        fail("这个应用包还没有签名：先用 app sign 签名，Server 只登记可信键签名的应用包")
+    record = server.register_app(data)
+    if record.get("sha256") != hashlib.sha256(data).hexdigest():
+        fail("Server 登记的不是这份字节")
+    return record
+
+
+def app_push(args):
+    """把签名的应用包登记到 ESP Tool Server。同一份字节登记过就返回已有的记录。"""
+    server = app_server(args)
+    try:
+        record = register_app(server, args.package)
+    except esp_base_server.ServerError as error:
+        fail(str(error))
+    print(json.dumps(record, ensure_ascii=False))
+
+
+def app_deploy(args):
+    """让一台设备运行某个应用包，并等到设备报告结果。给的是文件时先登记（已登记的不重复）。
+
+    退出码：0 部署成功；1 部署失败、被设备拒绝、超过任务期限或被取消；2 等满了 --timeout 任务还没结束。
+    """
+    server = app_server(args)
+    try:
+        if esp_base_server.SHA256.fullmatch(args.app):
+            digest = args.app
+        elif Path(args.app).is_file():
+            digest = register_app(server, args.app)["sha256"]
+        else:
+            fail("要部署的应用是签名的应用包文件，或已登记应用包的 SHA-256（64 位小写十六进制）")
+        deployment = server.create_deployment(args.device, digest, args.ttl)
+
+        def show(item, elapsed):
+            print(json.dumps({"deployment": item["id"], "status": item["status"], "attempt": item["attempt"],
+                              "error": item["error"] or None, "elapsed_s": round(elapsed, 1)}, ensure_ascii=False), flush=True)
+
+        show(deployment, 0)
+        if args.no_wait:
+            return
+        started = time.monotonic()
+        deployment = server.wait_deployment(deployment, args.timeout, show)
+    except esp_base_server.ServerError as error:
+        fail(str(error))
+    if deployment["status"] in esp_base_server.ACTIVE:
+        print(f"esp_base: 等了 {args.timeout:g} 秒任务还没结束（{deployment['status']}）；任务仍在进行，设备上线后会继续",
+              file=sys.stderr)
+        sys.exit(2)
+    if deployment["status"] != "SUCCEEDED":
+        print(f"esp_base: 部署没有成功：{deployment['status']}" + (f"（{deployment['error']}）" if deployment["error"] else ""),
+              file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"deployment": deployment["id"], "device": args.device, "app_sha256": digest, "status": "SUCCEEDED",
+                      "seconds": round(time.monotonic() - started, 1)}, ensure_ascii=False))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -636,7 +711,7 @@ def main():
     command.add_argument("--timeout", type=float, default=30)
     command.set_defaults(run=control)
 
-    command = commands.add_parser("app", help="业务应用（WASM）：新建、构建、测试、本机运行、签名、查看")
+    command = commands.add_parser("app", help="业务应用（WASM）：新建、构建、测试、本机运行、签名、查看、登记、部署")
     actions = command.add_subparsers(dest="action", required=True)
     action = actions.add_parser("new", help="新建一个应用工程")
     action.add_argument("directory", help="工程目录：不存在，或是空目录")
@@ -670,6 +745,24 @@ def main():
     action = actions.add_parser("inspect", help="查看应用包或 .wasm 的清单、体积、宿主接口和线性内存")
     action.add_argument("file")
     action.set_defaults(run=app_inspect)
+
+    def server_arguments(action):
+        action.add_argument("--server", required=True, help="ESP Tool 管理入口的根地址：https://<主机>")
+        action.add_argument("--username", required=True, help="管理入口的账户")
+        action.add_argument("--password-file", required=True, help="仓外的密码文件")
+
+    action = actions.add_parser("push", help="把签名的应用包登记到 ESP Tool Server")
+    action.add_argument("package", help="app sign 产出的 -signed.ebapp")
+    server_arguments(action)
+    action.set_defaults(run=app_push)
+    action = actions.add_parser("deploy", help="把应用部署到一台设备并等它报告结果；设备不重启")
+    action.add_argument("app", help="签名的应用包文件（先登记），或已登记应用包的 SHA-256")
+    action.add_argument("--device", required=True, help="设备 UUID")
+    action.add_argument("--ttl", type=int, help="任务期限，秒；缺省由 Server 决定（7 天）。设备离线时任务等它上线")
+    action.add_argument("--timeout", type=float, default=120, help="最多等多少秒；等满后任务仍然有效")
+    action.add_argument("--no-wait", action="store_true", help="创建任务后立即返回")
+    server_arguments(action)
+    action.set_defaults(run=app_deploy)
 
     args = parser.parse_args()
     if args.command == "control" and args.action == "cmd" and not args.name:

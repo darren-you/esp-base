@@ -69,7 +69,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 ## 业务应用（WASM）
 
-业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。应用封装成签名的[应用包](docs/design/app-package.md)，经 `app/desired` 部署到设备的应用槽里：换应用不重启设备，新应用启动失败或试运行期间出故障时自动回到上一版。应用工程用 `tools/esp_base.py app new` 新建，`app test` 在本机跑单元测试，`app run` 在本机用同一份宿主核心运行编译好的应用，不用碰设备。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)，部署合同见[设备—云协议](docs/design/device-protocol.md#应用部署)。
+业务用 Rust 写成 `no_std` 的应用，编译成 WASM，由基座固件里的 WASM 宿主加载运行：应用是事件驱动的，只能经宿主接口使用定时器、业务 MQTT 等设备能力，出故障时只停应用，系统层照常在线。应用封装成签名的[应用包](docs/design/app-package.md)，经 `app/desired` 部署到设备的应用槽里：换应用不重启设备，新应用启动失败或试运行期间出故障时自动回到上一版。应用工程用 `tools/esp_base.py app new` 新建，`app test` 在本机跑单元测试，`app run` 在本机用同一份宿主核心运行编译好的应用，不用碰设备；`app build`、`app sign` 出签名的应用包，`app push` 登记到 ESP Tool Server，`app deploy` 部署到一台设备并等它报告结果。SDK 和样例见 [sdk/rust](sdk/rust/README.md)，宿主见[固件说明](firmware/README.md#wasm-宿主)，部署合同见[设备—云协议](docs/design/device-protocol.md#应用部署)。
 
 ## 业务固件
 
@@ -90,6 +90,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 ```bash
 bash firmware/tests/run_host_tests.sh   # host 测试：协议编解码与 OTA 状态机，需先构建过一次
+python3 tools/test_esp_base_server.py   # app push、app deploy：对着本机的假 Server 跑客户端和命令行
 ```
 
 验证分三层：host 测试、两块板冒烟（刷入后联网、收发命令、完成一次 OTA）、24 小时长稳。host 测试通过不代表实板可用。长稳用 esp-tool 的 [`server/scripts/ota_soak.py`](https://github.com/darren-you/esp-tool/blob/1.0.0/server/scripts/ota_soak.py)，在 Server 所在主机上运行：两块板在两个已登记的版本之间来回升级，记录每轮结果、非预期重启和最小空闲堆。
