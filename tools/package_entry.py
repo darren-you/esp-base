@@ -106,14 +106,14 @@ def directory_files(directory):
     files = {}
     for path in sorted(directory.rglob("*")):
         if path.is_symlink() or not (path.is_file() or path.is_dir()):
-            esp_base.fail("固件包目录只能包含普通文件")
+            esp_base.fail("正式包的目录只能包含普通文件")
         if path.is_file():
             files[path.relative_to(directory).as_posix()] = path.read_bytes()
     return files
 
 
 def package_directory(stage, expected, artifact):
-    """把已签名并核对的固件目录封装成正式 ZIP；根 build.json 换成正式身份，不覆盖已有不同字节。"""
+    """把已签名并核对的目录（固件或应用）封装成正式 ZIP；根 build.json 换成正式身份，不覆盖已有不同字节。"""
     import tempfile
     import zipfile
     files = directory_files(stage)
@@ -129,12 +129,12 @@ def package_directory(stage, expected, artifact):
                 archive.writestr(item, data)
         with zipfile.ZipFile(candidate) as archive:
             if archive.namelist() != sorted(files) or any(archive.read(name) != data for name, data in files.items()):
-                esp_base.fail("最终固件包与封装输入不一致")
+                esp_base.fail("最终的正式包与封装输入不一致")
         try:
             os.link(candidate, artifact)
         except FileExistsError:
             if artifact.is_symlink() or artifact.read_bytes() != candidate.read_bytes():
-                esp_base.fail("同版本构建号已有不同固件包，拒绝覆盖")
+                esp_base.fail("同版本构建号已有不同的正式包，拒绝覆盖")
     return {"schema_version": 1, "build": expected, "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
             "artifact_bytes": artifact.stat().st_size}
 
@@ -194,8 +194,8 @@ def package(artifact):
             "version": version, "target": manifest["target"], "signing_trust": trust}
 
 
-def ensure_idf_environment():
-    """Fast Deploy 不导出 IDF：用官方 export.sh 取得环境，再以 IDF 的 Python 重新执行本入口。
+def ensure_idf_environment(script=__file__):
+    """Fast Deploy 不导出 IDF：用官方 export.sh 取得环境，再以 IDF 的 Python 重新执行入口（script）。
 
     idf.py 与 espsecure 依赖 IDF 自己的 Python 环境，所以不能只补 PATH。
     """
@@ -209,7 +209,7 @@ def ensure_idf_environment():
                           check=True, capture_output=True).stdout.decode()
     environment = dict(item.split("=", 1) for item in dump.split("\0") if "=" in item)
     python = Path(environment["IDF_PYTHON_ENV_PATH"]) / "bin" / "python"
-    os.execve(python, [str(python), str(Path(__file__).resolve()), *sys.argv[1:]], environment)
+    os.execve(python, [str(python), str(Path(script).resolve()), *sys.argv[1:]], environment)
 
 
 def main():

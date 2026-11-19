@@ -461,14 +461,18 @@ def app_test(args):
     run([cargo(), "test", "--target", host, *args.cargo_args], cwd=project)
 
 
-def build_app(project, build_number):
-    """构建应用并封装成未签名的应用包：<cargo 的 target 目录>/esp-base/<应用名>.ebapp。返回清单和产物的信息。"""
+def build_app(project, build_number, locked=False, target_dir=None):
+    """构建应用并封装成未签名的应用包：<cargo 的 target 目录>/esp-base/<应用名>.ebapp。返回清单和产物的信息。
+
+    正式打包时 locked 为真（不许改动 Cargo.lock），target_dir 指到源码树之外。
+    """
     project = Path(project).resolve()
     if not (project / "Cargo.toml").is_file():
         fail(f"{project} 里没有 Cargo.toml")
-    run([cargo(), "build", "--release"], cwd=project, stdout=sys.stderr)
+    environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)} if target_dir else None
+    run([cargo(), "build", "--release", *(["--locked"] if locked else [])], cwd=project, stdout=sys.stderr, env=environment)
     metadata = json.loads(subprocess.run([cargo(), "metadata", "--format-version", "1", "--no-deps"], cwd=project,
-                                         check=True, capture_output=True).stdout)
+                                         check=True, capture_output=True, env=environment).stdout)
     try:
         crate = json.loads(subprocess.run([cargo(), "read-manifest"], cwd=project, check=True, capture_output=True).stdout)
         wasm_path = Path(metadata["target_directory"]) / "wasm32v1-none/release" / (crate["name"].replace("-", "_") + ".wasm")
@@ -489,7 +493,7 @@ def build_app(project, build_number):
     if fields["memory"] < estimate:
         print(f"esp_base: 清单的 memory 是 {fields['memory']} 字节，这个应用估计要用 {estimate} 字节左右；"
               "装到设备上可能启动失败", file=sys.stderr)
-    return {**fields, "package": str(output), "package_bytes": len(package), "wasm_bytes": len(wasm),
+    return {**fields, "package": str(output), "package_bytes": len(package), "wasm_bytes": len(wasm), "wasm": str(wasm_path),
             "linear_bytes": checked["linear_bytes"], "memory_estimate": estimate, "imports": checked["imports"]}
 
 
@@ -561,9 +565,12 @@ def app_signed_path(package):
     return package.with_name(package.stem.removesuffix("-signed") + "-signed.ebapp")
 
 
-def app_sign(args):
-    """用固件的同一把 RSA-3072 键、同一个官方入口签名：补齐到 4 KiB，再附一个扇区的 Secure Boot V2 签名块。"""
-    package = Path(args.package).resolve()
+def sign_app(package, args):
+    """用固件的同一把 RSA-3072 键、同一个官方入口签名：补齐到 4 KiB，再附一个扇区的 Secure Boot V2 签名块。
+
+    返回签名后的文件和包里的清单。
+    """
+    package = Path(package).resolve()
     try:
         described = esp_base_app.describe(package.read_bytes())
     except (OSError, ValueError, esp_base_app.AppError) as error:
@@ -581,8 +588,13 @@ def app_sign(args):
     padded = unsigned + b"\xff" * (-len(unsigned) % esp_base_app.SECTOR_BYTES)
     if data[:len(padded)] != padded or len(data) != len(padded) + esp_base_app.SECTOR_BYTES or len(data) > esp_base_app.SLOT_BYTES:
         fail("签名后的应用包不是原包的字节，或超过应用槽")
-    print(json.dumps({"name": described["manifest"]["name"], "version": described["manifest"]["version"],
-                      "signed": str(signed), "bytes": len(data), "sha256": sha256(signed)}, ensure_ascii=False))
+    return signed, described["manifest"]
+
+
+def app_sign(args):
+    signed, manifest = sign_app(args.package, args)
+    print(json.dumps({"name": manifest["name"], "version": manifest["version"],
+                      "signed": str(signed), "bytes": signed.stat().st_size, "sha256": sha256(signed)}, ensure_ascii=False))
 
 
 def app_inspect(args):

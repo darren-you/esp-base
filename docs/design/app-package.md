@@ -101,3 +101,19 @@ chips = ["esp32c3"]
 4 = "out0"
 5 = "out0"
 ```
+
+## 正式包
+
+给正式设备用的应用包与固件一样由 Fast Deploy 的 package Job 在构建宿主上构建和签名，签名键不离开那里。Job 由产品仓声明：`platform` 为 `plugin`，`variant` 是应用名，`architectures` 是 `[wasm32]`，入口调用本仓的 `tools/app_package_entry.py`，环境变量 `ESP_BASE_APP_PROJECT` 指向应用工程、`ESP_BASE_APPLICATION_ID` 等于 `package.id`，签名键与信任根的两个变量和固件相同。应用工程 `Cargo.toml` 的 `version` 必须等于 Fast Deploy 分配的版本，依赖按入库的 `Cargo.lock`（`cargo build --locked`），构建目录在本次运行的目录里，不改动源码树。
+
+产出的 ZIP：
+
+| 文件 | 内容 |
+| --- | --- |
+| `<应用名>.ebapp` | 签名的应用包；登记到 ESP Tool Server、部署到设备的就是它，它的 SHA-256 就是登记和设备上报用的那个 |
+| `<应用名>.wasm` | 包里的模块，供排查 |
+| `Cargo.lock` | 这次构建用的依赖锁 |
+| `manifest.json` | `kind` 为 `esp-base-app`；清单（`app`）、构建输入（Rust 工具链、锁与编译配置的摘要、签名信任根的公钥摘要）、模块体积与线性内存、各文件的字节数和 SHA-256 |
+| `build.json` | Fast Deploy 写出的本次身份，逐字节相同 |
+
+入口只构建、签名和封装：登记（`app push`）和部署（`app deploy`，或在 ESP Tool 网页上）是之后分开的两步。

@@ -79,6 +79,8 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 
 正式固件包由 Fast Deploy 的 package Job `esp-base-esp32-firmware`、`esp-base-esp32c3-firmware` 构建（声明见 `package/<芯片>/deploy.yaml`），在工作区根执行 `bash harness/scripts/workspace/fast-deploy.sh trigger --job esp-base-esp32c3-firmware --wait`。两种芯片共用构建号 scope `firmware / esp-base`。Job 在 mac-ci-1 写出本次身份文件，执行 `tools/package_entry.py`：构建，用 Profile 快照中 `esp-base/firmware/shared.prod.env` 的 `ESP_BASE_SIGNING_KEY_PEM`（两种芯片共用这一把 RSA-3072 键）签名并验签，再封装成含 `manifest.json` 与 `build.json` 的 ZIP；Fast Deploy 再回读包内身份并留存制品。Fast Deploy 不导出 ESP-IDF，入口会自己 source 官方 `export.sh`，再用 IDF 的 Python 重新执行；IDF 默认在构建宿主的 `~/.espressif/frameworks/esp-idf-v6.1`，可用 `ESP_BASE_IDF_PATH` 指定别处。上面第 4 步的 `--package` 刷写的就是这个 ZIP。
 
+业务应用的正式包同样由 package Job 构建和签名，Job 由应用所在的产品仓声明（`platform: plugin`），入口调用本仓的 `tools/app_package_entry.py`：按入库的依赖锁构建，用同一把签名键签名并验签，封装成含签名应用包、`manifest.json` 与 `build.json` 的 ZIP，见[应用包](docs/design/app-package.md#正式包)。
+
 ## 文档
 
 - [设备—云协议](docs/design/device-protocol.md)：主题、状态文档、命令和 OTA 合同；[样例](docs/design/device-protocol-samples.json)同时用于设备和 Server 的解码测试。
@@ -91,6 +93,7 @@ python3 tools/esp_base.py control cmd restart --device <UUID> --uri ... --userna
 ```bash
 bash firmware/tests/run_host_tests.sh   # host 测试：协议编解码与 OTA 状态机，需先构建过一次
 python3 tools/test_esp_base_server.py   # app push、app deploy：对着本机的假 Server 跑客户端和命令行
+python3 tools/test_app_package_entry.py # 应用的正式打包入口：临时键加一份假的 Fast Deploy 身份，核对 ZIP（要 cargo 和官方 ESP-IDF）
 ```
 
 验证分三层：host 测试、两块板冒烟（刷入后联网、收发命令、完成一次 OTA）、24 小时长稳。host 测试通过不代表实板可用。长稳用 esp-tool 的 [`server/scripts/ota_soak.py`](https://github.com/darren-you/esp-tool/blob/1.0.0/server/scripts/ota_soak.py)，在 Server 所在主机上运行：两块板在两个已登记的版本之间来回升级，记录每轮结果、非预期重启和最小空闲堆。
