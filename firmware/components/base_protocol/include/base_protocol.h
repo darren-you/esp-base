@@ -27,6 +27,7 @@ typedef enum {
     BASE_TOPIC_APP_DESIRED, /* Server → 设备，retained 期望应用 */
     BASE_TOPIC_APP_STATE,   /* 设备 → Server，retained 应用状态 */
     BASE_TOPIC_APP_LOG,     /* 设备 → Server，应用日志；不保留，QoS 0 */
+    BASE_TOPIC_TELEMETRY,   /* 设备 → Server，log-sdk 设备日志（data-platform 协议 9.1 节）；不保留，QoS 1 */
     BASE_TOPIC_COUNT,
 } base_topic_t;
 

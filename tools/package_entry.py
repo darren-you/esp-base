@@ -26,12 +26,17 @@ APPLICATION_ID = "esp-base"
 
 
 def sources(target):
-    """构建输入的摘要：配置、依赖锁和分区表；缺少的目标专属配置不记。"""
+    """构建输入的摘要：配置、依赖锁和分区表；缺少的目标专属配置不记。log-sdk 记 gitlink 登记的提交。"""
     result = {}
     for name in SOURCES:
         path = esp_base.FIRMWARE / name.format(target=target)
         if path.is_file():
             result[name.format(target=target)] = esp_base.sha256(path)
+    listed = subprocess.check_output(["git", "-C", str(esp_base.FIRMWARE.parent), "ls-files", "--stage", "--", "dependencies/log-sdk"],
+                                     text=True).split()
+    if len(listed) < 4 or listed[0] != "160000":
+        esp_base.fail("缺少 dependencies/log-sdk 的 gitlink")
+    result["dependencies/log-sdk"] = listed[1]
     return result
 
 

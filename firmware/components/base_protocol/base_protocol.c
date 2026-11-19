@@ -47,7 +47,7 @@ bool base_is_sha256_hex(const char *text)
 bool base_topic(char out[BASE_TOPIC_BYTES], const char *device_id, base_topic_t topic)
 {
     static const char *const suffix[BASE_TOPIC_COUNT] = {"status", "rsp", "cmd/+", "ota/desired", "ota/state",
-                                                         "app/desired", "app/state", "app/log"};
+                                                         "app/desired", "app/state", "app/log", "telemetry"};
     if (!out || !base_is_uuid(device_id) || (unsigned)topic >= BASE_TOPIC_COUNT) return false;
     const int n = snprintf(out, BASE_TOPIC_BYTES, BASE_TOPIC_PREFIX "/%s/%s", device_id, suffix[topic]);
     return n > 0 && n < BASE_TOPIC_BYTES;

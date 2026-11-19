@@ -6,6 +6,10 @@
 kind: package
 project: esp-base-esp32c3-firmware
 
+hooks:
+  # 按本仓登记的 gitlink 取得 log-sdk 源码（固件引入其 ESP-IDF 组件 log_esp）（darren-space#114 T22）。
+  pre_build: [bash, tools/prepare_log_sdk.sh]
+
 package:
   platform: firmware
   id: esp-base

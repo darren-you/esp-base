@@ -1,0 +1,4 @@
+[submodule "log-sdk"]
+	path = dependencies/log-sdk
+	url = git@github.com:darren-you/log-sdk.git
+	branch = 1.0.0

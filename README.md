@@ -24,7 +24,7 @@ source ./esp-idf/export.sh
 
 以下命令在本仓根目录执行，`<target>` 是 `esp32c3` 或 `esp32`。
 
-**1. 构建**。产物是未签名的 `firmware/build/<target>/esp_base.bin`：
+**1. 构建**。系统层引入 log-sdk 的 ESP-IDF 组件 `log_esp`（设备日志，经 `telemetry` 主题桥接到数据平台，darren-space#114），源码在仓根 `dependencies/log-sdk` 的 gitlink，首次构建前执行 `git submodule update --init dependencies/log-sdk`（正式包由 `tools/prepare_log_sdk.sh` 取得）。产物是未签名的 `firmware/build/<target>/esp_base.bin`：
 
 ```bash
 python3 tools/esp_base.py build <target>

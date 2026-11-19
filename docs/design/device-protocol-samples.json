@@ -8,7 +8,8 @@
     "ota_state": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/ota/state",
     "app_desired": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/desired",
     "app_state": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/state",
-    "app_log": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/log"
+    "app_log": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/log",
+    "telemetry": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/telemetry"
   },
   "status": [
     {

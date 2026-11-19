@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "base_guard.h"
 #include "base_net.h"
@@ -22,6 +23,7 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "log_esp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -35,6 +37,7 @@
 #define STATUS_REFRESH_MS (15u * 60u * 1000u)
 #define PUBLIC_IP_DELAY_MS 10000u       /* 连上 Broker 后等业务连接先握手完，再取公网地址 */
 #define PUBLIC_IP_RETRY_MS 60000u       /* 固件下载占着网络时，过一会儿再看 */
+#define TELEMETRY_INTERVAL_MS 30000u    /* 设备日志（telemetry）最多这么久发布一次；收到 PUBACK 后若还有待发记录立即续发 */
 #define MESSAGE_MAX_BYTES 1536u
 #define STATUS_BYTES 3072 /* 状态文档最长约 2.7 KiB（系统任务、业务连接和业务任务都写满时），与发送缓冲相同 */
 #define APP_STATE_BYTES 640
@@ -47,7 +50,7 @@ typedef enum {
 } event_kind_t;
 typedef enum {
     TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED,
-    TIMER_BUSINESS_CONNECT, TIMER_BUSINESS_REPORT, TIMER_BUSINESS_STABLE, TIMER_PUBLIC_IP, TIMER_COUNT,
+    TIMER_BUSINESS_CONNECT, TIMER_BUSINESS_REPORT, TIMER_BUSINESS_STABLE, TIMER_PUBLIC_IP, TIMER_TELEMETRY, TIMER_COUNT,
 } timer_id_t;
 typedef enum { DEFER_NONE, DEFER_RESTART, DEFER_APPLY_CONFIG, DEFER_RECONNECT } deferred_t;
 
@@ -77,6 +80,10 @@ static deferred_t s_deferred;
 static int s_deferred_message_id;
 static uint32_t s_wakeups;
 static base_guard_t s_guard;
+/* 正在等 PUBACK 的设备日志载荷：消息 ID 与载荷里的记录数（darren-space#114 T22）。 */
+static int s_telemetry_message_id = -1;
+static size_t s_telemetry_taken;
+static bool s_net_was_down;
 /* 上一次运行的固件，留在 RTC 内存里（软件重启、panic 和看门狗复位都不清）：异常复位只记在出事的那个固件头上，
  * 新固件崩溃后回滚回来的旧固件不背这次复位。 */
 #define LAST_RUN_MAGIC 0x6c617374u
@@ -230,6 +237,35 @@ static void publish_app_log(void)
     if (length > 0 && s_mqtt && s_mqtt_connected)
         esp_mqtt_client_enqueue(s_mqtt, s_topics[BASE_TOPIC_APP_LOG], lines, length, 0, 0, true);
     free(lines);
+}
+
+/* telemetry：log-sdk 设备日志。QoS 1、不保留；收到 PUBACK 才删除，断线重连后重发得到同一个 batch_id，由服务端去重。 */
+static void publish_telemetry(void)
+{
+    if (!s_mqtt || !s_mqtt_connected || s_telemetry_message_id >= 0 || !log_esp_pending()) return;
+    char *payload = malloc(LOG_ESP_PAYLOAD_MAX_BYTES + 1u);
+    if (!payload) return;
+    int64_t unix_ms = -1;
+    if (base_net_time_valid()) {
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        unix_ms = (int64_t)now.tv_sec * 1000 + now.tv_usec / 1000;
+    }
+    size_t taken = 0;
+    const size_t length = log_esp_take(payload, LOG_ESP_PAYLOAD_MAX_BYTES + 1u, unix_ms, &taken);
+    if (length > 0) {
+        const int message_id = esp_mqtt_client_enqueue(s_mqtt, s_topics[BASE_TOPIC_TELEMETRY], payload, (int)length, 1, 0, true);
+        if (message_id > 0) {
+            s_telemetry_message_id = message_id;
+            s_telemetry_taken = taken;
+        }
+    }
+    free(payload);
+}
+
+static void lifecycle(const char *message, const char *attrs_json)
+{
+    log_esp_write(LOG_ESP_INFO, "device.lifecycle", message, attrs_json);
 }
 
 static void publish_profile(void)
@@ -482,6 +518,7 @@ static void on_mqtt_connected(void)
     if (!s_pending_verify) ota_apply(base_ota_on_confirmed(&s_ota));
     business_connect(false);
     timer_start(TIMER_PUBLIC_IP, PUBLIC_IP_DELAY_MS); /* 每次连上都重取：重连往往意味着出口变了 */
+    publish_telemetry();
 }
 
 static void on_timer(timer_id_t id)
@@ -492,6 +529,7 @@ static void on_timer(timer_id_t id)
         publish_status();
         break;
     case TIMER_PUBLIC_IP: public_ip_lookup(); break;
+    case TIMER_TELEMETRY: publish_telemetry(); break;
     case TIMER_OTA_RETRY: ota_apply(base_ota_on_retry_timer(&s_ota)); break;
     case TIMER_ROLLBACK:
         if (!s_pending_verify) break;
@@ -526,6 +564,9 @@ static void handle(const event_t *event)
 {
     switch ((event_kind_t)event->kind) {
     case EV_NET_UP:
+        if (s_net_was_down) lifecycle("wifi_reconnected", NULL);
+        s_net_was_down = false;
+        /* fall through */
     case EV_NET_TIME:
         /* 严格 TLS 要校验证书有效期：时间同步后才连接 Broker。 */
         if (base_net_time_valid()) {
@@ -535,14 +576,23 @@ static void handle(const event_t *event)
         }
         break;
     case EV_NET_DOWN:
+        s_net_was_down = true;
         /* 断开 Wi-Fi 后出口可能变了（换网络、路由器重拨）：清掉，重新连上再取。 */
         s_public_ip[0] = '\0';
         base_profile_set_public_ip(NULL);
         break;
     case EV_MQTT_CONNECTED: on_mqtt_connected(); break;
-    case EV_MQTT_DISCONNECTED: s_mqtt_connected = false; break;
+    case EV_MQTT_DISCONNECTED:
+        s_mqtt_connected = false;
+        s_telemetry_message_id = -1; /* 重连后重新编码发布；同一批记录得到同一个 batch_id */
+        break;
     case EV_MQTT_PUBLISHED:
         if (s_deferred != DEFER_NONE && event->value == s_deferred_message_id) run_deferred();
+        if (s_telemetry_message_id >= 0 && event->value == s_telemetry_message_id) {
+            log_esp_commit(s_telemetry_taken);
+            s_telemetry_message_id = -1;
+            publish_telemetry();
+        }
         break;
     case EV_MQTT_MESSAGE: {
         const char *payload = event->message + event->topic_len + 1;
@@ -567,12 +617,17 @@ static void handle(const event_t *event)
     case EV_APP_CHANGED: publish_app_state(); break;
     case EV_APP_LOGGED: publish_app_log(); break;
     case EV_PUBLIC_IP: on_public_ip(event->message); break;
-    case EV_OTA_DONE:
+    case EV_OTA_DONE: {
+        char attrs[96];
+        snprintf(attrs, sizeof attrs, "{\"result\":%d%s%s%s}", (int)event->value, event->error[0] ? ",\"error\":\"" : "",
+                 event->error[0] ? event->error : "", event->error[0] ? "\"" : "");
+        lifecycle("ota_result", attrs);
         base_net_set_power_save(true);
         base_runtime_set_updating(false);
         ota_apply(base_ota_on_worker_done(&s_ota, (base_ota_result_t)event->value,
                                           event->error[0] ? event->error : NULL));
         break;
+    }
     }
 }
 
@@ -630,6 +685,14 @@ void base_system_run(const base_business_t *business)
         uint8_t random[16];
         esp_fill_random(random, sizeof random);
         base_uuid_format(s_boot_id, random);
+        /* log-sdk 设备日志：接管 esp_log 的 W／E 两级，启动记一条 boot（带复位原因）。 */
+        static char s_fw_version[sizeof running.version];
+        snprintf(s_fw_version, sizeof s_fw_version, "%s", running.version);
+        if (log_esp_start(s_boot_id, s_fw_version, CONFIG_IDF_TARGET, true) == ESP_OK) {
+            char attrs[64];
+            snprintf(attrs, sizeof attrs, "{\"reset\":\"%s\"}", s_reset_reason);
+            lifecycle("boot", attrs);
+        }
         for (int topic = 0; topic < BASE_TOPIC_COUNT; ++topic) base_topic(s_topics[topic], s_device_id, (base_topic_t)topic);
         const esp_err_t profiled = base_profile_start(s_device_id, s_boot_id, s_reset_reason, &running, profile_ready);
         if (profiled != ESP_OK) ESP_LOGE(TAG, "profile unavailable: %s", esp_err_to_name(profiled));
@@ -648,6 +711,7 @@ void base_system_run(const base_business_t *business)
             result = base_net_start(s_config.wifi_ssid, s_config.wifi_password, net_event);
             if (result != ESP_OK) ESP_LOGE(TAG, "network unavailable: %s", esp_err_to_name(result));
             esp_timer_start_periodic(s_timers[TIMER_STATUS], (uint64_t)STATUS_REFRESH_MS * 1000u);
+            esp_timer_start_periodic(s_timers[TIMER_TELEMETRY], (uint64_t)TELEMETRY_INTERVAL_MS * 1000u);
         }
     }
     /* 没有事件时一直阻塞在这里。 */

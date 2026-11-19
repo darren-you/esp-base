@@ -16,8 +16,11 @@
 | `app/desired` | Server → 设备 | 是 | 期望应用；空载荷表示取消 |
 | `app/state` | 设备 → Server | 是 | 应用的部署与运行状态 |
 | `app/log` | 设备 → Server | 否 | 应用写的日志；QoS 0 |
+| `telemetry` | 设备 → Server | 否 | log-sdk 设备日志（data-platform 协议 9.1 节）；QoS 1，Server 原样桥接到数据平台 |
 
-ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只能写自己的 `status`、`rsp`、`ota/state`、`app/state` 和 `app/log`。
+ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只能写自己的 `status`、`rsp`、`ota/state`、`app/state`、`app/log` 和 `telemetry`。
+
+`telemetry` 由系统层经 log-sdk 的 ESP-IDF 组件 `log_esp`（仓根 `dependencies/log-sdk` 的 gitlink）产生：接管 `esp_log` 的 W、E 两级，外加 `device.lifecycle` 的 `boot`（属性 `reset`）、`wifi_reconnected`、`ota_result`。系统 MQTT 连上时和每 30 秒最多发布一条，收到 PUBACK 才删除；断线重连后重发的载荷得到同一个 `batch_id`，由服务端去重（darren-space#114 T22）。
 
 ## 状态文档
 

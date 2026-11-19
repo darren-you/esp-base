@@ -9,7 +9,10 @@ endif()
 set(PROJECT_VER "${esp_base_version}+${ESP_BASE_BUILD_NUMBER}")
 
 # components/ 是系统层和业务运行时；wasm/ 是业务层（WASM 宿主），连同它对 WAMR 的构建设置单独放一个目录。
-set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/apps/esp_base/main" "${CMAKE_CURRENT_LIST_DIR}/wasm")
+# 仓根 dependencies/log-sdk 是 log-sdk 的 gitlink（darren-space#114），只取其中的 ESP-IDF 组件 log_esp；
+# 放在固件根之外，固件根只含设备源码。
+set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/apps/esp_base/main" "${CMAKE_CURRENT_LIST_DIR}/wasm"
+    "${CMAKE_CURRENT_LIST_DIR}/../dependencies/log-sdk/esp-idf/components")
 # 只构建主程序依赖到的组件。
 set(COMPONENTS main)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
