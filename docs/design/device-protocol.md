@@ -38,7 +38,7 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
         "ipv6":["fe80::…","2001:db8::…"]},                 // 链路本地与 SLAAC 地址，最多 3 个，小写
  "mqtt":{"uri":"mqtts://<Broker 域名>:8883"},              // 系统 MQTT；只报地址，不报账户和密码
  "business":{                                              // 业务层；固件没有业务层时为 null
-   "name":"hxh_studio",                                    // 业务名：小写字母、数字、下划线
+   "name":"wasm",                                          // 业务名：基座固件的业务层是 WASM 宿主
    "state":"running",                                      // running，或 disabled（安全模式：没有运行任何业务代码）
    "error":null,                                           // disabled 的原因：crash_loop、invalid_name
    "mqtt":{"uri":"mqtts://…"},                             // 经 config 下发的业务 MQTT；没有配置时为 null

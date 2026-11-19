@@ -8,8 +8,7 @@ if(NOT DEFINED ESP_BASE_BUILD_NUMBER)
 endif()
 set(PROJECT_VER "${esp_base_version}+${ESP_BASE_BUILD_NUMBER}")
 
-# components/ 是系统层和业务运行时（业务固件引用的就是它）；wasm/ 是 WASM 宿主，它是 base_runtime 之上的一个业务，
-# 连同它引用的 WAMR 只进要它的工程。
+# components/ 是系统层和业务运行时；wasm/ 是业务层（WASM 宿主），连同它对 WAMR 的构建设置单独放一个目录。
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/apps/esp_base/main" "${CMAKE_CURRENT_LIST_DIR}/wasm")
 # 只构建主程序依赖到的组件。
 set(COMPONENTS main)

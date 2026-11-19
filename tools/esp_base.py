@@ -3,7 +3,7 @@
 
 在已导出官方 ESP-IDF 环境（IDF_PATH、idf.py、esptool、espsecure）的 macOS／Linux 上运行。
 私钥、Wi-Fi 与 MQTT 凭据只从仓外文件读取，不打印、不写入仓库。
-基于 esp-base 的业务固件用 ESP_BASE_FIRMWARE_ROOT 指向自己的固件根，工程名（决定 target 后半段）取自其 CMakeLists.txt。
+固件只有本仓的基座一种（target `<芯片>/esp_base`）；业务写成 WASM 应用，用 app 子命令构建、签名和部署。
 """
 import argparse
 import contextlib
@@ -27,8 +27,7 @@ import esp_base_app
 import esp_base_server
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE_FIRMWARE = ROOT / "firmware"
-FIRMWARE = Path(os.environ.get("ESP_BASE_FIRMWARE_ROOT") or BASE_FIRMWARE).resolve()
+FIRMWARE = ROOT / "firmware"
 TARGETS = ("esp32c3", "esp32")
 NVS_OFFSET, NVS_BYTES = 0x9000, 0x10000
 SLOT_BYTES = 0x1E0000

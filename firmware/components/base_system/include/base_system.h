@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // ESP Base 系统层的入口。系统层负责联网、系统 MQTT、状态文档、命令、远程配置和 OTA；
-// 业务固件在自己的 app_main 里调用 base_system_run 并交出业务描述，业务层只依赖 base_runtime.h。
+// 基座固件的 app_main 调用 base_system_run 并交出业务描述（WASM 宿主），业务层只依赖 base_runtime.h。
 #pragma once
 #include "base_runtime.h"
 

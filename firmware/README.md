@@ -14,7 +14,7 @@
 | `components/base_store` | 系统 | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置、设备名称与所属 Group、OTA 记录和业务守卫记录 |
 | `components/base_net` | 系统 | Wi-Fi STA、IPv6（链路本地与 SLAAC）与 SNTP |
 | `components/base_runtime` | 运行时 | 业务层唯一能依赖的组件：公开目录里只有 `base_runtime.h`；`system/` 是留给系统层的接口和业务守卫的纯逻辑 |
-| `wasm/base_wasm` | 业务 | WASM 宿主：不在 `components/` 里——业务固件引用的是 `components/`，宿主和它引用的 WAMR 只进要它的工程。以一个业务的身份跑在 `base_runtime` 上，用 WAMR 解释器运行编译成 WASM 的业务应用，并负责应用的部署。`core/` 是不依赖 ESP-IDF 的纯逻辑（宿主接口与事件分发、应用包解析、部署状态机）；`base_wasm.c` 是应用任务，`wasm_platform.c` 是定时器与业务 MQTT，`wasm_store.c` 是应用槽、部署记录和下载 |
+| `wasm/base_wasm` | 业务 | WASM 宿主，基座固件唯一的业务层：以一个业务的身份跑在 `base_runtime` 上，用 WAMR 解释器运行编译成 WASM 的业务应用，并负责应用的部署。`core/` 是不依赖 ESP-IDF 的纯逻辑（宿主接口与事件分发、应用包解析、部署状态机）；`base_wasm.c` 是应用任务，`wasm_platform.c` 是定时器与业务 MQTT，`wasm_store.c` 是应用槽、部署记录和下载 |
 | `partitions/partitions.csv` | | 两个目标共用的 4 MiB 分区表 |
 | `tests` | | host 测试、测试用的应用（`apps/`，源码在 [`../sdk/rust`](../sdk/rust/README.md)）和测试固件的 sdkconfig 片段；QEMU 里的部署测试由 `../tools/wasm_deploy_qemu.py` 驱动（主机侧的脚本不放在固件根里） |
 
@@ -22,7 +22,7 @@
 
 ```mermaid
 flowchart TB
-    business["业务层（业务固件自己的组件）"] -->|"只 #include base_runtime.h"| runtime["base_runtime：业务运行时"]
+    business["业务层：WASM 宿主（wasm/base_wasm）"] -->|"只 #include base_runtime.h"| runtime["base_runtime：业务运行时"]
     system["base_system：控制任务"] -->|"启动业务、传业务 MQTT 配置、读业务的 Profile"| runtime
     system --> services["base_net／base_ota／base_profile／base_store／base_protocol"]
     runtime -->|"业务参数"| services
@@ -63,9 +63,9 @@ coredump  0x3e0000  64 KiB
 
 设备 UUID、Wi-Fi 和系统 MQTT 配置在 NVS 的 `base` 命名空间，由 `tools/esp_base.py flash --provision` 生成 NVS 镜像写入；固件出错时不擦除 NVS。系统 MQTT 是 esp-base 连管理 Broker 的那条连接，只能经出厂资料修改。经 `cmd/config` 下发的新 Wi-Fi 先试用，连上 Broker 才保存，120 秒内连不上就恢复旧配置。`cmd/config` 下发的业务 MQTT（`biz_mqtt_uri`、`biz_mqtt_user`、`biz_mqtt_pass`）收到即保存，业务层经 `base_runtime_mqtt_config()` 读取并自己连接；系统层不连接它。
 
-## 业务固件
+## 业务层接口
 
-业务固件是一个独立的 ESP-IDF 工程，按精确提交引用本仓：把 `firmware/components` 加进 `EXTRA_COMPONENT_DIRS`（WASM 宿主不在这个目录里，原生业务固件不会带上它和 WAMR），`SDKCONFIG_DEFAULTS` 先列本仓的 `sdkconfig.defaults`（目标专属的 `.<target>` 会一并加载）再列自己的，分区表与本仓逐字节相同（正式打包时核对）。入口组件依赖 `base_system`，在 `app_main` 里调用 `base_system_run(&业务描述)`；业务组件只声明 `REQUIRES base_runtime`，只 `#include "base_runtime.h"`。
+基座固件的业务层只有 WASM 宿主一个（`base_wasm_business`），由入口 `apps/esp_base/main` 交给 `base_system_run`；测试固件用测试开关换成测试业务。宿主经 `base_runtime` 取得设备身份、业务参数和业务 MQTT 配置，下面是这层接口的约定，业务（应用）本身写成 WASM，见下一节。
 
 业务描述（`base_business_t`）：
 
@@ -84,9 +84,8 @@ coredump  0x3e0000  64 KiB
 | `base_runtime_task(name, entry, arg, stack, priority, watchdog_ms)` | 创建业务任务（最多 4 个），记在业务名下；`watchdog_ms` 非 0 时任务必须按期调用 `base_runtime_feed()`，否则运行时重启设备并记一次业务故障 |
 | `base_runtime_mqtt_open(name, &config)`／`base_runtime_mqtt_close(client)` | 打开／关闭一条业务 MQTT 连接（最多 3 条）。返回官方 esp-mqtt 的 client：业务自己注册事件、`esp_mqtt_client_start`、订阅和发布；运行时只记录连接的名称、地址（不含账户和密码）和是否已连上，随状态文档上报。关闭只能用 `base_runtime_mqtt_close`，并且不能在这条连接自己的事件处理函数里调用 |
 
-连到哪台服务器、连几条、用什么主题都由业务决定。两条连接错开握手：`connect` 在系统 MQTT 连上之后才调用，业务连接的任务优先级又低于系统 MQTT，在单核的 C3 上不会和系统抢握手。业务连接的重连间隔也应与系统连接（5 秒）错开。业务连接的客户端 ID 不能用设备 UUID（系统 MQTT 在用，同一 Broker 上会互相挤下线），也不能用系统 MQTT 的账户和主题。系统层的状态文档、命令、OTA 与业务无关，target 是 `<芯片>/<业务工程名>`，OTA 只在同一 target 之间进行。
+连到哪台服务器、连几条、用什么主题都由业务决定。两条连接错开握手：`connect` 在系统 MQTT 连上之后才调用，业务连接的任务优先级又低于系统 MQTT，在单核的 C3 上不会和系统抢握手。业务连接的重连间隔也应与系统连接（5 秒）错开。业务连接的客户端 ID 不能用设备 UUID（系统 MQTT 在用，同一 Broker 上会互相挤下线），也不能用系统 MQTT 的账户和主题。系统层的状态文档、命令、OTA 与业务无关，target 是 `<芯片>/esp_base`，OTA 只在同一 target 之间进行。
 
-构建、签名、刷写和正式打包用本仓的 `tools/`，以 `ESP_BASE_FIRMWARE_ROOT` 指向业务固件根；正式打包另设 `ESP_BASE_APPLICATION_ID` 为 Fast Deploy 身份里的应用 ID。
 
 ## WASM 宿主
 

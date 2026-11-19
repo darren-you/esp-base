@@ -17,11 +17,12 @@ default_workflows:
 github:
   repo: darren-you/esp-base
   visibility: public
-  about: 基于官方 ESP-IDF 的 ESP 设备业务基座：身份、Wi-Fi、TLS MQTT 管理、HTTPS 断点续传 OTA 与原生 A/B 回滚
+  about: 基于官方 ESP-IDF 的 ESP 设备基座：身份、Wi-Fi、TLS MQTT 管理、HTTPS 断点续传 OTA 与 A/B 回滚，业务以 WASM 应用独立部署
   topics:
     - darren-space
     - tooling-repo
     - embedded-firmware
+    - webassembly
 entrypoints:
   - README.md
   - AGENTS.md

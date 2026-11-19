@@ -40,7 +40,7 @@ typedef struct {
 /* 一条 app/log 消息的最大长度：系统按它准备缓冲。 */
 #define BASE_RUNTIME_APP_LOG_BYTES 1152
 
-/* 业务固件在 app_main 里把它交给 base_system_run。 */
+/* 基座固件的 app_main 把它（WASM 宿主，测试固件里是测试业务）交给 base_system_run。 */
 typedef struct {
     /* 业务名：1–23 字节的小写字母、数字和下划线；上报在状态文档的 business.name。 */
     const char *name;

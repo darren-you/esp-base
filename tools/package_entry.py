@@ -4,8 +4,6 @@
 环境变量：
   ESP_BASE_SIGNING_KEY_FILE 或 ESP_BASE_SIGNING_KEY_ENV（FILE:VAR）  仓外的 RSA-3072 签名键
   ESP_BASE_SIGNING_TRUST    release 或 software-test；后者不得用于正式设备
-  ESP_BASE_FIRMWARE_ROOT    基于 esp-base 的业务固件根；缺省是 esp-base 自己的固件
-  ESP_BASE_APPLICATION_ID   Fast Deploy 身份里的应用 ID；缺省 esp-base
 版本和构建号由 Fast Deploy 分配并写进 FAST_DEPLOY_IDENTITY_FILE，本入口不分配编号，也不连接设备。
 """
 import argparse
@@ -24,28 +22,17 @@ ARCHITECTURES = {"esp32c3": "riscv32", "esp32": "xtensa"}
 IDF_DEFAULT = Path.home() / ".espressif/frameworks/esp-idf-v6.1"
 SOURCES = ("sdkconfig.defaults", "sdkconfig.defaults.{target}", "dependencies.lock.{target}",
            "partitions/partitions.csv")
-APPLICATION_ID = os.environ.get("ESP_BASE_APPLICATION_ID") or "esp-base"
+APPLICATION_ID = "esp-base"
 
 
 def sources(target):
-    """构建输入的摘要。业务固件在自己的配置之外叠加 esp-base 的配置，两边都记；缺少的目标专属配置不记。"""
-    roots = [("", esp_base.FIRMWARE)]
-    if esp_base.FIRMWARE != esp_base.BASE_FIRMWARE:
-        roots.append(("esp-base/", esp_base.BASE_FIRMWARE))
+    """构建输入的摘要：配置、依赖锁和分区表；缺少的目标专属配置不记。"""
     result = {}
-    for prefix, root in roots:
-        for name in SOURCES:
-            path = root / name.format(target=target)
-            if path.is_file():
-                result[prefix + name.format(target=target)] = esp_base.sha256(path)
+    for name in SOURCES:
+        path = esp_base.FIRMWARE / name.format(target=target)
+        if path.is_file():
+            result[name.format(target=target)] = esp_base.sha256(path)
     return result
-
-
-def require_base_partitions():
-    """业务固件必须沿用 esp-base 的分区表：OTA 槽、NVS 和 otadata 的位置决定了能否互相升级。"""
-    product, base = esp_base.FIRMWARE / "partitions/partitions.csv", esp_base.BASE_FIRMWARE / "partitions/partitions.csv"
-    if product.read_bytes() != base.read_bytes():
-        esp_base.fail("业务固件的分区表必须与 esp-base 逐字节相同")
 
 
 def encoded(value):
@@ -143,7 +130,6 @@ def package(artifact):
     run_directory = artifact.parent
     target, expected = formal_identity()
     key, trust = signing_arguments()
-    require_base_partitions()
     frozen = inputs(target)
     app = esp_base.app_name()
 
