@@ -1,11 +1,11 @@
-# 本机运行（tools/esp_base.py app run）：设备上的同一份宿主核心（firmware/components/base_wasm/core）加 WAMR 的本机构建。
+# 本机运行（tools/esp_base.py app run）：设备上的同一份宿主核心（firmware/wasm/base_wasm/core）加 WAMR 的本机构建。
 # WAMR 的特性开关要与设备一致：见 firmware/CMakeLists.txt 和 sdkconfig.defaults 的 WASM 一节。
 cmake_minimum_required(VERSION 3.22)
 project(esp_base_app_sim C)
 
 set(WAMR_ROOT_DIR "" CACHE PATH "组件管理器取回的 WAMR：firmware/managed_components/wasm-micro-runtime")
 set(CJSON_DIR "" CACHE PATH "组件管理器取回的 cJSON：firmware/managed_components/espressif__cjson/cJSON")
-set(BASE_WASM_DIR "${CMAKE_CURRENT_LIST_DIR}/../../firmware/components/base_wasm")
+set(BASE_WASM_DIR "${CMAKE_CURRENT_LIST_DIR}/../../firmware/wasm/base_wasm")
 
 string(TOLOWER ${CMAKE_HOST_SYSTEM_NAME} WAMR_BUILD_PLATFORM)
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")

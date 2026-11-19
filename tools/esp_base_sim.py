@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """本机运行业务应用：驱动 sdk/sim 的模拟器。
 
-模拟器是设备上的同一份宿主核心（firmware/components/base_wasm/core）加 WAMR 的本机构建，平台服务（定时器、业务
+模拟器是设备上的同一份宿主核心（firmware/wasm/base_wasm/core）加 WAMR 的本机构建，平台服务（定时器、业务
 MQTT、引脚、PWM、业务参数）换成模拟实现。应用包按设备的规则解析和验收，所以清单写错、引脚在这个芯片上不能用、
 用了没有声明的引脚、死循环、陷阱，在本机就能看到，不用等部署到设备上。
 

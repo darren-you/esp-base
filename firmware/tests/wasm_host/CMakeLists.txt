@@ -1,10 +1,10 @@
-# host 测试：宿主核心（components/base_wasm/core）加 WAMR 的本机构建，用真实的应用（tests/apps/*.wasm）跑。
+# host 测试：宿主核心（wasm/base_wasm/core）加 WAMR 的本机构建，用真实的应用（tests/apps/*.wasm）跑。
 # WAMR 的特性开关要与设备一致：见 firmware/CMakeLists.txt 和 sdkconfig.defaults 的 WASM 一节。
 cmake_minimum_required(VERSION 3.22)
 project(wasm_host_test C)
 
 set(WAMR_ROOT_DIR "" CACHE PATH "组件管理器取回的 WAMR：firmware/managed_components/wasm-micro-runtime")
-set(BASE_WASM_DIR "${CMAKE_CURRENT_LIST_DIR}/../../components/base_wasm")
+set(BASE_WASM_DIR "${CMAKE_CURRENT_LIST_DIR}/../../wasm/base_wasm")
 
 string(TOLOWER ${CMAKE_HOST_SYSTEM_NAME} WAMR_BUILD_PLATFORM)
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")

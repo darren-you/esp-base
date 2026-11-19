@@ -13,7 +13,7 @@
 
 ## ESP Base 边界
 
-- 固件只依赖官方 ESP-IDF 发行版、组件注册表，以及按精确提交原样引用的官方上游发行版（WAMR，见 `firmware/components/base_wasm/idf_component.yml`）；不引入上游派生、补丁或相邻 checkout 的实现。
+- 固件只依赖官方 ESP-IDF 发行版、组件注册表，以及按精确提交原样引用的官方上游发行版（WAMR，见 `firmware/wasm/base_wasm/idf_component.yml`）；不引入上游派生、补丁或相邻 checkout 的实现。
 - 设备—云协议以 `docs/design/device-protocol.md` 和同目录样例为唯一来源；改协议时同步样例、host 测试和 esp-tool 的 Server 副本。
 - 只有真实测试通过才记为已支持；host 测试不代表实板验收。
 - USB 写入前核对本轮设备与目标芯片；整片擦除必须同时写回出厂资料。不写 eFuse，不启用硬件 Secure Boot 和 Flash 加密。

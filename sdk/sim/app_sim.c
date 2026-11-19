@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// 本机运行：用设备上的同一份宿主核心（firmware/components/base_wasm/core）和 WAMR 运行一个应用，平台服务换成
+// 本机运行：用设备上的同一份宿主核心（firmware/wasm/base_wasm/core）和 WAMR 运行一个应用，平台服务换成
 // 这里的模拟实现。应用包按设备的规则解析和验收（清单、芯片、内存上限、引脚），不验签。
 //
 // 时间是虚拟的：定时器只在 advance 命令推进时钟时到期，应用睡眠直接把时钟拨快，所以运行结果是确定的。

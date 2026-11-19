@@ -14,7 +14,7 @@
 | `components/base_store` | 系统 | NVS 中的设备 UUID、Wi-Fi／系统 MQTT／业务 MQTT 配置、设备名称与所属 Group、OTA 记录和业务守卫记录 |
 | `components/base_net` | 系统 | Wi-Fi STA、IPv6（链路本地与 SLAAC）与 SNTP |
 | `components/base_runtime` | 运行时 | 业务层唯一能依赖的组件：公开目录里只有 `base_runtime.h`；`system/` 是留给系统层的接口和业务守卫的纯逻辑 |
-| `components/base_wasm` | 业务 | WASM 宿主：以一个业务的身份跑在 `base_runtime` 上，用 WAMR 解释器运行编译成 WASM 的业务应用，并负责应用的部署。`core/` 是不依赖 ESP-IDF 的纯逻辑（宿主接口与事件分发、应用包解析、部署状态机）；`base_wasm.c` 是应用任务，`wasm_platform.c` 是定时器与业务 MQTT，`wasm_store.c` 是应用槽、部署记录和下载 |
+| `wasm/base_wasm` | 业务 | WASM 宿主：不在 `components/` 里——业务固件引用的是 `components/`，宿主和它引用的 WAMR 只进要它的工程。以一个业务的身份跑在 `base_runtime` 上，用 WAMR 解释器运行编译成 WASM 的业务应用，并负责应用的部署。`core/` 是不依赖 ESP-IDF 的纯逻辑（宿主接口与事件分发、应用包解析、部署状态机）；`base_wasm.c` 是应用任务，`wasm_platform.c` 是定时器与业务 MQTT，`wasm_store.c` 是应用槽、部署记录和下载 |
 | `partitions/partitions.csv` | | 两个目标共用的 4 MiB 分区表 |
 | `tests` | | host 测试、QEMU 里的部署测试、测试用的应用（`apps/`，源码在 [`../sdk/rust`](../sdk/rust/README.md)）和测试固件的 sdkconfig 片段 |
 
@@ -65,7 +65,7 @@ coredump  0x3e0000  64 KiB
 
 ## 业务固件
 
-业务固件是一个独立的 ESP-IDF 工程，按精确提交引用本仓：把 `firmware/components` 加进 `EXTRA_COMPONENT_DIRS`，`SDKCONFIG_DEFAULTS` 先列本仓的 `sdkconfig.defaults`（目标专属的 `.<target>` 会一并加载）再列自己的，分区表与本仓逐字节相同（正式打包时核对）。入口组件依赖 `base_system`，在 `app_main` 里调用 `base_system_run(&业务描述)`；业务组件只声明 `REQUIRES base_runtime`，只 `#include "base_runtime.h"`。
+业务固件是一个独立的 ESP-IDF 工程，按精确提交引用本仓：把 `firmware/components` 加进 `EXTRA_COMPONENT_DIRS`（WASM 宿主不在这个目录里，原生业务固件不会带上它和 WAMR），`SDKCONFIG_DEFAULTS` 先列本仓的 `sdkconfig.defaults`（目标专属的 `.<target>` 会一并加载）再列自己的，分区表与本仓逐字节相同（正式打包时核对）。入口组件依赖 `base_system`，在 `app_main` 里调用 `base_system_run(&业务描述)`；业务组件只声明 `REQUIRES base_runtime`，只 `#include "base_runtime.h"`。
 
 业务描述（`base_business_t`）：
 
@@ -103,14 +103,14 @@ coredump  0x3e0000  64 KiB
 - **应用槽**：不在分区表里。启动时把 Flash 末尾空闲的 64 KiB 登记成两个 32 KiB 的数据分区（`app_a`、`app_b`），应用包原样放在槽的开头；每次启动都重新核对包头、清单、签名和摘要，读不出有效的包就当槽是空的。当前槽和最近一次部署任务记在 NVS 的 `app` 命名空间里。
 - **部署**：系统层在 `app/desired` 上收到期望应用后交给宿主，宿主把 `app/state` 的内容交回系统发布。新应用下载到没在用的槽，校验通过后停旧启新，稳定运行 30 秒才提交；启动失败、试运行期间出故障或设备第二次重启都回到原来的槽。已提交的应用运行时设备连续两次异常重启（判定与系统的业务守卫相同），下一次启动就不再运行它，宿主照常在线等新的部署：这样停用的是应用，而不是等到第三次由业务守卫把整个宿主关进安全模式。决定由纯逻辑的状态机（`core/wasm_deploy.c`）做出，设备上的代码只执行它给出的动作。
 
-运行时是 [WAMR](https://github.com/wasm-micro-runtime/wasm-micro-runtime) 2.4.6 的经典解释器，由组件管理器按精确提交取回、原样使用（`components/base_wasm/idf_component.yml`），关闭 AOT、WASI、线程和内置 libc，打开线性内存收缩与指令计量。它的 ESP-IDF 端口在 ESP-IDF 6 上有几处问题，都在构建和链接时处理，不改它的源码：
+运行时是 [WAMR](https://github.com/wasm-micro-runtime/wasm-micro-runtime) 2.4.6 的经典解释器，由组件管理器按精确提交取回、原样使用（`wasm/base_wasm/idf_component.yml`），关闭 AOT、WASI、线程和内置 libc，打开线性内存收缩与指令计量（Kconfig 没有覆盖的开关在 `wasm/base_wasm/project_include.cmake` 里）。它的 ESP-IDF 端口在 ESP-IDF 6 上有几处问题，都在构建和链接时处理，不改它的源码；这些处理都在宿主组件里，用到宿主的工程把 `firmware/wasm` 加进 `EXTRA_COMPONENT_DIRS` 就带上了：
 
 | 问题 | 处理 | 位置 |
 | --- | --- | --- |
-| 用到 `struct stat`、`renameat` 却没有包含声明 | 强制包含 `port/wamr_idf6.h` | `CMakeLists.txt` |
-| 自己设了 `-Wno-format`，缺配套的 `-Wno-format-security` | 补上 | `CMakeLists.txt` |
-| 内存保护开启时 ESP-IDF 6 不定义 `MALLOC_CAP_EXEC` | 定义为无效能力；可执行内存只有 AOT 用 | `CMakeLists.txt` |
-| 用 `pthread_self()` 取当前线程，在普通 FreeRTOS 任务里断言失败 | 链接时把 `os_self_thread` 换成按任务句柄实现的版本 | `components/base_wasm/CMakeLists.txt` |
+| 用到 `struct stat`、`renameat` 却没有包含声明 | 强制包含 `port/wamr_idf6.h` | `wasm/base_wasm/CMakeLists.txt` |
+| 自己设了 `-Wno-format`，缺配套的 `-Wno-format-security` | 补上 | `wasm/base_wasm/CMakeLists.txt` |
+| 内存保护开启时 ESP-IDF 6 不定义 `MALLOC_CAP_EXEC` | 定义为无效能力；可执行内存只有 AOT 用 | `wasm/base_wasm/CMakeLists.txt` |
+| 用 `pthread_self()` 取当前线程，在普通 FreeRTOS 任务里断言失败 | 链接时把 `os_self_thread` 换成按任务句柄实现的版本 | `wasm/base_wasm/CMakeLists.txt` |
 | `os_realloc` 在内存块被挪动后可能把数据错位 4 字节 | 运行时用 WAMR 自带的池分配器，不经过它 | `core/wasm_host.c` |
 
 ESP32-C3 上 WAMR 占 Flash 约 57 KB，宿主约 23 KB，引脚和 PWM 带进来的官方 GPIO、LEDC 驱动约 10 KB；宿主常驻的静态内存约 3.9 KB（部署状态、应用状态文档和两个槽的清单），下载和解码用的缓冲只在用的时候分配。应用的内存池用量大约是 `.wasm` 的 1.5 倍加线性内存（4 KiB 栈加静态数据）再加 1.5 KB：样例应用（988 字节）用掉 7,088 字节，其中线性内存 4,176 字节；操作引脚的夹具（2,005 字节）用掉 8,568 字节；只有一个定时器的夹具（365 字节）用掉 5,592 字节。应用任务的栈最多用到约 2 KB；应用停止后堆回到启动前的水平。

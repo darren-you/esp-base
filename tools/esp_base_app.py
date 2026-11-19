@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ESP Base 业务应用的打包：检查 WASM 模块、生成清单、封装成应用包。由 esp_base.py 的 app 子命令调用。
 
-应用包的布局见 firmware/components/base_wasm/core/wasm_package.h。这里产出未签名的包（包头、清单、wasm），
+应用包的布局见 firmware/wasm/base_wasm/core/wasm_package.h。这里产出未签名的包（包头、清单、wasm），
 签名由 esp_base.py app sign 用官方 espsecure 完成：补齐到 4 KiB 后附一个扇区的 Secure Boot V2 签名块。
 """
 import json

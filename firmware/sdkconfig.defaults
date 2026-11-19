@@ -42,6 +42,7 @@ CONFIG_MQTT_POLL_READ_TIMEOUT_MS=100
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 
 # WASM 宿主：WAMR 只留解释器，不要 AOT、WASI、线程和内置 libc（应用是 no_std 的 Rust）。
+# 不带宿主的工程（原生业务固件）里没有这些符号，Kconfig 只提示一句未知符号，不影响构建。
 CONFIG_WAMR_ENABLE_AOT=n
 CONFIG_WAMR_INTERP_CLASSIC=y
 CONFIG_WAMR_ENABLE_LIB_PTHREAD=n

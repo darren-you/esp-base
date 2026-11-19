@@ -45,6 +45,6 @@ direct_dependencies:
 - espressif/mqtt
 - idf
 - wasm-micro-runtime
-manifest_hash: d371aa5721745c8e948eba4b119ca774da9d70f423ea7411437b05ff342da6cb
+manifest_hash: 1c26ea0897733e545e6fbfdaed90fb6c1408c4df0583493b7b7381b267b3a03b
 target: esp32c3
 version: 3.0.0

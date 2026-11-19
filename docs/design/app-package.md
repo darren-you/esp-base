@@ -1,6 +1,6 @@
 # 应用包
 
-应用包是一个签名的、可以独立部署的业务应用：一个 WASM 模块加一份清单。它与固件分开构建、分开签名、分开下发，固件用同一把键验签。打包工具（`tools/esp_base.py app`）、设备（`firmware/components/base_wasm/core/wasm_package.c`）和 Server 都按本文实现；样例 [`firmware/tests/apps/hello.ebapp`](../../firmware/tests/apps/hello.ebapp) 是它的可执行版本，设备的 host 测试直接读它。
+应用包是一个签名的、可以独立部署的业务应用：一个 WASM 模块加一份清单。它与固件分开构建、分开签名、分开下发，固件用同一把键验签。打包工具（`tools/esp_base.py app`）、设备（`firmware/wasm/base_wasm/core/wasm_package.c`）和 Server 都按本文实现；样例 [`firmware/tests/apps/hello.ebapp`](../../firmware/tests/apps/hello.ebapp) 是它的可执行版本，设备的 host 测试直接读它。
 
 ## 布局
 
