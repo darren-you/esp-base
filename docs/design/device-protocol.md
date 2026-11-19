@@ -15,8 +15,9 @@
 | `ota/state` | 设备 → Server | 是 | OTA 状态 |
 | `app/desired` | Server → 设备 | 是 | 期望应用；空载荷表示取消 |
 | `app/state` | 设备 → Server | 是 | 应用的部署与运行状态 |
+| `app/log` | 设备 → Server | 否 | 应用写的日志；QoS 0 |
 
-ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只能写自己的 `status`、`rsp`、`ota/state` 和 `app/state`。
+ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只能写自己的 `status`、`rsp`、`ota/state`、`app/state` 和 `app/log`。
 
 ## 状态文档
 
@@ -63,6 +64,7 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
 | --- | --- | --- |
 | `status` | 无 | 立即重新发布状态文档 |
 | `restart` | 无 | 应答发出后重启 |
+| `app_restart` | 无 | 只重启应用，设备不重启：停掉应用再启动；因为连续把设备拖到异常重启而被停用的应用再试一次。应答 `ok` 表示宿主已接受，结果看随后的 `app/state`。没有应用可以重启（没装应用、固件没有应用宿主，或设备在安全模式）时 `error` 为 `no_app` |
 | `config` | `wifi`:{`ssid`,`password`}、`business_mqtt`:{`uri`,`username`,`password`}、`name` 和 `group`，至少一项；`uri` 必须是 `mqtts://`；`name` 是 1–32 字节 UTF-8，不含控制字符，首尾不是空格；`group` 是小写 UUID，`null` 表示移出 Group；其他字段（包括改系统 MQTT 的 `mqtt`）一律 `invalid_args`，不部分执行 | `business_mqtt`：系统代业务保存的一个 Broker，业务层经运行时读取并自己连接，系统不连接它。`name`、`group`：设备资料，Group 本身只在 Server／网页里管理，设备只存 ID。这三项收到即保存并把 `config.revision` 加一，保存失败时 `config.error` 为 `not_saved`；改了 `name` 或 `group` 时应答发出后重建系统 MQTT 连接，更新遗嘱。`wifi`：应答发出后试用新网络，连上 Broker 才保存并把 `config.revision` 加一；120 秒内连不上则恢复旧配置，`config.error` 为 `trial_failed` |
 
 应答：
@@ -71,7 +73,7 @@ ACL：设备只能读自己的 `cmd/+`、`ota/desired` 和 `app/desired`，只�
 {"request_id":"<uuid>","cmd":"restart","ok":true,"error":null,"result":null}
 ```
 
-`error` 取值：`invalid_args`、`unknown_command`、`busy`（已有重启或配置试用在进行）。`result` 留给有返回值的命令，现有命令都没有，固定为 `null`。
+`error` 取值：`invalid_args`、`unknown_command`、`busy`（已有重启或配置试用在进行）、`no_app`。`result` 留给有返回值的命令，现有命令都没有，固定为 `null`。
 
 ## OTA
 
@@ -136,3 +138,16 @@ Server 把「这台设备应运行哪个固件」发布为 retained 的 `ota/des
 - 已提交的应用运行时设备连续两次异常重启（panic、各类看门狗）：下一次启动不再运行它，`app.state` 为 `disabled`，宿主照常在线等新的部署；正常重启或部署新应用后解除。
 
 成功的唯一判据是设备上报的 `running.sha256` 等于期望值且 `state` 为 `succeeded`。固件进了安全模式（状态文档里 `business.state` 为 `disabled`）时宿主不运行，`app/desired` 不被处理。
+
+### 应用日志
+
+应用写的日志除了出现在串口上，也经 `app/log` 发给 Server，不用接线就能看到。设备把日志攒起来，最多每秒发一条消息；消息不保留、QoS 0，设备没连上 Broker 时这一批就丢掉——日志是给人看的，不重发。宿主自己的事件（部署、故障、重启）不在这里，在 `app/state` 里。
+
+```jsonc
+// app/log
+{"seq":17,"dropped":0,                                  // seq：本次启动以来的第几条消息，从 1 起；中间跳号说明丢了消息
+ "lines":[{"t":61234,"level":"info","text":"HXH_COMMAND move {\"direction\":\"up\"}"},
+          {"t":63234,"level":"warn","text":"HXH_LEASE_EXPIRED stopping"}]}
+```
+
+`t` 是设备开机以来的毫秒数，`level` 取值 `error`、`warn`、`info`。一行正文最长 200 字节，超出的截掉；不是合法 UTF-8 的字节换成 `?`。两次发送之间最多攒 1,024 字节，攒不下的行整行丢掉，丢掉的行数记在下一条消息的 `dropped` 里（`lines` 这时可以是空的）。

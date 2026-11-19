@@ -97,6 +97,7 @@ void wasm_port_log(int level, const char *text, size_t length)
 {
     const esp_log_level_t mapped = level <= 1 ? ESP_LOG_ERROR : level == 2 ? ESP_LOG_WARN : ESP_LOG_INFO;
     ESP_LOG_LEVEL(mapped, "app", "%.*s", (int)(length > 200 ? 200 : length), text);
+    base_wasm_log(level, text, length); /* 同一行也经 app/log 发给 Server */
 }
 
 uint64_t wasm_port_uptime_ms(void)

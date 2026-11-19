@@ -22,6 +22,7 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 #include "wasm_host.h"
+#include "wasm_log.h"
 #include "wasm_port.h"
 
 #define TASK_STACK_BYTES 5120 /* 实测最多用到约 2 KB（加载应用时） */
@@ -38,6 +39,9 @@
 #define LINEAR_MAX_BYTES (16 * 1024) /* 线性内存（栈加静态数据）的上限；超过说明模块没有收缩 */
 #define BUDGET 2000000               /* 每次调用的指令预算 */
 #define DESIRED_MAX_BYTES 1536
+#define LOG_FLUSH_MS 1000 /* 应用写了日志之后最多攒这么久再发：一秒最多一条 app/log 消息 */
+
+_Static_assert(WASM_LOG_BYTES <= BASE_RUNTIME_APP_LOG_BYTES, "an app/log message must fit the system's buffer");
 #if CONFIG_ESP_BASE_TEST_WASM_DEPLOY
 #define TRIAL_MS 3000u /* 测试固件：缩短试运行 */
 #else
@@ -61,10 +65,18 @@ static struct {
     uint32_t restarts;
 } s_app = {.state = "stopped"};
 
-/* 最近一次编码好的 app/state：应用任务写，系统的控制任务读。 */
+/* 最近一次编码好的 app/state 和攒下的应用日志：应用任务写，系统的控制任务读，s_state_lock 保护。 */
 static SemaphoreHandle_t s_state_lock;
 static char s_state[WASM_DEPLOY_STATE_BYTES];
 static int s_state_length;
+static struct {
+    char *lines;     /* 攒下的行（JSON 数组的元素）；应用第一次写日志时才分配，之后一直留着 */
+    size_t length;
+    uint32_t seq, dropped; /* 发出过几条消息；上一条之后攒不下丢掉了几行 */
+    bool scheduled;  /* 已经约好了发送 */
+} s_log;
+static esp_timer_handle_t s_log_timer;
+static atomic_bool s_restartable; /* 有应用可以重启（在运行，或被停用了）：控制任务据此应答 app_restart */
 
 static void apply(unsigned actions);
 
@@ -130,6 +142,7 @@ static void publish_state(void)
     xSemaphoreTake(s_state_lock, portMAX_DELAY);
     s_state_length = wasm_deploy_state_encode(&s_deploy, &app, s_state, sizeof s_state);
     xSemaphoreGive(s_state_lock);
+    atomic_store(&s_restartable, s_deploy.running < WASM_SLOTS || s_deploy.disabled);
     ESP_LOGI(TAG, "ESP_BASE_APP job=%s state=%s error=%s app=%s restarts=%u", s_deploy.record.job[0] ? s_deploy.record.job : "-",
              wasm_deploy_phase_name((wasm_deploy_phase_t)s_deploy.record.phase), s_deploy.record.error, s_app.state,
              (unsigned)s_app.restarts);
@@ -145,6 +158,45 @@ static int business_state(char *out, size_t size)
         memcpy(out, s_state, (size_t)s_state_length + 1);
         length = s_state_length;
     }
+    xSemaphoreGive(s_state_lock);
+    return length;
+}
+
+/* ---------- app/log ---------- */
+
+void base_wasm_log(int level, const char *text, size_t length)
+{
+    if (!s_state_lock) return;
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    if (!s_log.lines) s_log.lines = malloc(WASM_LOG_LINES_BYTES);
+    if (!s_log.lines ||
+        !wasm_log_append(s_log.lines, WASM_LOG_LINES_BYTES, &s_log.length, wasm_port_uptime_ms(), level, text, length))
+        ++s_log.dropped; /* 攒不下：应用写得比发得快。丢掉的行数随下一条消息报上去 */
+    const bool schedule = !s_log.scheduled;
+    s_log.scheduled = true;
+    xSemaphoreGive(s_state_lock);
+    if (schedule && s_log_timer) timer_start(s_log_timer, LOG_FLUSH_MS);
+}
+
+static void log_timer_fired(void *argument)
+{
+    (void)argument;
+    base_runtime_app_logged(); /* 系统随后在控制任务里经 business_log 取走 */
+}
+
+static int business_log(char *out, size_t size)
+{
+    int length = 0;
+    if (!s_state_lock) return 0;
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    if (s_log.length || s_log.dropped) {
+        length = wasm_log_encode(out, size, s_log.seq + 1, s_log.dropped, s_log.lines ? s_log.lines : "", s_log.length);
+        if (length > 0) ++s_log.seq;
+        else length = 0;
+        s_log.length = 0;
+        s_log.dropped = 0;
+    }
+    s_log.scheduled = false;
     xSemaphoreGive(s_state_lock);
     return length;
 }
@@ -319,6 +371,7 @@ static void handle(const base_wasm_event_t *event)
             publish_state();
         }
         break;
+    case EV_APP_RESTART: apply(wasm_deploy_on_restart(&s_deploy)); break;
     case EV_DESIRED:
         on_desired(event->data, event->payload_length);
         free(event->data);
@@ -376,7 +429,8 @@ static bool prepare(const char *device_id)
                                                .name = timers[index].name};
         ready = esp_timer_create(&timer, timers[index].timer) == ESP_OK;
     }
-    if (!ready) return false;
+    const esp_timer_create_args_t log_timer = {.callback = log_timer_fired, .name = "app_log"};
+    if (!ready || esp_timer_create(&log_timer, &s_log_timer) != ESP_OK) return false;
 
     /* 读两个槽并验签。这一步在系统的控制任务里做，排在系统自己校验运行固件之后：官方的验签入口不可重入。 */
     wasm_slot_t slots[WASM_SLOTS] = {0};
@@ -432,8 +486,18 @@ static void business_deploy(const char *payload, size_t length)
     base_wasm_post(&event);
 }
 
+/* 命令 app_restart：在控制任务里调用。没有应用可以重启时拒绝，否则交给应用任务。 */
+static bool business_restart(void)
+{
+    if (!s_queue || !atomic_load(&s_restartable)) return false;
+    base_wasm_post(&(base_wasm_event_t){.kind = EV_APP_RESTART});
+    return true;
+}
+
+static const base_app_channel_t s_channel = {.deploy = business_deploy, .state = business_state, .log = business_log,
+                                             .restart = business_restart};
 const base_business_t base_wasm_business = {.name = "wasm", .init = business_init, .connect = business_connect,
-                                            .deploy = business_deploy, .state = business_state};
+                                            .app = &s_channel};
 
 /* ---------- 测试固件 ---------- */
 #if CONFIG_ESP_BASE_TEST_WASM_BENCH || CONFIG_ESP_BASE_TEST_WASM_DEPLOY
@@ -527,6 +591,15 @@ void base_wasm_bench(void)
 #include "psa/crypto.h"
 
 #define STAGED_OFFSET 0x200000u
+#define EXTRA_PACKAGE 8
+
+/* 预置区的第 index 个位置上有没有应用包。 */
+static bool staged(unsigned index)
+{
+    uint8_t magic[4];
+    return esp_flash_read(NULL, magic, STAGED_OFFSET + index * WASM_SLOT_BYTES, sizeof magic) == ESP_OK &&
+           !memcmp(magic, WASM_PACKAGE_MAGIC, sizeof magic);
+}
 
 static uint32_t script_step(void)
 {
@@ -584,7 +657,8 @@ static void script_task(void *argument)
     static const struct {
         int package;
         uint32_t wait_ms;
-    } steps[] = {{0, 6000}, {-1, 0}, {1, 6000}, {2, 6000}, {3, 3000}, {4, 3000}, {5, 8000}, {6, 6000}, {-1, 0}, {7, 6000}, {-1, 0}};
+    } steps[] = {{0, 6000}, {-1, 0}, {1, 6000}, {2, 6000}, {3, 3000}, {4, 3000}, {5, 8000}, {6, 6000}, {-1, 0}, {7, 6000}, {-1, 0},
+                 {EXTRA_PACKAGE, 8000}}; /* 最后一步可选：脚本另外放了一个包才做（实板上量真实应用的内存） */
     vTaskDelay(pdMS_TO_TICKS(1500)); /* 等应用任务按部署记录把该运行的应用拉起来 */
     for (unsigned step = script_step(); step < sizeof steps / sizeof steps[0]; ++step) {
         script_save(step + 1);
@@ -600,8 +674,13 @@ static void script_task(void *argument)
             esp_restart();
 #endif
         }
+        if (steps[step].package == EXTRA_PACKAGE && !staged(EXTRA_PACKAGE)) {
+            printf("WASM_DEPLOY_TEST step=%u skipped\n", step);
+            continue;
+        }
         if (!stage(step, (unsigned)steps[step].package)) printf("WASM_DEPLOY_TEST step=%u stage_failed\n", step);
         vTaskDelay(pdMS_TO_TICKS(steps[step].wait_ms));
+        report("WASM_DEPLOY_TEST", "step");
         printf("WASM_DEPLOY_TEST step=%u after=%s\n", step, s_state);
     }
     report("WASM_DEPLOY_TEST", "final");
@@ -618,7 +697,11 @@ void base_wasm_deploy_test(void)
     }
     printf("WASM_DEPLOY_TEST begin target=%s step=%u nvs=%s\n", CONFIG_IDF_TARGET, (unsigned)script_step(),
            esp_err_to_name(result));
-    if (!prepare("deploy-test") || !base_wasm_task("wasm_app", app_task, TASK_STACK_BYTES, 0)) printf("WASM_DEPLOY_TEST failed=prepare\n");
+    /* prepare 就是正式固件里业务的 init 回调做的事（登记应用槽、逐槽验签、读部署记录）：量一下它要多久。 */
+    const int64_t begin_us = esp_timer_get_time();
+    const bool prepared = prepare("deploy-test");
+    printf("WASM_DEPLOY_TEST prepare_ms=%d\n", (int)((esp_timer_get_time() - begin_us) / 1000));
+    if (!prepared || !base_wasm_task("wasm_app", app_task, TASK_STACK_BYTES, 0)) printf("WASM_DEPLOY_TEST failed=prepare\n");
     report("WASM_DEPLOY_TEST", "prepared");
     xTaskCreate(script_task, "script", 6144, NULL, TASK_PRIORITY, NULL);
     for (;;) vTaskDelay(portMAX_DELAY);

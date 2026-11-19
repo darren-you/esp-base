@@ -26,6 +26,7 @@ typedef enum {
     BASE_TOPIC_OTA_STATE,   /* 设备 → Server，retained OTA 状态 */
     BASE_TOPIC_APP_DESIRED, /* Server → 设备，retained 期望应用 */
     BASE_TOPIC_APP_STATE,   /* 设备 → Server，retained 应用状态 */
+    BASE_TOPIC_APP_LOG,     /* 设备 → Server，应用日志；不保留，QoS 0 */
     BASE_TOPIC_COUNT,
 } base_topic_t;
 
@@ -38,7 +39,7 @@ bool base_topic(char out[BASE_TOPIC_BYTES], const char *device_id, base_topic_t 
 bool base_topic_command(const char *topic, size_t topic_len, const char *device_id,
                         char name[BASE_CMD_NAME_BYTES]);
 
-typedef enum { BASE_CMD_STATUS, BASE_CMD_RESTART, BASE_CMD_CONFIG } base_cmd_kind_t;
+typedef enum { BASE_CMD_STATUS, BASE_CMD_RESTART, BASE_CMD_CONFIG, BASE_CMD_APP_RESTART } base_cmd_kind_t;
 
 /* 一个 MQTT Broker 的连接信息。 */
 typedef struct {

@@ -57,16 +57,22 @@ def package(wasm_name, version, memory=10240, pins=None):
     return esp_base_app.pack(wasm, fields)
 
 
-def build(target, directory):
+def build(target, directory, qemu=True):
+    """构建测试固件。qemu 为真时日志走 UART（模拟器只有它）；实板用固件自己的控制台。"""
     idf = Path(os.environ["IDF_PATH"]) / "tools/idf.py"
+    defaults = "sdkconfig.defaults;tests/sdkconfig.wasm_deploy" + (";tests/sdkconfig.qemu" if qemu else "")
     run([sys.executable, idf, "-C", FIRMWARE, "-B", directory, "-DIDF_TARGET=" + target,
-         "-DSDKCONFIG=" + str(directory / "sdkconfig"),
-         "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;tests/sdkconfig.wasm_deploy;tests/sdkconfig.qemu", "build"],
+         "-DSDKCONFIG=" + str(directory / "sdkconfig"), "-DSDKCONFIG_DEFAULTS=" + defaults, "build"],
         stdout=subprocess.DEVNULL)
 
 
-def flash_image(target, build_dir, work):
-    """合成 4 MiB 的 Flash 镜像：签名的测试固件，加上放在 ota_1 位置的八个待部署的包。"""
+def flash_image(target, build_dir, work, extra=None):
+    """合成 4 MiB 的 Flash 镜像：签名的测试固件，加上放在 ota_1 位置的八个待部署的包。
+
+    extra 是另外一个未签名的应用包（例如真实业务的应用）：放在第九个位置，脚本最后部署它，用来在实板上量它的内存。
+    返回镜像的路径；work 目录里还有单独的 app-signed.bin（写到 0x20000）和 staged.bin（写到 0x200000），实板上只写
+    这两块和 ota_data_initial.bin，不动 bootloader 和分区表。
+    """
     firmware_key, other_key = work / "firmware-key.pem", work / "other-key.pem"
     for key in (firmware_key, other_key):
         run([sys.executable, "-m", "espsecure", "generate-signing-key", "--version", "2", "--scheme", "rsa3072", key],
@@ -94,11 +100,16 @@ def flash_image(target, build_dir, work):
         sign(package("pins", "0.1.0+1", 12288, PINS[target]), firmware_key, work, "pins"),  # 6：操作引脚的应用
         sign(package("hello", "0.1.0+5"), firmware_key, work, "hello-5"),      # 7：换回不用引脚的应用
     ]
+    if extra:
+        staged.append(sign(Path(extra).read_bytes(), firmware_key, work, "extra"))  # 8：可选，真实业务的应用
+    blob = bytearray(b"\xff" * (len(staged) * SLOT_BYTES))
+    for index, data in enumerate(staged):
+        assert len(data) <= SLOT_BYTES
+        blob[index * SLOT_BYTES:index * SLOT_BYTES + len(data)] = data
+    (work / "staged.bin").write_bytes(blob)
     with open(image, "r+b") as stream:
-        for index, data in enumerate(staged):
-            assert len(data) <= SLOT_BYTES
-            stream.seek(STAGED_OFFSET + index * SLOT_BYTES)
-            stream.write(data)
+        stream.seek(STAGED_OFFSET)
+        stream.write(blob)
     return image
 
 
@@ -133,8 +144,11 @@ def emulate(target, image, timeout):
     return re.sub(r"\x1b\[[0-9;]*m", "", output.decode("utf-8", "replace"))
 
 
-def check(log):
-    """核对每一步之后的 app/state。返回失败的条目。"""
+def check(log, board=False, extra=None):
+    """核对每一步之后的 app/state。返回失败的条目。
+
+    board 为真表示日志来自实板：读回的引脚电平和 PWM 占空比也要对。extra 是可选的第九个包的应用名。
+    """
     failures = []
 
     def expect(condition, what):
@@ -177,11 +191,33 @@ def check(log):
            "pins：写输出、配置和改配 PWM、有时限的输出都成功，没有声明的引脚被拒绝（两次启动）")
     expect(len(expired) == 2 and all(line.get("expired") == "4" for line in expired),
            "pins：有时限的输出到期后应用收到事件（两次启动）")
+    if board:
+        # 实板：安全电平、写出去的电平、带上拉的输入、占空比都读得回来；时限到了引脚回到低电平。
+        expect(all(run.get("safe0") == "0" and run.get("safe1") == "1" and run.get("high") == "1" and run.get("low") == "0" and
+                   run.get("in") == "1" and run.get("duty") == "1228" for run in runs),
+               "pins（实板）：安全电平 0／1、写高读高、写低读低、上拉输入为高、占空比读回 1228")
+        expect(all(line.get("level") == "0" for line in expired), "pins（实板）：时限到期时引脚已经回到低电平")
+        stamps = [(int(a), int(b)) for a, b in re.findall(r"\((\d+)\) app: pins: safe0=.*\n(?:.*\n)*?.*\((\d+)\) app: pins: expired", log)]
+        for begin, end in stamps:
+            print(f"  时限 300 毫秒，实际 {end - begin} 毫秒后应用收到到期事件")
+        expect(len(stamps) == 2 and all(295 <= end - begin <= 330 for begin, end in stamps), "pins（实板）：300 毫秒的时限准时到期")
     after(9, "succeeded", None, "0.1.0+5")
     expect("ESP_BASE_APP_STARTED hello 0.1.0+5 slot=1" in log, "步骤 9：换回不用引脚的应用，装进槽 1")
+    expect(states.get(10) is None and "step=10 restart" in log, "步骤 10：再重启一次")
+    restored = re.findall(r"WASM_DEPLOY_TEST step=11 before=(\{.*\})", log)
+    doc = json.loads(restored[0]) if restored else {}
+    expect(doc.get("state") == "succeeded" and (doc.get("running") or {}).get("version") == "0.1.0+5" and
+           (doc.get("app") or {}).get("state") == "running", "重启后仍运行 hello 0.1.0+5，任务记录保留")
     doc = json.loads(final.group(1)) if final else {}
-    expect(bool(final) and doc.get("state") == "succeeded" and (doc.get("running") or {}).get("version") == "0.1.0+5" and
-           (doc.get("app") or {}).get("state") == "running", "步骤 10：最后一次重启后仍运行 hello 0.1.0+5，任务记录保留")
+    if extra:
+        after(11, "succeeded", None, doc.get("running", {}).get("version"), extra)
+        app = (states.get(11) or {}).get("app") or {}
+        print(f"  {extra}：内存池用掉 {app.get('pool_used')} 字节，峰值 {app.get('pool_peak')}，线性内存 {app.get('linear')}")
+    else:
+        expect("step=11 skipped" in log and bool(final) and (doc.get("running") or {}).get("version") == "0.1.0+5",
+               "没有第九个包：最后一步跳过")
+    for value in re.findall(r"WASM_DEPLOY_TEST prepare_ms=(\d+)", log):
+        print(f"  宿主启动（登记应用槽、逐槽验签、读部署记录）用了 {value} 毫秒")
     expect(not re.search(r"E \(\d+\) (gpio|ledc):", log), "GPIO 和 LEDC 驱动没有报错")
     expect("Guru Meditation" not in log and "abort()" not in log and "assert failed" not in log, "全程没有崩溃")
     return failures
@@ -192,19 +228,37 @@ def main():
     parser.add_argument("target", nargs="?", default="esp32c3", choices=sorted(QEMU))
     parser.add_argument("--no-build", action="store_true", help="用已有的构建目录，不重新构建")
     parser.add_argument("--log", help="把模拟器的完整输出另存一份")
+    parser.add_argument("--extra", help="另外一个未签名的应用包：最后部署它（实板上量真实应用的内存）")
+    parser.add_argument("--check-log", help="不运行模拟器，只核对一份实板的串口日志")
+    parser.add_argument("--image-dir", help="不运行模拟器，只把要写进实板的文件放到这个目录：app-signed.bin、staged.bin")
     args = parser.parse_args()
-    build_dir = FIRMWARE / "build" / ("deploy-" + args.target)
+    # 模拟器和实板的测试固件控制台不同，各用各的构建目录。
+    build_dir = FIRMWARE / "build" / (("board-" if args.image_dir else "deploy-") + args.target)
+    extra = esp_base_app.describe(Path(args.extra).read_bytes())["manifest"]["name"] if args.extra else None
+    if args.check_log:
+        log = re.sub(r"\x1b\[[0-9;]*m", "", Path(args.check_log).read_text(encoding="utf-8", errors="replace"))
+        failures = check(log, board=True, extra=extra)
+        print(f"wasm deploy test ({args.target}, board): {'passed' if not failures else str(len(failures)) + ' failure(s)'}")
+        sys.exit(1 if failures else 0)
     if not args.no_build:
-        build(args.target, build_dir)
+        build(args.target, build_dir, qemu=not args.image_dir)
+    if args.image_dir:
+        directory = Path(args.image_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        flash_image(args.target, build_dir, directory, args.extra)
+        print(json.dumps({"app": str(directory / "app-signed.bin"), "staged": str(directory / "staged.bin"),
+                          "otadata": str(build_dir / "ota_data_initial.bin"),
+                          "partition_table": str(build_dir / "partition_table/partition-table.bin")}))
+        return
     with tempfile.TemporaryDirectory(prefix="wasm-deploy-") as directory:
-        image = flash_image(args.target, build_dir, Path(directory))
+        image = flash_image(args.target, build_dir, Path(directory), args.extra)
         log = emulate(args.target, image, 240)
     if args.log:
         Path(args.log).write_text(log)
     for line in log.splitlines():
         if "WASM_DEPLOY_TEST phase=" in line or "WASM_DEPLOY_TEST begin" in line:
             print(line.strip())
-    failures = check(log)
+    failures = check(log, extra=extra)
     print(f"wasm deploy test ({args.target}): {'passed' if not failures else str(len(failures)) + ' failure(s)'}")
     sys.exit(1 if failures else 0)
 

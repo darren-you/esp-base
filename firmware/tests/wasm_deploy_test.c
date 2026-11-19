@@ -364,6 +364,50 @@ static void test_crash_loop(void)
 }
 
 /* 与 Server 共用的合同样例（docs/design/device-protocol-samples.json）里的应用部分。 */
+/* 命令 app_restart。 */
+static void test_restart(void)
+{
+    wasm_deploy_t deploy;
+    wasm_slot_t slots[WASM_SLOTS] = {package(SHA_X, "0.1.0+1"), package(SHA_Y, "0.1.0+2")};
+    wasm_slot_t empty[WASM_SLOTS] = {{0}, {0}};
+    /* 没有应用：什么也不做。 */
+    wasm_deploy_boot(&deploy, NULL, empty, false);
+    CHECK(wasm_deploy_on_restart(&deploy) == 0);
+    /* 已提交的应用在运行：停掉再启动，记录不变。 */
+    wasm_deploy_record_t record = {.version = WASM_DEPLOY_RECORD_VERSION, .active = 0, .trial = WASM_SLOT_NONE,
+                                   .phase = WASM_DEPLOY_SUCCEEDED, .attempt = 1, .job = JOB_A, .sha256 = SHA_X};
+    wasm_deploy_boot(&deploy, &record, slots, false);
+    const wasm_deploy_record_t before = deploy.record;
+    CHECK(wasm_deploy_on_restart(&deploy) == (WASM_ACT_RUN | WASM_ACT_PUBLISH) && deploy.running == 0);
+    CHECK(!memcmp(&before, &deploy.record, sizeof before));
+    CHECK(wasm_deploy_on_started(&deploy, true, NULL) == 0);
+    /* 重启后启动失败：已提交的应用不回退，由宿主退避重试。 */
+    CHECK(wasm_deploy_on_restart(&deploy) == (WASM_ACT_RUN | WASM_ACT_PUBLISH));
+    CHECK(wasm_deploy_on_started(&deploy, false, "start_failed") == 0 && deploy.running == 0);
+
+    /* 因为连续把设备拖到异常重启而被停用的应用：再给一次机会，计数从头算。 */
+    record.crashes = 1;
+    wasm_deploy_boot(&deploy, &record, slots, true);
+    CHECK(deploy.disabled && deploy.running == WASM_SLOT_NONE && deploy.record.crashes == 2);
+    CHECK(wasm_deploy_on_restart(&deploy) == (WASM_ACT_PERSIST | WASM_ACT_RUN | WASM_ACT_PUBLISH));
+    CHECK(!deploy.disabled && deploy.running == 0 && deploy.record.crashes == 0 && deploy.record.active == 0);
+    CHECK(wasm_deploy_on_restart(&deploy) == (WASM_ACT_RUN | WASM_ACT_PUBLISH)); /* 第二次只是普通的重启 */
+
+    /* 试运行中的应用也可以重启：启动失败照常回到原来的应用。 */
+    record = (wasm_deploy_record_t){.version = WASM_DEPLOY_RECORD_VERSION, .active = 0, .trial = WASM_SLOT_NONE,
+                                    .phase = WASM_DEPLOY_SUCCEEDED, .attempt = 1, .job = JOB_A, .sha256 = SHA_X};
+    wasm_deploy_boot(&deploy, &record, slots, false);
+    const wasm_desired_t want = desired(JOB_B, SHA_Y);
+    wasm_deploy_on_desired(&deploy, &want);
+    CHECK(wasm_deploy_on_worker_done(&deploy, WASM_WORKER_INSTALLED, NULL, &slots[1]) ==
+          (WASM_ACT_PERSIST | WASM_ACT_PUBLISH | WASM_ACT_RUN));
+    wasm_deploy_on_started(&deploy, true, NULL);
+    CHECK(deploy.running == 1 && deploy.record.phase == WASM_DEPLOY_STARTING);
+    CHECK(wasm_deploy_on_restart(&deploy) == (WASM_ACT_RUN | WASM_ACT_PUBLISH) && deploy.running == 1);
+    const unsigned rolled_back = wasm_deploy_on_started(&deploy, false, "start_failed");
+    CHECK((rolled_back & WASM_ACT_RUN) && deploy.running == 0 && deploy.record.phase == WASM_DEPLOY_FAILED);
+}
+
 static void test_contract_samples(const char *path)
 {
     FILE *file = fopen(path, "rb");
@@ -463,6 +507,7 @@ int main(int argc, char **argv)
 {
     test_first_deployment();
     test_crash_loop();
+    test_restart();
     test_replace_and_rollback();
     test_replace_commits();
     test_boot();

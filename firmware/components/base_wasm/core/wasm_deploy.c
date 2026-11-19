@@ -130,6 +130,20 @@ unsigned wasm_deploy_boot(wasm_deploy_t *deploy, const wasm_deploy_record_t *sto
     return actions;
 }
 
+unsigned wasm_deploy_on_restart(wasm_deploy_t *deploy)
+{
+    wasm_deploy_record_t *record = &deploy->record;
+    unsigned actions = 0;
+    if (deploy->disabled && slot_ok(record->active) && deploy->slots[record->active].valid) {
+        deploy->disabled = false;
+        deploy->running = record->active;
+        record->crashes = 0;
+        actions = WASM_ACT_PERSIST;
+    }
+    /* 试运行中的应用也可以重启：启动失败照常回退，试运行的计时不重新开始。 */
+    return slot_ok(deploy->running) ? actions | WASM_ACT_RUN | WASM_ACT_PUBLISH : 0;
+}
+
 unsigned wasm_deploy_on_desired(wasm_deploy_t *deploy, const wasm_desired_t *desired)
 {
     wasm_deploy_record_t *record = &deploy->record;

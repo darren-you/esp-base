@@ -55,7 +55,7 @@ esp_base_app::app!(Blink);
 
 | 模块 | 能力 |
 | --- | --- |
-| `log` | 日志，出现在设备的串口日志里 |
+| `log` | 日志：出现在设备的串口日志里，也经 `app/log` 发给 Server，在 ESP Tool 的设备页上能看到 |
 | `uptime_ms`、`unix_ms`、`sleep_ms` | 单调时间、UTC 时间（没对时为 `None`）、短暂睡眠 |
 | `timer` | 4 个定时器，到期时应用收到 `Event::Timer` |
 | `mqtt` | 业务 MQTT：连接与遗嘱、订阅、发布，消息以 `Event::MqttMessage` 送达 |

@@ -17,6 +17,7 @@ typedef enum {
     EV_LINK_MESSAGE,
     EV_SYSTEM_CONNECT, /* 系统通知：可以建立业务连接了 */
     EV_RESTART,        /* 出过故障的应用该重新启动了 */
+    EV_APP_RESTART,    /* 运维要求重启应用（命令 app_restart） */
     EV_DESIRED,        /* 系统转来的 app/desired */
     EV_FETCH_VERIFYING,
     EV_FETCH_DONE,
@@ -37,6 +38,8 @@ typedef struct {
 void base_wasm_post(const base_wasm_event_t *event);
 /* 叫醒应用任务去取到期的定时器和引脚。队列里最多放一个叫醒；可以在定时器回调里调用。 */
 void base_wasm_wake(void);
+/* 应用写了一行日志：攒起来，一秒之内经 app/log 发出去。在应用任务里调用。 */
+void base_wasm_log(int level, const char *text, size_t length);
 /* 建一个记在业务名下的任务；系统层没有启动时（测试固件）退回普通任务。 */
 bool base_wasm_task(const char *name, void (*entry)(void *), uint32_t stack_bytes, uint32_t watchdog_ms);
 

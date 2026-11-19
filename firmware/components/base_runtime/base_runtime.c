@@ -45,7 +45,7 @@ static bool s_running, s_abnormal;
 static char s_error[BASE_ERROR_BYTES];
 static char s_device_id[BASE_UUID_BYTES];
 static base_mqtt_t s_mqtt;
-static base_runtime_changed_cb_t s_changed, s_app_changed;
+static base_runtime_hooks_t s_hooks;
 static atomic_bool s_updating;
 static task_slot_t s_tasks[TASK_SLOTS];
 static link_slot_t s_links[BASE_LINK_SLOTS];
@@ -101,16 +101,14 @@ bool base_runtime_take_fault(void)
 }
 
 void base_runtime_boot(const base_business_t *business, const char *device_id, const base_mqtt_t *mqtt, bool enabled,
-                       const char *error, bool abnormal, base_runtime_changed_cb_t changed,
-                       base_runtime_changed_cb_t app_changed)
+                       const char *error, bool abnormal, const base_runtime_hooks_t *hooks)
 {
     if (s_lock) return;
     s_lock = xSemaphoreCreateMutex();
     s_abnormal = abnormal;
     snprintf(s_device_id, sizeof s_device_id, "%s", device_id ? device_id : "");
     if (mqtt) s_mqtt = *mqtt;
-    s_changed = changed;
-    s_app_changed = app_changed;
+    if (hooks) s_hooks = *hooks;
     if (!s_lock || !business) return;
     s_business = business;
     if (!base_is_identifier(business->name, BASE_BUSINESS_NAME_BYTES)) {
@@ -148,21 +146,44 @@ void base_runtime_connect(void)
     if (s_running) call_business(s_business->connect, "connect");
 }
 
+bool base_runtime_has_app(void)
+{
+    return s_running && s_business->app;
+}
+
 void base_runtime_deploy(const char *payload, size_t length)
 {
-    if (!s_running || !s_business->deploy) return;
+    if (!base_runtime_has_app() || !s_business->app->deploy) return;
     callback_begin("deploy");
-    s_business->deploy(payload, length);
+    s_business->app->deploy(payload, length);
     callback_end();
 }
 
 int base_runtime_app_state(char *out, size_t size)
 {
-    if (!s_running || !s_business->state) return 0;
+    if (!base_runtime_has_app() || !s_business->app->state) return 0;
     callback_begin("state");
-    const int length = s_business->state(out, size);
+    const int length = s_business->app->state(out, size);
     callback_end();
     return length;
+}
+
+int base_runtime_app_log(char *out, size_t size)
+{
+    if (!base_runtime_has_app() || !s_business->app->log) return 0;
+    callback_begin("log");
+    const int length = s_business->app->log(out, size);
+    callback_end();
+    return length;
+}
+
+bool base_runtime_app_restart(void)
+{
+    if (!base_runtime_has_app() || !s_business->app->restart) return false;
+    callback_begin("restart");
+    const bool accepted = s_business->app->restart();
+    callback_end();
+    return accepted;
 }
 
 void base_runtime_set_updating(bool updating)
@@ -207,7 +228,12 @@ void base_runtime_snapshot(base_business_profile_t *out)
 
 void base_runtime_app_changed(void)
 {
-    if (s_app_changed) s_app_changed();
+    if (s_hooks.app_changed) s_hooks.app_changed();
+}
+
+void base_runtime_app_logged(void)
+{
+    if (s_hooks.app_logged) s_hooks.app_logged();
 }
 
 bool base_runtime_system_updating(void)
@@ -333,7 +359,7 @@ static void link_event(void *argument, esp_event_base_t base, int32_t id, void *
         link->connected = connected;
     }
     unlock();
-    if (changed && s_changed) s_changed();
+    if (changed && s_hooks.changed) s_hooks.changed();
 }
 
 /* 上报用的地址：优先 uri，否则用 hostname、port 和 transport 拼出来。 */
@@ -378,7 +404,7 @@ esp_mqtt_client_handle_t base_runtime_mqtt_open(const char *name, const esp_mqtt
     }
     unlock();
     if (!client) ESP_LOGE(TAG, "business link %s not opened", name);
-    else if (s_changed) s_changed();
+    else if (s_hooks.changed) s_hooks.changed();
     return client;
 }
 
@@ -399,5 +425,5 @@ void base_runtime_mqtt_close(esp_mqtt_client_handle_t client)
     if (!found || inside) return;
     esp_mqtt_client_stop(client);
     esp_mqtt_client_destroy(client);
-    if (s_changed) s_changed();
+    if (s_hooks.changed) s_hooks.changed();
 }

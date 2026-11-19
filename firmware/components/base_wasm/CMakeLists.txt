@@ -9,7 +9,7 @@ if(CONFIG_ESP_BASE_TEST_WASM_BENCH)
 endif()
 idf_component_register(
     SRCS "base_wasm.c" "wasm_platform.c" "wasm_store.c"
-         "core/wasm_host.c" "core/wasm_package.c" "core/wasm_deploy.c"
+         "core/wasm_host.c" "core/wasm_package.c" "core/wasm_deploy.c" "core/wasm_log.c"
     INCLUDE_DIRS "include" PRIV_INCLUDE_DIRS "." "core"
     REQUIRES base_runtime
     PRIV_REQUIRES wasm-micro-runtime bootloader_support esp_driver_gpio esp_driver_ledc esp_http_client esp_partition

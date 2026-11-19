@@ -92,7 +92,8 @@ fn check(code: i32) -> Result<usize, Error> {
     }
 }
 
-/// 日志：出现在设备的串口日志里，也可以远程读取最近的若干行。
+/// 日志：出现在设备的串口日志里，也经系统 MQTT 发给 Server（最多每秒一条消息，一行最长 200 字节；写得比发得
+/// 快时多出来的行会被丢掉）。
 pub mod log {
     use super::sys;
 

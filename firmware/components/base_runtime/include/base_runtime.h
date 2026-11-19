@@ -19,9 +19,26 @@
 /* 业务任务的最高优先级：系统任务都在它之上，业务任务占满 CPU 时系统仍能应答命令和升级。 */
 #define BASE_RUNTIME_PRIORITY_MAX 4
 
-/* 业务的回调（init、connect、deploy、state）在系统的控制任务里执行，各自最多占用这么久：超时算一次业务故障，
+/* 业务的回调（init、connect 和应用通道的四个）在系统的控制任务里执行，各自最多占用这么久：超时算一次业务故障，
  * 运行时重启设备（复位原因 business_watchdog），连续 3 次后进入安全模式。耗时的工作放到业务任务里做。 */
 #define BASE_RUNTIME_CALLBACK_MS 10000u
+
+/* 应用通道：业务本身是一个应用宿主时实现（esp-base 的 WASM 宿主），别的业务不用管。系统只做转发：自己的主题
+ * app/desired、app/state、app/log 和命令 app_restart。四个回调都在系统的控制任务里调用：只通知业务任务或拷贝
+ * 它准备好的内容，立即返回。 */
+typedef struct {
+    /* 系统在 app/desired 上收到消息时调用，payload 是原文，长度 0 表示取消；返回后 payload 失效。 */
+    void (*deploy)(const char *payload, size_t length);
+    /* 把要发布到 app/state 的内容写进 out，返回长度；没有可报的返回 0。 */
+    int (*state)(char *out, size_t size);
+    /* 把攒下的应用日志（一条 app/log 消息的载荷）写进 out，返回长度；没有则返回 0。取走后清空。 */
+    int (*log)(char *out, size_t size);
+    /* 运维要求重启应用（命令 app_restart）。返回是否接受。 */
+    bool (*restart)(void);
+} base_app_channel_t;
+
+/* 一条 app/log 消息的最大长度：系统按它准备缓冲。 */
+#define BASE_RUNTIME_APP_LOG_BYTES 1152
 
 /* 业务固件在 app_main 里把它交给 base_system_run。 */
 typedef struct {
@@ -33,16 +50,14 @@ typedef struct {
     /* 该（重新）建立业务连接了：系统 MQTT 首次连上后调用一次（60 秒内连不上则不再等），
      * 业务 MQTT 配置经远程配置更新后再调用一次。在系统的控制任务里调用：只通知业务任务，立即返回。 */
     void (*connect)(void);
-    /* 可选：应用部署通道。系统在自己的主题 app/desired 上收到消息时调用，payload 是原文，长度 0 表示取消；
-     * 返回后 payload 失效。在系统的控制任务里调用：只通知业务任务，立即返回。 */
-    void (*deploy)(const char *payload, size_t length);
-    /* 可选：把要发布到 app/state 的内容写进 out，返回长度；没有可报的返回 0。在系统的控制任务里调用：只拷贝
-     * 业务任务准备好的内容，立即返回。 */
-    int (*state)(char *out, size_t size);
+    /* 可选：应用通道。 */
+    const base_app_channel_t *app;
 } base_business_t;
 
 /* app/state 的内容变了，请系统重新发布。在任意任务里调用。 */
 void base_runtime_app_changed(void);
+/* 有应用日志可以取了，请系统发布 app/log。在任意任务和定时器回调里调用。 */
+void base_runtime_app_logged(void);
 /* 系统正在下载或校验固件：这时业务不要开始自己的下载。 */
 bool base_runtime_system_updating(void);
 

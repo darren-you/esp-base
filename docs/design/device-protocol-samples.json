@@ -7,7 +7,8 @@
     "ota_desired": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/ota/desired",
     "ota_state": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/ota/state",
     "app_desired": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/desired",
-    "app_state": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/state"
+    "app_state": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/state",
+    "app_log": "esp-base/0f8fad5b-d9cb-469f-a165-70867728950e/app/log"
   },
   "status": [
     {
@@ -124,6 +125,8 @@
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"}},
     {"name": "restart", "cmd": "restart", "expect": "ok",
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3302"}},
+    {"name": "app_restart", "cmd": "app_restart", "expect": "ok",
+     "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3321"}},
     {"name": "config_wifi_and_business_mqtt", "cmd": "config", "expect": "ok",
      "payload": {"request_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3303",
                  "wifi": {"ssid": "example-ssid", "password": "example-password"},
@@ -309,5 +312,35 @@
                  "running": null,
                  "app": {"state": "disabled", "restarts": 0, "fault": "crash_loop", "pool_used": 0, "pool_peak": 0, "linear": 0},
                  "abi": 1}}
+  ],
+  "app_log": [
+    {"name": "lines", "expect": "ok",
+     "payload": {"seq": 17, "dropped": 0,
+                 "lines": [{"t": 1500, "level": "info", "text": "HXH_BOOT role=lift state=hxh-studio/lab/lift/state"},
+                           {"t": 61234, "level": "info", "text": "HXH_COMMAND move {\"direction\":\"up\"}"},
+                           {"t": 63234, "level": "warn", "text": "HXH_LEASE_EXPIRED stopping"},
+                           {"t": 4294967296000, "level": "error", "text": "推杆 \\ \t"}]}},
+    {"name": "first_message", "expect": "ok",
+     "payload": {"seq": 1, "dropped": 0, "lines": [{"t": 0, "level": "info", "text": ""}]}},
+    {"name": "only_dropped", "expect": "ok",
+     "payload": {"seq": 4000000000, "dropped": 12, "lines": []}},
+    {"name": "seq_zero", "expect": "invalid",
+     "payload": {"seq": 0, "dropped": 0, "lines": []}},
+    {"name": "missing_dropped", "expect": "invalid",
+     "payload": {"seq": 1, "lines": []}},
+    {"name": "negative_dropped", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": -1, "lines": []}},
+    {"name": "lines_not_array", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": 0, "lines": "HXH_BOOT"}},
+    {"name": "unknown_level", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": 0, "lines": [{"t": 1, "level": "debug", "text": "x"}]}},
+    {"name": "negative_time", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": 0, "lines": [{"t": -1, "level": "info", "text": "x"}]}},
+    {"name": "text_not_string", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": 0, "lines": [{"t": 1, "level": "info", "text": 7}]}},
+    {"name": "line_extra_field", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": 0, "lines": [{"t": 1, "level": "info", "text": "x", "task": "app"}]}},
+    {"name": "extra_field", "expect": "invalid",
+     "payload": {"seq": 1, "dropped": 0, "lines": [], "boot_id": "6ba7b810-9dad-41d1-80b4-00c04fd430c8"}}
   ]
 }

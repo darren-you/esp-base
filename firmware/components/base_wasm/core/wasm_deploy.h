@@ -121,6 +121,9 @@ unsigned wasm_deploy_on_started(wasm_deploy_t *deploy, bool ok, const char *erro
 /* 运行中的应用出了故障（陷阱、超预算）。只在试运行期间有后果。 */
 unsigned wasm_deploy_on_fault(wasm_deploy_t *deploy, const char *error);
 unsigned wasm_deploy_on_trial_timer(wasm_deploy_t *deploy);
+/* 运维要求重启应用（命令 app_restart）：停掉再启动应当运行的那个应用。因为连续把设备拖到异常重启而被停用的
+ * 应用再给一次机会，计数从头算。没有应用可以重启时返回 0。 */
+unsigned wasm_deploy_on_restart(wasm_deploy_t *deploy);
 unsigned wasm_deploy_on_retry_timer(wasm_deploy_t *deploy);
 
 /* 下载的目标槽：没在用的那个。 */

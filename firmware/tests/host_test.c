@@ -44,6 +44,7 @@ static void test_topics(void)
     CHECK(base_topic(topic, DEVICE, BASE_TOPIC_OTA_DESIRED) && !strcmp(topic, "esp-base/" DEVICE "/ota/desired"));
     CHECK(base_topic(topic, DEVICE, BASE_TOPIC_APP_DESIRED) && !strcmp(topic, "esp-base/" DEVICE "/app/desired"));
     CHECK(base_topic(topic, DEVICE, BASE_TOPIC_APP_STATE) && !strcmp(topic, "esp-base/" DEVICE "/app/state"));
+    CHECK(base_topic(topic, DEVICE, BASE_TOPIC_APP_LOG) && !strcmp(topic, "esp-base/" DEVICE "/app/log"));
     CHECK(!base_topic(topic, DEVICE, BASE_TOPIC_COUNT));
     CHECK(!base_topic(topic, "not-a-uuid", BASE_TOPIC_STATUS));
     const char *restart = "esp-base/" DEVICE "/cmd/restart";
@@ -563,7 +564,7 @@ static void test_contract_samples(const char *path)
     const char *device = cJSON_GetObjectItem(root, "device_id")->valuestring;
     const cJSON *topics = cJSON_GetObjectItem(root, "topics"), *sample;
     static const char *const names[BASE_TOPIC_COUNT] = {"status", "rsp", "cmd_filter", "ota_desired", "ota_state",
-                                                        "app_desired", "app_state"};
+                                                        "app_desired", "app_state", "app_log"};
     for (int i = 0; i < BASE_TOPIC_COUNT; ++i) {
         char topic[BASE_TOPIC_BYTES];
         CHECK(base_topic(topic, device, (base_topic_t)i) &&

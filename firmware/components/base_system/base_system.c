@@ -40,7 +40,7 @@ typedef enum {
     EV_NET_UP, EV_NET_DOWN, EV_NET_TIME,
     EV_MQTT_CONNECTED, EV_MQTT_DISCONNECTED, EV_MQTT_MESSAGE, EV_MQTT_PUBLISHED,
     EV_TIMER, EV_OTA_PROGRESS, EV_OTA_VERIFYING, EV_OTA_DONE, EV_NET_IP6, EV_PROFILE_READY, EV_BUSINESS_CHANGED,
-    EV_APP_CHANGED,
+    EV_APP_CHANGED, EV_APP_LOGGED,
 } event_kind_t;
 typedef enum {
     TIMER_STATUS, TIMER_OTA_RETRY, TIMER_ROLLBACK, TIMER_CONFIG_TRIAL, TIMER_DEFERRED,
@@ -211,6 +211,23 @@ static void publish_app_state(void)
     if (s_mqtt_connected && base_runtime_app_state(state, sizeof state) > 0) publish(BASE_TOPIC_APP_STATE, state, true);
 }
 
+/* 应用写了日志：在业务的任务或定时器回调里调用，只投递事件。 */
+static void app_logged(void)
+{
+    post(&(event_t){.kind = EV_APP_LOGGED}, 0);
+}
+
+/* app/log：应用的日志由业务攒好，系统取走发布。不保留、QoS 0，没连上时这一批就不要了——日志是给人看的。 */
+static void publish_app_log(void)
+{
+    char *lines = malloc(BASE_RUNTIME_APP_LOG_BYTES);
+    if (!lines) return;
+    const int length = base_runtime_app_log(lines, BASE_RUNTIME_APP_LOG_BYTES);
+    if (length > 0 && s_mqtt && s_mqtt_connected)
+        esp_mqtt_client_enqueue(s_mqtt, s_topics[BASE_TOPIC_APP_LOG], lines, length, 0, 0, true);
+    free(lines);
+}
+
 static void publish_profile(void)
 {
     char *json = malloc(STATUS_BYTES);
@@ -361,6 +378,10 @@ static void handle_command(const char *name, const char *payload, size_t length)
             if (s_deferred != DEFER_NONE) error = "busy";
             else after = DEFER_RESTART;
             break;
+        case BASE_CMD_APP_RESTART:
+            /* 只重启应用，设备不重启。没有应用宿主在运行（固件没有宿主，或设备在安全模式）时拒绝。 */
+            if (!base_runtime_app_restart()) error = "no_app";
+            break;
         case BASE_CMD_CONFIG:
             if (s_deferred != DEFER_NONE || s_trial_active) { error = "busy"; break; }
             s_config_error = NULL;
@@ -421,7 +442,7 @@ static void on_mqtt_connected(void)
     }
     esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_CMD_FILTER], 1);
     esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_OTA_DESIRED], 1);
-    if (base_runtime_active()) esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_APP_DESIRED], 1);
+    if (base_runtime_has_app()) esp_mqtt_client_subscribe(s_mqtt, s_topics[BASE_TOPIC_APP_DESIRED], 1);
     publish_status();
     publish_app_state();
     if (!s_pending_verify) ota_apply(base_ota_on_confirmed(&s_ota));
@@ -501,6 +522,7 @@ static void handle(const event_t *event)
     case EV_OTA_PROGRESS: ota_apply(base_ota_on_progress(&s_ota, (uint32_t)event->value)); break;
     case EV_OTA_VERIFYING: ota_apply(base_ota_on_verifying(&s_ota)); break;
     case EV_APP_CHANGED: publish_app_state(); break;
+    case EV_APP_LOGGED: publish_app_log(); break;
     case EV_OTA_DONE:
         base_net_set_power_save(true);
         base_runtime_set_updating(false);
@@ -524,8 +546,9 @@ static void business_boot(const base_business_t *business, const char *fw_sha256
         }
         if (s_guard.strikes) ESP_LOGW(TAG, "business guard: %u abnormal restart(s) in a row", (unsigned)s_guard.strikes);
     }
-    base_runtime_boot(business, s_device_id, &s_config.business_mqtt, enabled, BASE_GUARD_ERROR, abnormal, business_changed,
-                      app_changed);
+    static const base_runtime_hooks_t hooks = {.changed = business_changed, .app_changed = app_changed,
+                                               .app_logged = app_logged};
+    base_runtime_boot(business, s_device_id, &s_config.business_mqtt, enabled, BASE_GUARD_ERROR, abnormal, &hooks);
     if (base_runtime_active() && s_guard.strikes) timer_start(TIMER_BUSINESS_STABLE, BASE_GUARD_STABLE_MS);
 }
 
